@@ -73,7 +73,7 @@ impl BodyFilter {
     pub(crate) fn shown(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
         match self {
             Self::Status(status) => {
-                !(status == AgentStatus::Success && facts.group.finished)
+                !(status == AgentStatus::Success && facts.group.inactive.is_some())
                     && facts
                         .units
                         .get(&facts.group.unit_key(row))
@@ -386,7 +386,7 @@ mod tests {
     fn success_count_and_lens_exclude_finished_groups_only() {
         let groups = [true, false].map(|finished| {
             let mut group = team_group(&[AgentStatus::Success, AgentStatus::Success]);
-            group.finished = finished;
+            group.inactive = (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
             group
         });
         let success = BodyFilter::Status(AgentStatus::Success);
@@ -394,7 +394,7 @@ mod tests {
         let idle = BodyFilter::Status(AgentStatus::Idle);
         assert_eq!(idle.total(&groups), 0);
         let mut idle_finished = team_group(&[AgentStatus::Idle, AgentStatus::Success]);
-        idle_finished.finished = true;
+        idle_finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         assert_eq!(idle.total(&[idle_finished]), 1);
     }
 
@@ -402,7 +402,7 @@ mod tests {
     fn bucket_totals_and_shown_units_use_one_predicate() {
         use AgentStatus::*;
         let mut finished = team_group(&[Success, Success]);
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let groups = [
             team_group(&[Running, Idle, Success]),
             team_group(&[Waiting, Failed, Paused]),

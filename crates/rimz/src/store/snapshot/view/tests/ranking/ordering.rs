@@ -1,4 +1,70 @@
 use super::*;
+
+#[test]
+fn group_order_is_newest_registration_not_working_state_or_pane_creation() {
+    let actual = [AgentStatus::Idle, AgentStatus::Running, AgentStatus::Paused].map(|status| {
+        let mut old = agent_in("old", "/repo/old", status, 0).in_pane("%99");
+        old.registered_at = Some(ago(100));
+        let mut new = agent_in("new", "/repo/new", AgentStatus::Idle, 0).in_pane("%1");
+        new.registered_at = Some(ago(1));
+        let mut snapshot = room_with_agent_panes(vec![old, new]);
+        let before = snapshot
+            .worktree_groups
+            .iter()
+            .map(|g| g.label.clone())
+            .collect::<Vec<_>>();
+        let mut arrival = snapshot.worktree_groups[1].rows[0].clone();
+        arrival.id = "arrival".to_owned();
+        arrival.as_agent_mut().unwrap().registered_at = Some(epoch());
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+        )
+        .push(arrival);
+        snapshot.sort_groups_for_presentation();
+        let after = snapshot
+            .worktree_groups
+            .iter()
+            .map(|g| g.label.clone())
+            .collect::<Vec<_>>();
+        (before, after)
+    });
+    assert_eq!(
+        actual,
+        std::array::from_fn(|_| (
+            vec!["new".to_owned(), "old".to_owned()],
+            vec!["old".to_owned(), "new".to_owned()]
+        ))
+    );
+}
+
+#[test]
+fn inactive_groups_order_by_latest_agent_activity_not_creation_or_process_activity() {
+    let mut old = agent_in("old", "/repo/old", AgentStatus::Idle, 0);
+    old.registered_at = Some(ago(90000));
+    old.last_activity = ago(100);
+    let mut new = agent_in("new", "/repo/new", AgentStatus::Success, 0);
+    new.registered_at = Some(ago(88000));
+    new.last_activity = ago(200);
+    let mut snapshot = room_with_agent_panes(vec![old, new]);
+    let new_group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|g| g.label == "new")
+        .unwrap();
+    let mut process = new_group.rows[0].clone();
+    process.id = "process".to_owned();
+    process.last_activity = epoch();
+    process.card = crate::store::snapshot::RowCard::Process(Default::default());
+    std::sync::Arc::make_mut(&mut new_group.rows).push(process);
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|g| (g.label.as_str(), g.inactive.is_some()))
+            .collect::<Vec<_>>(),
+        [("old", true), ("new", true)]
+    );
+}
 use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::ids::{MuxName, PaneId};
 use crate::store::snapshot::SidebarWorktreeGroup;
@@ -121,7 +187,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
 }
 
 #[test]
-fn calm_order_uses_pane_ordinal_not_label() {
+fn calm_rows_use_pane_ordinal_but_groups_use_newest_registration() {
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
     older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
@@ -162,8 +228,8 @@ fn calm_order_uses_pane_ordinal_not_label() {
         .collect::<Vec<_>>();
     assert_eq!(
         groups,
-        vec!["b", "a"],
-        "groups order by their earliest pane ordinal (`b` holds `%0`); labels never decide calm order"
+        vec!["a", "b"],
+        "the newer registration leads even though its pane was created later"
     );
 }
 
@@ -365,9 +431,11 @@ fn inactive_idle_uses_the_hour_boundary_strictly() {
 
 #[test]
 fn inactive_groups_sink_below_process_groups() {
+    let mut old = agent_in("old-done", "/repo/a", AgentStatus::Success, 1_000)
+        .active_ago(ATTENTION_AGE_CEILING_SECS + 1);
+    old.registered_at = Some(ago(86401));
     let mut snapshot = room_with_agent_panes(vec![
-        agent_in("old-done", "/repo/a", AgentStatus::Success, 1_000)
-            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        old,
         agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
     ]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(SidebarWorktreeGroup {
@@ -389,7 +457,7 @@ fn inactive_groups_sink_below_process_groups() {
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,
@@ -404,7 +472,7 @@ fn inactive_groups_sink_below_process_groups() {
     assert_eq!(
         group_labels(&snapshot),
         vec!["c", "b", "a"],
-        "fresh calm groups outrank process groups, and inactive calm groups sink below both"
+        "registered active groups lead process groups, and quiet groups sink below both"
     );
 }
 
@@ -736,7 +804,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         trunk: None,
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: None,
         landed: None,
         trunk_sync: None,

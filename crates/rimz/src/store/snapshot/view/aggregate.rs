@@ -221,7 +221,7 @@ impl SidebarSnapshot {
                     trunk: None,
                     worktree_backed: false,
                     root_lane,
-                    finished: false,
+                    inactive: None,
                     clean: None,
                     landed: None,
                     trunk_sync: None,

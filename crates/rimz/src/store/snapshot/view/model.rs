@@ -427,6 +427,14 @@ pub struct StackPr {
     pub url: Option<String>,
 }
 
+/// Landedness retained only while a group belongs to the inactive fold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarInactive {
+    Landed,
+    Unlanded,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -471,15 +479,15 @@ pub struct SidebarWorktreeGroup {
     /// the first git read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree_backed: bool,
-    /// The resolved project-root group, independent of branch or label. With an
-    /// agent card it pins below actionable groups and never becomes finished.
+    /// The resolved project-root group, independent of branch or label. It pins
+    /// below actionable groups and never becomes inactive, even without agents.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
-    /// Terminal line of work: git verdict `Done` with no attention or running
-    /// member, except a root-lane group holding an agent card is never finished.
-    /// Follows all unfinished groups and collapses agent rosters in renderers.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub finished: bool,
+    /// Quiet past the landed or unlanded window, with no running or attention
+    /// member. Root-lane and external groups never fold. A renderer may defer
+    /// admission while the group is viewed or the layout is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive: Option<SidebarInactive>,
     /// Whether the working tree is clean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clean: Option<bool>,
@@ -651,10 +659,10 @@ impl SidebarWorktreeGroup {
         SidebarUnitKey::Solo(&row.id)
     }
 
-    /// A finished roster with any agent collapses behind the two-line receipt.
+    /// An inactive roster with any agent collapses behind the two-line receipt.
     /// Process-only groups stay open.
     pub fn collapses(&self) -> bool {
-        self.finished && self.rows.iter().any(SidebarRow::is_agent)
+        self.inactive.is_some() && self.rows.iter().any(SidebarRow::is_agent)
     }
 }
 
@@ -860,7 +868,7 @@ mod tests {
             trunk: None,
             worktree_backed: false,
             root_lane: false,
-            finished: true,
+            inactive: Some(crate::store::snapshot::SidebarInactive::Landed),
             clean: None,
             landed: None,
             trunk_sync: None,

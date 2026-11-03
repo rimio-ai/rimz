@@ -40,11 +40,12 @@ pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
-    ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
-    ThrottleNotice, UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
-    agent_idle_since, card_status, lead_unread_row, needs_you,
+    ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarInactive,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, UnitStatus, WorktreeCi,
+    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, agent_idle_since, card_status,
+    lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -544,7 +545,11 @@ impl SidebarSnapshot {
     /// presentation flag such as `SidebarRow::unread` changes. This preserves
     /// the producer's row cap and status counts; it only changes visible order.
     pub fn sort_groups_for_presentation(&mut self) {
-        layout::sort_groups_for_presentation(&mut self.worktree_groups);
+        layout::sort_groups_for_presentation(
+            &mut self.worktree_groups,
+            self.now,
+            aggregate::AttentionWindows::from_config(&self.attention),
+        );
     }
 
     pub(crate) fn project_stuck_stages(&mut self) {
@@ -599,7 +604,7 @@ impl SidebarSnapshot {
             card.turn_error_label = Some(label);
             group.stalled_since = Some(latest);
             aggregate::stamp_attention(rows, self.now, windows);
-            layout::refresh_overlay_group(group);
+            layout::refresh_overlay_group(group, self.now, windows);
         }
     }
 

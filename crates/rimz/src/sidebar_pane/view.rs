@@ -406,7 +406,7 @@ mod tests {
             agent_row("done-focused", AgentStatus::Success),
         ]);
         finished.key = "finished".to_owned();
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         std::sync::Arc::make_mut(&mut finished.rows)[0].unread = true;
 
         let mut active = group(vec![agent_row("active", AgentStatus::Running)]);
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn roster_collapses_lone_finished_row() {
         let mut finished = group(vec![agent_row("done", AgentStatus::Success)]);
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let snapshot = snapshot(vec![finished]);
 
         let roster = VisibleRoster::baseline(&snapshot);
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn success_lens_reveals_only_unfinished_results() {
         let mut finished = group(vec![agent_row("landed", AgentStatus::Success)]);
-        finished.finished = true;
+        finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let snapshot = snapshot(vec![
             finished,
             group(vec![agent_row("review", AgentStatus::Success)]),
@@ -669,7 +669,7 @@ mod tests {
             trunk: None,
             worktree_backed: false,
             root_lane: false,
-            finished: false,
+            inactive: None,
             clean: None,
             landed: None,
             trunk_sync: None,

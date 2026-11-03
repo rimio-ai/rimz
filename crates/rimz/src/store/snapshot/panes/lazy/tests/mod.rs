@@ -76,7 +76,9 @@ fn live_stamped_agent_stays_out_of_lazy_pairings() {
 
 #[test]
 fn wired_non_lazy_pane_synthesizes_idle_row() {
-    let pane = pane("term1", "claude", "/repo/main");
+    let mut pane = pane("term1", "claude", "/repo/main");
+    pane.pane_process_start = None;
+    pane.first_seen_at_ms = Some(ago(3600).as_millisecond().try_into().unwrap());
     let agents: Vec<AgentState> = Vec::new();
     let pairings = LazyAgentPairingResult {
         pairings: HashMap::new(),
@@ -112,6 +114,7 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
             assert_eq!(row.name, "claude");
             assert_eq!(row.status(), Some(AgentStatus::Idle));
             assert!(row.as_agent().is_some());
+            assert_eq!(row.last_activity, ago(3600));
         }
         _ => panic!("wired sessionless Claude should synthesize idle row"),
     }

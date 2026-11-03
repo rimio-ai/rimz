@@ -133,7 +133,7 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
     let group_key = |group: &SidebarWorktreeGroup| {
         (
             group.kind == SidebarWorktreeKind::External,
-            group.finished,
+            group.inactive.is_some(),
             group_pos
                 .get(group.key.as_str())
                 .copied()

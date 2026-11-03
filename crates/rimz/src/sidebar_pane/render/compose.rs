@@ -1228,12 +1228,12 @@ fn scroll_lines_windowed(
         let landed_count = snapshot
             .worktree_groups
             .iter()
-            .filter(|group| group.finished)
+            .filter(|group| group.inactive.is_some())
             .count();
         let mut landed_chip = None;
         let mut emitted = false;
         for group in roster.groups() {
-            if group.source().finished && !filtered {
+            if group.source().inactive.is_some() && !filtered {
                 if landed_chip.is_none() {
                     if emitted {
                         block.push_inert(Line::from(""));
@@ -1270,7 +1270,7 @@ fn scroll_lines_windowed(
                 walk,
             ));
             if landed_span.is_none()
-                && group.source().finished
+                && group.source().inactive.is_some()
                 && group.is_empty()
                 && let Some(chip) = landed_chip
             {

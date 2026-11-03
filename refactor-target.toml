@@ -3725,7 +3725,13 @@ path = "crates/rimz/src/store"
 # ProviderPlan and SidebarProviderPanel::plan_label replace the shared formatter (+1).
 # agent_idle_since shares the row-or-child idle origin across CLI scenes (+1).
 # workflow::{RunRead, unfinished_under} share strict and best-effort cross-room run protection (+2).
-surface-budget = 531
+# SidebarInactive carries fold membership and landedness to renderer consumers (+1).
+surface-budget = 532
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarInactive"
+reason = "The producer and renderer share inactive membership and its landed or unlanded breakdown."
 
 [[verdict]]
 kind = "item"

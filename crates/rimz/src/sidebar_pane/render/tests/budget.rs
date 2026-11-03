@@ -234,7 +234,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 trunk: Some("main".to_owned()),
                 worktree_backed: false,
                 root_lane: false,
-                finished: false,
+                inactive: None,
                 clean: None,
                 landed: None,
                 trunk_sync: None,

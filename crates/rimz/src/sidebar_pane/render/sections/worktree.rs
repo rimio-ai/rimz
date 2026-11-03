@@ -703,7 +703,7 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let label_style = if group.finished {
+    let label_style = if group.inactive.is_some() {
         theme.muted().add_modifier(Modifier::BOLD)
     } else {
         theme.styled(Component::WorktreeHeader, Modifier::BOLD)

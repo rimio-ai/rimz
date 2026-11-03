@@ -179,7 +179,7 @@ fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
             group.label = "x".to_owned();
             group.label_qualifier = qualifier.map(str::to_owned);
             group.team = team.map(str::to_owned);
-            group.finished = finished;
+            group.inactive = (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
             let label_style = if finished {
                 theme.muted().add_modifier(Modifier::BOLD)
             } else {
@@ -293,7 +293,7 @@ fn empty_pipeline_is_inert_and_expanded_less_tail_toggles_without_ordinal() {
             })
             .collect(),
     );
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = false;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive = None;
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let group = &snapshot.worktree_groups[0];
     let block = worktree_group_block(&ctx, group, true, None);
@@ -398,7 +398,7 @@ fn render_pipeline_states() {
 fn render_pipeline_folded_stage() {
     let mut snapshot = pipeline_snapshot();
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     group.pipeline.as_mut().unwrap().stage = "Done".to_owned();
     for row in std::sync::Arc::make_mut(&mut group.rows) {
         row.as_agent_mut().unwrap().status = AgentStatus::Success;
@@ -828,7 +828,7 @@ fn render_directory_room_root_pod_is_name_only() {
         "the git-backed row keeps the fork-glyph pod header:\n{rendered}"
     );
     assert!(
-        rendered.lines().any(|line| line.trim() == "main") && !rendered.contains("⑂ agents"),
+        rendered.lines().any(|line| line.starts_with("▎main ┄")) && !rendered.contains("⑂ agents"),
         "the room's own pod is name-only:\n{rendered}"
     );
     assert_snapshot("directory_room_root_pod", rendered);
@@ -1712,7 +1712,7 @@ fn finished_worktree_age_stays_full_past_an_hour() {
     card.last_activity = fixed_now() - Duration::from_secs(7200);
     let mut snapshot = snapshot_with(vec![card]);
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     group.cohort_effort = None;
     for (style, glyph) in [
         (None, "●"),
@@ -1747,7 +1747,7 @@ fn finished_worktree_age_uses_the_newest_member_cache_request() {
     });
     let mut snapshot = snapshot_with(members.into());
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-    group.finished = true;
+    group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     group.cohort_effort = None;
     for (row, minutes) in std::sync::Arc::make_mut(&mut group.rows)
         .iter_mut()
@@ -1777,7 +1777,8 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Merged));
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
 
     let finished = group_lines(&snapshot, &theme, 0);
     let finished_label = finished[0]
@@ -1790,7 +1791,7 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
         theme.muted().add_modifier(Modifier::BOLD)
     );
 
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = false;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive = None;
     let live = group_lines(&snapshot, &theme, 0);
     let live_label = live[0]
         .spans

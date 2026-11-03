@@ -1090,7 +1090,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             trunk: None,
             worktree_backed: false,
             root_lane: false,
-            finished: false,
+            inactive: None,
             clean: None,
             landed: None,
             trunk_sync: None,

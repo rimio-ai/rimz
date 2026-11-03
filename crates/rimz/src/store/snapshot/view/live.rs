@@ -19,6 +19,7 @@ use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
 };
 
+use super::aggregate::AttentionWindows;
 use super::layout::refresh_overlay_group;
 use super::{SidebarRow, SidebarSnapshot};
 
@@ -335,7 +336,11 @@ impl SidebarSnapshot {
                     }
                 }
             }
-            refresh_overlay_group(group);
+            refresh_overlay_group(
+                group,
+                self.now,
+                AttentionWindows::from_config(&self.attention),
+            );
         }
         if self
             .worktree_groups
@@ -391,7 +396,11 @@ impl SidebarSnapshot {
                 }
                 changed = true;
             }
-            refresh_overlay_group(group);
+            refresh_overlay_group(
+                group,
+                self.now,
+                AttentionWindows::from_config(&self.attention),
+            );
         }
         changed
     }

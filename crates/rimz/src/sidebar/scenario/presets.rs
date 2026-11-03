@@ -319,7 +319,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         trunk: Some("main".to_owned()),
         worktree_backed: false,
         root_lane: false,
-        finished: false,
+        inactive: None,
         clean: spec.clean,
         landed: spec.landed,
         trunk_sync: spec.trunk_sync,
