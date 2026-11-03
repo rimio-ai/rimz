@@ -3008,7 +3008,7 @@ reason = "Sweep and jump consume ordered per-view outcomes while transport failu
 [[verdict]]
 kind = "item"
 key = "mux::LaggingViews"
-reason = "The host consumes one backend-owned MRU snapshot per settled sweep."
+reason = "The host consumes fresh backend-owned MRU geometry and normal-screen reflow costs per sweep slice."
 
 [[verdict]]
 kind = "item"
