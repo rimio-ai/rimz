@@ -2076,6 +2076,114 @@ fn codex_auto_permission_waits_for_review_before_attention() {
 }
 
 #[test]
+fn completed_permission_cell_closes_only_its_keyless_auto_ask() {
+    let mut agent = auto_review_permission();
+    let since = agent.open_ask.as_ref().unwrap().since;
+    assert_eq!(agent.settleable_permission_since(), Some(since));
+    agent.context = Some(AgentContext {
+        permission_settle: Some(crate::agents::context::PermissionSettle {
+            ask_since: since,
+            at: Timestamp::from_second(1_010).unwrap(),
+        }),
+        ..Default::default()
+    });
+    for second in [1_010, 1_059, 1_060, 1_061, 1_090] {
+        let now = Timestamp::from_second(second).unwrap();
+        assert!(!agent.is_awaiting_input(), "at {second}");
+        assert!(agent.attention_ask(now).is_none());
+        assert_eq!(agent.permission_review_until(), None);
+        assert_eq!(agent.actionable_asks().count(), 0);
+        assert_eq!(agent.effective_status(now), AgentStatus::Running);
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default(), now),
+            (AgentStatus::Running, TurnPhase::Reasoning)
+        );
+        assert!(agent.holds_open_turn());
+    }
+
+    let now = Timestamp::from_second(1_061).unwrap();
+    for (ask_since, at) in [(999, 1_010), (1_000, 1_000), (1_000, 999)] {
+        let mut other = agent.clone();
+        other.context.as_mut().unwrap().permission_settle =
+            Some(crate::agents::context::PermissionSettle {
+                ask_since: Timestamp::from_second(ask_since).unwrap(),
+                at: Timestamp::from_second(at).unwrap(),
+            });
+        assert!(other.is_awaiting_input(), "{ask_since}, {at}");
+        assert_eq!(other.effective_status(now), AgentStatus::Waiting);
+        assert!(other.attention_ask(now).is_some());
+    }
+    for (kind, mode, ask_kind, native_key) in [
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Ask),
+            AskKind::Permission,
+            None,
+        ),
+        ("codex", None, AskKind::Permission, None),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Yolo),
+            AskKind::Permission,
+            None,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Plan),
+            AskKind::Permission,
+            None,
+        ),
+        (
+            "claude",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Permission,
+            None,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Question,
+            None,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::PlanApproval,
+            None,
+        ),
+        (
+            "codex",
+            Some(crate::agents::PermissionMode::Auto),
+            AskKind::Permission,
+            Some("native"),
+        ),
+    ] {
+        let mut other = agent.clone();
+        other.kind = AgentKind::new_unchecked(kind);
+        other.mode = mode;
+        other.open_ask.as_mut().unwrap().kind = ask_kind;
+        other.open_ask.as_mut().unwrap().native_key = native_key.map(str::to_owned);
+        assert!(
+            other.is_awaiting_input(),
+            "{kind}, {mode:?}, {ask_kind:?}, {native_key:?}"
+        );
+        assert_eq!(other.settleable_permission_since(), None);
+        assert_eq!(other.effective_status(now), AgentStatus::Waiting);
+        assert!(other.attention_ask(now).is_some());
+    }
+    agent.open_ask.as_mut().unwrap().since = Timestamp::from_second(1_011).unwrap();
+    agent.waiting_since = Some(Timestamp::from_second(1_011).unwrap());
+    assert!(
+        agent.is_awaiting_input(),
+        "a second PermissionRequest restamps the ask"
+    );
+    assert_eq!(
+        agent.effective_status(Timestamp::from_second(1_071).unwrap()),
+        AgentStatus::Waiting
+    );
+}
+
+#[test]
 fn waiting_without_answer_evidence_stays_waiting() {
     let now = Timestamp::from_second(2_000).unwrap();
     let mut agent = test_agent(AgentStatus::Waiting, 1_010);

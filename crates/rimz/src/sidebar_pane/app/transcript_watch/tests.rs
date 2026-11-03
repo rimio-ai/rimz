@@ -42,7 +42,16 @@ fn append_codex_signal(
     session: &str,
     signal: crate::agents::LifecycleSignal,
 ) {
-    let observation = crate::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+    append_codex_observation(
+        state,
+        &crate::agents::AgentLifecycleObservation::new(Some(session.into()), signal),
+    );
+}
+
+fn append_codex_observation(
+    state: &crate::StatePaths,
+    observation: &crate::agents::AgentLifecycleObservation,
+) {
     crate::store::event_log::append(
         &state.events_log,
         &crate::store::event::EventEnvelope::agent_lifecycle(
@@ -50,7 +59,7 @@ fn append_codex_signal(
             "room",
             "codex",
             "test",
-            &observation,
+            observation,
         ),
     )
     .unwrap();
@@ -143,7 +152,12 @@ fn roster_rescan_skips_unchanged_inputs_and_rebuilds_after_add_and_remove() {
 fn newly_rostered_permission_rechecks_an_already_read_completion() {
     use crate::agents::{AskKind, LifecycleSignal};
     let (dir, state, runtime) = fixture();
-    register_codex(&state, "permission");
+    let mut registered = crate::agents::AgentLifecycleObservation::new(
+        Some("permission".into()),
+        LifecycleSignal::Registered,
+    );
+    registered.launch.mode = Some(crate::agents::PermissionMode::Auto);
+    append_codex_observation(&state, &registered);
     let now = jiff::Timestamp::now();
     let call_at = now - Duration::from_secs(1);
     let result_at = now + Duration::from_secs(1);

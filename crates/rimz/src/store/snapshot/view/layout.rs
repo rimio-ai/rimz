@@ -345,8 +345,8 @@ fn agent_rank_facts(
     now: jiff::Timestamp,
     windows: AttentionWindows,
 ) -> RankFacts<'_> {
-    let status = if agent.is_reviewing_permission(now) {
-        AgentStatus::Running
+    let status = if agent.status == AgentStatus::Waiting {
+        agent.effective_status(now)
     } else {
         agent.status
     };

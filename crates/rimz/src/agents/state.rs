@@ -591,6 +591,14 @@ fn waiting_turn_ended(context: Option<&AgentContext>, last_activity: Timestamp) 
         .is_some_and(|error| error.ended_turn)
 }
 
+fn waiting_permission_settled(agent: &AgentState, context: Option<&AgentContext>) -> bool {
+    agent.settleable_permission_since().is_some_and(|since| {
+        context
+            .and_then(|context| context.permission_settle)
+            .is_some_and(|proof| proof.answers(since))
+    })
+}
+
 /// A `failed` row's terminal turn-error marker: it must fall inside the row's
 /// current turn (`turn_started_at` or later), so a stale marker from a prior
 /// turn never explains a fresh failure.
@@ -682,6 +690,9 @@ impl WaitingResolution {
         }
         if waiting_turn_ended(context, last_activity) {
             return Self::TurnEnded;
+        }
+        if source_agent.is_some_and(|agent| waiting_permission_settled(agent, context)) {
+            return Self::Answered;
         }
         if source_agent.is_some_and(|agent| {
             agent
@@ -1904,7 +1915,8 @@ impl AgentState {
     /// markers cover native dialogs without inventing a durable ask record.
     /// A keyed open ask waits for its durable completion edge because parallel
     /// sibling tools also touch activity. Newer activity self-clears keyless
-    /// and derived asks. A newer provider interruption releases an ask keyed
+    /// and derived asks. Matching asking-cell proof releases a keyless Auto
+    /// permission too. A newer provider interruption releases an ask keyed
     /// or not. A turn-ending error closes asks too, but releases pane input
     /// only for a recorded Auto or Yolo row, which shows no approval dialog
     /// for a background approval. Other modes, including unknown mode, keep
@@ -1912,6 +1924,9 @@ impl AgentState {
     /// retires the marker, because a background Code Mode approval may still
     /// be live.
     pub fn is_awaiting_input(&self) -> bool {
+        if self.permission_settled() {
+            return false;
+        }
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
         let ask_reserves = self
             .open_ask
@@ -1936,16 +1951,28 @@ impl AgentState {
         ) || (self.status == AgentStatus::Waiting && self.holds_open_turn() && ask_reserves)
     }
 
+    pub(crate) fn permission_settled(&self) -> bool {
+        self.status == AgentStatus::Waiting
+            && waiting_permission_settled(self, self.context.as_ref())
+    }
+
+    /// The open permission of a recorded Auto row whose adapter fires the
+    /// permission hook before its automatic reviewer runs.
+    fn auto_reviewed_permission(&self) -> Option<&OpenAsk> {
+        self.open_ask.as_ref().filter(|ask| {
+            ask.kind == AskKind::Permission
+                && self.mode == Some(super::PermissionMode::Auto)
+                && super::registry::spec_by_kind(self.kind.as_str())
+                    .is_some_and(|spec| spec.capabilities.permission_before_auto_review)
+        })
+    }
+
     /// When an auto-reviewed permission first needs attention. The raw ask
     /// still reserves pane input throughout review; other asks return `None`.
+    /// A completed asking cell closes the ask instead of extending review.
     pub fn permission_review_until(&self) -> Option<Timestamp> {
-        let ask = self.open_ask.as_ref()?;
-        if ask.kind != AskKind::Permission
-            || self.mode != Some(super::PermissionMode::Auto)
-            || !self.is_awaiting_input()
-            || !super::registry::spec_by_kind(self.kind.as_str())
-                .is_some_and(|spec| spec.capabilities.permission_before_auto_review)
-        {
+        let ask = self.auto_reviewed_permission()?;
+        if !self.is_awaiting_input() {
             return None;
         }
         ask.since
@@ -1962,11 +1989,11 @@ impl AgentState {
             .is_some_and(|until| now < until)
     }
 
-    /// Arrival of the row's open permission ask, whatever its mode.
-    pub fn open_permission_since(&self) -> Option<Timestamp> {
-        self.open_ask
-            .as_ref()
-            .filter(|ask| ask.kind == AskKind::Permission)
+    /// Arrival of the open permission ask that its asking cell's completion can
+    /// settle: a keyless, auto-reviewed permission.
+    pub fn settleable_permission_since(&self) -> Option<Timestamp> {
+        self.auto_reviewed_permission()
+            .filter(|ask| ask.native_key.is_none())
             .map(|ask| ask.since)
     }
 

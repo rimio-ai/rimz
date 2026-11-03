@@ -315,7 +315,8 @@ fn transcript_targets<'a>(
             kind: record.kind.as_str().to_owned(),
             session_id: record.agent_id.as_str().to_owned(),
             model_hint: record.context.model_id.clone(),
-            open_permission_since: agent.and_then(crate::agents::AgentState::open_permission_since),
+            open_permission_since: agent
+                .and_then(crate::agents::AgentState::settleable_permission_since),
         };
         targets.entry(path).or_default().insert(target);
     }

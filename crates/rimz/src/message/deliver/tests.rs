@@ -599,6 +599,46 @@ fn waiting_dwell_starts_when_permission_review_becomes_visible() {
         assert_eq!(evaluation.check.trip_at, Some(trip_at));
         assert_eq!(evaluation.retry_at, (!met).then_some(trip_at));
     }
+    watched.context = Some(crate::agents::AgentContext {
+        permission_settle: Some(crate::agents::context::PermissionSettle {
+            ask_since: at,
+            at: at + Duration::from_secs(2),
+        }),
+        ..Default::default()
+    });
+    for second in [1_059, 1_070, 1_090] {
+        let now = Timestamp::from_second(second).unwrap();
+        let evaluation = evaluate_when_condition(
+            &condition,
+            &snapshot(watched.clone(), false, now),
+            now,
+            Duration::from_secs(30),
+        );
+        assert_eq!(evaluation.check.status, Some(AgentStatus::Running));
+        assert!(!evaluation.check.met);
+        assert!(evaluation.retry_at.is_some_and(|retry| retry > now));
+    }
+    watched
+        .context
+        .as_mut()
+        .unwrap()
+        .permission_settle
+        .as_mut()
+        .unwrap()
+        .ask_since = at - Duration::from_secs(1);
+    watched.last_activity = at + Duration::from_secs(4);
+    let now = at + Duration::from_secs(90);
+    let evaluation = evaluate_when_condition(
+        &condition,
+        &snapshot(watched, false, now),
+        now,
+        Duration::from_secs(30),
+    );
+    assert_eq!(evaluation.check.status, Some(AgentStatus::Waiting));
+    assert!(
+        evaluation.check.met,
+        "without matching proof, keep raw-status matching"
+    );
 }
 
 fn ready_check() -> DeliveryCheck {

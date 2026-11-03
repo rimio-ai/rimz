@@ -1242,7 +1242,7 @@ pub(super) fn evaluate_when_condition(
         .iter()
         .find(|agent| condition.card_ref().matches(agent.card_ref()));
     let status = agent.map(|agent| {
-        if agent.is_reviewing_permission(now) {
+        if agent.is_reviewing_permission(now) || agent.permission_settled() {
             AgentStatus::Running
         } else {
             agent.status

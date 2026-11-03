@@ -997,7 +997,8 @@ pub struct LocalContextRefreshCtx<'a> {
     /// Catalog/config inputs already reflected in the sidecar's model limits.
     pub prior_model_context_limits_key: Option<&'a context::record::ModelContextLimitsKey>,
     pub prior_spend_fold: Option<&'a LocalSpendFold>,
-    /// Arrival of the row's open permission ask, when the caller knows the row.
+    /// Arrival of the row's settleable permission ask
+    /// (`AgentState::settleable_permission_since`), when the caller knows the row.
     pub open_permission_since: Option<Timestamp>,
     pub prior_permission_settle: Option<context::PermissionSettle>,
     /// Persistent shared `pricing-cache.json`, for adapters that price token

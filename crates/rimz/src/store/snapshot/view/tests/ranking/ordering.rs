@@ -71,6 +71,50 @@ use crate::store::snapshot::SidebarWorktreeGroup;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
+fn closed_permissions_do_not_rank_as_waiting() {
+    for proof in ["completed cell", "turn ended", "answered"] {
+        let mut closed = agent("codex", "closed", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(90);
+        closed.mode = Some(crate::agents::PermissionMode::Auto);
+        closed.waiting_since = Some(ago(90));
+        closed.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: None,
+            native_key: None,
+            since: ago(90),
+        });
+        closed.context = Some(crate::agents::AgentContext::default());
+        match proof {
+            "completed cell" => {
+                closed.context.as_mut().unwrap().permission_settle =
+                    Some(crate::agents::context::PermissionSettle {
+                        ask_since: ago(90),
+                        at: ago(88),
+                    })
+            }
+            "turn ended" => {
+                closed.context.as_mut().unwrap().turn_error = Some(crate::agents::AgentTurnError {
+                    class: crate::agents::TurnErrorClass::PausedOverloaded,
+                    at: ago(88),
+                    label: None,
+                    ended_turn: true,
+                })
+            }
+            _ => closed.last_activity = ago(89),
+        }
+        let waiting = agent("claude", "waiting", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(30);
+        let snapshot = room_with_agent_panes(vec![closed, waiting]);
+        let agents = snapshot.agents.iter().collect::<Vec<_>>();
+        let groups = group_live_agents_by_worktree(&agents, &snapshot);
+        assert_eq!(groups[0].agents[0].agent_id.as_str(), "waiting", "{proof}");
+    }
+}
+
+#[test]
 fn auto_review_permission_listing_ranks_with_running_until_visible() {
     for age in [59, 60] {
         let mut review = agent("codex", "review", AgentStatus::Waiting, 0)
