@@ -100,7 +100,7 @@ fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
         ticket(
             rimz::ids::HoldKind::Store,
             2,
-            "cannot count active agents: broken",
+            "cannot count open agents: broken",
         ),
     ];
     let (kind, reason) = attention(&row, 0, now);
@@ -108,7 +108,7 @@ fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
         kind == Some(Attention::Held),
         "a needs-a-fix start must raise attention"
     );
-    assert_eq!(reason, "cannot count active agents: broken");
+    assert_eq!(reason, "cannot count open agents: broken");
     row.held.truncate(1);
     let (kind, reason) = attention(&row, 0, now);
     assert!(kind.is_none() && reason.is_empty());

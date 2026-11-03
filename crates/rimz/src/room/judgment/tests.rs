@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn judgment_warns_and_ignores_project_throttle() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[throttle]\nmax-parallel-agents=1\n",
+    )
+    .unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let machine = MachineConfig::default();
+    let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+    let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+    let warning = judgment
+        .skipped
+        .iter()
+        .find(|entry| entry.setting == "throttle");
+    assert!(warning.is_some(), "{:?}", judgment.skipped);
+    assert!(warning.unwrap().message.contains("machine-only"));
+}
+
+#[test]
 fn judgment_warns_only_when_stall_nudge_is_shadowed() {
     let root = tempfile::tempdir().unwrap();
     let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();

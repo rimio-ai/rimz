@@ -95,8 +95,9 @@ pub enum HoldKind {
     Capacity,
     CheckFailed,
     Queue,
-    TaskCap,
     MachineCap,
+    AutomationCap,
+    Stagger,
     WorkflowLimit,
     StepLimit,
     Pressure,
@@ -106,6 +107,16 @@ pub enum HoldKind {
 }
 
 impl HoldKind {
+    pub(crate) fn deserialize_optional<'de, D>(deserializer: D) -> Result<Option<Self>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<String>::deserialize(deserializer)?;
+        Ok(value.and_then(|value| {
+            Self::deserialize(serde::de::value::StrDeserializer::<D::Error>::new(&value)).ok()
+        }))
+    }
+
     pub const fn needs_fix(self) -> bool {
         matches!(self, Self::CheckFailed | Self::Disk | Self::Store)
     }
@@ -1132,8 +1143,9 @@ mod tests {
             ("capacity", false),
             ("check_failed", true),
             ("queue", false),
-            ("task_cap", false),
             ("machine_cap", false),
+            ("automation_cap", false),
+            ("stagger", false),
             ("workflow_limit", false),
             ("step_limit", false),
             ("pressure", false),
@@ -1144,6 +1156,37 @@ mod tests {
             let kind: HoldKind = serde_json::from_value(serde_json::json!(wire)).unwrap();
             assert_eq!(serde_json::to_value(kind).unwrap(), wire);
             assert_eq!(kind.needs_fix(), needs_fix, "{wire}");
+        }
+    }
+
+    #[test]
+    fn durable_waits_ignore_unknown_hold_kinds() {
+        for wire in ["task_cap", "future_hold"] {
+            let value = serde_json::json!({
+                "node":"build", "outcome":"capacity", "hold":wire,
+                "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
+                "count":1, "recheck_at":null, "kinds":[], "reason":"held", "gave_up":false
+            });
+            let wait = serde_json::from_value::<crate::store::workflow::Wait>(value.clone());
+            assert!(wait.is_ok(), "{wire}: {wait:?}");
+            assert_eq!(wait.unwrap().hold, None);
+            let mut journal = value.clone();
+            journal["event"] = serde_json::json!("wait");
+            let journal = serde_json::from_value::<crate::store::workflow::JournalEvent>(journal);
+            assert!(journal.is_ok(), "{wire}: {journal:?}");
+            assert!(matches!(
+                journal.unwrap(),
+                crate::store::workflow::JournalEvent::Wait {
+                    hold: None,
+                    count: 1,
+                    ..
+                }
+            ));
+            let record = serde_json::from_value::<
+                crate::harness::schedule::launch_ledger::CapacityRecord,
+            >(value);
+            assert!(record.is_ok(), "{wire}: {record:?}");
+            assert_eq!(record.unwrap().hold, None);
         }
     }
     #[test]

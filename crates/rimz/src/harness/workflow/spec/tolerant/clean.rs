@@ -294,8 +294,8 @@ fn limit(value: &mut Option<Limit>, path: &str, ignored: &mut Vec<Issue>) {
         return;
     };
     sanitize(
-        &mut limit.max_active,
-        &format!("{path}.max-active"),
+        &mut limit.max_parallel,
+        &format!("{path}.max-parallel"),
         ignored,
         |max| {
             if *max == 0 {
@@ -306,17 +306,17 @@ fn limit(value: &mut Option<Limit>, path: &str, ignored: &mut Vec<Issue>) {
         },
     );
     sanitize(
-        &mut limit.pace,
-        &format!("{path}.pace"),
+        &mut limit.stagger,
+        &format!("{path}.stagger"),
         ignored,
         |raw| match duration(raw) {
-            Ok(pace) if pace.is_zero() => Err("must be greater than zero".to_string()),
+            Ok(stagger) if stagger.is_zero() => Err("must be greater than zero".to_string()),
             Ok(_) => Ok(()),
             Err(error) => Err(error.to_string()),
         },
     );
-    if limit.max_active.is_none() && limit.pace.is_none() {
-        ignore(value, path, ignored, "set max-active or pace");
+    if limit.max_parallel.is_none() && limit.stagger.is_none() {
+        ignore(value, path, ignored, "set max-parallel or stagger");
     }
 }
 

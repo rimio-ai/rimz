@@ -7756,7 +7756,7 @@ fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
             let first = format!("[tasks.one]\n{root}check = \"true\"\nevery = \"1h\"\n");
             let next = match (following_section, project) {
                 (false, _) => "",
-                (true, false) => "\n# Throttle settings\n[throttle]\npace = \"10s\"\n",
+                (true, false) => "\n# Throttle settings\n[throttle]\nstagger = \"10s\"\n",
                 (true, true) => "\n# Agent settings\n[agents]\n",
             };
             let seed = format!("{first}{comments}{next}");
@@ -9242,16 +9242,19 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
 #[test]
 fn loop_show_nonspawning_tasks_have_no_throttle_readings() {
     let env = Env::new();
+    let core = env.rimz_home().join("config.toml");
+    let base = std::fs::read_to_string(&core).unwrap_or_default();
     for (limit, switch) in [
         ("", ""),
         ("", "throttle='on'\n"),
         ("", "throttle='off'\n"),
-        ("[throttle]\nmax-active = 1\n", ""),
+        ("[throttle]\nmax-parallel-agents = 1\n", ""),
     ] {
+        std::fs::write(&core, format!("{base}\n{limit}")).unwrap();
         write_loop_config(
             &env,
             &format!(
-                "{limit}[tasks.check]\n{switch}check = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
+                "[tasks.check]\n{switch}check = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
                  [tasks.wake]\n{switch}root = {:?}\nevery = \"1h\"\n\
                  wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
                 env.project_root, env.project_root,

@@ -81,6 +81,13 @@ pub(super) fn judge(
     for warning in &machine.notices.definition_warnings {
         warn(warning.path.display().to_string(), warning.to_string());
     }
+    if crate::trust::project_throttle(&workspace.project_root).unwrap_or(false) {
+        warn(
+            "throttle".into(),
+            "[throttle] is machine-only; the project table is ignored; set it in ~/.rimz/config.toml"
+                .into(),
+        );
+    }
     if let Ok(Some(packs)) = crate::trust::project_packs(&workspace.project_root)
         && let Ok(installed) = crate::packs::Record::read(&crate::disk::paths::agents_home())
     {
@@ -119,8 +126,8 @@ pub(super) fn judge(
             crate::blocker::Blocker::from(error).to_string(),
         );
     }
-    if let Err(error) = crate::harness::schedule::throttle::preflight(&machine.r#loop.throttle) {
-        warn("loop.throttle".into(), error.to_string());
+    if let Err(error) = crate::harness::schedule::throttle::preflight(&machine.throttle) {
+        warn("throttle".into(), error.to_string());
     }
     let state = crate::StatePaths::for_project_root(&workspace.project_root)?;
     let agent_shell = agent_shell.cloned().or_else(|| {

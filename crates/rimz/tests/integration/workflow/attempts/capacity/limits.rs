@@ -38,6 +38,10 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
             seq: 1,
             role: WorkflowAttemptRole::Step,
         });
+        observation.launch.automation = Some(rimz::agents::Automation::Workflow {
+            workflow: "review".into(),
+            step: "build".into(),
+        });
         room.env
             .store()
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -52,11 +56,69 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
 }
 
 #[test]
+fn oversized_step_groups_fail_without_taking_the_capacity_route() {
+    let room =
+        Room::new("throttle='off'\non.capacity='after'\n[steps.build.limit]\nmax-parallel=1\n");
+    let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("agent = 'codex'", "agent = 'codex,codex'"),
+    )
+    .unwrap();
+    let record = pending(&room, Some("nightly"));
+    let value = advance(&room, &record);
+    assert_eq!(value["record"]["state"], "failed", "{value:#}");
+    assert_eq!(value["record"]["node"], "build", "{value:#}");
+    assert!(value["record"]["wait"].is_null(), "{value:#}");
+    assert!(events(&value, "turn_end").is_empty(), "{value:#}");
+    assert!(
+        !events(&value, "route")
+            .iter()
+            .any(|row| row["outcome"] == "capacity"),
+        "{value:#}"
+    );
+    let attempts = events(&value, "attempt");
+    let failed = attempts
+        .iter()
+        .find(|row| row["outcome"] == "died")
+        .expect("died attempt");
+    assert_eq!(
+        failed["reason"],
+        "this start opens 2 agents, more than max-parallel = 1 allows; raise max-parallel in step build's definition"
+    );
+    assert!(tickets(&room).is_empty());
+}
+
+#[test]
+fn off_steps_still_hold_at_the_machine_automation_cap() {
+    let room = Room::new("throttle='off'\ncapacity-wait='1h'\n");
+    let core = room.env.rimz_home().join("config.toml");
+    let mut config = fs::read_to_string(&core).unwrap_or_default();
+    config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
+    fs::write(core, config).unwrap();
+    let record = pending(&room, Some("nightly"));
+    fill_limit(&room, &record);
+    let value = advance(&room, &record);
+    assert_eq!(
+        value["record"]["wait"]["hold"], "automation_cap",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["record"]["wait"]["detail"],
+        "1 of 1 automated agents open (@codex)"
+    );
+    assert_eq!(value["record"]["visits"], json!({}));
+    assert!(tickets(&room).is_empty());
+}
+
+#[test]
 fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() {
     let mut actual = Vec::new();
     for (edge, terminal) in [("", "failed"), ("on.capacity='after'\n", "done")] {
         let room = Room::new(&format!(
-            "throttle='off'\ncapacity-wait='1h'\n{edge}[steps.build.limit]\nmax-active=1\n"
+            "throttle='off'\ncapacity-wait='1h'\n{edge}[steps.build.limit]\nmax-parallel=1\n"
         ));
         fs::write(
             room.env.rimz_home().join("loop.toml"),
@@ -70,12 +132,16 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
         fill_limit(&room, &record);
         let mut value = advance(&room, &record);
         assert_eq!(value["record"]["wait"]["hold"], "step_limit", "{value:#}");
-        assert_eq!(value["record"]["wait"]["detail"], "limit build 1/1 working");
+        assert_eq!(
+            value["record"]["wait"]["detail"],
+            "step build: 1 of 1 agents open (@codex)"
+        );
         assert_eq!(value["record"]["visits"], json!({}));
         for args in [&["workflow", "list"][..], &["loop", "list"][..]] {
             let listed = success(room.command(args).output().unwrap());
             assert!(
-                listed.contains("HELD") && listed.contains("limit build 1/1 working"),
+                listed.contains("HELD")
+                    && listed.contains("step build: 1 of 1 agents open (@codex)"),
                 "{listed}"
             );
             assert!(!listed.contains("NEEDS YOU"), "{listed}");
@@ -97,15 +163,15 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
 }
 
 #[test]
-fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_pace_scopes() {
+fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
     for task in [None, Some("nightly")] {
-        let room = Room::new("[steps.build.limit]\nmax-active=1\npace='2m'\n");
+        let room = Room::new("[steps.build.limit]\nmax-parallel=1\nstagger='2m'\n");
         let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
         fs::write(
             &spec,
             fs::read_to_string(&spec).unwrap().replace(
                 "[checks.pr]",
-                "[workflow.limit]\nmax-active=1\npace='3m'\n[checks.pr]",
+                "[workflow.limit]\nmax-parallel=1\nstagger='3m'\n[checks.pr]",
             ),
         )
         .unwrap();
@@ -116,18 +182,20 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_pace_scopes() {
         let before = jiff::Timestamp::now().as_millisecond();
         let value = advance(&room, &record);
         assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
-        let pace = room.env.rimz_home().join("loops/workflow-pace.json");
+        let stagger = room.env.rimz_home().join("loops/start-stamps.json");
         assert!(
-            pace.is_file(),
-            "manual limited launches must restart pace: {value:#}"
+            stagger.is_file(),
+            "manual limited launches must restart stagger: {value:#}"
         );
-        let pace: Value = serde_json::from_slice(&fs::read(pace).unwrap()).unwrap();
-        let at = pace["review"]["last_launch_ms"].as_i64().unwrap();
+        let stagger: Value = serde_json::from_slice(&fs::read(stagger).unwrap()).unwrap();
+        let at = stagger["workflows"]["review"]["last_launch_ms"]
+            .as_i64()
+            .unwrap();
         assert!(
             at >= before && at <= jiff::Timestamp::now().as_millisecond(),
-            "{pace:#}"
+            "{stagger:#}"
         );
-        assert_eq!(pace["review"]["steps"]["build"], at);
+        assert_eq!(stagger["workflows"]["review"]["steps"]["build"], at);
         let queue = tickets(&room);
         assert_eq!(queue.len(), 1, "{queue:#?}");
         assert_eq!(queue[0]["state"], "launched");
@@ -138,7 +206,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_pace_scopes() {
                 .unwrap(),
         );
         assert!(
-            definition.contains("limit max-active=1 · pace=3m"),
+            definition.contains("limit max-parallel=1 · stagger=3m"),
             "{definition}"
         );
         let step = success(
@@ -146,7 +214,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_pace_scopes() {
                 .output()
                 .unwrap(),
         );
-        assert!(step.contains("max-active=1 · pace=2m"), "{step}");
+        assert!(step.contains("max-parallel=1 · stagger=2m"), "{step}");
         success(
             room.command(&["workflow", "cancel", record.id.as_str()])
                 .output()
@@ -157,7 +225,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_pace_scopes() {
 
 #[test]
 fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() {
-    let room = Room::new("throttle='off'\n[steps.build.limit]\nmax-active=1\n");
+    let room = Room::new("throttle='off'\n[steps.build.limit]\nmax-parallel=1\n");
     let record = pending(&room, None);
     fs::create_dir_all(room.env.rimz_home().join("loops")).unwrap();
     fs::write(

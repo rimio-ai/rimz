@@ -2,8 +2,8 @@
 //!
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
 //! Machine turns release on a provider report or ceiling. Workflow-scoped turns
-//! wait for a countable leader or their own ceiling, independently of machine
-//! scope. Manual limited starts claim without waiting and stamp pace at launch.
+//! wait for their agent row or their own ceiling, independently of machine
+//! scope. Manual limited starts claim without waiting and stamp stagger at launch.
 //! A later scanner releases each scope, so the launching process never lingers.
 //! Admission samples limits under the queue lock; capacity scripts run off-lock.
 //! Inspection reads the same limits without taking a turn.
@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, AgentStatus};
@@ -24,7 +23,6 @@ use crate::disk::atomic::AtomicErr;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LoginName, WorkspaceId};
-use crate::store::run::RunRecord;
 use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
 
@@ -34,6 +32,7 @@ pub(in crate::harness) use limits::WorkflowStart;
 const RECHECK: Duration = Duration::from_secs(1);
 const SAMPLE_EVERY_MS: u64 = 5_000;
 const CHECK_REUSE_MS: u64 = 60_000;
+const TURN_CEILING: Duration = Duration::from_secs(10);
 const CHECK_CEILING: Duration = Duration::from_secs(120);
 const NAMED_AGENTS: usize = 2;
 
@@ -43,6 +42,13 @@ pub enum ThrottleError {
     /// A configured limit this machine cannot read, with the fix.
     #[error("{0}")]
     Unreadable(String),
+    #[error("this start opens {agents} agents, more than {key} = {cap} allows; {fix}")]
+    Oversized {
+        agents: usize,
+        key: &'static str,
+        cap: u32,
+        fix: String,
+    },
     #[error("reading {reading}: {detail}")]
     Reading {
         reading: &'static str,
@@ -64,8 +70,8 @@ pub enum ThrottleError {
     },
     #[error("writing a loop throttle ticket: {0}")]
     WriteTicket(#[source] AtomicErr),
-    #[error("writing workflow pace: {0}")]
-    WritePace(#[source] AtomicErr),
+    #[error("writing launch stagger: {0}")]
+    WriteStamps(#[source] AtomicErr),
     #[error("loop throttle ticket {0} vanished from the queue")]
     Vanished(PathBuf),
     #[error("listening for Ctrl-C while held: {0}")]
@@ -159,7 +165,7 @@ pub(super) trait Host: Send + Sync {
     fn queue_dir(&self) -> PathBuf;
     fn queue_lock(&self) -> PathBuf;
     fn check_cache(&self) -> PathBuf;
-    fn workflow_pace(&self) -> PathBuf;
+    fn start_stamps(&self) -> PathBuf;
     fn check(
         &self,
         config: &ThrottleConfig,
@@ -178,7 +184,6 @@ pub(super) trait Host: Send + Sync {
     fn workspaces(&self) -> Result<Vec<WorkspaceId>, String>;
     /// Every agent row of one workspace; `Err` names why it cannot be read.
     fn agents(&self, workspace: &WorkspaceId) -> Result<Vec<AgentState>, String>;
-    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String>;
     fn workflows(
         &self,
         workspace: &WorkspaceId,
@@ -190,17 +195,15 @@ pub(super) struct SystemHost;
 
 impl Host for SystemHost {
     fn throttle_config(&self) -> Option<ThrottleConfig> {
-        MachineConfig::load_loop()
-            .ok()
-            .map(|config| config.throttle)
+        MachineConfig::load_throttle().ok()
     }
 
     fn check_cache(&self) -> PathBuf {
         paths::loop_throttle_check_cache()
     }
 
-    fn workflow_pace(&self) -> PathBuf {
-        paths::loop_throttle_workflow_pace()
+    fn start_stamps(&self) -> PathBuf {
+        paths::loop_throttle_start_stamps()
     }
 
     fn check(
@@ -324,16 +327,6 @@ impl Host for SystemHost {
         ))
     }
 
-    fn runs(&self, workspace: &WorkspaceId) -> Result<Vec<RunRecord>, String> {
-        let unreadable =
-            |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
-        let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
-        let mut runs =
-            crate::harness::run::list(&state).map_err(|err| unreadable(&format!("{err:#}")))?;
-        runs.retain(|run| !run.status.is_terminal());
-        Ok(runs)
-    }
-
     fn workflows(
         &self,
         workspace: &WorkspaceId,
@@ -439,13 +432,9 @@ pub(super) fn try_admit_in(
     config: &ThrottleConfig,
     run: &Run,
 ) -> Result<Attempt> {
-    if (!run.machine_gated || !gates(config)) && run.limits.is_none() {
+    if !run.machine_gated && !caps(config) && run.limits.is_none() {
         return Ok(Attempt::Open);
     }
-    let run = &Run {
-        machine_gated: run.machine_gated && gates(config),
-        ..run.clone()
-    };
     if run.machine_gated
         && let Some(problem) = unreadable(host.as_ref(), config)
     {
@@ -475,19 +464,30 @@ pub(super) fn try_admit_in(
                 kinds: run.kinds(),
             }))
         }
-        None => Ok(Attempt::Turn(turn)),
+        None => {
+            if run.machine_gated && config.check.is_some() {
+                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                if let Some(hold) = pass(
+                    host.as_ref(),
+                    config,
+                    run,
+                    Some(&turn.0.ticket),
+                    host.now_ms(),
+                    &mut None,
+                )? {
+                    return Ok(Attempt::Held(hold));
+                }
+            }
+            Ok(Attempt::Turn(turn))
+        }
     }
 }
 
 /// Inspect the same tail without a ticket or reservation, even during its check.
 pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
-    if (!run.machine_gated || !gates(config)) && run.limits.is_none() {
+    if !run.machine_gated && !caps(config) && run.limits.is_none() {
         return Ok(None);
     }
-    let run = &Run {
-        machine_gated: run.machine_gated && gates(config),
-        ..run.clone()
-    };
     if run.machine_gated
         && let Some(problem) = unreadable(host, config)
     {
@@ -499,13 +499,18 @@ pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Re
             return Ok(Some(hold));
         }
     }
-    check_groups(host, config, run, false)
+    let hold = check_groups(host, config, run, false)?;
+    if hold.is_some() || !run.machine_gated || config.check.is_none() {
+        return Ok(hold);
+    }
+    let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+    pass(host, config, run, None, host.now_ms(), &mut None)
 }
 
 /// The latest capacity-check errors, read without running a check or taking a turn.
 pub fn check_errors() -> Vec<String> {
     let config = MachineConfig::load_lenient();
-    check_errors_in(&SystemHost, &config.r#loop.throttle)
+    check_errors_in(&SystemHost, &config.throttle)
 }
 
 fn check_errors_in(host: &dyn Host, config: &ThrottleConfig) -> Vec<String> {
@@ -706,6 +711,8 @@ struct Ticket {
     enqueued_ms: u64,
     #[serde(default = "machine_gated_default")]
     machine_gated: bool,
+    #[serde(default = "one_agent")]
+    agents: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<LimitScope>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -714,6 +721,10 @@ struct Ticket {
     gives_up_ms: Option<u64>,
     #[serde(flatten)]
     state: TicketState,
+}
+
+fn one_agent() -> usize {
+    1
 }
 
 fn machine_gated_default() -> bool {
@@ -735,6 +746,7 @@ impl Ticket {
             checkout: run.checkout.clone(),
             enqueued_ms,
             machine_gated: run.machine_gated,
+            agents: run.groups.iter().map(|group| group.agents).sum(),
             limit: run.limits.as_ref().map(|start| LimitScope {
                 workflow: start.workflow.clone(),
                 step: start.step.clone(),
@@ -743,10 +755,6 @@ impl Ticket {
             gives_up_ms: run.gives_up_ms,
             state: TicketState::Waiting { reason: None },
         }
-    }
-
-    fn same_task(&self, other: &Self) -> bool {
-        self.task == other.task && self.root == other.root
     }
 
     fn shares_scope(&self, other: &Self) -> bool {
@@ -793,7 +801,7 @@ impl Turn {
         }))
     }
 
-    /// Stamp the committed launch and any workflow/step pace under the queue lock.
+    /// Stamp the committed launch and machine/workflow/step stagger under the queue lock.
     /// Machine and workflow scopes release independently on their report or ceiling.
     /// A second report, which a verify retry produces, changes nothing.
     pub fn report_launch(&self, workspace: &WorkspaceId, agent: &AgentSessionId) {
@@ -807,8 +815,13 @@ impl Turn {
                 return Ok(());
             };
             let at_ms = host.now_ms();
-            if let Some(scope) = &ticket.limit {
-                limits::stamp(host.as_ref(), scope, at_ms)?;
+            if ticket.machine_gated || ticket.limit.is_some() {
+                limits::stamp(
+                    host.as_ref(),
+                    ticket.machine_gated,
+                    ticket.limit.as_ref(),
+                    at_ms,
+                )?;
             }
             ticket.state = TicketState::Launched {
                 at_ms,
@@ -851,9 +864,8 @@ pub(super) enum Admission {
     Interrupted,
 }
 
-/// Whether any key makes the gate do something.
-fn gates(config: &ThrottleConfig) -> bool {
-    !config.pace().is_zero() || config.has_limits()
+fn caps(config: &ThrottleConfig) -> bool {
+    config.max_parallel_agents.is_some() || config.max_parallel_automation.is_some()
 }
 
 /// The configured limit this host cannot read, as the fail-fast message.
@@ -863,7 +875,7 @@ fn unreadable(host: &dyn Host, config: &ThrottleConfig) -> Option<String> {
             && let Err(source) = host.pressure(resource)
         {
             return Some(format!(
-                "`loop.throttle.{}-pressure` is set but pressure cannot be read ({source}); remove the key from loop.toml, or enable PSI (boot with `psi=1`)",
+                "`throttle.{}-pressure` is set but pressure cannot be read ({source}); remove the key from config.toml, or enable PSI (boot with `psi=1`)",
                 resource.name()
             ));
         }
@@ -872,7 +884,7 @@ fn unreadable(host: &dyn Host, config: &ThrottleConfig) -> Option<String> {
         && let Err(source) = host.memory_available()
     {
         return Some(format!(
-            "`loop.throttle.min-memory` is set but available memory cannot be read ({source}); remove the key from loop.toml"
+            "`throttle.min-memory` is set but available memory cannot be read ({source}); remove the key from config.toml"
         ));
     }
     None
@@ -895,10 +907,12 @@ pub(super) fn admit(
     run: &Run,
     listening: Option<Interrupts>,
 ) -> Result<Admission> {
-    if !gates(config) {
+    if !run.machine_gated && !caps(config) && run.limits.is_none() {
         return Ok(Admission::Open);
     }
-    if let Some(problem) = unreadable(host.as_ref(), config) {
+    if run.machine_gated
+        && let Some(problem) = unreadable(host.as_ref(), config)
+    {
         return Err(ThrottleError::Unreadable(problem));
     }
     let enqueued_ms = host.now_ms();
@@ -928,7 +942,9 @@ pub(super) fn admit(
         if let Some(current) = host.throttle_config()
             && current != config
         {
-            if let Some(problem) = unreadable(host.as_ref(), &current) {
+            if run.machine_gated
+                && let Some(problem) = unreadable(host.as_ref(), &current)
+            {
                 return Err(ThrottleError::Unreadable(problem));
             }
             refresh_check |=
@@ -951,7 +967,7 @@ pub(super) fn admit(
             {
                 return skipped(reason);
             }
-            if !gates(&config) {
+            if !run.machine_gated && !caps(&config) && run.limits.is_none() {
                 return Ok(Admission::Open);
             }
             pass(host.as_ref(), &config, run, Some(&path), now, &mut blocked)?
@@ -963,6 +979,17 @@ pub(super) fn admit(
                 run,
                 std::mem::take(&mut refresh_check),
             )?;
+            if hold.is_none() && run.machine_gated && config.check.is_some() {
+                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                hold = pass(
+                    host.as_ref(),
+                    &config,
+                    run,
+                    Some(&path),
+                    host.now_ms(),
+                    &mut None,
+                )?;
+            }
             if let Some(hold) = &hold {
                 let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
                 let mut ticket =
@@ -1011,6 +1038,43 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+fn check_group_size(config: &ThrottleConfig, run: &Run) -> Result<()> {
+    let agents = run.groups.iter().map(|group| group.agents).sum::<usize>();
+    if let Some(start) = &run.limits {
+        for (scope, name, limit) in [
+            ("workflow", &start.workflow, &start.workflow_limit),
+            ("step", &start.step, &start.step_limit),
+        ] {
+            if let Some(cap) = limit.as_ref().and_then(|limit| limit.max_parallel)
+                && agents > cap as usize
+            {
+                return Err(ThrottleError::Oversized {
+                    agents,
+                    key: "max-parallel",
+                    cap,
+                    fix: format!("raise max-parallel in {scope} {name}'s definition"),
+                });
+            }
+        }
+    }
+    for (key, cap) in [
+        ("max-parallel-agents", config.max_parallel_agents),
+        ("max-parallel-automation", config.max_parallel_automation),
+    ] {
+        if let Some(cap) = cap
+            && agents > cap as usize
+        {
+            return Err(ThrottleError::Oversized {
+                agents,
+                key,
+                cap,
+                fix: "raise it in ~/.rimz/config.toml".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// One pass over the queue, under its lock: `None` admits the ticket at
 /// `mine`, and a hold is what it waits on. Without `mine`, inspect the tail
 /// without changing it.
@@ -1025,10 +1089,11 @@ fn pass(
     if run.limits.as_ref().is_some_and(|start| !start.may_wait) {
         return Ok(None);
     }
+    check_group_size(config, run)?;
     let ceiling = if config.check.is_some() {
-        config.pace().max(CHECK_CEILING)
+        CHECK_CEILING
     } else {
-        config.pace()
+        TURN_CEILING
     };
     let queue = sweep(host, Some(ceiling), now)?;
     let position = match mine {
@@ -1047,18 +1112,35 @@ fn pass(
     let mut hold = run
         .limits
         .as_ref()
-        .and_then(|start| match launching(&queue, &ticket) {
-            0 => limits::evaluate(host, start).unwrap_or_else(|error| Some(store_hold(error))),
+        .and_then(|start| match launching(&queue, &ticket, mine) {
+            0 => limits::evaluate(
+                host,
+                start,
+                run.groups.iter().map(|group| group.agents).sum(),
+            )
+            .unwrap_or_else(|error| Some(store_hold(error))),
             count => Some(limits::launching(start, count)),
         });
     if hold.is_none() && run.machine_gated {
         hold = queue_hold(&queue, position, &ticket);
     }
-    if hold.is_none() && run.machine_gated {
+    if hold.is_none() {
         hold = match blocked {
-            Some((at, hold)) if now.saturating_sub(*at) < SAMPLE_EVERY_MS => Some(hold.clone()),
+            Some((at, hold))
+                if hold.kind != HoldKind::Stagger && now.saturating_sub(*at) < SAMPLE_EVERY_MS =>
+            {
+                Some(hold.clone())
+            }
             _ => {
-                let sampled = limit_hold(host, config, run)?;
+                let in_flight = queue
+                    .iter()
+                    .filter(|(path, ticket)| {
+                        mine != Some(path.as_path())
+                            && matches!(ticket.state, TicketState::Admitted)
+                    })
+                    .map(|(_, ticket)| ticket.agents)
+                    .sum();
+                let sampled = limit_hold(host, config, run, in_flight)?;
                 *blocked = sampled.clone().map(|hold| (now, hold));
                 sampled
             }
@@ -1089,32 +1171,25 @@ fn pass(
     Ok(hold)
 }
 
-fn launching(queue: &[(PathBuf, Ticket)], mine: &Ticket) -> usize {
+fn launching(queue: &[(PathBuf, Ticket)], mine: &Ticket, path: Option<&Path>) -> usize {
     queue
         .iter()
-        .filter(|(_, ticket)| ticket.shares_limit(mine) && !ticket.is_waiting())
+        .filter(|(other, ticket)| {
+            path != Some(other.as_path()) && ticket.shares_limit(mine) && !ticket.is_waiting()
+        })
         .count()
 }
 
-fn turn_held(queue: &[(PathBuf, Ticket)], mine: &Ticket) -> bool {
-    queue
-        .iter()
-        .any(|(_, ticket)| ticket.shares_scope(mine) && !ticket.is_waiting())
+fn turn_held(queue: &[(PathBuf, Ticket)], mine: &Ticket, position: usize) -> bool {
+    queue.iter().enumerate().any(|(index, (_, ticket))| {
+        index != position && ticket.shares_scope(mine) && !ticket.is_waiting()
+    })
 }
 
 /// What in the queue keeps the ticket at `position` from being the candidate:
 /// a held turn, or a ticket ahead that nothing lets it step over.
 fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Option<Hold> {
-    let turn_held = turn_held(queue, mine);
-    let task_cap = |ticket: &Ticket| {
-        matches!(
-            &ticket.state,
-            TicketState::Waiting { reason: Some(reason) } if reason.kind == HoldKind::TaskCap
-        )
-    };
-    // The cap is the task's: once a waiting run records it, that run and
-    // every later waiting run of its task step aside for other tasks, and
-    // each keeps its place among its own.
+    let turn_held = turn_held(queue, mine, position);
     let blocks_me = |index: usize| {
         let ticket = &queue[index].1;
         if !ticket.shares_scope(mine) {
@@ -1134,10 +1209,7 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
         {
             return false;
         }
-        let behind_its_cap = queue[..=index]
-            .iter()
-            .any(|(_, earlier)| earlier.same_task(ticket) && task_cap(earlier));
-        ticket.same_task(mine) || !behind_its_cap
+        true
     };
     let mut ahead = 0;
     let mut capacity_only = true;
@@ -1196,8 +1268,8 @@ fn queue_hold(queue: &[(PathBuf, Ticket)], position: usize, mine: &Ticket) -> Op
 
 /// Read the queue in order and remove every ticket that is over: a waiting or
 /// admitted one whose owner died, and a launched one whose turn has passed.
-/// `pace` is `None` for a reader that only reaps the dead.
-fn sweep(host: &dyn Host, pace: Option<Duration>, now: u64) -> Result<Vec<(PathBuf, Ticket)>> {
+/// `ceiling` is `None` for a reader that only reaps the dead.
+fn sweep(host: &dyn Host, ceiling: Option<Duration>, now: u64) -> Result<Vec<(PathBuf, Ticket)>> {
     let mut queue = Vec::new();
     for path in ticket_paths(&host.queue_dir())? {
         let mut ticket = match read_ticket(&path) {
@@ -1220,17 +1292,16 @@ fn sweep(host: &dyn Host, pace: Option<Duration>, now: u64) -> Result<Vec<(PathB
                 workspace,
                 agent,
             } => {
-                if let Some(pace) = pace {
+                if let Some(ceiling) = ceiling {
                     let elapsed = now.saturating_sub(*at_ms);
-                    let mut machine_done = !ticket.machine_gated || elapsed >= duration_ms(pace);
+                    let mut machine_done = !ticket.machine_gated || elapsed >= duration_ms(ceiling);
                     let mut limit_done =
-                        ticket.limit.is_none() || elapsed >= duration_ms(pace.max(CHECK_CEILING));
+                        ticket.limit.is_none() || elapsed >= duration_ms(CHECK_CEILING);
                     if (!machine_done || !limit_done)
                         && let Ok(agents) = host.agents(workspace)
                     {
                         machine_done = machine_done || provider_reported(&agents, agent);
-                        limit_done =
-                            limit_done || limits::reported(&agents, agent, host_time(host));
+                        limit_done = limit_done || limits::reported(&agents, agent);
                     }
                     ticket.machine_gated &= !machine_done;
                     if limit_done {
@@ -1275,40 +1346,12 @@ fn provider_reported(agents: &[AgentState], reference: &AgentSessionId) -> bool 
             .is_none_or(|agent| agent.ended_at.is_some() || agent.status == AgentStatus::Failed)
 }
 
-/// An agent that is working now: mid-turn, not ended, not inside a bounded
-/// compaction window, and its owner not gone.
-fn working(agent: &AgentState, now: Timestamp) -> bool {
-    agent.ended_at.is_none()
-        && agent.effective_status(now) == AgentStatus::Running
-        && !agent.is_compacting(now)
+/// A full agent session still open, regardless of turn or compaction state.
+fn open(agent: &AgentState) -> bool {
+    crate::agents::state::molt_stands(agent)
+        && !agent.is_provider_subagent()
         && crate::store::runtime::agent_liveness(agent)
             != crate::store::runtime::AgentLiveness::Dead
-}
-
-/// The working agents task `task` started: stamped with it, or matched by one
-/// of its open runs or live workflows.
-fn task_working<'a>(
-    agents: &'a [AgentState],
-    runs: &[RunRecord],
-    workflows: &[crate::store::workflow::RunRecord],
-    task: &str,
-    now: Timestamp,
-) -> Vec<&'a AgentState> {
-    agents
-        .iter()
-        .filter(|agent| working(agent, now))
-        .filter(|agent| {
-            agent.loop_task.as_deref() == Some(task)
-                || runs.iter().any(|run| run.matches_agent(agent))
-                || agent.workflow.as_ref().is_some_and(|pin| {
-                    workflows.iter().any(|run| {
-                        run.id == pin.run
-                            && !run.state.is_terminal()
-                            && run.task.as_deref() == Some(task)
-                    })
-                })
-        })
-        .collect()
 }
 
 /// Name the counted agents, up to the few a reason has room for.
@@ -1325,42 +1368,31 @@ fn name_counted(names: &mut Vec<String>, agents: &[AgentState], counted: &[&Agen
     );
 }
 
-fn machine_count(host: &dyn Host, now: Timestamp) -> Result<(usize, Vec<String>), String> {
-    let mut count = 0;
-    let mut names = Vec::new();
+/// The open agents on this machine, then the automated among them, each
+/// counted with the few it names, in one read of every workspace.
+fn machine_counts(host: &dyn Host) -> Result<[(usize, Vec<String>); 2], String> {
+    let mut counts: [(usize, Vec<String>); 2] = Default::default();
     for workspace in host.workspaces()? {
         let agents = host.agents(&workspace)?;
-        let counted: Vec<&AgentState> = agents.iter().filter(|agent| working(agent, now)).collect();
-        name_counted(&mut names, &agents, &counted);
-        count += counted.len();
+        let opened: Vec<&AgentState> = agents.iter().filter(|agent| open(agent)).collect();
+        let automated: Vec<&AgentState> = opened
+            .iter()
+            .copied()
+            .filter(|agent| agent.automation.is_some())
+            .collect();
+        for ((count, names), counted) in counts.iter_mut().zip([opened, automated]) {
+            name_counted(names, &agents, &counted);
+            *count += counted.len();
+        }
     }
-    Ok((count, names))
-}
-
-fn task_count(
-    host: &dyn Host,
-    workspace: &WorkspaceId,
-    task: &str,
-    now: Timestamp,
-) -> Result<(usize, Vec<String>), String> {
-    let agents = host.agents(workspace)?;
-    let runs: Vec<_> = host
-        .runs(workspace)?
-        .into_iter()
-        .filter(|run| run.loop_task.as_deref() == Some(task))
-        .collect();
-    let workflows = host.workflows(workspace)?;
-    let counted = task_working(&agents, &runs, &workflows, task, now);
-    let mut names = Vec::new();
-    name_counted(&mut names, &agents, &counted);
-    Ok((counted.len(), names))
+    Ok(counts)
 }
 
 fn store_hold(text: String) -> Hold {
     Hold {
         kind: HoldKind::Store,
         kinds: Vec::new(),
-        text: format!("cannot count active agents: {text}"),
+        text: format!("cannot count open agents: {text}"),
     }
 }
 
@@ -1383,53 +1415,90 @@ fn disk_hold(host: &dyn Host, floor: u64, path: &Path) -> Result<Option<Hold>> {
     }))
 }
 
-fn cap_hold(kind: HoldKind, cap: u32, count: usize, mut names: Vec<String>) -> Option<Hold> {
-    if count < cap as usize {
+fn cap_hold(
+    kind: HoldKind,
+    prefix: &str,
+    cap: u32,
+    count: usize,
+    incoming: usize,
+    in_flight: usize,
+    mut names: Vec<String>,
+) -> Option<Hold> {
+    if count.saturating_add(in_flight).saturating_add(incoming) <= cap as usize {
         return None;
     }
     if count > names.len() {
         names.push(format!("+{}", count - names.len()));
     }
-    let prefix = if kind == HoldKind::TaskCap {
-        "task at its cap: "
+    let automated = if kind == HoldKind::AutomationCap {
+        "automated "
     } else {
         ""
     };
+    let suffix = if names.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", names.join(", "))
+    };
+    let mut text = format!("{prefix}{count} of {cap} {automated}agents open{suffix}");
+    if in_flight > 0 {
+        text.push_str(&format!(", {in_flight} more starting"));
+    }
+    if incoming > 1 {
+        text.push_str(&format!("; this start opens {incoming}"));
+    }
     Some(Hold {
         kind,
         kinds: Vec::new(),
-        text: format!(
-            "{prefix}{count} of {cap} agents active ({})",
-            names.join(", ")
-        ),
+        text,
     })
 }
 
 /// The first configured cap or limit that is not clear for `run`, sampled now.
 /// A reading that cannot be taken is an error; a store that cannot be read is
 /// a hold, never a short count.
-fn limit_hold(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
-    let now = host_time(host);
-    if let Some(cap) = config.max_active_per_task.filter(|_| {
-        !run.limits
-            .as_ref()
-            .is_some_and(WorkflowStart::task_cap_exempt)
-    }) {
-        let (count, names) = match task_count(host, &run.workspace, &run.task, now) {
-            Ok(read) => read,
+fn limit_hold(
+    host: &dyn Host,
+    config: &ThrottleConfig,
+    run: &Run,
+    in_flight: usize,
+) -> Result<Option<Hold>> {
+    let counts = if caps(config) {
+        match machine_counts(host) {
+            Ok(counts) => counts,
             Err(text) => return Ok(Some(store_hold(text))),
-        };
-        if let Some(hold) = cap_hold(HoldKind::TaskCap, cap, count, names) {
+        }
+    } else {
+        Default::default()
+    };
+    for ((kind, cap), (count, names)) in [
+        (HoldKind::MachineCap, config.max_parallel_agents),
+        (HoldKind::AutomationCap, config.max_parallel_automation),
+    ]
+    .into_iter()
+    .zip(counts)
+    {
+        let Some(cap) = cap else { continue };
+        if let Some(hold) = cap_hold(
+            kind,
+            "",
+            cap,
+            count,
+            run.groups.iter().map(|group| group.agents).sum(),
+            in_flight,
+            names,
+        ) {
             return Ok(Some(hold));
         }
     }
-    if let Some(cap) = config.max_active {
-        let (count, names) = match machine_count(host, now) {
-            Ok(read) => read,
-            Err(text) => return Ok(Some(store_hold(text))),
-        };
-        if let Some(hold) = cap_hold(HoldKind::MachineCap, cap, count, names) {
-            return Ok(Some(hold));
+    if !run.machine_gated {
+        return Ok(None);
+    }
+    if let Some(gap) = config.stagger() {
+        match limits::machine_hold(host, gap) {
+            Ok(Some(hold)) => return Ok(Some(hold)),
+            Err(error) => return Ok(Some(store_hold(error))),
+            Ok(None) => {}
         }
     }
     for resource in Resource::ALL {
@@ -1569,7 +1638,7 @@ pub fn readings(
         groups: Vec::new(),
         gives_up_ms: None,
     };
-    readings_in(&SystemHost, &config.r#loop.throttle, &run)
+    readings_in(&SystemHost, &config.throttle, &run)
 }
 
 /// A current needs-a-fix reading, independent of tickets and cached verdicts.
@@ -1596,14 +1665,14 @@ fn diagnostic_holds_in(
     tasks: &[(&str, &TaskEntry)],
 ) -> Vec<DiagnosticHold> {
     let mut holds = Vec::new();
-    if let Err(text) = diagnostic_agent_count(host, &config.r#loop.throttle, tasks) {
+    if let Err(text) = diagnostic_agent_count(host, &config.throttle) {
         holds.push(DiagnosticHold {
             hold: HoldKind::Store,
             text: store_hold(text).text,
             disk_path: None,
         });
     }
-    if let Some(floor) = config.r#loop.throttle.min_disk_bytes() {
+    if let Some(floor) = config.throttle.min_disk_bytes() {
         let paths = tasks
             .iter()
             .flat_map(|(_, entry)| {
@@ -1636,22 +1705,9 @@ fn diagnostic_holds_in(
     holds
 }
 
-fn diagnostic_agent_count(
-    host: &dyn Host,
-    config: &ThrottleConfig,
-    tasks: &[(&str, &TaskEntry)],
-) -> Result<(), String> {
-    let now = host_time(host);
-    if config.max_active.is_some() {
-        machine_count(host, now)?;
-    }
-    if config.max_active_per_task.is_some() {
-        for (name, entry) in tasks {
-            let root = entry.resolved_root();
-            let state = StatePaths::for_project_root(&root)
-                .map_err(|err| format!("{}: {err}", root.display()))?;
-            task_count(host, &state.workspace_id, name, now)?;
-        }
+fn diagnostic_agent_count(host: &dyn Host, config: &ThrottleConfig) -> Result<(), String> {
+    if caps(config) {
+        machine_counts(host)?;
     }
     Ok(())
 }
@@ -1686,7 +1742,6 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
         Some(limit) => format!("{text} (limit {limit})"),
         None => text,
     };
-    let now = host_time(host);
     let mut rows = Vec::new();
     for resource in Resource::ALL {
         if let Ok(pressure) = host.pressure(resource) {
@@ -1721,22 +1776,19 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
             ),
         ));
     }
-    if let Ok((active, _)) = machine_count(host, now) {
-        rows.push((
-            "active agents",
-            limited(
-                active.to_string(),
-                config.max_active.map(|cap| format!("max {cap}")),
-            ),
-        ));
-    }
-    if let Some(cap) = config.max_active_per_task
-        && let Ok((counted, _)) = task_count(host, &run.workspace, &run.task, now)
-    {
-        rows.push((
-            "task active agents",
-            limited(counted.to_string(), Some(format!("max {cap}"))),
-        ));
+    if let Ok(counts) = machine_counts(host) {
+        for ((label, cap), (count, _)) in [
+            ("open agents", config.max_parallel_agents),
+            ("automated agents", config.max_parallel_automation),
+        ]
+        .into_iter()
+        .zip(counts)
+        {
+            rows.push((
+                label,
+                limited(count.to_string(), cap.map(|cap| format!("max {cap}"))),
+            ));
+        }
     }
     rows
 }
@@ -1803,14 +1855,6 @@ fn write_ticket(path: &Path, ticket: &Ticket) -> Result<()> {
         .map_err(ThrottleError::WriteTicket)
 }
 
-/// The host's clock as a timestamp, for the windows agent rows carry.
-fn host_time(host: &dyn Host) -> Timestamp {
-    i64::try_from(host.now_ms())
-        .ok()
-        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-        .unwrap_or(Timestamp::MAX)
-}
-
 fn remove_ticket(path: &Path) {
     if let Err(err) = std::fs::remove_file(path)
         && err.kind() != std::io::ErrorKind::NotFound
@@ -1821,4 +1865,4 @@ fn remove_ticket(path: &Path) {
 
 #[cfg(test)]
 #[path = "throttle/tests.rs"]
-pub(super) mod tests;
+pub(crate) mod tests;

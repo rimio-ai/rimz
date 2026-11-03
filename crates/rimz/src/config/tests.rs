@@ -7,6 +7,51 @@ use std::num::NonZeroU16;
 use tempfile::tempdir;
 
 #[test]
+fn machine_throttle_lives_in_core_and_rejects_invalid_limits() {
+    let text = "[throttle]\nmax-parallel-agents=128\nmax-parallel-automation=32\nstagger='30s'\n";
+    let parsed = parse_core_text_collecting(Path::new("config.toml"), text).unwrap();
+    assert!(parsed.unknown_keys.is_empty(), "{:?}", parsed.unknown_keys);
+    let machine =
+        MachineConfig::assemble(parsed.value, ThemeConfig::default(), LoopConfig::default());
+    let value = serde_json::to_value(machine).unwrap();
+    assert_eq!(value["throttle"]["max-parallel-agents"], 128);
+    assert_eq!(value["throttle"]["max-parallel-automation"], 32);
+    assert_eq!(value["throttle"]["stagger"], "30s");
+    for limit in [
+        "max-parallel-agents=0",
+        "max-parallel-automation=0",
+        "stagger='0s'",
+        "stagger='soon'",
+    ] {
+        assert!(
+            parse_core_text(Path::new("config.toml"), &format!("[throttle]\n{limit}")).is_err(),
+            "{limit}"
+        );
+    }
+}
+
+#[test]
+fn loop_throttle_is_unknown_and_does_not_change_the_catalog() {
+    let parsed = parse_loop_text_collecting(
+        Path::new("loop.toml"),
+        "[throttle]\nstagger='30s'\nmin-memory='invalid'",
+    );
+    assert!(
+        parsed.is_ok(),
+        "an ignored table must not validate its values: {parsed:?}"
+    );
+    let parsed = parsed.unwrap();
+    assert_eq!(parsed.unknown_keys, ["throttle"]);
+    assert!(parsed.value.is_empty());
+    assert!(
+        serde_json::to_value(parsed.value)
+            .unwrap()
+            .get("throttle")
+            .is_none()
+    );
+}
+
+#[test]
 fn smart_compact_toml_fields_round_trip_and_reject_invalid_values() {
     let actual: Vec<_> = ["200k", "70%", "off"]
         .map(|raw| {

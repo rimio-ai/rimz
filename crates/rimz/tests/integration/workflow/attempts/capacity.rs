@@ -4,6 +4,21 @@ use rimz::ids::WorkflowRunId;
 
 mod limits;
 
+fn write_capacity_config(room: &Room, text: impl AsRef<str>) -> std::io::Result<()> {
+    let mut tables: toml::Table = toml::from_str(text.as_ref()).unwrap();
+    let core_path = room.env.rimz_home().join("config.toml");
+    let mut core: toml::Table =
+        toml::from_str(&fs::read_to_string(&core_path).unwrap_or_default()).unwrap();
+    if let Some(throttle) = tables.remove("throttle") {
+        core.insert("throttle".into(), throttle);
+    }
+    fs::write(core_path, toml::to_string(&core).unwrap())?;
+    fs::write(
+        room.env.rimz_home().join("loop.toml"),
+        toml::to_string(&tables).unwrap(),
+    )
+}
+
 fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
     let state = room.env.state_path_for(&room.env.project_root);
     let dir = room.env.rimz_home().join("workflows/review");
@@ -74,11 +89,7 @@ fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
         if failure == "profile" {
             fs::remove_file(room.env.rimz_home().join("agents/capacity-worker.md")).unwrap();
         } else {
-            fs::write(
-                room.env.rimz_home().join("loop.toml"),
-                "[throttle]\nmax-active=1\n",
-            )
-            .unwrap();
+            write_capacity_config(&room, "[throttle]\nmax-parallel-agents=1\n").unwrap();
             fs::create_dir_all(room.env.rimz_home().join("loops")).unwrap();
             fs::write(
                 room.env.rimz_home().join("loops/throttle"),
@@ -106,11 +117,11 @@ fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
     let mut actual = Vec::new();
     for verb in ["fire", "run"] {
         let room = Room::new("");
-        fs::write(
-            room.env.rimz_home().join("loop.toml"),
+        write_capacity_config(
+            &room,
             format!(
                 concat!(
-                    "[throttle]\npace='0s'\ncheck='exit 75'\n[tasks.nightly]\n",
+                    "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
                     "workflow='review'\nroot={:?}\nevery='1h'\n"
                 ),
                 room.env.project_root
@@ -141,11 +152,11 @@ fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
 #[test]
 fn capacity_workflow_wait_reaches_the_human_loop_list() {
     let room = Room::new("");
-    fs::write(
-        room.env.rimz_home().join("loop.toml"),
+    write_capacity_config(
+        &room,
         format!(
             concat!(
-                "[throttle]\npace='0s'\ncheck='exit 75'\n[tasks.nightly]\n",
+                "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
                 "workflow='review'\nroot={:?}\nevery='1h'\n"
             ),
             room.env.project_root
@@ -222,10 +233,10 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
         ),
     )
     .unwrap();
-    fs::write(
-        room.env.rimz_home().join("loop.toml"),
+    write_capacity_config(
+        &room,
         concat!(
-            "[throttle]\npace='0s'\n",
+            "[throttle]\n",
             "check='printf \"%s\\n\" \"$RIMZ_START_KIND\" >> capacity.log; ",
             "test \"$RIMZ_START_KIND\" = claude || exit 75'\n"
         ),
@@ -286,11 +297,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
 #[test]
 fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() {
     let room = Room::new("capacity-wait='2h'\n");
-    fs::write(
-        room.env.rimz_home().join("loop.toml"),
-        "[throttle]\npace='0s'\ncheck='exit 75'\n",
-    )
-    .unwrap();
+    write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
     let record = pending(&room, Some("nightly"));
     let first = advance(&room, &record);
     let second = advance(&room, &record);
@@ -332,16 +339,12 @@ fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
     let mut actual = Vec::new();
     for (edge, terminal) in [("", "failed"), ("on.capacity='after'\n", "done")] {
         let room = Room::new(&format!("capacity-wait='1s'\n{edge}"));
-        fs::write(
-            room.env.rimz_home().join("loop.toml"),
-            "[throttle]\npace='0s'\nmax-active=0\n",
-        )
-        .unwrap();
+        write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
         let record = pending(&room, Some("nightly"));
         let now = jiff::Timestamp::now();
         let mut held = serde_json::to_value(&record).unwrap();
         held["wait"] = json!({
-            "node":"build", "outcome":"capacity", "detail":"0 of 0 agents active ()",
+            "node":"build", "outcome":"capacity", "detail":"capacity check declined codex",
             "first":now-jiff::SignedDuration::from_secs(2), "last":now,
             "count":1, "recheck_at":null, "kinds":["codex"],
             "gives_up_at":now-jiff::SignedDuration::from_secs(1)
@@ -372,13 +375,9 @@ fn capacity_manual_and_exempt_steps_bypass_the_door() {
     let mut actual = Vec::new();
     for (task, extra) in [(None, ""), (Some("nightly"), "throttle='off'\n")] {
         let room = Room::new(extra);
-        fs::write(
-            room.env.rimz_home().join("loop.toml"),
-            "[throttle]\npace='0s'\ncheck='exit 75'\n",
-        )
-        .unwrap();
+        write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
         let throttle: Value = serde_json::from_str(&success(
-            room.command(&["config", "get", "loop.throttle", "--json"])
+            room.command(&["config", "get", "throttle", "--json"])
                 .output()
                 .unwrap(),
         ))
@@ -430,11 +429,7 @@ fn capacity_check_runs_off_the_room_lock_once_per_group_and_reaches_launch_commi
          \"$RIMZ_START_TASK\" >> capacity.log\n"
     );
     fs::write(&script, body).unwrap();
-    fs::write(
-        room.env.rimz_home().join("loop.toml"),
-        "[throttle]\npace='0s'\ncheck='sh capacity.sh'\n",
-    )
-    .unwrap();
+    write_capacity_config(&room, "[throttle]\ncheck='sh capacity.sh'\n").unwrap();
     let value = advance(&room, &record);
     let log = fs::read_to_string(room.env.project_root.join("capacity.log")).unwrap_or_default();
     assert_eq!(log, "codex 1 nightly\n", "{value:#}");
@@ -456,11 +451,7 @@ fn capacity_admission_rechecks_bounds_and_windows_and_releases_unused_turns() {
     for closes in ["deadline", "window"] {
         let room = Room::with_kind("window='5h.left>=20'\n", "claude");
         super::super::judges::capacity(&room.env, 0);
-        fs::write(
-            room.env.rimz_home().join("loop.toml"),
-            "[throttle]\npace='0s'\ncheck='exit 0'\n",
-        )
-        .unwrap();
+        write_capacity_config(&room, "[throttle]\ncheck='exit 0'\n").unwrap();
         let record = pending(&room, Some("nightly"));
         let socket = room.env.tmp_root().join("admission.sock");
         let listener = UnixListener::bind(&socket).unwrap();

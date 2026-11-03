@@ -68,7 +68,7 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
             let step =
                 format!("agent='claude'\nthen='gate'\nthrottle='off'\ncapacity-wait='{wait}'");
             let mut spec = spec("run='true'\non.ready='work'", &step);
-            let limit = Some(toml::from_str("max-active=1").unwrap());
+            let limit = Some(toml::from_str("max-parallel=1").unwrap());
             if workflow_limit {
                 spec.workflow.limit = limit;
             } else {
@@ -113,14 +113,14 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
         (
             "throttle='off'",
             "never",
-            Some("throttle-off"),
-            "never: throttle is off",
+            Some("capacity-wait-forever"),
+            "never: capacity-wait is forever",
         ),
         (
             "throttle='off'\ncapacity-wait='5m'",
-            "never",
-            Some("throttle-off"),
-            "never: throttle is off",
+            "in-loop-runs",
+            None,
+            "only when a loop task starts the run",
         ),
     ] {
         let spec = spec(

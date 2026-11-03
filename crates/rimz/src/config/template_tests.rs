@@ -93,6 +93,11 @@ fn template_covers_serialized_default_leaves() {
         "web.font_source".to_owned(),
         "web.share_base_url".to_owned(),
         "web.trusted_proxies".to_owned(),
+        // The throttle block contains user-selected examples, not defaults.
+        "throttle.max-parallel-agents".to_owned(),
+        "throttle.max-parallel-automation".to_owned(),
+        "throttle.stagger".to_owned(),
+        "throttle.min-memory".to_owned(),
     ]);
     for path in template.difference(&expected) {
         assert!(
@@ -107,8 +112,6 @@ fn template_comparison_defaults(mut config: MachineConfig) -> MachineConfig {
     // missing value can still participate correctly in layered config.
     config.r#loop.default_timeout =
         Some(crate::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned());
-    config.r#loop.throttle.pace = Some(ThrottleConfig::DEFAULT_PACE.to_owned());
-    config.r#loop.throttle.check_timeout = Some("30s".to_owned());
     config
 }
 
@@ -242,7 +245,33 @@ fn all_template_default_paths() -> BTreeSet<String> {
 
 fn uncomment_default_lines(template: &str) -> String {
     let mut out = String::new();
+    let mut section = "";
     for line in template.lines() {
+        let trimmed = line.trim();
+        if let Some(header) = trimmed
+            .strip_prefix("# ")
+            .unwrap_or(trimmed)
+            .strip_prefix('[')
+            .and_then(|raw| raw.strip_suffix(']'))
+        {
+            section = header;
+        }
+        // These mandated example values intentionally differ from defaults.
+        if section == "throttle"
+            && commented_default_key(line).is_some_and(|key| {
+                [
+                    "max-parallel-agents",
+                    "max-parallel-automation",
+                    "stagger",
+                    "min-memory",
+                ]
+                .contains(&key)
+            })
+        {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
         if commented_default_key(line).is_some() || line.trim_start().starts_with("# [") {
             let trimmed = line.trim_start();
             let indent_len = line.len() - trimmed.len();

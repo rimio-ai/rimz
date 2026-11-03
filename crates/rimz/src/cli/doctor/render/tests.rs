@@ -1742,7 +1742,7 @@ fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
         },
         DiagnosticHold {
             hold: HoldKind::Store,
-            text: "cannot count active agents: workspace ws_broken unreadable: torn log".into(),
+            text: "cannot count open agents: workspace ws_broken unreadable: torn log".into(),
             disk_path: None,
         },
     ];
@@ -1766,7 +1766,9 @@ fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
         );
         let closing = strip(|w| render_tally(w, &tally));
         assert!(
-            closing.contains("free space at /repo or lower `[throttle] min-disk` in loop.toml"),
+            closing.contains(
+                "free space at /repo or lower `[throttle] min-disk` in ~/.rimz/config.toml"
+            ),
             "{closing}"
         );
         if count > 1 {
@@ -1777,8 +1779,8 @@ fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
             assert!(closing.contains("free space at /worktrees"), "{closing}");
             assert!(
                 closing.contains(concat!(
-                    "repair or remove the workspace named above, or unset `[throttle] max-active` ",
-                    "and `max-active-per-task` in loop.toml",
+                    "repair or remove the workspace named above, or unset `[throttle] max-parallel-agents` ",
+                    "and `max-parallel-automation` in ~/.rimz/config.toml",
                 )),
                 "{closing}"
             );

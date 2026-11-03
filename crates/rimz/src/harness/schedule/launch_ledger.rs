@@ -25,7 +25,11 @@ pub struct CapacityRecord {
     pub count: u64,
     pub kinds: Vec<crate::ids::AgentKind>,
     pub reason: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::ids::HoldKind::deserialize_optional"
+    )]
     pub hold: Option<crate::ids::HoldKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gives_up_at: Option<Timestamp>,

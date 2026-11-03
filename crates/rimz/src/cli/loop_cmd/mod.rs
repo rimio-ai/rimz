@@ -301,7 +301,7 @@ struct AddArgs {
     /// Named account of the agent's provider that every fire runs on; unset follows the room.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
-    /// Whether the task's agent starts take their turn in the loop throttle; unset is on.
+    /// Off skips machine stagger, resource limits and capacity check, not caps; unset is on.
     #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
     throttle: Option<String>,
     /// How long to wait for capacity: a positive s/m/h/d duration, or forever.

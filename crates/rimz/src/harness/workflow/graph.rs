@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use super::spec::{Check, CheckKind, Step, StepKind, WorkflowSpec};
-use crate::config::{CapacityWait, ThrottleSwitch};
+use crate::config::CapacityWait;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
 const STEP_TRIGGERS: [&str; 5] = ["then", "asked", "cap", "capacity", "deadline"];
@@ -39,7 +39,6 @@ pub enum NeverReason {
     NoTimeout,
     NoMaxVisits,
     CapacityWaitForever,
-    ThrottleOff,
     JudgeRetries,
 }
 
@@ -49,7 +48,6 @@ impl NeverReason {
             Self::NoTimeout => "never: no timeout",
             Self::NoMaxVisits => "never: no max-visits",
             Self::CapacityWaitForever => "never: capacity-wait is forever",
-            Self::ThrottleOff => "never: throttle is off",
             Self::JudgeRetries => "never: a judge retries once, then parks at @user",
         }
     }
@@ -307,12 +305,6 @@ impl WorkflowSpec {
         }
         if outcome != "capacity" {
             return (Fireability::Yes, None);
-        }
-        if step.throttle == Some(ThrottleSwitch::Off)
-            && self.workflow.limit.is_none()
-            && step.limit.is_none()
-        {
-            return (Fireability::Never, Some(NeverReason::ThrottleOff));
         }
         if !matches!(step.capacity_wait, Some(CapacityWait::Duration(_))) {
             return (Fireability::Never, Some(NeverReason::CapacityWaitForever));

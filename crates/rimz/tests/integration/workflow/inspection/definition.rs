@@ -368,7 +368,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "then → judge (explicit)",
                 "asked → watch (explicit)",
                 "cap → @user (explicit)",
-                "capacity → @failed (explicit, never: throttle is off)",
+                "capacity → @failed (explicit, only when a loop task starts the run)",
             ],
         ),
         (

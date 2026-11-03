@@ -132,6 +132,30 @@ impl Fixture {
 }
 
 #[test]
+fn committed_launch_counts_once_even_when_run_publication_fails() {
+    crate::harness::schedule::throttle::tests::assert_committed_launch_counts_once(|turn| {
+        let fixture = Fixture::new();
+        let store = fixture.fresh.context.store.clone();
+        let mut fresh = fixture.fresh.clone();
+        fresh.throttle_turn = Some(turn);
+        let mut leader = fixture.leader();
+        leader.completion = RunCompletion::Watched {
+            cancellation: RunCancellation::new(),
+            install_interrupts: |_| anyhow::bail!("interrupt listener unavailable"),
+            termination: None,
+        };
+        let backend = fake_backend::Backend::default();
+        let result = open_fresh(fresh, Some(leader), &mut Unattended, &backend);
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "interrupt listener unavailable"
+        );
+        assert!(backend.tabs.lock().unwrap().is_empty());
+        store.snapshot_cached().unwrap().agents.to_vec()
+    });
+}
+
+#[test]
 fn session_lifecycle_reaches_the_published_record() {
     let fixture = Fixture::new();
     let mut leader = fixture.leader();

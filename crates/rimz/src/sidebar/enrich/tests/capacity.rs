@@ -41,7 +41,7 @@ fn durable_capacity_waits_merge_sources_on_producer_and_consumer_folds() {
             "/repo/a": {
                 "since": "2026-01-01T00:00:00Z", "first": "2026-01-01T00:02:00Z",
                 "last": "2026-01-01T00:03:00Z", "count": 4, "kinds": ["claude"],
-                "reason": "cannot count active agents: broken", "hold": "store", "gave_up": false
+                "reason": "cannot count open agents: broken", "hold": "store", "gave_up": false
             }
         }
     });
@@ -87,7 +87,7 @@ fn durable_capacity_waits_merge_sources_on_producer_and_consumer_folds() {
     }
     let expected = serde_json::json!([
         {"kind": "disk", "reason": "oldest disk", "count": 3},
-        {"kind": "store", "reason": "cannot count active agents: broken", "count": 1}
+        {"kind": "store", "reason": "cannot count open agents: broken", "count": 1}
     ]);
     assert_eq!(
         actual,

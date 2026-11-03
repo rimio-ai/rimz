@@ -25,10 +25,15 @@ use host::Host;
 
 fn limit_text(limit: &workflow::Limit) -> String {
     limit
-        .max_active
-        .map(|cap| format!("max-active={cap}"))
+        .max_parallel
+        .map(|cap| format!("max-parallel={cap}"))
         .into_iter()
-        .chain(limit.pace.as_ref().map(|pace| format!("pace={pace}")))
+        .chain(
+            limit
+                .stagger
+                .as_ref()
+                .map(|stagger| format!("stagger={stagger}")),
+        )
         .collect::<Vec<_>>()
         .join(" · ")
 }

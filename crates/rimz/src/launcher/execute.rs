@@ -327,6 +327,12 @@ fn open_fresh(
             description: fresh.description.clone(),
         },
     )?;
+    if let Some(turn) = &fresh.throttle_turn {
+        turn.report_launch(
+            &workspace.workspace_id,
+            &batch.identities()[leader_index].agent_id,
+        );
+    }
     let peer = if leader.is_none() {
         prepare_peer_prompt(store, batch.identities(), cwd, fresh.report_to).inspect_err(|_| {
             let _ = store.fail_agent_launch_batch(&batch);
@@ -386,12 +392,6 @@ fn open_fresh(
     } else {
         None
     };
-    if let Some(turn) = &fresh.throttle_turn {
-        turn.report_launch(
-            &workspace.workspace_id,
-            &batch.identities()[leader_index].agent_id,
-        );
-    }
     if fresh.pick_session && in_place {
         interaction.notice(Notice::PickerReceipt {
             kind: batch.identities()[0].kind.as_str(),

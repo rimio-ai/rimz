@@ -2557,7 +2557,7 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
                 tally,
                 Severity::Warning,
                 error,
-                "repair `[throttle] check` in loop.toml, then retry the start",
+                "repair `[throttle] check` in ~/.rimz/config.toml, then retry the start",
             ),
         );
     }
@@ -2566,14 +2566,14 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
             (rimz::ids::HoldKind::Disk, Some(path)) => (
                 "disk floor",
                 format!(
-                    "free space at {} or lower `[throttle] min-disk` in loop.toml",
+                    "free space at {} or lower `[throttle] min-disk` in ~/.rimz/config.toml",
                     path.display()
                 ),
             ),
             (rimz::ids::HoldKind::Store, _) => (
                 "agent count",
-                "repair or remove the workspace named above, or unset `[throttle] max-active` \
-                 and `max-active-per-task` in loop.toml"
+                "repair or remove the workspace named above, or unset `[throttle] max-parallel-agents` \
+                 and `max-parallel-automation` in ~/.rimz/config.toml"
                     .to_owned(),
             ),
             _ => continue,

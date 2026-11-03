@@ -1046,14 +1046,14 @@ fn limits_validate_both_scopes_and_ignore_invalid_values_with_a_warning() {
     let mut actual = Vec::new();
     for scope in ["workflow", "steps.build"] {
         for (value, suffix) in [
-            ("max-active=3", None),
-            ("pace='10m'", None),
-            ("max-active=4\npace='2m'", None),
+            ("max-parallel=3", None),
+            ("stagger='10m'", None),
+            ("max-parallel=4\nstagger='2m'", None),
             ("", Some("")),
-            ("max-active=0", Some(".max-active")),
-            ("pace='0s'", Some(".pace")),
-            ("pace='soon'", Some(".pace")),
-            ("max-active='three'", Some(".max-active")),
+            ("max-parallel=0", Some(".max-parallel")),
+            ("stagger='0s'", Some(".stagger")),
+            ("stagger='soon'", Some(".stagger")),
+            ("max-parallel='three'", Some(".max-parallel")),
             ("unknown=1", Some(".unknown")),
         ] {
             fs::write(
@@ -1081,13 +1081,13 @@ fn limits_validate_both_scopes_and_ignore_invalid_values_with_a_warning() {
         .replace("prompt-file = \"prompts/build.md\"", "");
     fs::write(
         dir.join("workflow.toml"),
-        format!("{command}\n[steps.build.limit]\nmax-active=1\n"),
+        format!("{command}\n[steps.build.limit]\nmax-parallel=1\n"),
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     actual.push((
         "command",
-        "max-active=1",
+        "max-parallel=1",
         report.errors.is_empty()
             && report.warnings.iter().any(|issue| {
                 issue.path == "steps.build.limit"
@@ -1111,7 +1111,7 @@ fn schema_is_derived_from_the_loader_types() {
     assert!(value["properties"]["workflow"].is_object());
     assert_eq!(value["$defs"]["Limit"]["additionalProperties"], false);
     assert_eq!(
-        value["$defs"]["Limit"]["properties"]["max-active"]["minimum"],
+        value["$defs"]["Limit"]["properties"]["max-parallel"]["minimum"],
         1
     );
     assert!(value["$defs"]["Case"]["properties"].get("key").is_none());

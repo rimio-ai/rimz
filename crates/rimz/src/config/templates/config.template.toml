@@ -7,6 +7,12 @@
 
 ## timezone = "America/New_York" # IANA zone for displayed times and scheduling; default = system local
 
+# [throttle]
+# max-parallel-agents = 128
+# max-parallel-automation = 32
+# stagger = "30s"
+# min-memory = "1GB"
+
 [remote_control]
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon when installed

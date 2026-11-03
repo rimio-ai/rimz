@@ -156,7 +156,7 @@ fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
     value["throttle_notices"] = serde_json::json!([
         {"kind": "check_failed", "reason": "capacity check failing: claude exit 1", "count": 4},
         {"kind": "disk", "reason": "free disk 1G < 2G at /repo", "count": 1},
-        {"kind": "store", "reason": "cannot count active agents: broken record", "count": 2}
+        {"kind": "store", "reason": "cannot count open agents: broken record", "count": 2}
     ]);
     let mut snapshot: SidebarSnapshot = serde_json::from_value(value.clone()).unwrap();
     snapshot.now = fixed_now();
@@ -170,7 +170,7 @@ fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
         wide.contains("⚠ capacity check failing: claude exit 1")
             && wide.contains("· 4 held · rimz doctor")
             && wide.contains("⚠ starts held: free disk 1G < 2G at /repo")
-            && wide.contains("⚠ starts held: cannot count active agents: broken record")
+            && wide.contains("⚠ starts held: cannot count open agents: broken record")
             && wide.contains("review triage asked")
             && narrow.contains("· 4 held · rimz doctor")
             && !wide.contains("1 held")
