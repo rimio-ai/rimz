@@ -827,6 +827,8 @@ pub struct AgentState {
     pub loop_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<super::observation::WorkflowAttemptRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<super::observation::Automation>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
     /// carried forward like `team`. Team launches use `team` as their cohort
     /// key; inline layouts use this generated id.
@@ -1288,6 +1290,7 @@ impl AgentState {
             team: None,
             loop_task: None,
             workflow: None,
+            automation: None,
             launch_group: None,
             launch_ordinal: None,
             channel: None,

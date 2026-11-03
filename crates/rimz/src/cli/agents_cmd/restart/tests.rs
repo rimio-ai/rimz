@@ -183,6 +183,44 @@ fn restart_cell_carries_the_current_postures_auto_compact_count() {
 }
 
 #[test]
+fn restart_requests_preserve_automation_for_resumed_and_fresh_sessions() {
+    let stamp = serde_json::json!({"by": "workflow", "workflow": "land", "step": "triage"});
+    let mut value = serde_json::to_value(rimz::testkit::agent_state(
+        "claude",
+        "a1",
+        jiff::Timestamp::UNIX_EPOCH,
+    ))
+    .unwrap();
+    value["automation"] = stamp.clone();
+    let agent = serde_json::from_value(value).unwrap();
+    let posture = ResumePosture {
+        launch: Default::default(),
+        degraded: None,
+    };
+    let mut actual: Vec<_> = [
+        ExecAction::Resume {
+            session_id: "a1".into(),
+            extra_args: Vec::new(),
+        },
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    ]
+    .into_iter()
+    .map(|action| {
+        let request = relaunch_request(&agent, &posture, action, None, None);
+        serde_json::to_value(request.identity.params).unwrap()["automation"].clone()
+    })
+    .collect();
+    let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
+        panic!("agent cell")
+    };
+    actual.push(serde_json::to_value(cell.launch).unwrap()["automation"].clone());
+    assert_eq!(actual, vec![stamp.clone(), stamp.clone(), stamp]);
+}
+
+#[test]
 fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
     let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
     agent.name = Some("otter".to_owned());

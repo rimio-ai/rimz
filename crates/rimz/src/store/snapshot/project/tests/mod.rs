@@ -1429,6 +1429,82 @@ fn resume_attach_replaces_launch_record_and_can_clear_tier() {
 }
 
 #[test]
+fn automation_stamps_round_trip_and_survive_launch_identity_changes() {
+    let stamps = [
+        json!({"by": "loop"}),
+        json!({"by": "workflow", "workflow": "land", "step": "triage"}),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for stamp in stamps {
+        let params: LaunchParams = serde_json::from_value(json!({"automation": stamp})).unwrap();
+        actual.push(serde_json::to_value(&params).unwrap()["automation"].clone());
+        expected.push(stamp.clone());
+        let launch = launch_event(
+            "codex",
+            AgentLaunchPayload {
+                launch_id: Some("launch_coder".into()),
+                launch: params,
+                pane_id: Some(PaneId::parse("tmux:%1").unwrap()),
+                runtime_owner: Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "launch_coder",
+                    42,
+                    Some("agent-start".into()),
+                )),
+                ..launch_payload("launch_coder", "coder-card")
+            },
+        );
+        let mut events = vec![launch];
+        for event in [
+            None,
+            Some(same_process_registration(
+                "first",
+                "coder-card",
+                2,
+                "tmux:%1",
+                42,
+            )),
+            Some(same_process_registration(
+                "first",
+                "coder-card",
+                3,
+                "tmux:%1",
+                42,
+            )),
+            Some(same_process_registration(
+                "next",
+                "next-card",
+                4,
+                "tmux:%1",
+                42,
+            )),
+        ] {
+            if let Some(event) = event {
+                events.push(event);
+            }
+            for row in reduce_agent_states(&events) {
+                actual.push(serde_json::to_value(row).unwrap()["automation"].clone());
+                expected.push(stamp.clone());
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+    assert!(
+        serde_json::to_value(LaunchParams::default())
+            .unwrap()
+            .get("automation")
+            .is_none()
+    );
+    assert!(
+        serde_json::to_value(indexed_launch_agent("user", "tmux:%1", 42, None))
+            .unwrap()
+            .get("automation")
+            .is_none()
+    );
+}
+
+#[test]
 fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
     let launch = launch_event(
         "codex",

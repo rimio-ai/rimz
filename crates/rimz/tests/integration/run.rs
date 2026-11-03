@@ -1773,6 +1773,11 @@ fn assert_subagent_checkout_case(
     }
     let parent_id = AgentSessionId::from("parent-session");
     let parent_launch_id = AgentSessionId::from("parent-launch");
+    let automation = if fanout {
+        json!({"by": "workflow", "workflow": "land", "step": "triage"})
+    } else {
+        serde_json::Value::Null
+    };
     store
         .append_event(&EventEnvelope::agent_launched(
             workspace.workspace_id.clone(),
@@ -1789,7 +1794,7 @@ fn assert_subagent_checkout_case(
                         .as_ref()
                         .and_then(|switch| switch.parent_login)
                         .map(|name| name.parse().unwrap()),
-                    ..Default::default()
+                    ..serde_json::from_value(json!({"automation": automation})).unwrap()
                 },
                 state: AgentLaunchState::Bound,
                 run_id: None,
@@ -2081,6 +2086,10 @@ fn assert_subagent_checkout_case(
             .iter()
             .find(|agent| agent.name == record.agent_name)
             .expect("child launch card");
+        assert_eq!(
+            serde_json::to_value(child).unwrap()["automation"],
+            automation
+        );
         assert_eq!(child.worktree_path.as_deref(), checkout.to_str());
         if cwd.is_some() {
             assert_eq!(

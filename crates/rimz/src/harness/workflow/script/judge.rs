@@ -70,6 +70,10 @@ fn run(
         seq: attempt.seq,
         role: WorkflowAttemptRole::Judge,
     });
+    identity.params.automation = Some(crate::agents::Automation::Workflow {
+        workflow: record.workflow.clone(),
+        step: record.node.clone(),
+    });
     let mut request = ExecRequest::fresh(&profile.cell, identity, None, false);
     request.reminder_section = Some(crate::harness::launch::ReminderSection::Workflow(
         super::super::brief::judge(spec, record),

@@ -1312,7 +1312,11 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     if action != "unhooked" {
         env.install_agent_hooks("claude");
     }
-    crate::common::wait::register_calling_agent(&env);
+    let automation = serde_json::json!({"by": "workflow", "workflow": "land", "step": "triage"});
+    crate::common::wait::register_calling_agent_with_launch(
+        &env,
+        serde_json::from_value(serde_json::json!({"automation": automation})).unwrap(),
+    );
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",
@@ -1686,6 +1690,27 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         String::from_utf8_lossy(&output.stderr)
     );
     let trace = std::fs::read_to_string(log).unwrap();
+    if matches!(args[1], "claude" | "duo") && !hold && action != "cohort" {
+        let snapshot = env.store().snapshot().unwrap();
+        let launched: Vec<_> = snapshot
+            .agents
+            .iter()
+            .filter(|row| row.name.as_deref() != Some("planner"))
+            .map(|row| serde_json::to_value(row).unwrap()["automation"].clone())
+            .collect();
+        assert!(!launched.is_empty(), "{snapshot:?}");
+        assert_eq!(
+            launched,
+            vec![
+                if agent {
+                    automation
+                } else {
+                    serde_json::Value::Null
+                };
+                launched.len()
+            ]
+        );
+    }
     if !agent && matches!(args[1], "claude" | "duo") && action != "cohort" {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(

@@ -820,6 +820,9 @@ fn carried_base(
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(automation) = &launch.automation {
+        state.automation = Some(automation.clone());
+    }
     if let Some(workflow) = &launch.workflow {
         state.workflow = Some(workflow.clone());
     }
@@ -1117,6 +1120,7 @@ fn inherit_launch_identity(
     successor.team.clone_from(&predecessor.team);
     successor.loop_task.clone_from(&predecessor.loop_task);
     successor.workflow.clone_from(&predecessor.workflow);
+    successor.automation.clone_from(&predecessor.automation);
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;
     successor.molted_from.clone_from(&predecessor.molted_from);

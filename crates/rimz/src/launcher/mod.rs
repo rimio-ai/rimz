@@ -51,6 +51,7 @@ pub struct LayoutRequest {
     pub starter: Starter,
     pub resident_loop: Option<ResidentLoop>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
+    pub automation: Option<crate::agents::Automation>,
     pub leader_run: Option<LeaderRun>,
 }
 
@@ -317,6 +318,9 @@ pub fn prepare_layout(
     mut request: LayoutRequest,
     interaction: &mut dyn Interaction,
 ) -> Result<Preparation> {
+    if matches!(request.starter, Starter::Loop) {
+        request.automation = Some(crate::agents::Automation::Loop);
+    }
     if let Some(mut leader) = request.leader_run.take() {
         if request.workflow.is_some() {
             leader.workflow.clone_from(&request.workflow);
@@ -441,15 +445,6 @@ pub fn prepare_layout(
         mut layout,
         team_name,
     } = resolved;
-    for row in layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
-    {
-        if let Cell::Agent(cell) = row {
-            cell.launch.workflow.clone_from(&args.workflow);
-        }
-    }
     let pick_session = args.launch.selection == Selection::Picker;
     if pick_session {
         validate_picker(&layout, team_name.as_deref())?;
@@ -485,14 +480,29 @@ pub fn prepare_layout(
         ancestry::resolve_caller(&projection.agents)
     };
     let focus = LaunchFocus::resolve(args.launch.cohort.bg, caller.as_ref());
+    let launch_caller = caller
+        .as_ref()
+        .map(|caller| ancestry::resolve_launch_caller(&projection.agents, caller))
+        .transpose()?;
     let ancestry = ancestry::resolve_launch_ancestry(
-        caller
-            .as_ref()
-            .map(|caller| ancestry::resolve_launch_caller(&projection.agents, caller))
-            .transpose()?,
+        launch_caller,
         false,
         machine_config.agents.max_chain_length,
     )?;
+    let automation = args
+        .automation
+        .clone()
+        .or_else(|| launch_caller.and_then(|caller| caller.automation.clone()));
+    for row in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        if let Cell::Agent(cell) = row {
+            cell.launch.workflow.clone_from(&args.workflow);
+            cell.launch.automation.clone_from(&automation);
+        }
+    }
     let prompt = args
         .launch
         .prompt

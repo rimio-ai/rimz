@@ -3,7 +3,7 @@
 use super::*;
 use crate::cli::machine_config;
 use rimz::config::effective::ProfileScope;
-use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
+use rimz::harness::ancestry::{LaunchFocus, resolve_caller, resolve_launch_caller};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -47,6 +47,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.alive_snapshot()?;
     let caller = resolve_caller(&snapshot.agents);
     let focus = LaunchFocus::resolve(args.bg, caller.as_ref());
+    let launch_caller = caller
+        .as_ref()
+        .map(|caller| resolve_launch_caller(&snapshot.agents, caller))
+        .transpose()?;
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     if source.checkout.is_some() {
         let cwd = source
@@ -63,6 +67,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let catalog = rimz::agents::machine_login_catalog();
     let mut seed = validate_fork_source(
         &source,
+        launch_caller,
         &logins,
         &catalog,
         rimz::harness::resume::resume_session_present,
@@ -344,6 +349,7 @@ fn resolve_fork_source(
 
 fn validate_fork_source(
     agent: &AgentState,
+    caller: Option<&AgentState>,
     logins: &rimz::agents::RoomAccounts,
     catalog: &rimz::agents::LoginCatalog,
     session_backed: impl FnOnce(&AgentState) -> bool,
@@ -401,6 +407,7 @@ fn validate_fork_source(
             mode: agent.mode,
             isolation: agent.isolation,
             channel: agent.channel.clone(),
+            automation: caller.and_then(|caller| caller.automation.clone()),
             // The fork continues the source's place in an agent-launch
             // chain: it copies the source's generation, whoever runs the
             // command, so a fork never restarts the chain at 0. It is not a
@@ -458,6 +465,7 @@ mod tests {
 
         let seed = validate_fork_source(
             &agent,
+            None,
             &room("codex", "personal"),
             &codex_accounts("shared"),
             |_| true,
@@ -468,6 +476,7 @@ mod tests {
 
         let err = validate_fork_source(
             &agent,
+            None,
             &room("codex", "personal"),
             &codex_accounts("standalone"),
             |_| true,
@@ -699,7 +708,7 @@ mod tests {
         let mut agent = source("session-1");
         agent.parent_agent_id = Some(AgentSessionId::from("parent-1"));
 
-        let err = validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
             .expect_err("subagent");
 
         assert!(err.to_string().contains("fork its parent"));
@@ -709,7 +718,7 @@ mod tests {
     fn fork_validation_refuses_provisional_sessions() {
         let agent = source("launch_123");
 
-        let err = validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
             .expect_err("provisional");
 
         assert!(err.to_string().contains("has not registered"));
@@ -719,7 +728,7 @@ mod tests {
     fn fork_validation_refuses_missing_session_file() {
         let agent = source("session-1");
 
-        let err = validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| false, |_| true)
+        let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| false, |_| true)
             .expect_err("session file");
 
         assert!(err.to_string().contains("conversation file is gone"));
@@ -729,13 +738,27 @@ mod tests {
     fn fork_validation_refuses_missing_worktree() {
         let mut unrecorded = source("session-1");
         unrecorded.worktree_path = None;
-        let err = validate_fork_source(&unrecorded, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
-            .expect_err("recorded worktree");
+        let err = validate_fork_source(
+            &unrecorded,
+            None,
+            &NO_LOGINS,
+            &NO_ACCOUNTS,
+            |_| true,
+            |_| true,
+        )
+        .expect_err("recorded worktree");
         assert!(err.to_string().contains("no recorded worktree"));
 
         let missing = source("session-1");
-        let err = validate_fork_source(&missing, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| false)
-            .expect_err("worktree path");
+        let err = validate_fork_source(
+            &missing,
+            None,
+            &NO_LOGINS,
+            &NO_ACCOUNTS,
+            |_| true,
+            |_| false,
+        )
+        .expect_err("worktree path");
         assert!(
             err.to_string()
                 .contains("worktree `/repo/worktree` is gone")
@@ -761,6 +784,7 @@ mod tests {
         agent.login = Some("work".parse().unwrap());
         let seed = validate_fork_source(
             &agent,
+            None,
             &room("codex", "work"),
             &NO_ACCOUNTS,
             |_| true,
@@ -783,6 +807,36 @@ mod tests {
     }
 
     #[test]
+    fn fork_validation_inherits_the_callers_automation_not_the_sources() {
+        let mut agent = source("session-1");
+        agent.automation = Some(rimz::agents::Automation::Loop);
+        let mut caller = source("caller");
+        for automation in [
+            None,
+            Some(rimz::agents::Automation::Loop),
+            Some(rimz::agents::Automation::Workflow {
+                workflow: "review".into(),
+                step: "build".into(),
+            }),
+        ] {
+            caller.automation = automation.clone();
+            let seed = validate_fork_source(
+                &agent,
+                Some(&caller),
+                &NO_LOGINS,
+                &NO_ACCOUNTS,
+                |_| true,
+                |_| true,
+            )
+            .unwrap();
+            assert_eq!(seed.launch.automation, automation);
+        }
+        let seed = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+            .unwrap();
+        assert_eq!(seed.launch.automation, None);
+    }
+
+    #[test]
     fn fork_validation_inherits_the_source_chain_generation() {
         let mut agent = source("session-1");
         agent.launch_depth = Some(3);
@@ -791,7 +845,7 @@ mod tests {
             agent_id: AgentSessionId::from("launcher"),
         });
 
-        let seed = validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        let seed = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
             .expect("valid fork");
 
         assert_eq!(seed.launch.launch_depth, Some(3));
@@ -824,7 +878,8 @@ mod tests {
                 agent.profile_scope = Some(ProfileScope::Subagents);
             }
             let seed =
-                validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true).unwrap();
+                validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+                    .unwrap();
             actual.push(seed.launch.profile_scope);
         }
         assert_eq!(

@@ -218,7 +218,7 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
         team: Some("forge".to_owned()),
         channel: Some("event-log".to_owned()),
         profile: Some("claude-coder".to_owned()),
-        ..LaunchParams::default()
+        ..serde_json::from_value(json!({"automation": {"by": "loop"}})).unwrap()
     };
     full.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
 
@@ -244,7 +244,14 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
             .difference(&projected_keys)
             .cloned()
             .collect::<Vec<_>>(),
-        ["channel", "profile", "role", "team", "transcript_path",]
+        [
+            "automation",
+            "channel",
+            "profile",
+            "role",
+            "team",
+            "transcript_path",
+        ]
     );
     assert_eq!(projected.pane_id.as_ref().map(PaneId::raw), Some("%1"));
     assert_eq!(projected.worktree_branch.as_deref(), Some("feature"));
