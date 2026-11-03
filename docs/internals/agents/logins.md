@@ -111,6 +111,8 @@ A name is unshared when it equals an adapter's `private_home_entries` entry or s
 
 ### What happens to each entry
 
+Codex's local context refresh reads the account-private `models_cache.json` from its resolved account home for model capacity and compaction facts. It does not read a catalog beside a `RIMZ_CODEX_CONFIG` override; that override selects only `config.toml`. The [catalog gate](./adapter_codex.md#local-refresh) is independent of the rollout gate.
+
 `crates/rimz/src/agents/account_links.rs::classify` decides per planned name, by link text alone:
 
 | Account home holds | Action |

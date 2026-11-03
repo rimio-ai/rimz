@@ -994,6 +994,8 @@ pub struct LocalContextRefreshCtx<'a> {
     pub current_transcript_path: Option<&'a str>,
     pub prior_transcript_path: Option<&'a str>,
     pub prior_transcript_stat: Option<&'a TranscriptStat>,
+    /// Catalog/config inputs already reflected in the sidecar's model limits.
+    pub prior_model_context_limits_key: Option<&'a context::record::ModelContextLimitsKey>,
     pub prior_spend_fold: Option<&'a LocalSpendFold>,
     /// Persistent shared `pricing-cache.json`, for adapters that price token
     /// counts into card dollars. The spending producer owns writes.
@@ -1016,6 +1018,8 @@ pub struct LocalContextRefresh {
     /// Latest local source. `None` means the prior source disappeared.
     pub transcript_path: Option<String>,
     pub transcript_stat: Option<TranscriptStat>,
+    /// Latest model-limits inputs; every local refresh replaces this gate.
+    pub model_context_limits_key: Option<context::record::ModelContextLimitsKey>,
     /// Resumable pricing state is sparse: an absent new fold preserves the old one.
     pub spend_fold: FieldPatch<LocalSpendFold>,
 }
@@ -1415,6 +1419,7 @@ mod tests {
             prior_transcript_path: None,
             prior_transcript_stat,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: Path::new("pricing.json"),
         }
     }

@@ -424,6 +424,7 @@ fn local_refresh_prices_exact_cache_rows_and_fills_gauge_from_last_call() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing_cache,
     };
 

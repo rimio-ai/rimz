@@ -303,6 +303,9 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         prior_transcript_path: selected_transcript_path,
         prior_transcript_stat,
         prior_spend_fold,
+        prior_model_context_limits_key: prior
+            .as_ref()
+            .and_then(|record| record.model_context_limits_key.as_ref()),
         shared_pricing_cache_path: &shared_pricing_cache_path,
     };
     let mut refresh =

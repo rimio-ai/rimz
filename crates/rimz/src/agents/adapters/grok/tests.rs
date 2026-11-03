@@ -55,6 +55,7 @@ fn named_login_scopes_spending_and_session_transcripts() {
             prior_transcript_path: prior.and_then(|path| path.to_str()),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         };
         assert_eq!(
@@ -704,6 +705,7 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     };
 

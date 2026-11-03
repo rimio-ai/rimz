@@ -61,6 +61,7 @@ fn refresh_at(transcript: &Path) -> Option<LocalContextRefresh> {
             prior_transcript_path: transcript.to_str(),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: Path::new("/unused-pricing"),
         },
     )
@@ -81,6 +82,7 @@ fn local_refresh_ignores_a_recorded_transcript_of_another_session() {
             prior_transcript_path: path.to_str(),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: Path::new("/unused-pricing"),
         },
     );
@@ -554,6 +556,7 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
                 prior_transcript_path: Some(&transcript_path),
                 prior_transcript_stat: None,
                 prior_spend_fold: None,
+                prior_model_context_limits_key: None,
                 shared_pricing_cache_path: &pricing,
             },
         )
@@ -577,6 +580,7 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
                     prior_transcript_path: Some(&transcript_path),
                     prior_transcript_stat: Some(&stat),
                     prior_spend_fold: None,
+                    prior_model_context_limits_key: None,
                     shared_pricing_cache_path: &pricing,
                 },
             )

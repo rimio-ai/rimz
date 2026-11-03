@@ -53,6 +53,7 @@ fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion()
         prior_transcript_path: Some(&main_text),
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
     let first = KimiAdapter
@@ -519,6 +520,7 @@ fn refresh_publishes_the_state_title_as_session_preview() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
 
@@ -574,6 +576,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
     let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
@@ -730,6 +733,7 @@ fn wire_without_usage_emits_fresh_sentinel() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
     let tokens = refresh_wire_path(&path, "s1", stat, &ctx)
@@ -933,6 +937,7 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
         prior_transcript_path: Some(path.to_str().unwrap()),
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
 
@@ -1036,6 +1041,7 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
         prior_transcript_path: Some(&path_text),
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &cache,
     };
 

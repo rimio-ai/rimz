@@ -1437,7 +1437,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         Some(RefreshSpawn { args })
     }
 
-    /// Two sources in one pass: the local rollout tail always, and the
+    /// Two sources in one pass: local context (rollout, title, model limits), and the
     /// app-server's read-only enrichment (rate-limit windows, model display
     /// name, thread name/preview, version) only when its own fields are stale.
     /// The expensive app-server read is throttled by [`app_server_due`].
@@ -1450,18 +1450,28 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
                 .prior
                 .and_then(|record| record.context.model_id.as_deref())
         });
-        let local = refresh_transcript_context(
-            input.session_id,
-            model_hint,
-            input
-                .prior
-                .and_then(|record| record.transcript_path.as_deref()),
-            input
-                .prior
-                .and_then(|record| record.transcript_stat.as_ref()),
-            input.prior.and_then(|record| record.spend_fold.as_ref()),
-            input.pricing_cache_path,
-            input.login_env,
+        let local = self.local_context_refresh(
+            RefreshTrigger::Tick,
+            &LocalContextRefreshCtx {
+                login_env: input.login_env,
+                agent_id: input.session_id,
+                model_hint,
+                prior_session_name: input
+                    .prior
+                    .and_then(|record| record.context.session_name.as_deref()),
+                current_transcript_path: None,
+                prior_transcript_path: input
+                    .prior
+                    .and_then(|record| record.transcript_path.as_deref()),
+                prior_transcript_stat: input
+                    .prior
+                    .and_then(|record| record.transcript_stat.as_ref()),
+                prior_spend_fold: input.prior.and_then(|record| record.spend_fold.as_ref()),
+                prior_model_context_limits_key: input
+                    .prior
+                    .and_then(|record| record.model_context_limits_key.as_ref()),
+                shared_pricing_cache_path: input.pricing_cache_path,
+            },
         );
         if !app_server_due(input.prior) {
             return local.map(|local| SessionContextRefresh {
@@ -1526,15 +1536,49 @@ fn refresh_local_context_under(
     let session_name = codex_home
         .and_then(|home| session_index::session_name_under(home, ctx.agent_id))
         .filter(|name| Some(name.as_str()) != ctx.prior_session_name);
-    let Some(session_name) = session_name else {
-        return refresh;
-    };
+    let model = refresh
+        .as_ref()
+        .and_then(|refresh| match &refresh.context.model_id {
+            FieldPatch::Set(model) => Some(model.as_str()),
+            _ => None,
+        })
+        .or(ctx.model_hint);
+    let catalog_path = codex_home.map(|home| home.join("models_cache.json"));
+    let config_path = transcript::configured_config_path(ctx.login_env);
+    let limits_key = model.map(
+        |model| crate::agents::context::record::ModelContextLimitsKey {
+            model: model.to_owned(),
+            catalog: catalog_path
+                .as_deref()
+                .and_then(super::TranscriptStat::from_path),
+            config: config_path
+                .as_deref()
+                .and_then(super::TranscriptStat::from_path),
+        },
+    );
+    let limits_changed = limits_key
+        .as_ref()
+        .is_some_and(|key| Some(key) != ctx.prior_model_context_limits_key);
+    if refresh.is_none() && session_name.is_none() && !limits_changed {
+        return None;
+    }
     let enriched = refresh.get_or_insert_with(|| LocalContextRefresh {
         transcript_path: ctx.prior_transcript_path.map(str::to_owned),
         transcript_stat: ctx.prior_transcript_stat.copied(),
         ..LocalContextRefresh::default()
     });
-    enriched.context.session_name = FieldPatch::Set(session_name);
+    if let Some(session_name) = session_name {
+        enriched.context.session_name = FieldPatch::Set(session_name);
+    }
+    if let Some(key) = limits_key.as_ref().filter(|_| limits_changed) {
+        enriched.context.model_context_limits = FieldPatch::Set(transcript::model_context_limits(
+            &key.model,
+            catalog_path.as_deref(),
+            config_path.as_deref(),
+        ));
+    }
+    enriched.model_context_limits_key =
+        limits_key.or_else(|| ctx.prior_model_context_limits_key.cloned());
     refresh
 }
 

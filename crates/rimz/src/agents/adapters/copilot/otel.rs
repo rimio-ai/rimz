@@ -290,6 +290,7 @@ mod tests {
             prior_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
@@ -308,6 +309,7 @@ mod tests {
                 prior_transcript_path: first.transcript_path.as_deref(),
                 prior_transcript_stat: Some(&stat),
                 prior_spend_fold: None,
+                prior_model_context_limits_key: None,
                 shared_pricing_cache_path: &pricing,
             })
             .is_none()
@@ -328,6 +330,7 @@ mod tests {
             prior_transcript_path: first.transcript_path.as_deref(),
             prior_transcript_stat: Some(&stat),
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
@@ -353,6 +356,7 @@ mod tests {
             prior_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();
@@ -377,6 +381,7 @@ mod tests {
             prior_transcript_path: anchored.transcript_path.as_deref(),
             prior_transcript_stat: anchored.transcript_stat.as_ref(),
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         })
         .unwrap();

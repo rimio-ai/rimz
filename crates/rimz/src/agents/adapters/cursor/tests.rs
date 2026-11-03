@@ -1616,6 +1616,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("torn transcript still registers its path");
@@ -1631,6 +1632,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
         prior_transcript_path: None,
         prior_transcript_stat: refresh.transcript_stat.as_ref(),
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("new complete terminal refresh");
@@ -1656,6 +1658,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("file identity refresh");
@@ -1677,6 +1680,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
             prior_transcript_path: None,
             prior_transcript_stat: first.transcript_stat.as_ref(),
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &pricing,
         })
         .is_none()
@@ -1696,6 +1700,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
         prior_transcript_path: None,
         prior_transcript_stat: first.transcript_stat.as_ref(),
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("changed transcript refresh");
@@ -1736,6 +1741,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
         prior_transcript_path: None,
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("first completed snapshot");
@@ -1775,6 +1781,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
         prior_transcript_path: None,
         prior_transcript_stat: Some(&first_stat),
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     })
     .expect("whole-file rewrite refresh");

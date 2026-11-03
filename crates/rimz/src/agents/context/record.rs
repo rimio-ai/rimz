@@ -38,6 +38,9 @@ pub struct AgentContextRecord {
     /// an unchanged tail without parsing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_stat: Option<TranscriptStat>,
+    /// Independent stat gate for the model catalog and provider config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context_limits_key: Option<ModelContextLimitsKey>,
     /// Resumable per-request pricing state for the local transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spend_fold: Option<LocalSpendFold>,
@@ -45,6 +48,16 @@ pub struct AgentContextRecord {
     /// advance the accumulator.
     #[serde(default, skip_serializing_if = "LocallyPricedCostState::is_empty")]
     locally_priced_cost: LocallyPricedCostState,
+}
+
+/// Inputs used by the last local model-limits read, kept off the snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelContextLimitsKey {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<TranscriptStat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<TranscriptStat>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -77,6 +90,7 @@ impl AgentContextRecord {
             rich_observed_at: None,
             transcript_path: None,
             transcript_stat: None,
+            model_context_limits_key: None,
             spend_fold: None,
             locally_priced_cost: LocallyPricedCostState::default(),
         }
@@ -128,11 +142,14 @@ impl AgentContextRecord {
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
         context.post_compaction_tokens = self.context.post_compaction_tokens;
-        if context.model_context_limits.is_none() {
+        let model_context_limits_key = if context.model_context_limits.is_none() {
             context
                 .model_context_limits
                 .clone_from(&self.context.model_context_limits);
-        }
+            self.model_context_limits_key.clone()
+        } else {
+            None
+        };
         if context.cost.is_none() {
             context.cost.clone_from(&self.context.cost);
         }
@@ -150,6 +167,7 @@ impl AgentContextRecord {
             locally_priced_cost.owns_context_cost = false;
         }
         let mut next = Self::new(kind, agent_id, context);
+        next.model_context_limits_key = model_context_limits_key;
         next.transcript_path.clone_from(&self.transcript_path);
         next.spend_fold.clone_from(&self.spend_fold);
         next.locally_priced_cost = locally_priced_cost;
@@ -173,6 +191,7 @@ impl AgentContextRecord {
         refresh.spend_fold.apply(&mut self.spend_fold);
         self.transcript_path = refresh.transcript_path;
         self.transcript_stat = refresh.transcript_stat;
+        self.model_context_limits_key = refresh.model_context_limits_key;
         true
     }
 

@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn model_context_limits_key_follows_local_refreshes_and_survives_rich_writers() {
+    let definition = crate::agents::spec_by_kind("codex").unwrap();
+    let key = record::ModelContextLimitsKey {
+        model: "gpt-6.1-sol".into(),
+        catalog: None,
+        config: None,
+    };
+    let mut record = record::AgentContextRecord::new("codex", "agent", AgentContext::default());
+    record.apply_local_refresh(
+        definition,
+        crate::agents::LocalContextRefresh {
+            model_context_limits_key: Some(key.clone()),
+            context: LocalContextPatch {
+                model_context_limits: FieldPatch::Set(ModelContextLimits {
+                    model: key.model.clone(),
+                    max_window: Some(872_000),
+                    usable_percent: Some(95),
+                    own_compact_limit: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Timestamp::UNIX_EPOCH,
+    );
+    let local = record.model_context_limits_key.clone();
+    record.apply_context_refresh("codex", "agent", AgentContext::default(), None);
+    let rich = record.model_context_limits_key.clone();
+    record.merge_observed("codex", AgentContext::default(), Timestamp::UNIX_EPOCH);
+    assert_eq!(
+        [local, rich, record.model_context_limits_key.clone()],
+        [Some(key.clone()), Some(key.clone()), Some(key)]
+    );
+    record.apply_local_refresh(
+        definition,
+        crate::agents::LocalContextRefresh::default(),
+        Timestamp::UNIX_EPOCH,
+    );
+    assert!(
+        record.model_context_limits_key.is_none(),
+        "every local refresh owns the gate state"
+    );
+    let wire = serde_json::to_value(&record).unwrap();
+    assert!(wire.get("model_context_limits_key").is_none());
+    assert!(
+        serde_json::from_value::<record::AgentContextRecord>(wire)
+            .unwrap()
+            .model_context_limits_key
+            .is_none()
+    );
+}
+
+#[test]
 fn model_context_limits_survive_context_writers_and_legacy_records() {
     let definition = crate::agents::spec_by_kind("codex").unwrap();
     let limits = ModelContextLimits {

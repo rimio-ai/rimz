@@ -160,6 +160,7 @@ impl ChangedSessionRefreshFixture {
             prior_transcript_path: Some(transcript),
             prior_transcript_stat: None,
             prior_spend_fold: None,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &self.pricing,
         };
         self.adapter

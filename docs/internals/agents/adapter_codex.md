@@ -327,6 +327,10 @@ The adapter emits raw tokens and the window, and the snapshot fold derives the g
 
 The same pass takes the newest name for the session from `$CODEX_HOME/session_index.jsonl` into `session_name`, ahead of the first-message preview. The [index](../../../crates/rimz/src/agents/adapters/codex/session_index.rs) is parsed once per file version into a process-wide id-to-name map keyed by its full stat identity (length, mtime, device, inode), shared by account homes that link to one file, so an unchanged index costs one `stat` per lookup.
 
+The local pass also reads `$CODEX_HOME/models_cache.json` for the model the refresh resolves, storing `max_context_window`, `effective_context_window_percent`, and `auto_compact_token_limit` as model-keyed facts on the context. A `config.toml` `model_auto_compact_token_limit` overrides the catalog limit. The catalog always comes from the account's `config_home`, even when `RIMZ_CODEX_CONFIG` redirects the config file. Missing files, malformed JSON, missing `models`, or an absent slug leave only the model and any config limit; they never fail a hook or write to stdout.
+
+This read has its own persisted gate on the context record: catalog stat, config stat, and model slug. An unchanged key reads neither file; a catalog rewrite, config edit, or model switch rereads even when the rollout is unchanged. Every returned local refresh carries the key, including a name-only refresh. The facts travel into snapshots, but the gate does not. Cards and doctor combine matching facts with the reported usable session window at read time; gauges keep that window, while compaction-scaled labels pair the effective point with model capacity. Before a reported window, neither number appears. The explicit refresh helper uses the same local pass before its separately throttled app-server work.
+
 Four callers run the refresh, and all of them write the runtime sidecar and wake the sidebar without touching the durable store:
 
 - `rimz hooks feed` on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`, after the decision is written

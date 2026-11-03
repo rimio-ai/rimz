@@ -16,8 +16,8 @@ use super::rollout::{
 use super::spend::{live_fast_mode, live_fold_needs_token_counter_backfill, resume_live_fold};
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
-    AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
-    TurnSettleOutcome, cap_turn_error_label,
+    AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, ModelContextLimits,
+    TurnErrorClass, TurnSettle, TurnSettleOutcome, cap_turn_error_label,
 };
 use crate::agents::pricing;
 use crate::agents::{
@@ -104,6 +104,7 @@ pub fn refresh_transcript_context(
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
         spend_fold: FieldPatch::Set(spend_fold),
+        model_context_limits_key: None,
     })
 }
 
@@ -221,14 +222,14 @@ pub(super) fn configured_model(
 }
 
 #[cfg(not(test))]
-fn configured_config_path(
+pub(super) fn configured_config_path(
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> Option<PathBuf> {
     codex_config_path(login_env).ok()
 }
 
 #[cfg(test)]
-fn configured_config_path(
+pub(super) fn configured_config_path(
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> Option<PathBuf> {
     if let Some(path) = TEST_CODEX_CONFIG
@@ -300,6 +301,36 @@ pub(super) fn configured_model_at(path: &Path) -> Option<String> {
             .filter(|model| !model.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+pub(super) fn model_context_limits(
+    model: &str,
+    catalog_path: Option<&Path>,
+    config_path: Option<&Path>,
+) -> ModelContextLimits {
+    let catalog = catalog_path
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let entry = catalog
+        .as_ref()
+        .and_then(|catalog| catalog.get("models"))
+        .and_then(Value::as_array)
+        .and_then(|models| {
+            models
+                .iter()
+                .find(|entry| entry["slug"].as_str() == Some(model))
+        });
+    let configured_limit = config_path
+        .and_then(|path| read_existing_table(path).ok())
+        .and_then(|root| root.get("model_auto_compact_token_limit")?.as_integer())
+        .and_then(|limit| u64::try_from(limit).ok());
+    ModelContextLimits {
+        model: model.to_owned(),
+        max_window: entry.and_then(|entry| entry["max_context_window"].as_u64()),
+        usable_percent: entry.and_then(|entry| entry["effective_context_window_percent"].as_u64()),
+        own_compact_limit: configured_limit
+            .or_else(|| entry.and_then(|entry| entry["auto_compact_token_limit"].as_u64())),
+    }
 }
 
 pub(super) fn configured_reasoning_effort_at(path: &Path) -> Option<String> {

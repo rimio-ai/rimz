@@ -1070,6 +1070,7 @@ fn statusline_health_suppresses_otel_and_replacement_restores_it() {
         prior_transcript_path: otel.to_str(),
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing,
     };
 

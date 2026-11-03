@@ -3345,12 +3345,8 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
         env.drain_hooks();
         assert_hook_succeeded_neutral("codex", output);
     };
-    run(json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-codex-parent",
-        "source": "startup",
-    }));
-
+    // Seed before SessionStart so its detached root refresh cannot race the
+    // parent snapshot used to check child isolation.
     let mut context = rimz::agents::AgentContext::new("codex", Timestamp::now());
     context.model_id = Some("parent-model".to_owned());
     let parent_context = rimz::agents::context::record::AgentContextRecord::new(
@@ -3360,6 +3356,11 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     );
     rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
         .expect("seed parent context");
+    run(json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-codex-parent",
+        "source": "startup",
+    }));
     let parent_context_path =
         rimz::store::agent_context::path_for(&env.runtime_paths(), "codex", "sess-codex-parent");
     let parent_context_before = std::fs::read(&parent_context_path).expect("parent context bytes");
@@ -4564,19 +4565,18 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
     );
     assert!(out.stdout.is_empty(), "lifecycle hook is silent");
 
-    // The refresh is detached, so the sidecar lands after the hook returns.
+    // Local context can land synchronously; wait for the detached app-server
+    // reading, whose owned fields are published together.
     let deadline = Instant::now() + Duration::from_secs(10);
     let record = loop {
-        if let Some(record) = env
-            .agent_contexts()
-            .into_iter()
-            .find(|record| record.agent_id == "sess-codex-rt")
-        {
+        if let Some(record) = env.agent_contexts().into_iter().find(|record| {
+            record.agent_id == "sess-codex-rt" && record.rate_limits_observed_at.is_some()
+        }) {
             break record;
         }
         assert!(
             Instant::now() < deadline,
-            "codex context sidecar was never written"
+            "codex app-server context was never written"
         );
         std::thread::sleep(Duration::from_millis(50));
     };
