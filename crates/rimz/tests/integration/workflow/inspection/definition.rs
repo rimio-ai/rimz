@@ -48,9 +48,9 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     for fragment in [
         "review · carry the change to green",
         "one run per worktree · no loop task starts it; by hand: rimz workflow run review -w '<worktree>'",
-        "○ begin",
+        "◇ begin",
         "○ sweep",
-        "○ watch",
+        "◇ watch",
         "├─○ fix",
         "wait for the forge",
         "1  ci=passed for 3m",
@@ -69,13 +69,13 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "one node in full: rimz workflow show review begin",
         "source ~/",
         "unreachable from begin",
-        "○ unused",
+        "◇ unused",
         "NEEDS YOU",
         "review#project",
     ] {
         assert!(text.contains(fragment), "missing {fragment:?}:\n{text}");
     }
-    let positions = ["○ begin", "○ sweep", "○ watch", "├─○ fix", "○ unused"]
+    let positions = ["◇ begin", "○ sweep", "◇ watch", "├─○ fix", "◇ unused"]
         .map(|name| text.find(name).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("never:"), "{text}");

@@ -2,13 +2,13 @@
 source: crates/rimz/tests/integration/workflow.rs
 expression: normalized
 ---
-review#project  ☾ waiting at pr <age>: pending, recheck <clock> · gives up <clock>, then @user
+review#project
+☾ waiting at pr <age>: pending, recheck <clock> · gives up <clock>, then @user
+  ci=pending  pr=unread · read <clock>
 started <clock> by hand · 0 attempts
-  ci: pending
-  pr: unread
 
-☾ pr  check  sh checks/pr.sh · waits ≤<age>, then @user · pending · <clock> · since <clock>
-│   checked ×1 · wakes on review.ready, the minute tick
+☾ pr  check  sh checks/pr.sh · waits ≤<age>, then @user · pending · since <clock> · last checked <clock>
+│   wakes on review.ready, the minute tick
 │   done @done · pending @wait
 │
 trail  <clock> pr pending → @wait · now

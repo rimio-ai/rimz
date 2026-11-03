@@ -653,14 +653,23 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
             "☾ waiting at gate",
             "gives up",
             "then @user",
-            "ci: pending",
-            "pr: unread",
+            "  ci=pending  pr=unread · read ",
             ": pending",
             "gate pending ×2 → @wait",
             " · now",
         ],
     );
     assert!(!text.contains("history:"), "{text}");
+    assert_eq!(text.lines().next(), Some("review#project"), "{text}");
+    assert!(
+        text.contains(&format!("last checked {}", historical_clock(AT)))
+            && !text.contains("checked ×"),
+        "{text}"
+    );
+    assert!(
+        text.find(" · read ").unwrap() < text.find("started ").unwrap(),
+        "{text}"
+    );
     assert_eq!(
         text.lines()
             .filter(|line| line.contains("waiting at gate") && line.contains(": pending"))
@@ -694,6 +703,104 @@ fn running_step_states_its_activity_once() {
     save(&env, &record);
     let text = human(&env, &record, false);
     assert_eq!(text.matches("build running").count(), 1, "{text}");
+}
+
+#[test]
+fn terminal_runs_do_not_inherit_the_checkouts_current_pr() {
+    let (env, mut record) = fixture("done", None, vec![]);
+    let state = env.state_path_for(&record.project_root);
+    let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
+    let path = runtime.lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut states = serde_json::Map::new();
+    states.insert(
+        record.scope.path.to_string_lossy().into_owned(),
+        json!({"state":"open","number":200}),
+    );
+    fs::write(path, serde_json::to_vec(&json!({"states":states})).unwrap()).unwrap();
+    let mut rendered = Vec::new();
+    for state in [RunState::Done, RunState::Failed, RunState::Canceled] {
+        record.state = state;
+        save(&env, &record);
+        for history in [false, true] {
+            rendered.push(human(&env, &record, history));
+        }
+    }
+    assert!(
+        rendered.iter().all(|text| !text.contains("PR #")),
+        "{rendered:#?}"
+    );
+}
+
+#[test]
+fn with_you_header_names_the_room_pr_and_check_without_repeating_status() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    let state = env.state_path_for(&record.project_root);
+    let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
+    let path = runtime.lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut states = serde_json::Map::new();
+    states.insert(
+        record.scope.path.to_string_lossy().into_owned(),
+        json!({"state":"open","number":1517}),
+    );
+    fs::write(path, serde_json::to_vec(&json!({"states":states})).unwrap()).unwrap();
+    let actual = [false, true].map(|held| {
+        record.node = if held { "gate" } else { "build" }.into();
+        let attempt: rimz::store::workflow::LiveAttempt = serde_json::from_value(json!({
+            "kind":"agent", "lifecycle":"until", "seq":7, "node":"build",
+            "started_at":AT, "host":{"pid":1,"start":null},
+            "run":{"run_id":rimz::ids::RunId::new(),"handle":"@pet"},
+        }))
+        .unwrap();
+        record.attempt = (!held).then_some(attempt.clone());
+        record.held = held
+            .then(|| serde_json::from_value(json!({"attempt":attempt,"entered_at":AT})).unwrap());
+        record.wait = Some(
+            serde_json::from_value(json!({"node":"gate","outcome":"pending",
+            "first":AT,"last":AT,"count":2,"recheck_at":null}))
+            .unwrap(),
+        );
+        save(&env, &record);
+        let text = human(&env, &record, false);
+        let history = human(&env, &record, true);
+        let suffix = if held {
+            "checking gate: pending"
+        } else {
+            "gate: pending"
+        };
+        let header = text.lines().take(2).collect::<Vec<_>>().join("\n");
+        (
+            header,
+            text.matches(suffix).count(),
+            text.matches("build running").count(),
+            history.matches("pending").count(),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (
+                "review#project  PR #1517\n⢿ build is with you · @pet · gate: pending".into(),
+                1,
+                0,
+                1
+            ),
+            (
+                "review#project  PR #1517\n⢿ build is with you · @pet · checking gate: pending"
+                    .into(),
+                1,
+                0,
+                1
+            ),
+        ]
+    );
+    let json = json_show(&env, record.id.as_str());
+    assert_eq!(json.as_object().unwrap().len(), 5, "{json:#}");
+    assert!(
+        json.get("pr").is_none() && json.get("agent").is_none(),
+        "{json:#}"
+    );
 }
 
 #[test]
@@ -759,7 +866,7 @@ fn terminal_headline_uses_terminal_time_and_ignores_a_stale_park() {
         save(&env, &record);
         let text = human(&env, &record, false);
         assert!(
-            text.starts_with(&format!("review#project  {glyph} {word} 3m\n")),
+            text.starts_with(&format!("review#project\n{glyph} {word} 3m\n")),
             "{text}"
         );
         assert!(
@@ -823,6 +930,11 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
     );
     record.visits = serde_json::from_value(json!({"build":{"total":2,"keys":[]}})).unwrap();
     save(&env, &record);
+    sealed_spec(
+        &env,
+        &record,
+        &SPEC.replace("shell='true'", "agent='codex'\nprompt-file='prompt.md'"),
+    );
     let dir = env.rimz_home().join("workflows/review");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -835,7 +947,7 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
         &text,
         &[
             "● build",
-            "@builder ended",
+            "ended",
             "1m",
             "$1.25",
             "HEAD 12345678 → abcdef12",
@@ -844,6 +956,7 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
         ],
     );
     assert!(!text.contains("replacement"), "{text}");
+    assert!(!text.contains("@builder"), "{text}");
     let rail = text
         .split_once("● build")
         .unwrap()
@@ -856,6 +969,18 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
         text.find("● build").unwrap() < text.find("visits  ").unwrap(),
         "{text}"
     );
+    let paths = env
+        .state_path_for(&record.project_root)
+        .workflow(&record.id);
+    let rows = fs::read_to_string(&paths.journal).unwrap();
+    fs::write(
+        &paths.journal,
+        rows.replace("abcdef123456789", "123456789abcdef"),
+    )
+    .unwrap();
+    let text = human(&env, &record, false);
+    assert!(text.contains("HEAD 12345678, no new commits"), "{text}");
+    assert!(human(&env, &record, true).contains("@builder"));
 }
 
 #[test]
@@ -992,9 +1117,6 @@ fn current_rail_glyph_matches_the_headline_in_every_live_state() {
         let text = human(&env, &record, false);
         let glyph = text
             .lines()
-            .next()
-            .unwrap()
-            .split("  ")
             .nth(1)
             .unwrap()
             .split_whitespace()
@@ -1010,7 +1132,7 @@ fn current_rail_glyph_matches_the_headline_in_every_live_state() {
 }
 
 #[test]
-fn condition_rail_marks_the_winner_and_prints_each_reached_reading_once_without_color() {
+fn condition_rail_marks_the_winner_and_summarizes_all_readings_once_without_color() {
     let (env, record) = fixture(
         "active",
         None,
@@ -1030,15 +1152,22 @@ fn condition_rail_marks_the_winner_and_prints_each_reached_reading_once_without_
             .output()
             .unwrap(),
     );
-    contains(&text, &["▸ 4", "pending @wait", "wakes on", "pr.*", "ci.*"]);
-    assert_eq!(text.matches("ci: pending").count(), 1, "{text}");
-    assert_eq!(text.matches("pr: open").count(), 1, "{text}");
+    contains(
+        &text,
+        &["│ ▸ 4", "pending @wait", "wakes on", "pr.*", "ci.*"],
+    );
+    let readings = text.lines().find(|line| line.contains(" · read "));
+    assert!(readings.is_some(), "{text}");
+    let readings = readings.unwrap();
+    assert_eq!(readings.matches("ci=pending").count(), 1, "{text}");
+    assert_eq!(readings.matches("pr=open").count(), 1, "{text}");
+    assert_eq!(readings.matches("pr.queue=none").count(), 1, "{text}");
     assert!(
-        !text.contains("pr.queue: none") && !text.contains('\u{1b}'),
+        !text.contains("ci: pending") && !text.contains("pr: open") && !text.contains('\u{1b}'),
         "{text}"
     );
     assert!(
-        text.find("ci: pending").unwrap() < text.find("3  ci=passed").unwrap(),
+        text.find(" · read ").unwrap() < text.find("3  ci=passed").unwrap(),
         "{text}"
     );
 }

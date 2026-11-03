@@ -30,22 +30,38 @@ impl View<'_> {
         let current = workflow_view::glyph_role(self.record);
         for row in rail.rows.iter_mut().chain(&mut rail.unreachable) {
             let count = counts.get(row.name.as_str()).copied().unwrap_or(0);
-            let last = self.last(&row.name, &hops);
-            let is_current = !self.record.state.is_terminal() && row.name == self.record.node;
+            let is_current = row.name == self.record.node
+                || self
+                    .record
+                    .held
+                    .as_ref()
+                    .is_some_and(|held| held.attempt.node == row.name);
+            let check = self.spec.checks.contains_key(&row.name);
             row.glyph = if is_current {
                 current
-            } else if count > 0 {
-                GlyphRole::PipelinePassed
             } else {
-                GlyphRole::PipelineFuture
+                match (check, count > 0) {
+                    (true, true) => GlyphRole::PipelineCheckPassed,
+                    (true, false) => GlyphRole::PipelineCheckFuture,
+                    (false, true) => GlyphRole::PipelinePassed,
+                    (false, false) => GlyphRole::PipelineFuture,
+                }
             };
             row.style = if is_current {
                 render::status::workflow(
                     self.record.state,
                     workflow_view::asking(self.record).is_some(),
                 )
+                .bold()
+            } else if count > 0 {
+                render::palette::body()
             } else {
                 render::palette::muted()
+            };
+            row.glyph_style = if !is_current && count > 0 {
+                render::palette::good()
+            } else {
+                row.style
             };
             let visits = self
                 .spec
@@ -89,22 +105,30 @@ impl View<'_> {
             } else {
                 String::new()
             };
-            if let Some(summary) = last {
+            if is_current && check {
+                if let Some((entry, _)) = self.evaluation()
+                    && let JournalEvent::Evaluation { outcome, .. } = &entry.event
+                {
+                    row.heading.push_str(&format!(" · {outcome}{repeated}"));
+                }
+            } else if let Some(summary) = self.last(&row.name, &hops) {
                 row.heading.push_str(&format!(" · {summary}{repeated}"));
             }
             if let Some((_, used, max)) = visits.filter(|(_, used, _)| *used > 0) {
                 row.heading.push_str(&format!(" · visit {used} of {max}"));
             }
             if is_current {
-                row.heading
-                    .push_str(&format!(" · since {}", self.clock(self.record.entered_at)));
-                if let Some(wait) = self
+                let entered = self
                     .record
-                    .wait
+                    .held
                     .as_ref()
-                    .filter(|wait| wait.node == row.name)
-                {
-                    row.heading.push_str(&format!(" · checked ×{}", wait.count));
+                    .filter(|held| held.attempt.node == row.name)
+                    .map_or(self.record.entered_at, |held| held.attempt.started_at);
+                row.heading
+                    .push_str(&format!(" · since {}", self.clock(entered)));
+                if check && let Some((entry, _)) = self.evaluation() {
+                    row.heading
+                        .push_str(&format!(" · last checked {}", self.clock(entry.at)));
                 }
                 if let Some(check) = self.spec.checks.get(&row.name) {
                     let wakes = check
@@ -137,7 +161,6 @@ impl View<'_> {
                 entry.node == node && matches!(entry.event, JournalEvent::Attempt { .. })
             })
             && let JournalEvent::Attempt {
-                handle,
                 outcome,
                 started_at,
                 ended_at,
@@ -148,11 +171,7 @@ impl View<'_> {
             } = &entry.event
         {
             let mut summary = format!(
-                "{}{} · {}",
-                handle
-                    .as_ref()
-                    .map(|handle| format!("{handle} "))
-                    .unwrap_or_default(),
+                "{} · {}",
                 outcome.as_str(),
                 render::format_compact_duration(
                     ended_at.duration_since(*started_at).as_secs().max(0) as u64
@@ -169,11 +188,11 @@ impl View<'_> {
                         .take(8)
                         .collect::<String>()
                 };
-                summary.push_str(&format!(
-                    " · HEAD {} → {}",
-                    short(head_start),
-                    short(head_end)
-                ));
+                summary.push_str(&if head_start == head_end {
+                    format!(" · HEAD {}, no new commits", short(head_start))
+                } else {
+                    format!(" · HEAD {} → {}", short(head_start), short(head_end))
+                });
             }
             summary.push_str(&format!(" · {}", self.clock(entry.at)));
             return Some(summary);
@@ -232,7 +251,7 @@ impl View<'_> {
                 CaseMark::Unread => render::palette::warn(),
                 _ if case.target == "@done" => render::palette::good().bold(),
                 _ if case.target == "@failed" => render::palette::alarm().bold(),
-                _ => render::palette::body().bold(),
+                _ => render::palette::cool().bold(),
             };
             let Some(index) = case.number.map(|number| number - 1) else {
                 continue;
@@ -242,22 +261,19 @@ impl View<'_> {
             }
             let expression = WhenExpr::parse(&check.cases[index].when)?;
             for term in expression.terms() {
-                if !seen.insert(term.key.clone()) {
+                if mark != CaseMark::Unread || !seen.insert(term.key.clone()) {
                     continue;
                 }
                 if let Some(value) = object
                     .get("readings")
                     .and_then(|readings| readings.get(&term.key))
+                    && value.is_null()
                 {
-                    case.readings.push(if value.is_null() {
-                        format!(
-                            "{} unread: {}",
-                            term.key,
-                            reasons.get(&term.key).map_or("not read", String::as_str)
-                        )
-                    } else {
-                        format!("{}: {}", term.key, history::value(value))
-                    });
+                    case.readings.push(format!(
+                        "{} unread: {}",
+                        term.key,
+                        reasons.get(&term.key).map_or("not read", String::as_str)
+                    ));
                 }
             }
             if mark == CaseMark::Holding

@@ -18,6 +18,12 @@ struct View<'a> {
     commands: resolve::RunCommands<'a>,
 }
 
+struct Presentation {
+    state: String,
+    context: String,
+    forecast: String,
+}
+
 pub(super) fn render(
     run: &resolve::Located,
     json: bool,
@@ -45,23 +51,40 @@ pub(super) fn render(
         now: Timestamp::now(),
         commands: resolve::RunCommands::new(&run.record, globals),
     };
+    let room = RoomView::new(&run.record.project_root);
+    let agent = (!history
+        && run.record.state == RunState::Active
+        && workflow_view::asking(&run.record).is_none())
+    .then(|| room.agent(&run.state, &run.record, true))
+    .flatten();
+    let pr_number = (!run.record.state.is_terminal())
+        .then(|| room.pr_number(&run.record.scope.path))
+        .flatten();
     let mut out = render::out();
-    view.headline(&mut out)?;
-    for warning in &spec.ignored {
-        writeln!(out, "warning: {}", warning.message)?;
-    }
+    view.headline(&mut out, pr_number, agent.as_deref())?;
     if history {
+        for warning in &spec.ignored {
+            writeln!(out, "warning: {}", warning.message)?;
+        }
         return view.history(&mut out);
+    }
+    if run.record.state == RunState::Active {
+        view.readings(&mut out)?;
     }
     view.origin(&mut out)?;
     if run.record.state == RunState::Active {
-        view.current(&mut out)?;
+        if let Some(asking) = workflow_view::asking(&run.record) {
+            prose(&mut out, &asking.ask.text, "  ")?;
+        }
         takeover(&mut out, run, globals)?;
     }
     if run.record.state == RunState::Parked {
         view.park(&mut out)?;
     }
     view.rail(&mut out)?;
+    for warning in &spec.ignored {
+        writeln!(out, "warning: {}", warning.message)?;
+    }
     view.visits(&mut out)?;
     view.trail(&mut out)?;
     writeln!(
@@ -86,10 +109,17 @@ impl View<'_> {
         self.commands.command(verb, at, extend, flags)
     }
 
-    fn presentation(&self) -> Result<(GlyphRole, String)> {
+    fn presentation(&self, agent: Option<&str>) -> Result<Presentation> {
         let record = self.record;
         let asking = workflow_view::asking(record);
-        let phrase = if record.state.is_terminal() {
+        let agent = agent.or_else(|| {
+            workflow_view::session_attempt(record)
+                .and_then(|attempt| attempt.run.as_ref())
+                .map(|run| run.handle.as_str())
+        });
+        let mut context = String::new();
+        let mut forecast = String::new();
+        let state = if record.state.is_terminal() {
             format!(
                 "{} {}",
                 record.state.as_str(),
@@ -105,55 +135,72 @@ impl View<'_> {
         } else if let Some(asking) = asking {
             let step =
                 workflow_view::session_attempt(record).map_or(record.node.as_str(), |a| &a.node);
-            format!(
-                "{step} is asking you · {} ({})",
-                asking.ask.handle, asking.ask.kind,
-            )
+            context = format!(" · {} ({})", asking.ask.handle, asking.ask.kind);
+            format!("{step} is asking you")
         } else if workflow_view::with_you(record) {
-            let attempt = workflow_view::session_attempt(record);
-            format!(
-                "{} is with you · {}",
-                attempt.map_or(record.node.as_str(), |a| &a.node),
-                attempt
-                    .and_then(|a| a.run.as_ref())
-                    .map_or("—", |run| &run.handle)
-            )
-        } else if let Some(hold) = self.hold()? {
-            hold
+            let step =
+                workflow_view::session_attempt(record).map_or(record.node.as_str(), |a| &a.node);
+            context = format!(
+                " · {}{}",
+                agent.unwrap_or("—"),
+                workflow_view::with_you_suffix(record, Some(self.spec), self.now)
+            );
+            format!("{step} is with you")
+        } else if let Some((state, bound)) = self.hold()? {
+            forecast = bound;
+            state
         } else if let Some(wait) = workflow_view::wait(record, Some(self.spec), self.now) {
             if self.spec.checks.contains_key(&record.node) {
-                let mut phrase = format!(
+                if let Some((at, target)) = workflow::next_bound(self.spec, record, None, self.now)?
+                {
+                    forecast = format!(" · gives up {}, then {target}", self.clock(at));
+                }
+                format!(
                     "waiting at {} {}: {wait}",
                     record.node,
                     render::age_short(record.entered_at, self.now)
-                );
-                if let Some((at, target)) = workflow::next_bound(self.spec, record, None, self.now)?
-                {
-                    phrase.push_str(&format!(" · gives up {}, then {target}", self.clock(at)));
-                }
-                phrase
+                )
             } else {
                 format!("{} {wait}", record.node)
             }
         } else {
+            if let Some(agent) = agent {
+                context = format!(" · {agent}");
+            }
             self.running()
         };
-        Ok((workflow_view::glyph_role(record), phrase))
+        Ok(Presentation {
+            state,
+            context,
+            forecast,
+        })
     }
 
-    fn headline(&self, out: &mut impl Write) -> Result<()> {
+    fn headline(
+        &self,
+        out: &mut impl Write,
+        pr_number: Option<u64>,
+        agent: Option<&str>,
+    ) -> Result<()> {
         let record = self.record;
         let asking = workflow_view::asking(record);
-        let (role, phrase) = self.presentation()?;
+        let phrase = self.presentation(agent)?;
+        let role = workflow_view::glyph_role(record);
         let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(role);
+        write!(out, "{}", record.address())?;
+        if let Some(number) = pr_number {
+            write!(out, "  PR #{number}")?;
+        }
+        writeln!(out)?;
         writeln!(
             out,
-            "{}  {}",
-            record.address(),
+            "{}{}{}",
             render::paint(
-                render::status::workflow(record.state, asking.is_some()),
-                &format!("{glyph} {phrase}")
-            )
+                render::status::workflow(record.state, asking.is_some()).bold(),
+                &format!("{glyph} {}", phrase.state)
+            ),
+            render::paint(render::palette::body(), &phrase.context),
+            render::paint(render::palette::muted(), &phrase.forecast),
         )?;
         if asking.is_some() {
             let timeout = workflow_view::session_attempt(record)
@@ -185,16 +232,12 @@ impl View<'_> {
             .attempt
             .as_ref()
             .map_or(record.entered_at, |a| a.started_at);
-        let mut phrase = format!(
+        format!(
             "{} running {}{}",
             record.node,
             render::age_short(started, self.now),
             self.visit()
-        );
-        if let Some(run) = workflow_view::session_attempt(record).and_then(|a| a.run.as_ref()) {
-            phrase.push_str(&format!(" · {}", run.handle));
-        }
-        phrase
+        )
     }
 
     fn visit(&self) -> String {
@@ -214,7 +257,7 @@ impl View<'_> {
             })
     }
 
-    fn hold(&self) -> Result<Option<String>> {
+    fn hold(&self) -> Result<Option<(String, String)>> {
         let Some(wait) = self
             .record
             .wait
@@ -245,12 +288,14 @@ impl View<'_> {
         else {
             return Ok(None);
         };
-        Ok(Some(format!(
-            "holding {} at {} {} of {raw}, then {target} at {}",
-            case.outcome,
-            wait.node,
-            render::age_short(wait.first, self.now.min(hold_at)),
-            self.clock(at)
+        Ok(Some((
+            format!(
+                "holding {} at {} {} of {raw}",
+                case.outcome,
+                wait.node,
+                render::age_short(wait.first, self.now.min(hold_at)),
+            ),
+            format!(", then {target} at {}", self.clock(at)),
         )))
     }
 
@@ -285,39 +330,30 @@ impl View<'_> {
         Ok(())
     }
 
-    fn current(&self, out: &mut impl Write) -> Result<()> {
-        if let Some(asking) = workflow_view::asking(self.record) {
-            return prose(out, &asking.ask.text, "  ");
-        }
-        if !self
-            .spec
-            .checks
-            .get(&self.record.node)
-            .is_some_and(|check| !check.cases.is_empty())
-            && let Some((_, object)) = self.evaluation()
-            && let Some(readings) = object
-                .get("readings")
-                .and_then(serde_json::Value::as_object)
-        {
-            for (key, value) in readings {
-                writeln!(out, "  {key}: {}", history::value(value))?;
-            }
-        }
-        if !workflow_view::with_you(self.record) {
+    fn readings(&self, out: &mut impl Write) -> Result<()> {
+        if !self.spec.checks.contains_key(&self.record.node) {
             return Ok(());
         }
-        if self.record.held.is_some() {
-            writeln!(out, "checking {}", self.record.node)?;
-        }
-        if let Some(hold) = self.hold()? {
-            writeln!(out, "  {hold}")?;
+        let Some((entry, object)) = self.evaluation() else {
             return Ok(());
-        }
-        if let Some(wait) = workflow_view::wait(self.record, Some(self.spec), self.now) {
-            writeln!(out, "  {wait}")?;
-        } else if self.spec.steps.contains_key(&self.record.node) {
-            writeln!(out, "  {}", self.running())?;
-        }
+        };
+        let Some(readings) = object
+            .get("readings")
+            .and_then(serde_json::Value::as_object)
+            .filter(|readings| !readings.is_empty())
+        else {
+            return Ok(());
+        };
+        let values = readings
+            .iter()
+            .map(|(key, value)| format!("{key}={}", history::value(value)))
+            .collect::<Vec<_>>();
+        writeln!(
+            out,
+            "  {} · read {}",
+            values.join("  "),
+            self.clock(entry.at)
+        )?;
         Ok(())
     }
 
@@ -466,4 +502,129 @@ fn takeover(
         Ok(_) => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(with_you: bool) -> (String, String) {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":1,"id":WorkflowRunId::new(),"workflow":"review",
+            "spec_dir":"/spec","spec_digest":"digest","project_root":"/repo",
+            "scope":{"kind":"worktree","path":"/repo/lane"},
+            "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
+            "state":"active","node":"gate","visits":{"build":{"total":1,"keys":[]}},
+            "visit_grant":0,"deadline_fired":false,"next_seq":3,
+            "wait":{"node":"gate","outcome":"pending","first":Timestamp::UNIX_EPOCH,
+                "last":Timestamp::UNIX_EPOCH,"count":2},
+            "held":with_you.then(|| serde_json::json!({"entered_at":Timestamp::UNIX_EPOCH,
+                "attempt":{"kind":"agent","lifecycle":"until","seq":2,"node":"build",
+                    "started_at":Timestamp::UNIX_EPOCH,"host":{"pid":1,"start":null},
+                    "run":{"run_id":rimz::ids::RunId::new(),"handle":"@pet"}}})),
+        }))
+        .unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[checks.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[steps.build]\nshell='true'\nthen='gate'\n").unwrap();
+        let journal: Vec<JournalEntry> = serde_json::from_value(serde_json::json!([
+            {"event":"attempt","node":"build","seq":1,"visit":1,"outcome":"ended",
+                "started_at":Timestamp::UNIX_EPOCH,"ended_at":Timestamp::UNIX_EPOCH,
+                "at":Timestamp::UNIX_EPOCH,"digests":{}},
+            {"event":"evaluation","node":"gate","seq":2,"outcome":"pending",
+                "object":{"outcome":"pending","case":0,"readings":{"ci":"pending"}},
+                "started_at":now,"ended_at":now,"at":now,"digests":{}},
+        ]))
+        .unwrap();
+        let paths = paths::StatePaths::for_project_root(&record.project_root)
+            .unwrap()
+            .workflow(&record.id);
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Always,
+        };
+        let view = View {
+            record: &record,
+            paths: &paths,
+            spec: &spec,
+            journal: &journal,
+            now,
+            commands: resolve::RunCommands::new(&record, &globals),
+        };
+        let mut headline = Vec::new();
+        let mut rail = Vec::new();
+        view.headline(&mut headline, None, None).unwrap();
+        view.rail(&mut rail).unwrap();
+        (
+            String::from_utf8(headline).unwrap(),
+            String::from_utf8(rail).unwrap(),
+        )
+    }
+
+    #[test]
+    fn headline_separates_state_context_and_forecast_tones() {
+        let (waiting, _) = output(false);
+        let (with_you, _) = output(true);
+        let style = render::status::workflow(RunState::Active, false).bold();
+        let clock = render::workflow_clock(
+            Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1),
+            Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2),
+        );
+        assert_eq!(
+            [
+                waiting.contains(&render::paint(style, "☾ waiting at gate 2m: pending")),
+                waiting.contains(&render::paint(
+                    render::palette::muted(),
+                    &format!(" · gives up {clock}, then @user")
+                )),
+                with_you.contains(&render::paint(style, "⢿ build is with you")),
+                with_you.contains(&render::paint(
+                    render::palette::body(),
+                    " · @pet · checking gate: pending"
+                )),
+            ],
+            [true; 4],
+            "{waiting}\n{with_you}"
+        );
+    }
+
+    #[test]
+    fn vertical_rail_distinguishes_reached_current_future_and_winning_case() {
+        let (_, rail) = output(false);
+        let (_, held) = output(true);
+        let current = render::status::workflow(RunState::Active, false).bold();
+        assert_eq!(
+            [
+                rail.contains(&format!(
+                    "{} {}build",
+                    render::paint(render::palette::good(), "●"),
+                    render::palette::body().render()
+                )),
+                rail.contains(&format!(
+                    "{} {}gate",
+                    render::paint(current, "☾"),
+                    current.render()
+                )),
+                rail.contains(&render::paint(render::palette::muted(), "◇")),
+                rail.contains(&format!(
+                    "│ {} ",
+                    render::paint(render::palette::cool().bold(), "▸")
+                )),
+                held.contains(&format!(
+                    "{} {}build",
+                    render::paint(current, "⢿"),
+                    current.render()
+                )),
+                held.contains(&format!(
+                    "{} {}gate",
+                    render::paint(current, "⢿"),
+                    current.render()
+                )),
+            ],
+            [true; 6],
+            "{rail}\n{held}"
+        );
+    }
 }

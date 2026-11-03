@@ -38,7 +38,7 @@ fn agent_step_start_launches_with_null_context_and_counts_the_null_outcome() {
     assert!(
         definition
             .find("○ build")
-            .zip(definition.find("○ after"))
+            .zip(definition.find("◇ after"))
             .is_some_and(|(build, after)| build < after),
         "{definition}"
     );

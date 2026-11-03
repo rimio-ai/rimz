@@ -1227,7 +1227,7 @@ fn human_show_wait_and_journal_are_readable() {
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
-        text.starts_with("review#project  ☾ waiting at pr"),
+        text.starts_with("review#project\n☾ waiting at pr"),
         "{text}"
     );
     assert_eq!(text.matches("pending, recheck").count(), 1, "{text}");
@@ -1321,7 +1321,7 @@ fn human_show_wait_and_journal_are_readable() {
     settled(&env, &id, "done");
     let terminal = success(command(&env, &["workflow", "show", &id]));
     assert!(
-        terminal.lines().next().unwrap().contains("done"),
+        terminal.lines().nth(1).unwrap().contains("done"),
         "{terminal}"
     );
 }

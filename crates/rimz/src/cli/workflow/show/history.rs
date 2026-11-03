@@ -151,9 +151,8 @@ impl View<'_> {
             prose(out, &asking.ask.text, "  ")?;
         }
         if let Some(wait) = &self.record.wait
-            && (workflow_view::with_you(self.record)
-                || workflow_view::asking(self.record).is_some()
-                || self.hold()?.is_some())
+            && (workflow_view::asking(self.record).is_some()
+                || (!workflow_view::with_you(self.record) && self.hold()?.is_some()))
             && let Some(line) = workflow_view::wait(self.record, Some(self.spec), self.now)
         {
             writeln!(out, "  waiting: {}, {line}", wait.node)?;
