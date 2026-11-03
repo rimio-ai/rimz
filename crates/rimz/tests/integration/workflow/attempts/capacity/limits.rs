@@ -140,8 +140,11 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
         for args in [&["workflow", "list"][..], &["loop", "list"][..]] {
             let listed = success(room.command(args).output().unwrap());
             assert!(
-                listed.contains("HELD")
-                    && listed.contains("step build: 1 of 1 agents open (@codex)"),
+                listed.contains(if args[0] == "workflow" {
+                    " · 1 held"
+                } else {
+                    "HELD"
+                }) && listed.contains("step build: 1 of 1 agents open (@codex)"),
                 "{listed}"
             );
             assert!(!listed.contains("NEEDS YOU"), "{listed}");

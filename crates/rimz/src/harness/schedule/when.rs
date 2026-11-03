@@ -325,6 +325,11 @@ impl<'a> ForgeKey<'a> {
 }
 
 impl CiSource {
+    /// The cached PR number for this checkout, without probing the forge.
+    pub fn pr_number(&self, scope: &Path) -> Option<u64> {
+        self.0.states.get(scope.to_string_lossy().as_ref())?.number
+    }
+
     /// Explain an absent forge reading without changing condition truth.
     pub fn unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
         if ForgeKey::parse(key)?.read(&self.0, scope).is_some() {

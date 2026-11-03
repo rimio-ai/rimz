@@ -23,6 +23,98 @@ mod resolve;
 mod show;
 use host::Host;
 
+fn workflow_agent(
+    record: &RunRecord,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    include_channel: bool,
+) -> Option<String> {
+    let attempt = workflow_view::session_attempt(record)?;
+    let leader_name = attempt
+        .run
+        .as_ref()
+        .and_then(|run| run.handle.strip_prefix('@'));
+    let peers = rimz::address::addressable_agents(snapshot);
+    let agent = peers
+        .iter()
+        .filter(|agent| {
+            agent.workflow.as_ref().is_some_and(|pin| {
+                pin.run == record.id
+                    && pin.seq == attempt.seq
+                    && pin.role == rimz::agents::WorkflowAttemptRole::Step
+            })
+        })
+        .min_by_key(|agent| leader_name.is_none_or(|name| agent.name.as_deref() != Some(name)))?;
+    Some(rimz::address::agent_handle(agent, &peers, include_channel))
+}
+
+struct RoomView {
+    runtime: Option<rimz::RuntimePaths>,
+    ci: Option<rimz::harness::schedule::when::CiSource>,
+    snapshot: std::cell::OnceCell<Option<rimz::store::snapshot::SidebarSnapshot>>,
+}
+
+impl RoomView {
+    fn new(root: &std::path::Path) -> Self {
+        let runtime = rimz::RuntimePaths::for_project_root(root).ok();
+        let ci = runtime
+            .as_ref()
+            .map(rimz::harness::schedule::when::CiSource::read);
+        Self {
+            runtime,
+            ci,
+            snapshot: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn pr_number(&self, scope: &std::path::Path) -> Option<u64> {
+        self.ci.as_ref()?.pr_number(scope)
+    }
+
+    fn agent(
+        &self,
+        state: &rimz::StatePaths,
+        record: &RunRecord,
+        include_channel: bool,
+    ) -> Option<String> {
+        let run = workflow_view::session_attempt(record)?.run.as_ref()?;
+        let snapshot = self.snapshot.get_or_init(|| {
+            let runtime = self.runtime.as_ref()?;
+            let workspace = rimz::workspace::record::read(&state.workspace_record).ok()?;
+            let store = rimz::Store::open_existing(state.clone(), runtime.clone())?;
+            let mut snapshot = rimz::sidebar::consumer::cached_alive_snapshot(
+                store.snapshot_with_context(|_, _| false).ok()?,
+                runtime,
+                &workspace.session_name,
+            );
+            if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
+                &runtime.pane_frame_path(),
+                &workspace.session_name,
+            ) {
+                snapshot = snapshot.with_live_panes(frame.to_pane_refs(), None);
+            }
+            Some(snapshot)
+        });
+        Some(
+            snapshot
+                .as_ref()
+                .and_then(|snapshot| workflow_agent(record, snapshot, include_channel))
+                .unwrap_or_else(|| run.handle.clone()),
+        )
+    }
+}
+
+fn run_origin(record: &RunRecord) -> String {
+    record.task.as_ref().map_or_else(
+        || "hand".into(),
+        |task| {
+            format!(
+                "loop task {task}{}",
+                if record.manual { ", fired by hand" } else { "" }
+            )
+        },
+    )
+}
+
 fn limit_text(limit: &workflow::Limit) -> String {
     limit
         .max_parallel

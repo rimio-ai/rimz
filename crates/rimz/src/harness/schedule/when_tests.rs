@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn pr_number_reads_only_the_scopes_cached_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state_under(&state, dir.path());
+    let source = CiSource(
+        serde_json::from_value(serde_json::json!({
+            "states": {"/scope": {"state":"open", "number":1517}},
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        [
+            source.pr_number(Path::new("/scope")),
+            source.pr_number(Path::new("/other")),
+            CiSource::read(&runtime).pr_number(Path::new("/scope"))
+        ],
+        [Some(1517), None, None]
+    );
+}
+
+#[test]
 fn ci_commits_only_reads_an_open_pr_with_a_known_head() {
     for (state, head, ci_sha, expected) in [
         ("open", Some("pr"), Some("ci"), Some(("pr", Some("ci")))),
