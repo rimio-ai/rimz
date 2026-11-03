@@ -1,18 +1,32 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+use std::io::IsTerminal;
 
 use rimz::harness::schedule::when::WhenExpr;
 use rimz::harness::workflow::{CaseMark, Hop};
 use serde_json::Value;
 
-use super::super::rail::{Rail, Row};
+use super::super::rail::{Rail, Row, horizontal, reached};
 use super::*;
 
 impl View<'_> {
     pub(super) fn rail(&self, out: &mut impl Write) -> Result<()> {
-        let mut rail = Rail::definition(self.spec);
-        rail.compact = self.record.state != RunState::Active;
         let hops = workflow::hops(self.spec, self.journal);
-        let counts = entries(&hops);
+        if self.record.state != RunState::Active {
+            writeln!(out)?;
+            return Ok(horizontal(
+                out,
+                self.spec,
+                self.record,
+                &hops,
+                self.journal,
+                std::io::stdout()
+                    .is_terminal()
+                    .then(|| render::terminal_columns(100)),
+                0,
+            )?);
+        }
+        let mut rail = Rail::definition(self.spec);
+        let counts = reached(&hops, self.journal);
         let current = workflow_view::glyph_role(self.record);
         for row in rail.rows.iter_mut().chain(&mut rail.unreachable) {
             let count = counts.get(row.name.as_str()).copied().unwrap_or(0);
@@ -20,7 +34,7 @@ impl View<'_> {
             let is_current = !self.record.state.is_terminal() && row.name == self.record.node;
             row.glyph = if is_current {
                 current
-            } else if count > 0 || last.is_some() {
+            } else if count > 0 {
                 GlyphRole::PipelinePassed
             } else {
                 GlyphRole::PipelineFuture
@@ -75,13 +89,6 @@ impl View<'_> {
             } else {
                 String::new()
             };
-            if rail.compact {
-                row.heading = visits.map_or_else(
-                    || repeated.trim_start().into(),
-                    |(_, used, max)| format!("{used}/{max}"),
-                );
-                continue;
-            }
             if let Some(summary) = last {
                 row.heading.push_str(&format!(" · {summary}{repeated}"));
             }
@@ -276,29 +283,4 @@ impl View<'_> {
         }
         Ok(())
     }
-}
-
-fn entries(hops: &[Hop]) -> BTreeMap<&str, u64> {
-    let mut counts = BTreeMap::new();
-    let mut position = None;
-    for hop in hops {
-        if hop.kind == HopKind::VisitsReset {
-            continue;
-        }
-        let node = hop.node.as_str();
-        if position != Some(node) || hop.kind == HopKind::Resume {
-            *counts.entry(node).or_default() += 1;
-        }
-        position = Some(node);
-        if hop.kind == HopKind::Route
-            && let Some(target) = hop
-                .target
-                .as_deref()
-                .filter(|target| !target.starts_with('@'))
-        {
-            *counts.entry(target).or_default() += hop.count;
-            position = Some(target);
-        }
-    }
-    counts
 }
