@@ -47,6 +47,8 @@ pub struct LaunchedBy {
 pub struct LaunchRecord {
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// The `--agent <PROFILE|KIND>` re-base this launch replays on restart, or `None`. Not
+    /// the launched profile: that is `AgentState::profile`.
     pub agent: Option<String>,
     /// Provider fast mode, replayed like `model`. Omitted when off, so a
     /// record written for an agent without fast keeps its bytes.
