@@ -343,7 +343,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::model_config_path resolves native model-settings remedies for doctor (+1).
 # Automation, its facade export and workflow_scope share durable start origin (+3).
 # PermissionSettle shares asking-cell completion proof between adapters and state (+1).
-surface-budget = 1235
+# AgentState::permission_settled lets message conditions use that proof without changing raw matching (+1).
+# AgentState::settleable_permission_since gives refresh callers the one ask that proof can close.
+surface-budget = 1236
 
 [[verdict]]
 kind = "item"

@@ -1,8 +1,74 @@
 use super::*;
 
+use std::time::Duration;
+
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
+
+#[test]
+fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
+    let mut receiver = agent("session", AgentStatus::Waiting);
+    receiver.kind = AgentKind::new_unchecked("codex");
+    receiver.mode = Some(crate::agents::PermissionMode::Auto);
+    receiver.last_activity = now() - Duration::from_secs(61);
+    receiver.waiting_since = Some(receiver.last_activity);
+    receiver.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since: receiver.last_activity,
+    });
+    receiver.context = Some(crate::agents::AgentContext {
+        permission_settle: Some(crate::agents::context::PermissionSettle {
+            ask_since: receiver.last_activity,
+            at: receiver.last_activity + Duration::from_secs(2),
+        }),
+        ..Default::default()
+    });
+    let snapshot = snapshot_with_panes(vec![receiver.clone()], Vec::new());
+    let channel = context(None);
+    let view = resolution(&snapshot, &[], &channel, false);
+    let targets = vec![ResolvedTarget {
+        pane: None,
+        agent: Some(receiver),
+    }];
+    let mut request = DispatchRequest {
+        target: "@session".into(),
+        text: "continue".into(),
+        target_scope: None,
+        current_channel: channel.clone(),
+        caller: None,
+        sender: MessageSender::Human,
+        automated: false,
+        allow_fanout: false,
+        reply: None,
+        mux: None,
+        enter: true,
+        force: false,
+        auto_compact: None,
+        mode: DispatchMode::Steer,
+        resuming_recipient: None,
+    };
+    for mode in [DispatchMode::Steer, DispatchMode::Interrupt] {
+        request.mode = mode;
+        let prepared = prepare_mode(&request, &view, &targets, &[]);
+        assert!(
+            prepared.is_ok(),
+            "the completed asking cell releases dispatch"
+        );
+        assert!(
+            !deliver::receiver_readiness(
+                targets[0].agent.as_ref().unwrap(),
+                DeliveryGate::Any,
+                false,
+                now()
+            )
+            .waiting
+        );
+    }
+}
 
 #[test]
 fn dispatch_copies_only_live_rows_and_the_resuming_child() {

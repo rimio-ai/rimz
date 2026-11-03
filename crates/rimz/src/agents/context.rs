@@ -4,9 +4,9 @@
 //! per-session data an agent publishes out of band — Claude's statusline,
 //! Codex's rollout tail plus app-server metadata, and future provider surfaces.
 //! It is sidecar enrichment, not durable store truth. Most fields are
-//! render-only; turn-error, turn-settle, and native-attention markers also feed
-//! the shared status projection so read paths agree about hookless state. Each agent
-//! integration produces it from its own transport or local refresh via
+//! render-only; turn-error, turn-settle, permission-settle, and native-attention
+//! markers also feed the shared status projection so read paths agree about
+//! hookless state. Each agent integration produces it from its own transport or local refresh via
 //! [`super::AgentDefinition`]; lifecycle hooks also keep the current turn's
 //! confirmed message openers here so an agent-authored send can retain exact
 //! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot

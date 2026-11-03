@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn completed_permission_cell_projects_root_and_child_as_running() {
+    for age in [59, 60, 90] {
+        let mut session = agent("codex", "review", AgentStatus::Waiting, 0)
+            .worktree("/repo/main")
+            .active_ago(age);
+        session.mode = Some(crate::agents::PermissionMode::Auto);
+        session.waiting_since = Some(ago(age));
+        session.open_ask = Some(crate::agents::OpenAsk {
+            id: crate::ids::AskId::new(),
+            kind: crate::agents::AskKind::Permission,
+            detail: None,
+            native_key: None,
+            since: ago(age),
+        });
+        session.context = Some(crate::agents::AgentContext {
+            permission_settle: Some(crate::agents::context::PermissionSettle {
+                ask_since: ago(age),
+                at: ago(age - 2),
+            }),
+            ..Default::default()
+        });
+        let snapshot = room_with_agent_panes(vec![session.clone()]);
+        assert_eq!(
+            row(&snapshot, "review").status(),
+            Some(AgentStatus::Running)
+        );
+
+        let parent = agent("codex", "root", AgentStatus::Success, 0).worktree("/repo/main");
+        let mut child = child_state("root", "child", AgentStatus::Waiting, age);
+        child.kind = session.kind;
+        child.launch_depth = Some(1);
+        child.mode = session.mode;
+        child.waiting_since = session.waiting_since;
+        child.open_ask = session.open_ask;
+        child.context = session.context;
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent = row(&snapshot, "root");
+        assert_eq!(
+            parent.sub_agents()[0].status,
+            AgentStatus::Running,
+            "child at {age}s"
+        );
+        assert_ne!(parent.attention_status(), Some(AgentStatus::Waiting));
+    }
+}
+
+#[test]
 fn turn_ending_capacity_error_releases_root_permission() {
     let mut session = agent("codex", "review", AgentStatus::Waiting, 0)
         .worktree("/repo/main")

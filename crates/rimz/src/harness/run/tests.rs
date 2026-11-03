@@ -2281,6 +2281,27 @@ fn live_status_keeps_raw_waiting_with_permission_review_evidence() {
             assert!(json.get("permission_review_until").is_none());
         }
     }
+    agent.mode = Some(PermissionMode::Auto);
+    agent.context = Some(crate::agents::AgentContext {
+        permission_settle: Some(crate::agents::context::PermissionSettle {
+            ask_since: since,
+            at: since + Duration::from_secs(2),
+        }),
+        ..Default::default()
+    });
+    let snapshot = SidebarSnapshot::build_with_agents(
+        workspace_id,
+        vec![agent],
+        since + Duration::from_secs(61),
+    );
+    let live = live_status(&record, &snapshot).unwrap();
+    assert_eq!(live.agent_status, AgentStatus::Waiting);
+    assert!(
+        serde_json::to_value(live)
+            .unwrap()
+            .get("permission_review_until")
+            .is_none()
+    );
 }
 
 #[test]

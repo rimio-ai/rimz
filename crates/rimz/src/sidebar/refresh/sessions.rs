@@ -133,7 +133,7 @@ pub fn force_refresh_session_context(
         kind,
         session_id,
         model_hint,
-        agent.open_permission_since(),
+        agent.settleable_permission_since(),
         crate::store::agent_context::read_one(runtime, kind, session_id).map(Arc::new),
         true,
         RefreshTrigger::Tick,
@@ -420,7 +420,7 @@ fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh>
             kind: agent.kind.as_str().to_owned(),
             session_id: agent.agent_id.to_string(),
             model_hint: session_model_hint(agent).map(str::to_owned),
-            open_permission_since: agent.open_permission_since(),
+            open_permission_since: agent.settleable_permission_since(),
         })
         .collect()
 }

@@ -69,7 +69,7 @@ The optional `launch.headless` form is a [`HeadlessForm`](../../../crates/rimz/s
 | `hook_context` | the reply shape (`HookSpecificOutput` or a `TopLevel` key) in which a native post-tool hook reply carries additive model context such as a deadline rung. `AgentDefinition::attach_hook_context` is its one writer, and `None` sends the rung through the pane |
 | `prompt_context` | a native prompt-submit reply can carry additive model context ([below](#hook-stdout-is-the-decision-channel)). Claude and Codex declare it |
 | `native_ask_ui` | the agent draws its own permission and question prompts, so RimZ can mark the row waiting and route you to the pane. Every built-in declares it, and a process plugin may not |
-| `permission_before_auto_review` | permission hooks precede an automatic reviewer. Codex alone declares it; recorded Auto launches hide permission attention for 60 seconds without releasing pane input ([waiting and asks](./model.md#waiting-and-asks)) |
+| `permission_before_auto_review` | permission hooks precede an automatic reviewer. Codex alone declares it; recorded Auto launches hide permission attention for 60 seconds without releasing pane input, unless the rollout proves the asking Code Mode cell finished and closes the ask ([waiting and asks](./model.md#waiting-and-asks)) |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
 | `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session), and a stamp must also pass kind, activity, and process-start guards |
 | `local_session_discovery` | `Unsupported`: no provider-local discovery; `FullScan`: scan admitted workspaces; `PerPane`: read only sessions live panes can bind. Observations may supply identity alone or lifecycle |
@@ -230,7 +230,7 @@ Installed provider hooks are outside RimZ's project-config executable-surface ha
 
 ## Context sources
 
-A session's context gauge says how full the window is and what the turn cost. An adapter fills it from none, one, or several sources (Qoder and Muse have none), and every source normalizes onto the same [`AgentContext`](../../../crates/rimz/src/agents/context.rs) fields, so nothing downstream depends on which one fed the row. A failed read leaves a field unset and never fails a hook. Most context is display data. The turn-error, settle, and attention markers are the exception: they feed displayed status, and [model.md](./model.md#rich-context) owns how.
+A session's context gauge says how full the window is and what the turn cost. An adapter fills it from none, one, or several sources (Qoder and Muse have none), and every source normalizes onto the same [`AgentContext`](../../../crates/rimz/src/agents/context.rs) fields, so nothing downstream depends on which one fed the row. A failed read leaves a field unset and never fails a hook. Most context is display data. The turn-error, turn-settle, permission-settle, and attention markers are the exception: they feed displayed status, and [model.md](./model.md#rich-context) owns how.
 
 Four `ContextCapability` methods feed the gauge:
 
