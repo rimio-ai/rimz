@@ -112,11 +112,15 @@ main
 ```console
 $ rimz agents show @coder
 @coder  codex · coder · GPT 5.5@high
-running (acting) · turn 3m · last request 0s ago
+running (acting) · turn 2m · last request 0s ago
 wire up the refresh-token path
 
+Run
+  run_01a135a0ce647155bc4c9cb30ac37447 · running 2m · for @planner
+  prompt: wire up the refresh-token path
+
 Context
-  31% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
+  33% of 258k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
   compactions: 0
   tools:       12 · Bash 9, Read 3
   budget:      -
@@ -129,6 +133,7 @@ Identity
   worktree: /home/you/code/query-engine-auth-refresh
   pr:       #91 open · ci passing
   pane:     tmux:%14
+
 ```
 
 Run, Messages, and Recent transcript appear before Context when present, so recent activity comes before stable facts. Waiting cards give you the next answer command, or point to the pane when the prompt needs its own UI. Live runs show a moving duration; only a finished run has an exit code. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
