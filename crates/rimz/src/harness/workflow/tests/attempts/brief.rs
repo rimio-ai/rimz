@@ -295,6 +295,40 @@ fn per_outcome_only_and_multiple_resets_do_not_invent_a_total_limit() {
 }
 
 #[test]
+fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
+    let notes = [false, true].map(|previously_parked| {
+        let (_dir, state, record) = setup(OUTCOME_STEP);
+        let host = FakeHost::new();
+        if previously_parked {
+            for _ in 0..3 {
+                answer(&state, &record, &host, json!({"outcome":"red"}));
+            }
+            resume(&state, &record.id, None, &["visits=+1".into()]).unwrap();
+            advance_ok(&state, &record.id, &host);
+        }
+        *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+        let launches = host.launched.borrow().len();
+        let waiting = answer(&state, &record, &host, json!({"outcome":"blue"}));
+        assert_eq!(waiting.state, RunState::Active);
+        assert_eq!(waiting.node, "build");
+        assert_eq!(waiting.wait.unwrap().outcome, "occupied");
+        assert_eq!(host.launched.borrow().len(), launches);
+        resume(&state, &record.id, None, &["visits=+1".into()]).unwrap();
+        *host.occupancy.borrow_mut() = Occupancy::Free;
+        advance_ok(&state, &record.id, &host);
+        note(&host)
+    });
+    assert_eq!(
+        notes
+            .each_ref()
+            .map(|text| text
+                .contains("You were launched because the check `watch` answered `blue`.")),
+        [true, true],
+        "{notes:#?}"
+    );
+}
+
+#[test]
 fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
     let (_dir, state, record) = setup(OUTCOME_STEP);
     let host = FakeHost::new();

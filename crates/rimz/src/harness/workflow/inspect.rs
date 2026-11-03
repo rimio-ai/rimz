@@ -82,16 +82,19 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
     hops
 }
 
-/// The latest resume at a node or route into it, shared by arrival and park views.
+/// The latest parked resume at a node or route into it, shared by arrival and park views.
+/// Active-run extensions do not replace the sender.
 pub fn routing_hop(spec: &WorkflowSpec, journal: &[JournalEntry], node: &str) -> Option<Hop> {
-    hops(spec, journal)
-        .into_iter()
-        .rev()
-        .find(|hop| match hop.kind {
-            HopKind::Resume => hop.node == node,
-            HopKind::Route => hop.target.as_deref() == Some(node),
-            _ => false,
-        })
+    let mut resumed = None;
+    for hop in hops(spec, journal).into_iter().rev() {
+        match hop.kind {
+            HopKind::Resume if hop.node == node && resumed.is_none() => resumed = Some(hop),
+            HopKind::Park { .. } if resumed.is_some() => return resumed,
+            HopKind::Route if hop.target.as_deref() == Some(node) => return Some(hop),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Whether a route repeats the immediately preceding evaluation's non-null answer.
