@@ -109,7 +109,7 @@ fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
     assert!(text.contains("turn_end") && text.contains("kept"), "{text}");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
-        text.contains("● after"),
+        text.contains("◆ after"),
         "the held session's check was visited:\n{text}"
     );
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
@@ -217,7 +217,7 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     );
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
-        text.contains("● after") && text.contains("done ·"),
+        text.contains("◆ after") && text.contains("done ·"),
         "the discarded verdict's check was evaluated:\n{text}"
     );
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
@@ -272,6 +272,6 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     assert_eq!(events(&value, "turn_end")[0]["action"], "kept");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(text.contains("build is with you"), "{text}");
-    assert_eq!(text.matches("  pending\n").count(), 1, "{text}");
+    assert_eq!(text.matches(" · after: pending").count(), 1, "{text}");
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }

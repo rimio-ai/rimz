@@ -157,13 +157,14 @@ rimz workflow show fix-tests  # definition rail, then live runs
 
 A row marked `· N ignored` has fields RimZ ignored in that run's sealed definition. `show` names each path and reason, even after the run finishes. These notices reflect how the current version reads the sealed definition, so an upgrade can add them to an existing run. A clean run has no mark. Start-time warnings about auto-continue or background reporting do not mark runs.
 
-`show` on an address or id starts with where the run is and what it is waiting for, then paints its sealed graph: `●` for reached nodes, `○` for those not reached, and the headline's glyph at the current node. Past nodes keep their last outcome or attempt, time and repeat count. The current condition's cases show each reading once, with `▸` at the winner or held case and `?` where unread evidence stopped it. Those marks work without color. Visit counts and a short trail follow, then the work directory and a command for full history. When parked, it explains why and gives the exact commands to resume, grant more bounds, choose another node, or cancel, followed by a horizontal rail. Finished runs use the horizontal rail without a current node. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
+`show` on an address or id starts with where the run is and what it is waiting for, then paints its sealed graph: `●`/`○` for reached/unreached steps, `◆`/`◇` for checks, and the headline's activity glyph at the current node. Reached glyphs are green, current nodes bold in their state tone, and future nodes muted. The header adds a cached PR number for active or parked runs when known; a live agent uses its full card handle. Past nodes keep their last outcome or attempt, time and repeat count. One line below the headline summarizes the current check's readings and when they were read. Its cases put `▸` in the gutter at the winner or held case and `?` where unread evidence stopped it. The current check says `last checked`, not an advance count; completed attempts omit pet names and say `HEAD <a>, no new commits` when unchanged. Those marks work without color. Visit counts and a short trail follow, then the work directory and a command for full history. When parked, it explains why and gives the exact commands to resume, grant more bounds, choose another node, or cancel, followed by a horizontal rail. Finished runs use the horizontal rail without a current node. While an agent step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field and the rules for choosing a run by name or address.
 
 Here the suite passed without needing `fix`. The finished run keeps that distinction visible:
 
 ```console
 $ rimz workflow show fix-tests#feat-x
-fix-tests#feat-x  ✓ done 3m
+fix-tests#feat-x
+✓ done 3m
 started 09:12 by hand · 0 attempts
 
 ◆ tests

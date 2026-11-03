@@ -116,6 +116,16 @@ fn ignored_fields_mark_run_views_but_do_not_change_json_detail() {
                 && text.contains("ignored"),
             "{text}"
         );
+        let warning = text.find("warning:").unwrap();
+        if args.len() == 3 {
+            assert!(text.rfind("│\n").unwrap() < warning, "{text}");
+            assert!(warning < text.find("trail  ").unwrap(), "{text}");
+        } else {
+            assert!(
+                text.lines().nth(2).unwrap().starts_with("warning:"),
+                "{text}"
+            );
+        }
     }
     for args in [vec!["workflow", "list"], vec!["workflow", "show", "review"]] {
         let text = success(command(&env, &args));
