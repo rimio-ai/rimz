@@ -335,7 +335,6 @@ pub struct SidebarSeatEffort {
 pub struct SidebarCohortEffort {
     pub cost_usd: Option<f64>,
     pub tokens: crate::agents::spending::EffortTokens,
-    pub active_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub seats: BTreeMap<String, SidebarSeatEffort>,
 }

@@ -1,9 +1,8 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
-//! with its parallel hit-test map entries. Finished agent pods collapse
+//! with its parallel hit-test map entries. Inactive agent pods collapse
 //! hidden agents into a two-line receipt: an expandable team/member roster with
-//! cost pinned right, then token totals and cache health with active duration,
-//! or the finished age when that record is absent,
+//! cost pinned right, then token totals and cache health with last-activity age
 //! pinned right.
 
 use std::collections::{HashMap, HashSet};
@@ -19,14 +18,11 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{
-    activity_short, age_label, age_secs, compact_count, dollars2,
-};
+use crate::sidebar_pane::render::fmt::{age_short, compact_count, dollars2};
 use crate::sidebar_pane::render::heights::{CardHeights, CardKey};
 use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, branch_delta_spans, diff_spans, hour_age_glyph, status_glyph,
-    status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
-    trunk_glyph_spans, value_seam,
+    TokenColumns, TokenDetail, branch_delta_spans, diff_spans, status_glyph, status_rest_style,
+    status_style_at, token_breakdown_spans, token_total_glyph, trunk_glyph_spans, value_seam,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -547,38 +543,25 @@ fn inactive_roster_line(
 }
 
 fn inactive_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
-    let idle_since = group
+    let has_agents = group.rows.iter().any(SidebarRow::is_agent);
+    let last_activity = group
         .rows
         .iter()
-        .filter(|row| row.is_agent())
-        .map(SidebarRow::idle_since)
+        .filter(|row| !has_agents || row.is_agent())
+        .map(|row| row.last_activity)
         .max()?;
-    let (tokens, active_secs) = group.cohort_effort.as_ref().map_or(
-        (crate::agents::spending::EffortTokens::default(), None),
-        |effort| (effort.tokens, effort.active_secs),
-    );
+    let tokens = group
+        .cohort_effort
+        .as_ref()
+        .map_or_else(Default::default, |effort| effort.tokens);
     let total = tokens.display_total();
     let input = tokens.input.saturating_add(tokens.cache_write);
     let output = tokens.output;
     let cache_read = tokens.cache_read;
-    let right = active_secs.map_or_else(
-        || {
-            activity_short(idle_since, ctx.now).map_or_else(Vec::new, |label| {
-                let seconds = age_secs(idle_since, ctx.now);
-                vec![Span::styled(
-                    format!("{} {label}", hour_age_glyph(ctx.theme, seconds)),
-                    ctx.theme.muted(),
-                )]
-            })
-        },
-        |active_secs| {
-            let seconds = i64::try_from(active_secs).unwrap_or(i64::MAX);
-            vec![Span::styled(age_label(seconds), ctx.theme.muted())]
-        },
-    );
-    if total == 0 && right.is_empty() {
-        return None;
-    }
+    let right = vec![Span::styled(
+        age_short(last_activity, ctx.now),
+        ctx.theme.muted(),
+    )];
 
     let cache_hit = (total > 0)
         .then(|| crate::agents::context::cache_hit_percent(cache_read, input))

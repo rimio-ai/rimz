@@ -464,7 +464,6 @@ pub(super) fn refresh_heavy_lanes(
             base,
             state_paths,
             runtime,
-            config.agents.attention.active_grace_secs.get(),
             unix_now_ms(),
             &mut state.rollup,
             &mut state.cohort_effort,

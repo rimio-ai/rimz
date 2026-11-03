@@ -23,20 +23,20 @@ expression: screen
 
  ↩ inactive-a
  ▸ ○ inactive-a
+                                                   0s
 
  ↩ inactive-b
  ▸ ✓ inactive-b
+                                                   0s
 
  ↩ inactive-c
  ▸ ✓ inactive-c
+                                                   0s
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
  ✓ external
    task-external
    ▢ ────────────────────────────────────  0.0%
-
-
-
 
 
  ────────────────────────────────────────────────────

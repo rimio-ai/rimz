@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentState;
 use crate::agents::spending::{EffortParseMemo, EffortSessionRef};
-use crate::store::active_time;
 use crate::store::snapshot::{
     RollupCursor, SidebarCohortEffort, SidebarSeatEffort, SidebarSnapshot, SidebarWorktreeGroup,
 };
@@ -42,7 +41,6 @@ pub(super) fn refresh_cohort_spend_for(
     snapshot: &SidebarSnapshot,
     state: &StatePaths,
     runtime: &RuntimePaths,
-    active_grace_secs: u32,
     now_ms: u64,
     cursor: &mut RollupCursor,
     memo: &mut EffortParseMemo,
@@ -65,9 +63,6 @@ pub(super) fn refresh_cohort_spend_for(
     let groups = compute_cohort_effort(
         &snapshot.worktree_groups,
         &agents.iter().collect::<Vec<_>>(),
-        runtime,
-        snapshot.now,
-        active_grace_secs,
         &prices,
         memo,
     );
@@ -88,9 +83,6 @@ pub(super) fn refresh_cohort_spend_for(
 fn compute_cohort_effort(
     groups: &[SidebarWorktreeGroup],
     agents: &[&AgentState],
-    runtime: &RuntimePaths,
-    now: jiff::Timestamp,
-    active_grace_secs: u32,
     prices: &crate::agents::PriceBook,
     memo: &mut EffortParseMemo,
 ) -> BTreeMap<String, SidebarCohortEffort> {
@@ -103,14 +95,6 @@ fn compute_cohort_effort(
         );
     }
     let slots = crate::agents::attribution::slot_groups(agents, &lifetimes);
-    let active = active_time::display_secs_for_keys(
-        runtime,
-        agents
-            .iter()
-            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-        now,
-        active_grace_secs,
-    );
     let mut computed = BTreeMap::new();
 
     for group in groups.iter().filter(|group| group.collapses()) {
@@ -147,14 +131,6 @@ fn compute_cohort_effort(
             {
                 cohort.seats.insert(record.agent_id.to_string(), seat);
             }
-            let slot_active =
-                crate::agents::attribution::seat_active_secs(records.iter().copied(), &active);
-            cohort.active_secs = match (cohort.active_secs, slot_active) {
-                (Some(total), Some(value)) => Some(total.saturating_add(value)),
-                (Some(total), None) => Some(total),
-                (None, Some(value)) => Some(value),
-                (None, None) => None,
-            };
         }
         computed.insert(group.key.clone(), cohort);
     }
@@ -218,14 +194,8 @@ mod tests {
     }
 
     #[test]
-    fn singleton_finished_fleet_folds_120_sessions_with_a_warm_memo() {
+    fn singleton_inactive_fleet_folds_120_sessions_with_a_warm_memo() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime = RuntimePaths::under(
-            crate::WorkspaceId::from_project_root(dir.path()),
-            dir.path(),
-        )
-        .unwrap();
-        runtime.ensure_dirs().unwrap();
         let transcript = dir.path().join("opencode.db");
         let connection = crate::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
         let mut agents = Vec::new();
@@ -261,9 +231,6 @@ mod tests {
             let computed = compute_cohort_effort(
                 &groups,
                 &agents,
-                &runtime,
-                jiff::Timestamp::UNIX_EPOCH,
-                180,
                 &crate::agents::PriceBook::default(),
                 &mut memo,
             );
@@ -277,9 +244,6 @@ mod tests {
     #[test]
     fn collapsed_group_folds_audit_slots_with_one_transcript_memo() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = crate::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
         let transcript = dir.path().join("opencode.db");
         let connection = crate::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
         for (id, session_id, input) in [("one", "planner", 10), ("two", "coder", 20)] {
@@ -329,9 +293,6 @@ mod tests {
         let computed = compute_cohort_effort(
             std::slice::from_ref(&group),
             &agents.iter().collect::<Vec<_>>(),
-            &runtime,
-            jiff::Timestamp::UNIX_EPOCH,
-            180,
             &crate::agents::PriceBook::default(),
             &mut memo,
         );
@@ -365,9 +326,6 @@ mod tests {
         let unreadable = compute_cohort_effort(
             &[group],
             &agents.iter().collect::<Vec<_>>(),
-            &runtime,
-            jiff::Timestamp::UNIX_EPOCH,
-            180,
             &crate::agents::PriceBook::default(),
             &mut memo,
         );
@@ -381,9 +339,6 @@ mod tests {
     #[test]
     fn collapsed_group_counts_only_the_current_lane_lifetime() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = crate::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
         let checkout = dir.path().join("lane");
         let git_dir = checkout.join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
@@ -410,16 +365,6 @@ mod tests {
             ("current", None, 100, 1.0, 10),
             ("current-child", Some("current"), 101, 3.0, 30),
         ] {
-            let start = jiff::Timestamp::from_second(registered_at).unwrap();
-            active_time::record_progress(&runtime, "opencode", session_id, start, 180).unwrap();
-            active_time::record_stop(
-                &runtime,
-                "opencode",
-                session_id,
-                start + jiff::SignedDuration::from_secs(input),
-                180,
-            )
-            .unwrap();
             let data = serde_json::json!({
                 "cost": cost,
                 "model":{"id":"gpt","providerID":"openai"},
@@ -464,9 +409,6 @@ mod tests {
             compute_cohort_effort(
                 std::slice::from_ref(&group),
                 &agents.iter().collect::<Vec<_>>(),
-                &runtime,
-                marker.created_at,
-                180,
                 &crate::agents::PriceBook::default(),
                 memo,
             )
@@ -474,7 +416,6 @@ mod tests {
         let computed = compute(&mut memo);
         let effort = &computed[&group.key];
         assert_eq!(effort.cost_usd, Some(4.0));
-        assert_eq!(effort.active_secs, Some(40));
         assert_eq!(effort.tokens.input, 40);
         assert_eq!(effort.tokens.output, 4);
         assert_eq!(

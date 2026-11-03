@@ -80,7 +80,6 @@ fn cohort_effort_projects_by_group_key_and_clears_misses() {
             cache_write: 3,
             cache_read: 4,
         },
-        active_secs: Some(60),
         ..crate::store::snapshot::SidebarCohortEffort::default()
     };
     let cache = CohortSpendCache {

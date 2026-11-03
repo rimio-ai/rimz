@@ -837,10 +837,7 @@ fn narrow_inactive_receipt_still_targets_first_member_before_the_shell() {
     finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.pr_url = Some("https://example.test/pull/91".into());
     finished.pr_number = Some(91);
-    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
-        active_secs: Some(60),
-        ..Default::default()
-    });
+    finished.cohort_effort = Some(Default::default());
     let (texts, map, hits) = render_group_at_width(&finished, false, 12);
     assert!(texts[1].contains("▸ +3 done"), "{texts:?}");
     assert_eq!(map, vec![None; 3]);
@@ -857,9 +854,9 @@ fn narrow_inactive_receipt_still_targets_first_member_before_the_shell() {
 }
 
 #[test]
-fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
+fn inactive_receipt_pins_cost_then_tokens_and_muted_activity_age() {
     let mut first = agent_row_with_cost("planner", 0.42);
-    first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
+    first.last_activity = fixed_now() - Duration::from_secs(20 * 60);
     let first_agent = first.as_agent_mut().expect("agent row");
     first_agent.registered_at = Some(fixed_now() - Duration::from_secs(152 * 60));
     first_agent.usage.total_tokens = Some(700_000);
@@ -876,7 +873,9 @@ fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
     second_agent.usage.output_tokens = Some(80_000);
     second_agent.usage.cache_read_input_tokens = Some(300_000);
 
-    let mut finished = group(vec![first, second]);
+    let mut shell = process_row("shell");
+    shell.last_activity = fixed_now();
+    let mut finished = group(vec![first, second, shell]);
     finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.0),
@@ -886,7 +885,6 @@ fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
             cache_write: 0,
             cache_read: 700_000,
         },
-        active_secs: Some(2 * 60 * 60),
         ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let mut snapshot = snapshot_with(Vec::new());
@@ -910,8 +908,8 @@ fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
         "member token counters sum into one detailed breakdown: {texts:?}"
     );
     assert!(
-        totals_text.trim_end().ends_with(" 2h") && !totals_text.contains('◉'),
-        "active duration is plain at the rightmost pin: {texts:?}"
+        totals_text.trim_end().ends_with(" 20m") && !totals_text.contains('◉'),
+        "latest agent activity, not work time or newer process activity: {texts:?}"
     );
     assert!(
         !totals_text.contains("32m") && !totals_text.contains('$'),
@@ -920,8 +918,8 @@ fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
     let age = totals
         .spans
         .iter()
-        .find(|span| span.content == "2h")
-        .expect("active duration span");
+        .find(|span| span.content == "20m")
+        .expect("activity age span");
     assert_eq!(
         age.style,
         theme.muted(),
@@ -997,7 +995,6 @@ fn inactive_totals_degrade_tokens_before_the_right_pin() {
             cache_write: 0,
             cache_read: 700_000,
         },
-        active_secs: Some(2 * 60 * 60),
         ..crate::store::snapshot::SidebarCohortEffort::default()
     });
 

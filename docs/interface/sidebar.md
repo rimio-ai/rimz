@@ -96,8 +96,8 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
-| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card, wait, and inactive-group ages fill over an hour and stay full past it, never ringed. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window; `◉` also leads the cache-expired line, not a card age. |
-| `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
+| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card and wait ages fill over an hour and stay full past it, never ringed. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window; `◉` also leads the cache-expired line, not a card age. |
+| `9m`, `2h` | plain muted runtime, frozen for finished children, and the inactive receipt's age, which carries no face; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1M` | the model's context window size |
 | `ϟ` (Nerd Font: ``) | fast mode, after the model on a card, after the effort on a subagent row (after the model when the row has no effort): bold amber, always still on child rows; on cards, still at rest and crackling only while running |
 | `↪` beside the model | tier routing passed over an earlier entry; `rimz agents show @<handle>` names the tier and every reason. The default mark is the same in both glyph sets (`card.tier_move`). |
@@ -679,7 +679,7 @@ A group becomes inactive once its latest agent launch or non-keepalive prompt is
    ◇ 1M ↘ 300k ↗ 80k ◌ 900k · 75%                    2h
 ```
 
-The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
+The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with time since the latest agent activity pinned right. This compact age is always present, plain and muted without a glyph, even under five minutes (`30s`, `12m`, `2h`). Cache pings do not move it, and process activity counts only in groups without agents. Cost and tokens cover every session the team ran in this worktree, resumed sessions and subagents included; the sidebar shows no work-time figure. When the line is too narrow for one member it reads `▸ +K done`.
 
 Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
@@ -696,12 +696,15 @@ Click the chip's glyph or brackets, or press `i`, to open it. If the receipts it
 
  ↩ inactive-a
  ▸ ○ inactive-a
+                                                   0s
 
  ↩ inactive-b
  ▸ ✓ inactive-b
+                                                   0s
 
  ↩ inactive-c
  ▸ ✓ inactive-c
+                                                   0s
 ```
 
 The counts are groups, not agents. Click `N inactive` to filter to every row in inactive groups, or `M unlanded` to show the unlanded groups among them. The breakdown is omitted when M is zero. These body filters persist, broadcast and clear like the cockpit's picks. The chip stays visible under these two picks and marks the chosen count; click it again to clear, or the other count to switch. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any other filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
@@ -711,6 +714,7 @@ A folded inactive group hides its pipeline line and puts the stage after the tea
 ```
  ⑂ pipeline
  ▸ forge · Done  ✓ planner  ✓ coder
+                                                   0s
 ```
 
 Expanding the group restores the pipeline line. Cards rank by status and age. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Inactive groups sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
