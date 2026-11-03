@@ -339,10 +339,26 @@ Wins identified but not taken, because each changes a contract or crosses a back
 1. **tmux `list-panes` over the held control client.** The host's `tmux -C` client already writes commands and parses reply blocks, so sending `list-panes` over it would remove the producer's `list-panes` fork and connect. The saving is 10 to 30 ms on the already-cheap backend, and the poll must still cover a dead watcher.
 2. **Delta-bearing wakeup datagrams.** `StoreDelta` could carry the appended frames, so a warm consumer folds from the datagram with no file IO. The warm cursor fold is already one stat plus a page-cache-hot read, so the win is microseconds against a second delivery path for state that must never become truth. Build it only above sustained hundreds of events per second.
 
-Two costs belong upstream, and RimZ only bounds them:
+Three costs belong upstream, and RimZ only bounds them:
 
 - **Zellij topology freshness depends on the presence plugin.** A missing, denied, or wedged plugin leaves a Zellij room holding its last good frame while `rimz doctor` names the failing precondition. A watchdog belongs in the presence channel, not in a CLI fallback.
 - **Zellij compact-bar and scrollback footprint.** A 100-pane room carries one compact-bar wasm instance per tab and large server-side scrollback. RimZ can recommend configuration and avoid adding pressure. The costs belong to Zellij's plugin and scrollback model.
+- **tmux's full status window loop.** The stock `#{W:…}` list formats every tab on status redraws, including redraws triggered by pane-title changes. `[mux] status_bar = "compact"` caches up to 21 tabs around the current window, so redraws reuse the strip; its event-triggered refresh still loops over the session's windows. `"off"` removes the bar. See [large tmux rooms](../guide/multiplexer.md#large-tmux-rooms) for the preserved layout, clicks, and refresh limits.
+
+tmux 3.8 measurement on trunk `9bcc98a9caf` plus the branch through `feat(reload): reapply tmux room options to live sessions` measured each mode: 268 windows, 536 panes, 60 spinner/OSC-title emitters (median 9.6 to 9.7 Hz), one 255×77 Powerline client, and zero versus 3,463 to 3,464 stored history lines after printing 3,500 per pane. Each row used 30 switches and a 10-second server-only CPU sample (percentage of one core), in the same private-devpts room, with native acknowledgements after both compact refresh writes. Per history state, the two compact rows ran back to back, bracketed by runs of an unshipped refresh variant.
+
+| History | Mode | Switch median / p90 (ms) | Server CPU (%) |
+| --- | --- | ---: | ---: |
+| Unfilled | full | 33.81 / 48.22 | 91.2 |
+| Unfilled | off | 2.26 / 2.98 | 17.1 |
+| Unfilled | compact 1 | 6.28 / 7.38 | 14.8 |
+| Unfilled | compact 2 | 7.94 / 9.90 | 14.9 |
+| Filled | full | 26.85 / 38.37 | 85.9 |
+| Filled | off | 2.42 / 2.86 | 16.7 |
+| Filled | compact 1 | 6.47 / 6.95 | 14.8 |
+| Filled | compact 2 | 7.73 / 8.66 | 18.9 |
+
+This sequential, unpinned shared-host run (one-minute load 8.70 to 14.80) met the roughly 8-ms filled and 10-ms median targets, but earlier runs of the same harness varied substantially with host load, so it establishes no universal latency ceiling.
 
 Evaluated and rejected, recorded so the next pass does not reopen them:
 
