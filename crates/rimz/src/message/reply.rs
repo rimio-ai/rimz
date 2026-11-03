@@ -5,6 +5,7 @@
 //! extraction, and join settlement. Callers drive polling and render the typed
 //! progress and result records.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
@@ -13,7 +14,9 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, TurnCompletion};
+use crate::agents::{
+    AgentCardRef, AgentDefinition, AgentState, AgentStatus, ParkDemotion, TurnCompletion,
+};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
@@ -521,6 +524,8 @@ pub struct TurnWaitView {
     pub snapshot: SidebarSnapshot,
     messages: Vec<MessageRecord>,
     now: Timestamp,
+    store: Store,
+    demotion: OnceCell<ParkDemotion>,
 }
 
 /// Why a turn has not completed, including wakes not yet reflected on its card.
@@ -564,16 +569,43 @@ impl TurnWaitView {
             snapshot,
             messages,
             now,
+            store: store.clone(),
+            demotion: OnceCell::new(),
         })
     }
 
     /// Effective status, held at `sleeping` while a wake for the agent is
-    /// still between its consumed catalog row and its delivered turn.
+    /// still between its consumed catalog row and its delivered turn. A
+    /// displayed provider pause the card counts as spent reads as `failed`,
+    /// unless a budget park takes precedence.
     fn status(&self, agent: &AgentState) -> AgentStatus {
         let status = agent.effective_status(self.snapshot.now);
         let waking = self.wake_in_flight(agent, false);
         if waking && matches!(status, AgentStatus::Idle | AgentStatus::Success) {
-            AgentStatus::Sleeping
+            return AgentStatus::Sleeping;
+        }
+        if status != AgentStatus::Paused || agent.budget_park.is_some() {
+            return status;
+        }
+        let Some((class, _)) = agent
+            .displayed_turn_error(self.snapshot.now)
+            .filter(|(class, _)| class.pauses_turn())
+        else {
+            return status;
+        };
+        let demotion = self.demotion.get_or_init(|| {
+            crate::harness::auto_continue::park_demotion(
+                Some(&self.store),
+                self.store.paths(),
+                self.store.runtime_paths(),
+                &crate::config::MachineConfig::load_lenient(),
+                &self.snapshot.agents,
+                self.snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+                self.snapshot.now,
+            )
+        });
+        if demotion.is_spent(agent, class) {
+            AgentStatus::Failed
         } else {
             status
         }

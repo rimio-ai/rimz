@@ -6481,6 +6481,80 @@ fn message_wait_ends_on_non_pausing_provider_error() {
 }
 
 #[test]
+fn message_wait_ends_on_spent_provider_pause() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let agent = ReplyAgentFixture::single(&env, "spent-pause");
+    let login = rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"));
+    env.publish_rate_limits(&rimz::agents::RateLimitsCache {
+        entries: [(
+            login.into(),
+            rimz::agents::RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(jiff::Timestamp::now() - Duration::from_secs(1)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+
+    let child = traced_rimz(&env, "zellij-wait-spent-pause-trace.log")
+        .args([
+            "message",
+            "@claude#feature-wait-spent-pause",
+            "--wait=30s",
+            "try it",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn spent-pause reply wait");
+    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
+    run_hook_for_owner(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": agent.session_id,
+            "prompt": user_message("try it"),
+            "worktree_branch": agent.branch,
+            "transcript_path": agent.transcript_path,
+        }),
+        &[("ZELLIJ_PANE_ID", agent.pane_id)],
+        env.agent_owner_pid(),
+    );
+    let started = Instant::now();
+    seed_turn_error(
+        &env,
+        &agent.session_id,
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
+
+    let out = child.wait_with_output().expect("wait for spent pause");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line == "rimz: turn failed (exit 1)"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.lines().any(|line| line.ends_with(": paused")),
+        "{stderr}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(20));
+}
+
+#[test]
 fn message_wait_gathers_other_replies_after_one_leg_fails() {
     let env = Env::new();
     env.record(&env.project_root);

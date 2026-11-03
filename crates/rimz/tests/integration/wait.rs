@@ -1184,6 +1184,87 @@ fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
     }
 }
 
+#[test]
+fn agents_wait_ends_on_spent_provider_pause() {
+    use rimz::agents::{
+        AgentContext, AgentRateLimits, AgentTurnError, RateLimitCacheEntry, RateLimitWindow,
+        RateLimitsCache, TurnErrorClass,
+    };
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let store = env.store();
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("provider-session")),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "test",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(1);
+    let mut context = AgentContext::new("claude", at);
+    context.turn_error = Some(AgentTurnError {
+        ended_turn: false,
+        class: TurnErrorClass::PausedRateLimit,
+        at,
+        label: None,
+    });
+    rimz::store::agent_context::write_record(
+        &env.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new(
+            "claude",
+            "provider-session",
+            context,
+        ),
+    )
+    .unwrap();
+    env.publish_rate_limits(&RateLimitsCache {
+        entries: [(
+            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(jiff::Timestamp::now() - std::time::Duration::from_secs(1)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+    for stream in [false, true] {
+        let mut command = env.rimz();
+        command.args(["agents", "wait", "@planner", "--timeout", "0s", "--json"]);
+        if stream {
+            command.arg("--stream");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "stream: {stream}, {output:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("paused"),
+            "{output:?}"
+        );
+        if !stream {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["@planner"]["status"], "failed");
+        }
+    }
+}
+
 fn agents_wait_exit(env: &Env) -> Option<i32> {
     env.rimz()
         .args(["agents", "wait", "@planner", "--timeout", "1s"])

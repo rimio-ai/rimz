@@ -201,7 +201,7 @@ A deadline does not withdraw queued text: it will still deliver unless you cance
 
 Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require it.
 
-A turn that goes `waiting` or `paused` is still inside its reply, so a reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--wait=<duration>` when a script needs its own bound.
+A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause the card counts as spent (`failed`) ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--wait=<duration>` when a script needs its own bound.
 
 Agents wait on each other too, and RimZ catches the deadlock instead of hanging: a send whose target is already waiting on the caller's own reply is refused before anything is queued, and a cycle that forms inside a running fan-out fails that one target, each naming the handle and message that blocks it. Text already queued stays queued and delivers at the next boundary. An agent's own `@all --wait` gathers peer replies only, never its own.
 
