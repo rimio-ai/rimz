@@ -196,6 +196,9 @@ pub struct AgentContext {
     /// to complete a turn wait, unlike supervised runs' durable run records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settle: Option<TurnSettle>,
+    /// The asking Code Mode cell's terminal result, keyed to the permission ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_settle: Option<PermissionSettle>,
     /// When the producer observed this record. Snapshot liveness comes from
     /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,
@@ -245,6 +248,20 @@ pub struct TurnSettle {
     pub outcome: TurnSettleOutcome,
 }
 
+/// Proof that the cell asking for permission finished after that ask arrived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionSettle {
+    pub ask_since: Timestamp,
+    pub at: Timestamp,
+}
+
+impl PermissionSettle {
+    /// Whether this proof closes the ask that arrived at `since`.
+    pub fn answers(self, since: Timestamp) -> bool {
+        self.ask_since == since && self.at > since
+    }
+}
+
 impl TurnSettle {
     pub fn new(at: Timestamp, outcome: TurnSettleOutcome) -> Self {
         Self { at, outcome }
@@ -278,6 +295,7 @@ impl Default for AgentContext {
             turn_opened_by: Vec::new(),
             turn_error: None,
             settle: None,
+            permission_settle: None,
             observed_at: Timestamp::UNIX_EPOCH,
         }
     }
@@ -405,6 +423,7 @@ pub struct LocalContextPatch {
     pub post_compaction_tokens: FieldPatch<u64>,
     pub turn_error: FieldPatch<AgentTurnError>,
     pub settle: FieldPatch<TurnSettle>,
+    pub permission_settle: FieldPatch<PermissionSettle>,
 }
 
 impl LocalContextPatch {
@@ -448,6 +467,7 @@ impl LocalContextPatch {
             .apply(&mut context.post_compaction_tokens);
         self.turn_error.apply(&mut context.turn_error);
         self.settle.apply(&mut context.settle);
+        self.permission_settle.apply(&mut context.permission_settle);
     }
 }
 

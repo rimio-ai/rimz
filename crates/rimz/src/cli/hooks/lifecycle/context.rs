@@ -292,7 +292,11 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         .then(|| prior.as_ref().and_then(|record| record.spend_fold.as_ref()))
         .flatten();
     let login_env = rimz::harness::hook_drain::capture_env();
+    // Every hook that refreshes context is itself later activity or leaves
+    // Waiting, so the open ask is left to the tick and watch passes.
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &login_env,
         agent_id: context_agent_id,
         model_hint: local_model_hint,

@@ -1457,6 +1457,10 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         let local = self.local_context_refresh(
             RefreshTrigger::Tick,
             &LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: input
+                    .prior
+                    .and_then(|record| record.context.permission_settle),
                 login_env: input.login_env,
                 agent_id: input.session_id,
                 model_hint,

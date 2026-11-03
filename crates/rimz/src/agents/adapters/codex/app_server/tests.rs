@@ -1020,6 +1020,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         settle: None,
+        permission_settle: None,
         observed_at: app_at,
     }
 }

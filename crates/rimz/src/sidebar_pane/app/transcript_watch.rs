@@ -44,6 +44,7 @@ struct WatchTarget {
     login: Option<crate::ids::LoginName>,
     session_id: String,
     model_hint: Option<String>,
+    open_permission_since: Option<jiff::Timestamp>,
 }
 
 #[derive(Default)]
@@ -136,6 +137,7 @@ fn watch_transcripts(runtime: &RuntimePaths) -> notify::Result<()> {
                     &target.session_id,
                     target.model_hint.as_deref(),
                     target.login.as_ref(),
+                    target.open_permission_since,
                 );
             }
             pending.clear();
@@ -296,6 +298,7 @@ fn transcript_targets<'a>(
             kind: record.kind.as_str().to_owned(),
             session_id: record.agent_id.as_str().to_owned(),
             model_hint: record.context.model_id.clone(),
+            open_permission_since: agent.and_then(crate::agents::AgentState::open_permission_since),
         };
         targets.entry(path).or_default().insert(target);
     }
@@ -335,6 +338,7 @@ mod tests {
             kind: kind.to_owned(),
             session_id: session_id.to_owned(),
             model_hint: None,
+            open_permission_since: None,
         }
     }
 
@@ -785,6 +789,7 @@ mod tests {
                 (
                     PathBuf::from("/t/a.jsonl"),
                     BTreeSet::from([WatchTarget {
+                        open_permission_since: None,
                         kind: "codex".to_owned(),
                         login: Some("work".parse().unwrap()),
                         session_id: "sess-a".to_owned(),
@@ -794,6 +799,7 @@ mod tests {
                 (
                     PathBuf::from("/t/d.settings.json"),
                     BTreeSet::from([WatchTarget {
+                        open_permission_since: None,
                         kind: "droid".to_owned(),
                         login: None,
                         session_id: "sess-d".to_owned(),
@@ -803,6 +809,7 @@ mod tests {
                 (
                     PathBuf::from("/t/g.jsonl"),
                     BTreeSet::from([WatchTarget {
+                        open_permission_since: None,
                         kind: "copilot".to_owned(),
                         login: None,
                         session_id: "sess-g".to_owned(),

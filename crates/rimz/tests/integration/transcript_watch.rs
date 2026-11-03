@@ -63,6 +63,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
         SESSION_ID,
         Some("gpt-5"),
         None,
+        None,
     );
 
     let merged = agent_context::read_one(runtime, "codex", SESSION_ID).expect("merged sidecar");
@@ -93,6 +94,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
         "codex",
         SESSION_ID,
         Some("gpt-5"),
+        None,
         None,
     );
     let after = std::fs::read(rimz::store::agent_context::path_for(
@@ -132,6 +134,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         SESSION_ID,
         Some("cursor/model"),
         None,
+        None,
     );
     let first = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("first refresh");
     let first_stat = first.transcript_stat.expect("first stat");
@@ -163,6 +166,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         SESSION_ID,
         Some("cursor/model"),
         None,
+        None,
     );
 
     let merged = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("merged sidecar");
@@ -187,6 +191,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         "cursor",
         SESSION_ID,
         Some("cursor/model"),
+        None,
         None,
     );
     let after = std::fs::read(rimz::store::agent_context::path_for(

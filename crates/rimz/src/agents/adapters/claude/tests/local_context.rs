@@ -202,6 +202,8 @@ fn cache_write_retention_keeps_on_resume_and_clears_on_replacement() {
         .local_context_refresh(
             RefreshTrigger::Tick,
             &LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: None,
                 agent_id: "session-1",
                 model_hint: None,
                 prior_session_name: None,
@@ -397,6 +399,8 @@ fn refresh<'a>(
     ClaudeAdapter.local_context_refresh(
         RefreshTrigger::Tick,
         &LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-1",
             model_hint: None,

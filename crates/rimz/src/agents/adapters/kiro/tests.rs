@@ -47,6 +47,8 @@ fn refresh_at(transcript: &Path) -> Option<LocalContextRefresh> {
     KiroAdapter.local_context_refresh(
         RefreshTrigger::Tick,
         &LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &BTreeMap::new(),
             agent_id: transcript
                 .parent()
@@ -74,6 +76,8 @@ fn local_refresh_ignores_a_recorded_transcript_of_another_session() {
     let refresh = KiroAdapter.local_context_refresh(
         RefreshTrigger::Tick,
         &LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &BTreeMap::new(),
             agent_id: "sess_99999999-9999-4999-8999-999999999999",
             model_hint: None,
@@ -548,6 +552,8 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
         .local_context_refresh(
             RefreshTrigger::Tick,
             &crate::agents::LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: None,
                 login_env: &std::collections::BTreeMap::new(),
                 agent_id: session_id,
                 model_hint: None,
@@ -572,6 +578,8 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
             .local_context_refresh(
                 RefreshTrigger::Tick,
                 &crate::agents::LocalContextRefreshCtx {
+                    open_permission_since: None,
+                    prior_permission_settle: None,
                     login_env: &std::collections::BTreeMap::new(),
                     agent_id: session_id,
                     model_hint: None,

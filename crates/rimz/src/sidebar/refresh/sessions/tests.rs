@@ -96,12 +96,14 @@ fn live_session_refreshes_target_live_root_sessions() {
         live_session_refreshes(&active_with_windows),
         vec![
             LiveSessionRefresh {
+                open_permission_since: None,
                 login: None,
                 kind: "codex".to_owned(),
                 session_id: "sess-active".to_owned(),
                 model_hint: Some("gpt-5.5-codex".to_owned()),
             },
             LiveSessionRefresh {
+                open_permission_since: None,
                 login: None,
                 kind: "claude".to_owned(),
                 session_id: "claude-active".to_owned(),
@@ -130,6 +132,7 @@ fn live_session_refreshes_target_live_root_sessions() {
     assert_eq!(
         live_session_refreshes(&active_no_model),
         vec![LiveSessionRefresh {
+            open_permission_since: None,
             login: None,
             kind: "codex".to_owned(),
             session_id: "sess-active".to_owned(),
@@ -307,6 +310,7 @@ fn unsupported_tick_adapter_writes_no_sidecar() {
         Some("opus"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
 
     assert!(crate::store::agent_context::read_all(&runtime).is_empty());
@@ -344,6 +348,7 @@ fn transcript_backstop_is_stat_gated() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     // The sidecar carries the derivation inputs (window + current usage), not a
@@ -372,6 +377,7 @@ fn transcript_backstop_is_stat_gated() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(second.context.observed_at, observed_at);
@@ -395,6 +401,7 @@ fn transcript_backstop_is_stat_gated() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let third = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(
@@ -441,6 +448,7 @@ fn forced_refresh_bypasses_stat_gate() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     let observed_at = first.context.observed_at;
@@ -453,6 +461,7 @@ fn forced_refresh_bypasses_stat_gate() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(second.context.observed_at, observed_at);
@@ -509,6 +518,7 @@ fn forced_refresh_reruns_turn_death_ladder() {
         Some("gpt-5"),
         None,
         RefreshTrigger::Tick,
+        None,
     );
     let stat_gated = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(

@@ -152,6 +152,8 @@ impl ChangedSessionRefreshFixture {
         let transcript = self.transcript.to_str()?;
         let login_env = crate::agents::ambient_env();
         let ctx = crate::agents::LocalContextRefreshCtx {
+            open_permission_since: None,
+            prior_permission_settle: None,
             login_env: &login_env,
             agent_id: &self.session_id,
             model_hint: None,

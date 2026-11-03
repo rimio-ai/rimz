@@ -45,6 +45,8 @@ fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion()
     let cache = dir.path().join("prices.json");
     crate::agents::PriceBook::write_fixture_cache(&cache);
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -63,6 +65,8 @@ fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion()
     assert!(base > 0.0);
     let stat = first.transcript_stat.unwrap();
     let unchanged = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         prior_transcript_stat: Some(&stat),
         ..ctx
     };
@@ -91,6 +95,8 @@ fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion()
     assert!(stat.companion.is_some());
     assert_eq!(Some(physical_main), KimiAdapter.transcript_stat(&main));
     let unchanged = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         prior_transcript_stat: Some(&stat),
         ..ctx
     };
@@ -114,6 +120,8 @@ fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion()
     assert_ne!(third.transcript_stat, Some(stat));
     assert_eq!(Some(physical_main), KimiAdapter.transcript_stat(&main));
     let unchanged = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         prior_transcript_stat: third.transcript_stat.as_ref(),
         ..ctx
     };
@@ -512,6 +520,8 @@ fn refresh_publishes_the_state_title_as_session_preview() {
     std::fs::write(session.join("state.json"), r#"{"title":"  Stable task  "}"#).unwrap();
     let cache = dir.path().join("prices.json");
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -568,6 +578,8 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     let cache = dir.path().join("prices.json");
     crate::agents::PriceBook::write_fixture_cache(&cache);
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -725,6 +737,8 @@ fn wire_without_usage_emits_fresh_sentinel() {
     let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -929,6 +943,8 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
     let cache = dir.path().join("prices.json");
     crate::agents::PriceBook::write_fixture_cache(&cache);
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -1033,6 +1049,8 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
     let cache = dir.path().join("prices.json");
     let path_text = path.to_string_lossy().into_owned();
     let ctx = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         agent_id: "s1",
         model_hint: None,
@@ -1061,6 +1079,8 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
     assert_eq!(refresh.transcript_path.as_deref(), Some(path_text.as_str()));
     let stat = refresh.transcript_stat.unwrap();
     let unchanged = LocalContextRefreshCtx {
+        open_permission_since: None,
+        prior_permission_settle: None,
         login_env: &std::collections::BTreeMap::new(),
         prior_transcript_stat: Some(&stat),
         prior_spend_fold: None,
