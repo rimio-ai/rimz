@@ -181,9 +181,30 @@ impl std::fmt::Display for TierSkipReason {
     }
 }
 
+/// The automation that started an agent, inherited by its launched children and peers.
+///
+/// Adding a variant makes an older binary drop the whole event that carries it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum Automation {
+    Loop,
+    Workflow { workflow: String, step: String },
+}
+
+impl Automation {
+    pub fn workflow_scope(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Loop => None,
+            Self::Workflow { workflow, step } => Some((workflow, step)),
+        }
+    }
+}
+
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<Automation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<WorkflowAttemptRef>,
     /// Absolute host checkout displaced by empty-dir placement; absent when the key did not apply.

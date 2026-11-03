@@ -205,6 +205,16 @@ fn stop_includes_a_cleared_companion() {
     .unwrap();
     let (id, run) = room.launch();
     let store = room.env.store();
+    let snapshot = store.snapshot().unwrap();
+    let stamps: Vec<_> = snapshot
+        .agents
+        .iter()
+        .map(|agent| serde_json::to_value(agent).unwrap()["automation"].clone())
+        .collect();
+    assert_eq!(
+        stamps,
+        vec![json!({"by": "workflow", "workflow": "review", "step": "build"}); 2]
+    );
     let companion = store
         .snapshot()
         .unwrap()

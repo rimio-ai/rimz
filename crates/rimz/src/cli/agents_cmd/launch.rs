@@ -143,6 +143,7 @@ pub(super) fn launch_layout(
         starter: rimz::launcher::Starter::Human,
         resident_loop: None,
         workflow: None,
+        automation: None,
         leader_run: None,
     };
     let mut interaction = CliInteraction;

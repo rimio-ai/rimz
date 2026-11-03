@@ -238,6 +238,26 @@ fn prepare(
         }
         (layout, team_name, inferred_lane, 0)
     };
+    let mut layout = layout;
+    let automation = run_layout
+        .as_ref()
+        .and_then(|(layout, _)| layout.automation.clone())
+        .or_else(|| {
+            request
+                .loop_task
+                .is_some()
+                .then_some(crate::agents::Automation::Loop)
+        })
+        .or_else(|| caller.and_then(|caller| caller.automation.clone()));
+    for row in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        if let Cell::Agent(cell) = row {
+            cell.launch.automation.clone_from(&automation);
+        }
+    }
     let agent_cell = layout
         .agent_cells()
         .nth(leader_index)

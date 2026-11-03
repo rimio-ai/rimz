@@ -191,6 +191,7 @@ impl workflow::AttemptHost for Host<'_> {
                 starter: launcher::Starter::Workflow,
                 resident_loop: None,
                 workflow: Some(step.workflow.clone()),
+                automation: Some(step.automation),
                 leader_run: Some(launcher::LeaderRun {
                     reminder_section: Some(rimz::harness::launch::ReminderSection::Workflow(
                         step.workflow_note,

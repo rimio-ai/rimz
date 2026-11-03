@@ -310,6 +310,7 @@ pub(in crate::cli) fn relaunch_request(
         Some(identity.name.as_str())
     });
     let restart_params = rimz::agents::LaunchParams {
+        automation: agent.automation.clone(),
         checkout: agent.checkout.clone(),
         molted_from: agent.molted_from.clone(),
         record: posture.launch.record.clone(),
@@ -433,6 +434,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         allowed_tools: posture.launch.allowed_tools.clone(),
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
+            automation: agent.automation.clone(),
             checkout: agent.checkout.clone(),
             profile: agent.profile.clone(),
             tier: posture.launch.tier.clone(),

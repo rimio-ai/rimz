@@ -341,7 +341,13 @@ upward-dependencies = ["address"]
 # ModelContextLimits and NativeCompaction carry catalog facts and their resolved display (+1).
 # ModelContextLimitsKey carries the independent catalog/config/model stat gate (+1).
 # LaunchCapability::model_config_path resolves native model-settings remedies for doctor (+1).
-surface-budget = 1231
+# Automation, its facade export and workflow_scope share durable start origin (+3).
+surface-budget = 1234
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::Automation"
+reason = "Durable launch origin is stamped by launchers, inherited by agent launches, and folded without lineage reads."
 
 [[verdict]]
 kind = "item"

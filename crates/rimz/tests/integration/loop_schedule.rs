@@ -1040,6 +1040,10 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         .unwrap();
     let payload = std::fs::read_to_string(&request[1]).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
+    assert_eq!(
+        serde_json::to_value(&request.identity.params).unwrap()["automation"],
+        json!({"by": "loop"}),
+    );
     let mut pane_env: BTreeMap<String, String> = argv
         .iter()
         .take_while(|arg| arg.contains('='))
@@ -1087,6 +1091,10 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         .find(|agent| agent.name.as_deref() == request.identity.name.as_deref())
         .unwrap();
     assert!(agent.launched_by.is_none(), "{agent:?}");
+    assert_eq!(
+        serde_json::to_value(agent).unwrap()["automation"],
+        json!({"by": "loop"})
+    );
     assert!(agent.parent_agent_id.is_none(), "{agent:?}");
     assert_eq!(agent.launch_depth, None, "{agent:?}");
     let expected = (action == LoopLaunch::Check).then_some("linked");

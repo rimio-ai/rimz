@@ -297,6 +297,7 @@ pub(super) fn run_one(
                         reminder: reminder_body,
                     }),
                     workflow: None,
+                    automation: None,
                     leader_run: None,
                 };
                 let mut interaction = crate::cli::launch_interaction::CliInteraction;

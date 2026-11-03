@@ -112,6 +112,7 @@ pub enum Occupancy {
 
 pub struct StepLaunch {
     pub workflow: WorkflowAttemptRef,
+    pub automation: crate::agents::Automation,
     pub agent: String,
     pub lifecycle: crate::store::workflow::StepLifecycle,
     pub prompt: String,

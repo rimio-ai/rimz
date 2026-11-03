@@ -169,6 +169,7 @@ pub(super) fn run(
         ..Default::default()
     };
     identity.params.loop_task = Some(fire.name.clone());
+    identity.params.automation = Some(crate::agents::Automation::Loop);
     let mut request = ExecRequest::fresh(cell, identity, None, false);
     request.action = ExecAction::Launch {
         prompt: Some(fire.augment_guard_prompt(prompt)),

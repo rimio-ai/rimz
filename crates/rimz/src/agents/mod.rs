@@ -126,10 +126,10 @@ pub use login::{
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{
-    AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, LaunchParams,
-    LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
-    SubagentCorrelationInput, SubagentSpawnInput, TierPass, TierSkip, TierSkipReason, TierStamp,
-    TierUnbuildable, WorkflowAttemptRef, WorkflowAttemptRole,
+    AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, Automation,
+    LaunchParams, LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput, TierPass, TierSkip,
+    TierSkipReason, TierStamp, TierUnbuildable, WorkflowAttemptRef, WorkflowAttemptRole,
 };
 pub use open_ask::{AskRoute, OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub use park::ParkDemotion;

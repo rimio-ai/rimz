@@ -238,6 +238,10 @@ pub(super) fn launch(
     let launched = match prompt {
         Ok(prompt) => host
             .launch(StepLaunch {
+                automation: crate::agents::Automation::Workflow {
+                    workflow: record.workflow.clone(),
+                    step: record.node.clone(),
+                },
                 workflow: WorkflowAttemptRef {
                     run: record.id.clone(),
                     seq: attempt.seq,
