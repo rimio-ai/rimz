@@ -54,6 +54,12 @@ A change to a provider's launch argv or its `--settings` JSON also runs `cargo x
 
 A change that makes a local or detached refresh write the context sidecar on a hook where it wrote none before also runs `cargo xtask test -E 'binary(integration) & test(/^hooks::/)'`, since tests there wait for the sidecar's first appearance or compare its bytes.
 
+A condition that lets a refresh past the unchanged-stat gate in `crates/rimz/src/agents/adapters/codex/transcript.rs::refresh_transcript_context` returns `None` when its read finds nothing new: every `Some` becomes an atomic sidecar publish and a sidebar wake, since `AgentContextRecord::apply_local_refresh` always stamps `observed_at`. Pin it with a test that `observed_at` stays put across two refreshes.
+
+Before a plan adds an input to the hook-path context refresh (`crates/rimz/src/cli/hooks/lifecycle/context.rs::merge_agent_context_sidecars`), list the hooks the adapter's `local_context_refresh` accepts and show one where the input can change the result; otherwise leave the input to the tick and watch passes.
+
+A change that adds a store or sidecar read on the hook path (`crates/rimz/src/cli/hooks/lifecycle/`) also runs `cargo xtask test -E 'binary(integration) & test(/^performance::work_log::/)'`: those tests pin each hook's row materializations and snapshot assemblies.
+
 A change to what `local_conversation_present` answers in any case also runs `cargo xtask test -P journey` and `cargo xtask test -P live`. Their rebirth, restart and resume journeys reach `crates/rimz/src/harness/resume.rs::resume_session_present` and depend, without asserting it, on the conversation that the shared stub in `crates/rimz/tests/integration/common/shim.rs` saves. `gate` runs neither profile.
 
 A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
