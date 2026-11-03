@@ -67,6 +67,49 @@ fn record(current: usize) -> Arc<ViewsRecord> {
 }
 
 #[test]
+fn sweep_ranks_neighbours_then_previous_and_keeps_unknown_mru_order() {
+    let queue = MirrorQueue::default();
+    let view = |index| ViewId::new_unchecked(format!("tab_{index}"));
+    let original = [20, 5, 1, 21, 6, 4, 2].map(view);
+    let mut views = original.clone();
+    queue.rank_views(&mut views);
+    assert_eq!(views, original, "no painted view keeps mux order");
+    queue.observe(record(6));
+    let mut current = record(3);
+    let fold = Arc::make_mut(Arc::get_mut(&mut current).unwrap().fold.as_mut().unwrap());
+    Arc::make_mut(fold.frame.as_mut().unwrap())
+        .tabs
+        .retain(|tab| {
+            tab.position
+                .is_some_and(|position| (1..=6).contains(&position))
+        });
+    queue.observe(current);
+    queue.rank_views(&mut views);
+    assert_eq!(views, [2, 4, 6, 1, 5, 20, 21].map(view));
+
+    let mut unpainted = record(3);
+    Arc::get_mut(&mut unpainted).unwrap().mirror_target = None;
+    Arc::get_mut(&mut unpainted).unwrap().mirror_pane = None;
+    queue.observe(unpainted);
+    let mut views = original.clone();
+    queue.rank_views(&mut views);
+    assert_eq!(views, original, "a retained frame is not a painted view");
+}
+
+#[test]
+fn sweep_reads_the_latest_host_wide_input_quiet_deadline() {
+    let queue = MirrorQueue::default();
+    let now = Instant::now();
+    queue.hold(now);
+    assert_eq!(queue.quiet_until(), Some(now + MIRROR_QUIET));
+    queue.hold(now + Duration::from_millis(25));
+    assert_eq!(
+        queue.quiet_until(),
+        Some(now + Duration::from_millis(25) + MIRROR_QUIET)
+    );
+}
+
+#[test]
 fn ranks_neighbours_then_previous_then_outward_then_unknown() {
     let queue = Arc::new(MirrorQueue::default());
     let now = Instant::now();

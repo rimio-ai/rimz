@@ -20,6 +20,10 @@ pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 pub(super) const MIRROR_POOL: usize = 4;
 pub(super) const MIRROR_QUIET: Duration = Duration::from_millis(150);
 
+pub(super) const HIDDEN_FIT_BUDGET: u64 = 150_000;
+pub(super) const HIDDEN_FIT_WINDOW_COST: u64 = 1_500;
+pub(super) const HIDDEN_FIT_WINDOW_CAP: usize = 8;
+
 const _: () = assert!(
     MIRROR_QUIET.as_millis()
         > crate::sidebar_pane::render::scroll_ease::SCROLL_EASE_DURATION.as_millis()

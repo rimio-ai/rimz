@@ -11,6 +11,7 @@ pub mod sandbox;
 pub use crate::disk::atomic::testkit::fsync_count;
 pub use crate::disk::parse_cache::testkit::read_counts as parse_cache_read_counts;
 pub use crate::proc::testkit::spawn_count;
+pub use crate::sidebar_pane::app::{HiddenViewSweep, start_hidden_view_sweep};
 pub use crate::store::event_log::testkit::{bytes_read, bytes_read_under, bytes_written};
 pub use crate::store::sidecar::testkit::read_counts as sidecar_read_counts;
 pub use crate::store::snapshot::fold_testkit::{

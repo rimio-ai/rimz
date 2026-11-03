@@ -652,6 +652,8 @@ pub enum DiagEvent {
         failed: usize,
         #[serde(default)]
         skipped: usize,
+        #[serde(default)]
+        remaining: usize,
     },
     ModelCatalogRefreshFailed {
         agent_kind: AgentKind,
@@ -1860,10 +1862,17 @@ impl DiagEvent {
                 fitted,
                 failed,
                 skipped,
+                remaining,
             } => {
-                format!(
-                    "{trigger:?}: {fitted} hidden views fitted to {target_cols}x{target_rows}, {failed} failed, {skipped} skipped"
-                )
+                let mut summary = format!(
+                    "{trigger:?}: {fitted} hidden views fitted to {target_cols}x{target_rows}, \
+                     {failed} failed, {skipped} skipped"
+                );
+                if *remaining != 0 {
+                    use std::fmt::Write;
+                    let _ = write!(summary, ", {remaining} remaining");
+                }
+                summary
             }
             Self::FetchCycleStats {
                 interval_ms,

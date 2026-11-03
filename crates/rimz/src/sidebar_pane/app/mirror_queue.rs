@@ -10,6 +10,9 @@ use crate::ids::{PaneId, ViewId};
 use super::timing::{MIRROR_POOL, MIRROR_QUIET};
 use super::views::ViewsRecord;
 
+/// Views and panes the painted tab frame cannot place rank after every known tab.
+const UNKNOWN_RANK: (u8, usize, bool) = (4, 0, false);
+
 // An attachment has many frame intervals to claim a wake before its slot is recycled.
 const OFFER_LEASE: Duration = Duration::from_secs(4);
 
@@ -49,6 +52,19 @@ pub(super) struct Grant {
 }
 
 impl MirrorQueue {
+    pub(super) fn quiet_until(&self) -> Option<Instant> {
+        self.lock().quiet_until
+    }
+
+    pub(super) fn rank_views(&self, views: &mut [ViewId]) {
+        let state = self.lock();
+        if state.record.mirror_target.is_none() {
+            return;
+        }
+        let ranks = state.view_ranks();
+        views.sort_by_key(|view| ranks.get(view).copied().unwrap_or(UNKNOWN_RANK));
+    }
+
     pub(super) fn new(subscribers: super::fetch::Subscribers) -> Self {
         Self {
             subscribers: Mutex::new(subscribers),
@@ -390,7 +406,7 @@ impl Queue {
                 let rank = tab
                     .position
                     .and_then(|position| positions.binary_search(&position).ok())
-                    .map_or((4, 0, false), |ordinal| {
+                    .map_or(UNKNOWN_RANK, |ordinal| {
                         if ordinal.checked_add(1) == Some(current) {
                             return (0, 0, false);
                         }
@@ -421,7 +437,7 @@ impl Queue {
                 let rank = view_ranks
                     .get(&tab.view_id)
                     .copied()
-                    .unwrap_or((4, 0, false));
+                    .unwrap_or(UNKNOWN_RANK);
                 for pane in &tab.panes {
                     ranks.insert(&pane.pane_id, rank);
                 }
@@ -438,7 +454,7 @@ impl Queue {
             })
             .map(|(index, pane)| {
                 (
-                    (ranks.get(pane).copied().unwrap_or((4, 0, false)), index),
+                    (ranks.get(pane).copied().unwrap_or(UNKNOWN_RANK), index),
                     pane.clone(),
                 )
             })

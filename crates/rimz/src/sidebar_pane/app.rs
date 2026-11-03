@@ -58,6 +58,8 @@ pub(super) use self::socket::EventForwarder;
 
 #[cfg(feature = "testkit")]
 pub use fetch::{ConcurrentFanout, FanoutThread, IdleCycleFixture};
+#[cfg(feature = "testkit")]
+pub use hidden_views::testkit::{HiddenViewSweep, start_hidden_view_sweep};
 pub use keymap::NavKeymap;
 #[cfg(feature = "testkit")]
 pub use play::{PlayError, PlayOptions, play};

@@ -188,7 +188,14 @@ impl DataPlane {
             // asks the producer to verify structural changes; the poll stays the presence backstop.
             // Zellij reaches the room socket through its presence plugin.
             if let Some((sweep, rx)) = hidden {
-                hidden_views::spawn(rx, config.session_name.clone(), diag, runtime.clone());
+                hidden_views::spawn(
+                    rx,
+                    config.session_name.clone(),
+                    diag,
+                    runtime.clone(),
+                    views.mirrors.clone(),
+                    crate::mux::backend_for(MuxName::Tmux),
+                );
                 tmux_watch::spawn(
                     runtime.clone(),
                     config.session_name.clone(),

@@ -3028,7 +3028,7 @@ reason = "The focus decision needs fresh target geometry rather than a watch hin
 [[verdict]]
 kind = "item"
 key = "mux::MuxBackend::fit_views"
-reason = "Both settled sweep and immediate jump fitting preserve backend-local sizing policy in one ordered call."
+reason = "Paced sweep slices and immediate jumps preserve backend-local sizing policy through ordered per-view outcomes."
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -3538,6 +3538,16 @@ path = "crates/rimz/src/sidebar_pane/app"
 # FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
 # RoomConfig separates room-owned settings from pane identity (+1).
 surface-budget = 15
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::hidden_views::testkit::HiddenViewSweep"
+reason = "Live tests and latency fixtures kick the production sweep rather than reproducing its planner."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::hidden_views::testkit::start_hidden_view_sweep"
+reason = "An injected private tmux backend exercises the host's real sweep without a room full of supervisors."
 
 [[verdict]]
 kind = "item"
