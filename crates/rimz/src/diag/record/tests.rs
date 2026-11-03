@@ -2,6 +2,38 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn hidden_view_records_without_remaining_default_to_zero() {
+    let decoded = serde_json::from_str::<DiagEvent>(
+        r#"{"kind":"hidden_views_fitted","trigger":"sweep","target_cols":240,"target_rows":65,"fitted":8,"failed":1,"skipped":2}"#,
+    );
+    assert!(
+        decoded.is_ok(),
+        "older fit records must still decode: {decoded:?}"
+    );
+    let event = decoded.unwrap();
+    assert!(matches!(
+        event,
+        DiagEvent::HiddenViewsFitted { remaining: 0, .. }
+    ));
+    assert_eq!(event.severity(), DiagSeverity::Info);
+    assert!(!event.summary().contains("remaining"));
+}
+
+#[test]
+fn interrupted_hidden_view_records_render_the_remainder() {
+    let event = DiagEvent::HiddenViewsFitted {
+        trigger: ViewFitTrigger::Sweep,
+        target_cols: 240,
+        target_rows: 65,
+        fitted: 8,
+        failed: 1,
+        skipped: 2,
+        remaining: 19,
+    };
+    assert!(event.summary().ends_with(", 19 remaining"));
+}
+
+#[test]
 fn hook_drainer_gaps_round_trip_and_partition_transitions_not_room_incidents() {
     let cases = [
         ("hook_drainer_reconnected", None, DiagSeverity::Info),

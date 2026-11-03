@@ -3,6 +3,149 @@ use rimz::ids::ViewId;
 use rimz::mux::{ViewFit, ViewSize};
 
 #[test]
+fn production_sweep_slices_hidden_windows_and_records_one_completed_run() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "sliced-hidden";
+    server.ensure_with_shell(session);
+    server.tmux(&["set-option", "-t", session, "status", "off"]);
+    server.tmux(&["set-option", "-t", session, "history-limit", "10000"]);
+    let current = server.display(session, "#{window_id}");
+    let mut script = String::new();
+    for index in 0..30 {
+        let work = if index % 10 == 0 {
+            "sh -c 'seq 1 4000; sleep 120'"
+        } else {
+            "sleep 120"
+        };
+        let target = format!("{session}:hidden-{index}");
+        script.push_str(&format!(
+            "new-window -d -t {session} -n hidden-{index} \"{work}\" ; \
+             split-window -d -h -t {target} 'sleep 120' ; \
+             select-pane -t {target}.0 -T rimz-sidebar\n"
+        ));
+        if index % 2 == 0 {
+            script.push_str(&format!(
+                "set-window-option -t {target} window-size largest\n"
+            ));
+        }
+    }
+    let setup = server._tempdir.path().join("sliced-setup.tmux");
+    std::fs::write(&setup, script).unwrap();
+    server.tmux(&["source-file", setup.to_str().unwrap()]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server
+        .stdout(&["list-panes", "-s", "-t", session, "-F", "#{history_size}"])
+        .lines()
+        .filter(|lines| lines.parse::<u64>().unwrap() >= 3000)
+        .count()
+        < 3
+    {
+        assert!(Instant::now() < deadline, "fixture history did not fill");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _client = AttachedTmuxClient::attach(&server.socket, session, 240, 65);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display(&current, "#{window_width} #{window_height}") != "240 65" {
+        assert!(Instant::now() < deadline, "current window did not grow");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let already_fit = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "sleep 120",
+    ]);
+    server.tmux(&["split-window", "-d", "-h", "-t", &already_fit, "sleep 120"]);
+    server.tmux(&["resize-window", "-t", &already_fit, "-x", "240", "-y", "65"]);
+    server.tmux(&["set-window-option", "-u", "-t", &already_fit, "window-size"]);
+    server.tmux(&["resize-pane", "-Z", "-t", &already_fit]);
+    assert_eq!(
+        server
+            .backend
+            .lagging_views(session)
+            .unwrap()
+            .unwrap()
+            .views
+            .len(),
+        30
+    );
+
+    let workspace = WorkspaceId::from_project_root(server._tempdir.path());
+    let state = rimz::StatePaths::under(workspace.clone(), server._tempdir.path()).unwrap();
+    let runtime = RuntimePaths::for_state_under(&state, server._tempdir.path());
+    let diag = rimz::diag::DiagSink::under(state.root, workspace, session, None);
+    let log = diag.log_path().unwrap();
+    let before = rimz::testkit::spawn_count();
+    let sweep = rimz::testkit::start_hidden_view_sweep(
+        TmuxBackend::with_socket(&server.socket),
+        session.to_owned(),
+        diag,
+        runtime,
+    );
+    sweep.kick();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let records = loop {
+        let records = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line).ok())
+            .collect::<Vec<_>>();
+        if !records.is_empty() {
+            break records;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the production sweep did not finish"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    let spawns = rimz::testkit::spawn_count() - before;
+    assert!(
+        spawns >= 13,
+        "the production worker must read and fit multiple slices, got {spawns} spawns"
+    );
+    assert_eq!(records.len(), 1);
+    assert!(matches!(
+        records[0].event,
+        rimz::diag::record::DiagEvent::HiddenViewsFitted {
+            trigger: rimz::diag::record::ViewFitTrigger::Sweep,
+            target_cols: 240,
+            target_rows: 65,
+            fitted: 30,
+            failed: 0,
+            skipped: 0,
+            remaining: 0,
+        }
+    ));
+    for index in 0..30 {
+        let target = format!("{session}:hidden-{index}");
+        assert_eq!(
+            server.display(&target, "#{window_width} #{window_height}"),
+            "240 65"
+        );
+        assert_eq!(
+            server.stdout(&["show-options", "-wqv", "-t", &target, "window-size"]),
+            if index % 2 == 0 { "largest" } else { "" },
+        );
+    }
+    assert_eq!(server.display(&already_fit, "#{window_zoomed_flag}"), "1");
+    assert!(
+        server
+            .backend
+            .lagging_views(session)
+            .unwrap()
+            .unwrap()
+            .views
+            .is_empty()
+    );
+}
+
+#[test]
 fn lagging_cost_includes_retained_history_but_not_alternate_screen_panes() {
     require_tmux!();
     let server = TmuxServer::new();
