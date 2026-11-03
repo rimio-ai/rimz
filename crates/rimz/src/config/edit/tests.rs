@@ -28,6 +28,24 @@ fn get_refuses_a_broken_theme_even_for_core_keys() {
 }
 
 #[test]
+fn mux_status_bar_round_trips_with_config_set_and_get() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    for value in ["full", "compact", "off"] {
+        let result = editor.set("mux.status_bar", value);
+        assert!(result.is_ok(), "status mode must be editable: {result:?}");
+        assert_eq!(
+            editor.get(Some("mux.status_bar")).unwrap().as_str(),
+            Some(value)
+        );
+    }
+    assert!(editor.set("mux.status_bar", "typo").is_err());
+}
+
+#[test]
 fn spend_order_round_trips_with_config_set_and_get() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
@@ -415,6 +433,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "zellij.support_kitty_keyboard_protocol",
     "zellij.osc8_hyperlinks",
     "zellij.session_serialization",
+    "mux.status_bar",
     "tmux.mouse",
     "tmux.focus_events",
     "tmux.history_limit",

@@ -109,8 +109,8 @@ pub use loop_::{
     TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
-pub use mux::MultiplexerConfig;
 use mux::MuxConfig;
+pub use mux::{MultiplexerConfig, MuxStatusBar};
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};
 #[cfg(test)]
 pub(crate) use mux::{TmuxPaneBorderLines, ZellijClipboard, ZellijForceClose};

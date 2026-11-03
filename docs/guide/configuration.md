@@ -437,6 +437,7 @@ RimZ applies room-scoped multiplexer settings when it creates or reattaches a se
 ```toml
 [mux]
 default = "tmux"
+status_bar = "full"           # full, compact, or off; tmux rooms only for now
 
 [zellij]
 pane_frames = true            # an optional override; unset, your config.kdl wins
@@ -446,6 +447,8 @@ pane_border_status = "top"    # optional; unset: inherit, except stack-window ti
 ```
 
 `[mux] default` picks the backend, consulted after an explicit `--mux <name>`, its `--zellij` and `--tmux` shorthands, and the check for a Zellij or tmux you are already inside. Left unset, RimZ takes tmux when both are installed. If the configured backend is not installed, RimZ skips the setting and auto-detects an installed backend; room start warns. An already-open room keeps its backend until it is reset.
+
+`[mux] status_bar` selects the room's status bar: `"full"` (the default) leaves your tmux bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Zellij rooms ignore this setting for now.
 
 The two backends differ in what an unset key means.
 

@@ -4,7 +4,7 @@ use crate::ids::MuxName;
 
 use super::MachineConfig;
 
-/// Backend-selection preference. `default` is consulted after `--mux` and an
+/// Multiplexer preferences. `default` is consulted after `--mux` and an
 /// active mux env; unset resolves from installed binaries with tmux as the
 /// tiebreak. An uninstalled configured backend is treated as unset.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -12,12 +12,23 @@ use super::MachineConfig;
 pub struct MuxConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<MuxName>,
+    pub status_bar: MuxStatusBar,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MuxStatusBar {
+    #[default]
+    Full,
+    Compact,
+    Off,
 }
 
 /// Multiplexer-only preferences, split out so CLI launch code can thread just
 /// the settings a backend needs instead of the whole per-machine config.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MultiplexerConfig {
+    pub status_bar: MuxStatusBar,
     pub zellij: ZellijConfig,
     pub tmux: TmuxConfig,
 }
@@ -25,6 +36,7 @@ pub struct MultiplexerConfig {
 impl From<&MachineConfig> for MultiplexerConfig {
     fn from(config: &MachineConfig) -> Self {
         Self {
+            status_bar: config.mux.status_bar,
             zellij: config.zellij.clone(),
             tmux: config.tmux.clone(),
         }

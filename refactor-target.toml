@@ -1034,7 +1034,13 @@ upward-dependencies = [
 # ProfilesConfig::keep_warm and Team::keep_warm_with_default share horizon fallback with validation (+2).
 # Team::leader_role shares the declared-or-first-role fallback with launch reminders and nudges (+1).
 # KeepWarmSeat and declared_horizon share the declared hold rule with launch compilation (+2).
-surface-budget = 268
+# MuxStatusBar carries the backend-neutral status mode to room setup (+1).
+surface-budget = 269
+
+[[verdict]]
+kind = "item"
+key = "config::mux::MuxStatusBar"
+reason = "Room setup and reload share the backend-neutral status-bar preference."
 
 [[verdict]]
 kind = "item"

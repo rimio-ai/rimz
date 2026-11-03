@@ -1858,6 +1858,11 @@ fn mux_default_parse_and_defaults_to_unset() {
     let dir = tempdir().expect("tempdir");
     let defaults = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(defaults.mux.default, None);
+    let mux = toml::Value::try_from(defaults.mux).unwrap();
+    assert_eq!(
+        mux.get("status_bar").and_then(toml::Value::as_str),
+        Some("full")
+    );
 
     let config = load_no_fragments(&write(
         &dir,
@@ -1866,6 +1871,23 @@ fn mux_default_parse_and_defaults_to_unset() {
     ))
     .expect("load");
     assert_eq!(config.mux.default, Some(MuxName::Tmux));
+}
+
+#[test]
+fn mux_status_bar_round_trips() {
+    let results = ["full", "compact", "off"].map(|mode| {
+        let config: MachineConfig =
+            toml::from_str(&format!("[mux]\nstatus_bar = {mode:?}\n")).expect("status mode parses");
+        let mux = toml::Value::try_from(config.mux).unwrap();
+        mux.get("status_bar")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    });
+    assert_eq!(
+        results,
+        ["full", "compact", "off"].map(|mode| Some(mode.into()))
+    );
+    assert!(toml::from_str::<MachineConfig>("[mux]\nstatus_bar = 'typo'\n").is_err());
 }
 
 #[test]
