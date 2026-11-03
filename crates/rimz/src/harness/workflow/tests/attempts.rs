@@ -812,9 +812,17 @@ fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
             value.get("lifecycle").cloned(),
             (lifecycle != "turn").then(|| json!(lifecycle))
         );
+        assert_eq!(value["visit"], 1);
         value.as_object_mut().unwrap().remove("lifecycle");
+        value.as_object_mut().unwrap().remove("visit");
         let legacy: records::LiveAttempt = serde_json::from_value(value).unwrap();
         assert!(legacy.lifecycle.is_turn());
+        let mut legacy_record = live;
+        legacy_record.attempt = Some(legacy);
+        update(&state, &legacy_record);
+        host.observed.borrow_mut().status = RunStatus::Completed;
+        let ended = advance_ok(&state, &record.id, &host);
+        assert_eq!(ended.prev_attempt.unwrap().visit, 1);
     }
 }
 

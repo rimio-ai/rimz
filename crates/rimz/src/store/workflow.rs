@@ -274,6 +274,8 @@ pub struct LiveAttempt {
     pub lifecycle: StepLifecycle,
     pub seq: u64,
     pub node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visit: Option<u64>,
     pub started_at: Timestamp,
     pub host: Host,
     #[serde(default)]
