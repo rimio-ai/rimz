@@ -9,7 +9,7 @@ use crate::harness::schedule::arm::{default_signal_match_key, duration_label};
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::run_log::LoopRunMode;
 use crate::harness::schedule::signal::SignalSelector;
-use crate::harness::schedule::{ParsedSchedule, ParsedTrigger, Schedule, Trigger};
+use crate::harness::schedule::{self, ParsedTrigger, Trigger, span, verbatim};
 
 /// One launching fire, as the section describes it.
 pub(super) struct LoopFire<'a> {
@@ -146,30 +146,12 @@ fn origin(name: &str, task: &LoadedTask) -> String {
 }
 
 fn trigger_clause(parsed: &ParsedTrigger, entry: &TaskEntry) -> String {
-    match &parsed.trigger {
-        // `describe` prints a raw cron as a noun phrase, which no verb can follow.
-        Trigger::Schedule(ParsedSchedule {
-            schedule: Schedule::RawCron(expr),
-            ..
-        }) => format!(" on the cron schedule {}", span(expr)),
-        Trigger::Schedule(_) => format!(" {}", verbatim(&parsed.describe())),
-        Trigger::Signal { .. } => {
-            let described = parsed.describe();
-            let selector = described.strip_prefix("on ").unwrap_or(&described);
-            format!(" on the signal {}", span(selector))
-        }
-        Trigger::Condition { expr, hold } => {
-            let mut clause = format!(" when {} holds", span(&expr.to_string()));
-            if entry.each_worktree {
-                clause.push_str(" there");
-            }
-            if let Some(hold) = hold {
-                clause.push_str(&format!(" for {}", duration_label(*hold)));
-            }
-            clause
-        }
-        Trigger::Watch(_) => String::new(),
-    }
+    let predicate = if entry.each_worktree {
+        "holds there"
+    } else {
+        "holds"
+    };
+    schedule::trigger_clause(parsed, predicate).unwrap_or_default()
 }
 
 fn check_clause(entry: &TaskEntry, after_condition: bool) -> Option<String> {
@@ -227,24 +209,6 @@ fn subscriptions(entry: &TaskEntry) -> Option<String> {
         if worktree { " for this worktree" } else { "" },
         if names.len() == 1 { "reaches" } else { "reach" }
     ))
-}
-
-fn span(text: &str) -> String {
-    format!("`{}`", verbatim(text))
-}
-
-/// User text shown as typed: only `<`, which could open or close the
-/// reminder tag, and control characters are escaped.
-fn verbatim(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '<' => escaped.push_str("&lt;"),
-            ch if ch.is_control() => escaped.extend(ch.escape_default()),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
