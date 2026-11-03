@@ -46,7 +46,7 @@ pub(super) fn render(
         commands: resolve::RunCommands::new(&run.record, globals),
     };
     let mut out = render::out();
-    view.headline(&mut out, history)?;
+    view.headline(&mut out)?;
     for warning in &spec.ignored {
         writeln!(out, "warning: {}", warning.message)?;
     }
@@ -86,63 +86,42 @@ impl View<'_> {
         self.commands.command(verb, at, extend, flags)
     }
 
-    fn presentation(&self, history: bool) -> Result<(GlyphRole, String)> {
+    fn presentation(&self) -> Result<(GlyphRole, String)> {
         let record = self.record;
         let asking = workflow_view::asking(record);
-        Ok(if record.state.is_terminal() {
-            let role = match record.state {
-                RunState::Done => GlyphRole::StatusDone,
-                RunState::Failed => GlyphRole::StatusAttention,
-                _ => GlyphRole::StatusIdle,
-            };
-            (
-                role,
-                format!(
-                    "{} {}",
-                    record.state.as_str(),
-                    render::age_short(record.terminal_at.unwrap_or(record.entered_at), self.now)
-                ),
+        let phrase = if record.state.is_terminal() {
+            format!(
+                "{} {}",
+                record.state.as_str(),
+                render::age_short(record.terminal_at.unwrap_or(record.entered_at), self.now)
             )
         } else if record.state == RunState::Parked {
-            (
-                GlyphRole::StatusWaiting,
-                format!(
-                    "parked at {} {} · {}",
-                    record.node,
-                    render::age_short(workflow_view::since(record), self.now),
-                    record.park.as_ref().map_or("", |park| park.reason.as_str())
-                ),
+            format!(
+                "parked at {} {} · {}",
+                record.node,
+                render::age_short(workflow_view::since(record), self.now),
+                record.park.as_ref().map_or("", |park| park.reason.as_str())
             )
         } else if let Some(asking) = asking {
             let step =
                 workflow_view::session_attempt(record).map_or(record.node.as_str(), |a| &a.node);
-            (
-                GlyphRole::StatusWaiting,
-                format!(
-                    "{step} is asking you · {} ({})",
-                    asking.ask.handle, asking.ask.kind,
-                ),
+            format!(
+                "{step} is asking you · {} ({})",
+                asking.ask.handle, asking.ask.kind,
             )
         } else if workflow_view::with_you(record) {
             let attempt = workflow_view::session_attempt(record);
-            (
-                GlyphRole::StatusWorking,
-                format!(
-                    "{} is with you · {}",
-                    attempt.map_or(record.node.as_str(), |a| &a.node),
-                    attempt
-                        .and_then(|a| a.run.as_ref())
-                        .map_or("—", |run| &run.handle)
-                ),
+            format!(
+                "{} is with you · {}",
+                attempt.map_or(record.node.as_str(), |a| &a.node),
+                attempt
+                    .and_then(|a| a.run.as_ref())
+                    .map_or("—", |run| &run.handle)
             )
         } else if let Some(hold) = self.hold()? {
-            (GlyphRole::StatusSleeping, hold)
-        } else if let Some(wait) = if history {
-            history::waiting_line(record, Some(self.spec), self.journal, self.now)
-        } else {
-            workflow_view::wait(record, Some(self.spec), self.now)
-        } {
-            let phrase = if self.spec.checks.contains_key(&record.node) {
+            hold
+        } else if let Some(wait) = workflow_view::wait(record, Some(self.spec), self.now) {
+            if self.spec.checks.contains_key(&record.node) {
                 let mut phrase = format!(
                     "waiting at {} {}: {wait}",
                     record.node,
@@ -155,17 +134,17 @@ impl View<'_> {
                 phrase
             } else {
                 format!("{} {wait}", record.node)
-            };
-            (GlyphRole::StatusSleeping, phrase)
+            }
         } else {
-            (GlyphRole::StatusWorking, self.running())
-        })
+            self.running()
+        };
+        Ok((workflow_view::glyph_role(record), phrase))
     }
 
-    fn headline(&self, out: &mut impl Write, history: bool) -> Result<()> {
+    fn headline(&self, out: &mut impl Write) -> Result<()> {
         let record = self.record;
         let asking = workflow_view::asking(record);
-        let (role, phrase) = self.presentation(history)?;
+        let (role, phrase) = self.presentation()?;
         let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(role);
         writeln!(
             out,

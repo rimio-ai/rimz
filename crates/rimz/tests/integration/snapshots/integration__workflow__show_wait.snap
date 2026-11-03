@@ -2,7 +2,7 @@
 source: crates/rimz/tests/integration/workflow.rs
 expression: normalized
 ---
-review#project  ☾ waiting at pr <age>: said pending, ×1, recheck <clock> · gives up <clock>, then @user
+review#project  ☾ waiting at pr <age>: pending, recheck <clock> · gives up <clock>, then @user
 started <clock> by hand · 0 attempts
   ci: pending
   pr: unread

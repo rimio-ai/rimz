@@ -145,19 +145,6 @@ fn wait_row_counts<'a>(
         .map(|row| row.count)
 }
 
-pub(super) fn waiting_line(
-    record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
-    journal: &[JournalEntry],
-    now: Timestamp,
-) -> Option<String> {
-    let wait = record.wait.as_ref()?;
-    let rows = collapsed_history(journal);
-    let show_count =
-        !wait_row_counts(&rows, &wait.node, &wait.outcome, wait.first, wait.last).eq([wait.count]);
-    workflow_view::wait_counted(record, spec, now, show_count)
-}
-
 impl View<'_> {
     pub(super) fn history(&self, out: &mut impl Write) -> Result<()> {
         if let Some(asking) = workflow_view::asking(self.record) {
@@ -167,7 +154,7 @@ impl View<'_> {
             && (workflow_view::with_you(self.record)
                 || workflow_view::asking(self.record).is_some()
                 || self.hold()?.is_some())
-            && let Some(line) = waiting_line(self.record, Some(self.spec), self.journal, self.now)
+            && let Some(line) = workflow_view::wait(self.record, Some(self.spec), self.now)
         {
             writeln!(out, "  waiting: {}, {line}", wait.node)?;
         }
@@ -898,12 +885,12 @@ mod tests {
             evaluation(3, 2, "done", None),
         ];
         let record = waiting_record(0, 0, 1);
-        let line = waiting_line(&record, None, &journal, at(20)).unwrap();
+        let line = workflow_view::wait(&record, None, at(20)).unwrap();
         assert!(!line.contains('×'), "{line}");
         assert!(
-            workflow_view::wait(&record, None, Timestamp::now())
+            !workflow_view::wait(&record, None, Timestamp::now())
                 .unwrap()
-                .contains("×1")
+                .contains('×')
         );
         journal.push(wait(2, "pending", 0, 0, 1));
         assert_eq!(collapsed_history(&journal).len(), 3);
@@ -911,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn several_kept_turns_keep_the_header_total_but_not_a_closing_summary() {
+    fn several_kept_turns_omit_the_header_total_and_closing_summary() {
         let mut journal = vec![
             evaluation(2, 0, "pending", None),
             kept_turn(1),
@@ -919,32 +906,35 @@ mod tests {
             kept_turn(3),
         ];
         let record = waiting_record(0, 2, 2);
-        let line = waiting_line(&record, None, &journal, at(20)).unwrap();
-        assert!(line.contains("×2"), "{line}");
+        let line = workflow_view::wait(&record, None, at(20)).unwrap();
+        assert!(!line.contains('×'), "{line}");
         journal.push(wait(4, "pending", 0, 2, 2));
         assert_eq!(collapsed_history(&journal).len(), 4);
         assert!(!history(&journal).contains("pr wait"));
     }
 
     #[test]
-    fn wakes_keep_the_open_waits_total_across_rows() {
-        let journal = [
+    fn wakes_do_not_add_a_waiting_line_count() {
+        let mut journal = vec![
             evaluation(1, 0, "pending", None),
             evaluation(2, 1, "pending", None),
             wake(2, "review.ready"),
             evaluation(3, 3, "pending", None),
         ];
         let record = waiting_record(0, 3, 3);
-        let line = waiting_line(&record, None, &journal, at(20)).unwrap();
-        assert!(line.contains("×3"), "{line}");
+        let line = workflow_view::wait(&record, None, at(20)).unwrap();
+        assert!(!line.contains('×'), "{line}");
+        journal.push(wait(4, "pending", 0, 3, 3));
+        assert_eq!(collapsed_history(&journal).len(), 3);
+        assert!(!history(&journal).contains("pr wait"));
     }
 
     #[test]
-    fn early_advances_keep_a_count_no_single_evaluation_states() {
+    fn early_advances_do_not_add_a_waiting_line_count() {
         let mut journal = vec![evaluation(1, 0, "pending", None)];
         let record = waiting_record(0, 2, 3);
-        let line = waiting_line(&record, None, &journal, at(20)).unwrap();
-        assert!(line.contains("×3"), "{line}");
+        let line = workflow_view::wait(&record, None, at(20)).unwrap();
+        assert!(!line.contains('×'), "{line}");
         journal.push(wait(3, "pending", 0, 2, 3));
         assert_eq!(collapsed_history(&journal).len(), 1);
         assert!(!history(&journal).contains("pr wait"));

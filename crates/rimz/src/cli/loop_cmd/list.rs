@@ -1293,7 +1293,7 @@ impl WorkflowRunRow {
             parked_at: park
                 .filter(|_| record.state == rimz::store::workflow::RunState::Parked)
                 .map(|park| park.at),
-            detail: crate::cli::workflow_view::detail(record, spec, now),
+            detail: crate::cli::workflow_view::detail(record, spec, now, None),
         }
     }
 
