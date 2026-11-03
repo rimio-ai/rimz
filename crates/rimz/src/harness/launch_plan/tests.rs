@@ -1,5 +1,5 @@
 use super::*;
-use crate::harness::launch::{ExecAction, ExecIdentity, ProviderAccountState};
+use crate::harness::launch::{ExecAction, ExecIdentity, ProviderAccountState, ReminderSection};
 use crate::ids::AgentKind;
 
 #[path = "session_step_tests.rs"]
@@ -980,7 +980,7 @@ fn configured_prompt_fingerprint_ignores_reminders_and_reads_files() {
     let baseline = fresh.system_prompt_digest.clone();
     let mut resume = launch.clone();
     resume.action = action_with_args("resume", launch.action.extra_args().to_vec());
-    resume.loop_reminder = Some("changed runtime reminder".into());
+    resume.reminder_section = Some(ReminderSection::Loop("changed runtime reminder".into()));
     let resumed = compile_prompt_request(project.path(), &resume, Some(&baseline), None);
     assert_ne!(fresh.process().reminder, resumed.process().reminder);
     assert_eq!(resumed.system_prompt_digest, baseline);
@@ -1058,7 +1058,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     }
@@ -2282,7 +2282,9 @@ fn headless_judge_reminder_omits_subagents_with_profiles_configured() {
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     });
-    request.loop_reminder = Some("Decide without a user or pane.".into());
+    request.reminder_section = Some(ReminderSection::Judge(
+        "Decide without a user or pane.".into(),
+    ));
     let reminders = exec_launch_reminders(&request, &machine, project.path(), config.path());
     let text = super::super::launch_reminders::render(&request, &reminders, project.path(), None);
 

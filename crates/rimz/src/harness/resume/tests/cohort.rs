@@ -922,7 +922,7 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
                 resume_seeds: Some(&seeds),
                 launch_identities: &[],
                 fallback_channel: None,
-                loop_reminder: None,
+                reminder_section: None,
                 leader_run: None,
             },
         )
@@ -1076,7 +1076,7 @@ fn absent_record_effort_reaches_the_cohort_exec_request() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )
@@ -1167,7 +1167,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                         resume_seeds: Some(&seeds),
                         launch_identities: &[],
                         fallback_channel: None,
-                        loop_reminder: None,
+                        reminder_section: None,
                         leader_run: None,
                     },
                 )
@@ -2047,7 +2047,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
             resume_seeds: Some(&tab.cohort.seeds),
             launch_identities: &[],
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )

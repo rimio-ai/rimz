@@ -1020,7 +1020,9 @@ fn settle_layout(
         leader_index: receipt_leader_index,
         placement,
         pick_session,
-        loop_reminder: loop_fire.map(|(_, reminder)| reminder.to_owned()),
+        reminder_section: loop_fire.map(|(_, reminder)| {
+            crate::harness::launch::ReminderSection::Loop(reminder.to_owned())
+        }),
         description: args.launch.cohort.description.clone(),
         report_to: args.launch.report_to,
         managed_launches: Vec::new(),
@@ -1634,7 +1636,7 @@ fn launch_resume_layout(
             pick_session: false,
             launch_identities: launch_batch.identities(),
             fallback_channel: channel.as_deref(),
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )?;

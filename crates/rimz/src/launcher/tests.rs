@@ -916,7 +916,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         max_attempts: None,
         loop_task: None,
         workflow: None,
-        loop_reminder: None,
+        reminder_section: None,
         passthrough: Vec::new(),
         managed_launch: crate::agents::ManagedLaunchState::PendingResolution,
         login: crate::store::writer::LaunchLogin::RoomDefault,

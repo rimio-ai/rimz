@@ -3919,7 +3919,7 @@ fn run_exiting_resume_wrapper(
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity {
             params: LaunchParams {

@@ -533,7 +533,7 @@ fn prepare(
             leader_index: Some(leader_index),
             placement: Placement::NewTab,
             pick_session: false,
-            loop_reminder: request.loop_reminder.clone(),
+            reminder_section: request.reminder_section.clone(),
             description: request.description.clone(),
             report_to: request.report_to,
             managed_launches,

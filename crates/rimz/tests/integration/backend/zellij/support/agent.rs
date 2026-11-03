@@ -45,7 +45,7 @@ pub(in crate::backend::zellij) fn zellij_agent_exec_command(
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     };

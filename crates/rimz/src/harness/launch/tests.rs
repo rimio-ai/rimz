@@ -628,7 +628,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     }
@@ -2649,7 +2649,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         exit_on_run_completion: true,
         subagent: true,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity {
             resume_model_override: false,

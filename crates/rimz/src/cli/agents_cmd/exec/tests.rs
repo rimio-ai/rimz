@@ -225,7 +225,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         exit_on_run_completion: false,
         subagent: true,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: Default::default(),
     };
@@ -380,7 +380,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     }
@@ -511,7 +511,7 @@ fn bare_exec_args() -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity {
             name: Some("lucid-atlas".to_owned()),
@@ -604,7 +604,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         exit_on_run_completion: true,
         subagent: true,
         follow_up_message: None,
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity {
             resume_model_override: false,

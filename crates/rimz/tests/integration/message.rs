@@ -5541,7 +5541,7 @@ fn assert_parent_follow_up_case(
         exit_on_run_completion: true,
         subagent: true,
         follow_up_message: Some(message.message_id.clone()),
-        loop_reminder: None,
+        reminder_section: None,
         headless: None,
         identity: ExecIdentity::default(),
     };

@@ -78,7 +78,7 @@ pub(super) struct FreshLaunch {
     pub(super) leader_index: Option<usize>,
     pub(super) placement: Placement,
     pub(super) pick_session: bool,
-    pub(super) loop_reminder: Option<String>,
+    pub(super) reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub(super) loop_task: Option<String>,
     pub(super) description: Option<String>,
     pub(super) report_to: ReportTo,
@@ -361,7 +361,7 @@ fn open_fresh(
             resume_seeds: None,
             launch_identities: batch.identities(),
             fallback_channel: None,
-            loop_reminder: fresh.loop_reminder.as_deref(),
+            reminder_section: fresh.reminder_section.as_ref(),
             leader_run: leader
                 .as_ref()
                 .zip(record.as_ref())

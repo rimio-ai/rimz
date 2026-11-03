@@ -724,6 +724,14 @@ impl ProviderAccountState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReminderSection {
+    Loop(String),
+    Judge(String),
+    Workflow(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_default: Option<crate::config::Isolation>,
@@ -760,9 +768,9 @@ pub struct ExecRequest {
     pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_message: Option<MessageId>,
-    /// The `### Loop` or headless `### Judge` reminder body composed for this launch; set on a resident's prompt leader, a loop single run, or a judge.
+    /// The non-durable reminder section composed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub loop_reminder: Option<String>,
+    pub reminder_section: Option<ReminderSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headless: Option<crate::agents::HeadlessRequest>,
     #[serde(default)]
@@ -835,7 +843,7 @@ impl ExecRequest {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             identity: ExecIdentity::default(),
         }

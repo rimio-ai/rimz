@@ -308,7 +308,9 @@ fn loop_section_follows_identity_and_precedes_environment() {
     };
     let render = |request: &ExecRequest| render(request, &reminders, Path::new("/w"), None);
     assert!(!render(&request).contains("### Loop"));
-    request.loop_reminder = Some("The user fired the rule `x` by hand.".to_owned());
+    request.reminder_section = Some(ReminderSection::Loop(
+        "The user fired the rule `x` by hand.".to_owned(),
+    ));
     assert_eq!(
         render(&request),
         wrap(&format!(
@@ -345,7 +347,9 @@ fn env_paragraph_escapes_cwd_and_names_shell_kind_only() {
 fn headless_check_section_replaces_loop_in_the_same_slot() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-    request.loop_reminder = Some("Decide without a user or pane.".into());
+    request.reminder_section = Some(ReminderSection::Judge(
+        "Decide without a user or pane.".into(),
+    ));
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),

@@ -177,7 +177,7 @@ pub enum TaskFirePlan {
         prompt: String,
         permission_override: Option<PermissionMode>,
         /// The `### Loop` reminder body for the prompt leader.
-        loop_reminder: String,
+        reminder_body: String,
     },
     Spawn(PreparedSpawn),
     Deliver(PreparedDelivery),
@@ -1345,7 +1345,7 @@ impl<'a> TaskFire<'a> {
             spec,
             prompt,
             permission_override,
-            loop_reminder: self.loop_reminder(None),
+            reminder_body: self.reminder_body(None),
         })
     }
 
@@ -2088,11 +2088,13 @@ impl<'a> TaskFire<'a> {
             LoopRunMode::Scheduled => crate::harness::launch::AgentShellPersistence::PerLaunch,
             LoopRunMode::Manual => crate::harness::launch::AgentShellPersistence::Room,
         };
-        request.loop_reminder = Some(self.loop_reminder(request.timeout));
+        request.reminder_section = Some(crate::harness::launch::ReminderSection::Loop(
+            self.reminder_body(request.timeout),
+        ));
         Ok(request)
     }
 
-    fn loop_reminder(&self, timeout: Option<Duration>) -> String {
+    fn reminder_body(&self, timeout: Option<Duration>) -> String {
         reminder::compose(&reminder::LoopFire {
             name: &self.name,
             task: &self.task,

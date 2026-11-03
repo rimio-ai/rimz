@@ -1991,7 +1991,7 @@ fn materialize_team_restore_tab(
             resume_seeds: Some(&planned.cohort.seeds),
             launch_identities: identities,
             fallback_channel: planned.channel.as_deref(),
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: None,
         },
     )

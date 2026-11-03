@@ -240,7 +240,7 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 resume_model_override: false,

@@ -10095,10 +10095,10 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
     let payload = std::fs::read_to_string(payload).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     assert_eq!(
-        request.loop_reminder.as_deref(),
-        Some(
-            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h."
-        )
+        request.reminder_section,
+        Some(rimz::harness::launch::ReminderSection::Loop(
+            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h.".into()
+        ))
     );
     assert!(paths.workspace_record.is_file());
     assert!(

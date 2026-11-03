@@ -80,7 +80,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             resume_seeds: None,
             launch_identities: &identities,
             fallback_channel: None,
-            loop_reminder: None,
+            reminder_section: None,
             leader_run: Some(crate::harness::plan::LayoutRunParams {
                 run_id: &run_id,
                 leader_index: 0,
@@ -124,7 +124,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             exit_on_run_completion: true,
             subagent: true,
             follow_up_message: None,
-            loop_reminder: None,
+            reminder_section: None,
             headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 resume_model_override: false,
