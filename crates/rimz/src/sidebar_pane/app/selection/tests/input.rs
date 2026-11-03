@@ -998,10 +998,7 @@ fn inactive_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
     inactive.key = "inactive".to_owned();
     inactive.label = "inactive".to_owned();
     inactive.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
-    inactive.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
-        active_secs: Some(60),
-        ..Default::default()
-    });
+    inactive.cohort_effort = Some(Default::default());
     inactive.rows = vec![filter_row(
         true,
         "done",

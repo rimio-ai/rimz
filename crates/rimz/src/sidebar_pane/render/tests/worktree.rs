@@ -1700,7 +1700,7 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
 }
 
 #[test]
-fn inactive_worktree_age_stays_full_past_an_hour() {
+fn inactive_worktree_age_is_always_plain_and_muted_even_under_five_minutes() {
     let mut card = agent(
         "worker",
         "claude",
@@ -1709,30 +1709,32 @@ fn inactive_worktree_age_stays_full_past_an_hour() {
         Some("main"),
         Some("finished work"),
     );
-    card.last_activity = fixed_now() - Duration::from_secs(7200);
+    card.last_activity = fixed_now();
     let mut snapshot = snapshot_with(vec![card]);
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     group.cohort_effort = None;
-    for (style, glyph) in [
-        (None, "●"),
-        (Some(crate::config::ThemeStyle::Modern), "\u{f0aa5}"),
-    ] {
+    for style in [None, Some(crate::config::ThemeStyle::Modern)] {
         snapshot.theme.style = style;
         let theme = Theme::fixed_for_theme(false, &snapshot.theme);
-        let lines = group_lines(&snapshot, &theme, usize::MAX);
-        let age = format!("{glyph} 2h");
-        let span = lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .find(|span| span.content == age);
-        assert!(span.is_some(), "{}", line_texts(&lines).join("\n"));
-        assert_eq!(span.unwrap().style, theme.muted());
+        for (seconds, age) in [(0, "0s"), (30, "30s"), (120, "2m"), (7200, "2h")] {
+            std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )[0]
+            .last_activity = fixed_now() - Duration::from_secs(seconds);
+            let lines = group_lines(&snapshot, &theme, usize::MAX);
+            let span = lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content == age);
+            assert!(span.is_some(), "{}", line_texts(&lines).join("\n"));
+            assert_eq!(span.unwrap().style, theme.muted());
+        }
     }
 }
 
 #[test]
-fn inactive_worktree_age_uses_the_newest_member_cache_request() {
+fn inactive_worktree_age_ignores_newer_member_cache_requests() {
     let members = [1200, 2400].map(|seconds| {
         let mut member = agent(
             &format!("worker-{seconds}"),
@@ -1766,7 +1768,7 @@ fn inactive_worktree_age_uses_the_newest_member_cache_request() {
         lines
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.content == "◔ 8m"),
+            .any(|span| span.content == "20m"),
         "{}",
         line_texts(&lines).join("\n")
     );
