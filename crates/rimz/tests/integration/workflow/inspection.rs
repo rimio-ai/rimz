@@ -38,6 +38,192 @@ fn setup() -> Env {
     env
 }
 
+#[test]
+fn list_enrichment_is_room_scoped_and_json_stays_unenriched() {
+    let env = setup();
+    let other = env.home_root.join("other/project");
+    env.record(&other);
+    let mut seeded = Vec::new();
+    for (root, lane, number) in [(&env.project_root, "one", 1517), (&other, "two", 1518)] {
+        let checkout = env.home_root.join(lane);
+        let mut record = seed(&env, root, &checkout, "active");
+        record.attempt = Some(
+            serde_json::from_value(json!({
+                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "started_at":record.entered_at, "host":{"pid":1, "start":null},
+                "run":{"run_id":rimz::ids::RunId::new(), "handle":"@pet"},
+            }))
+            .unwrap(),
+        );
+        save(&env, &record);
+        let state = env.state_path_for(root);
+        let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
+        let path = runtime.lane_path("pr-state.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut states = serde_json::Map::new();
+        states.insert(
+            checkout.to_string_lossy().into_owned(),
+            json!({"state":"open", "number":number}),
+        );
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({"states":states})).unwrap(),
+        )
+        .unwrap();
+        seeded.push((record, path, number));
+    }
+    let text = success(command(&env, &["workflow", "list"]));
+    assert_eq!(text.matches("PR #").count(), 2, "{text}");
+    for (record, _, number) in &seeded {
+        let line = text
+            .lines()
+            .find(|line| line.contains(&format!("#{} ", record.address().lane)))
+            .unwrap();
+        assert!(line.contains("with you in @pet"), "{text}");
+        assert_eq!(line.matches(&format!("PR #{number}")).count(), 1, "{text}");
+    }
+    for (_, path, _) in &seeded {
+        fs::remove_file(path).unwrap();
+    }
+    let text = success(command(&env, &["workflow", "list"]));
+    assert!(!text.contains("PR #"), "{text}");
+    for (record, _, _) in &seeded {
+        let paths = env
+            .state_path_for(&record.project_root)
+            .workflow(&record.id);
+        fs::write(paths.journal, "not-json\n").unwrap();
+    }
+    let rows: Value =
+        serde_json::from_str(&success(command(&env, &["workflow", "list", "--json"]))).unwrap();
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["detail"] == "with you"),
+        "{rows:#}"
+    );
+}
+
+#[test]
+fn list_keeps_every_run_when_one_journal_is_unreadable() {
+    let env = setup();
+    let broken = seed(
+        &env,
+        &env.project_root,
+        &env.home_root.join("broken"),
+        "active",
+    );
+    seed(
+        &env,
+        &env.project_root,
+        &env.home_root.join("healthy"),
+        "active",
+    );
+    let paths = env
+        .state_path_for(&broken.project_root)
+        .workflow(&broken.id);
+    fs::create_dir(&paths.journal).unwrap();
+    let output = command(&env, &["workflow", "list"]);
+    assert!(
+        output.status.success(),
+        "an unreadable enrichment journal must not fail the list: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("#broken") && text.contains("#healthy"),
+        "{text}"
+    );
+}
+
+#[test]
+fn with_you_names_use_live_card_peers_not_the_raw_rollup() {
+    use crate::common::tmux_pane;
+    use rimz::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
+    use rimz::disk::atomic::write_temp_then_rename_cache;
+    use rimz::sidebar::consumer::PublishedSnapshotReader;
+
+    for peer_state in ["shadowed", "unbound", "dead"] {
+        let env = setup();
+        let checkout = env.home_root.join("lane");
+        let mut record = seed(&env, &env.project_root, &checkout, "active");
+        let now = record.entered_at;
+        record.attempt = Some(
+            serde_json::from_value(json!({
+                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "started_at":now, "host":{"pid":1, "start":null},
+                "run":{"run_id":rimz::ids::RunId::new(), "handle":"@fallback"},
+            }))
+            .unwrap(),
+        );
+        save(&env, &record);
+        let store = env.store();
+        let runtime = store.runtime_paths();
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let pane = tmux_pane("%7", "codex", &checkout);
+        let mut agent = rimz::testkit::agent_state("codex", "leader", now);
+        agent.name = Some("pet".into());
+        agent.profile = Some("reviewer".into());
+        agent.worktree_path = Some(checkout.to_string_lossy().into_owned());
+        agent.pane = Some(pane.clone());
+        agent.workflow = Some(WorkflowAttemptRef {
+            run: record.id.clone(),
+            seq: 7,
+            role: WorkflowAttemptRole::Step,
+        });
+        let mut peer = agent.clone();
+        peer.agent_id = "other".into();
+        peer.name = Some("other".into());
+        peer.workflow = None;
+        peer.last_activity = now - Duration::from_secs(1);
+        if peer_state != "shadowed" {
+            peer.pane = None;
+        }
+        if peer_state == "dead" {
+            peer.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Daemon,
+                "other",
+                1,
+                None,
+            ));
+            write_temp_then_rename_cache(
+                &runtime.lane_path("codex-daemon-reap.json"),
+                &json!({"produced_at_ms":rimz::utils::time::unix_now_ms(),
+                    "daemon_pids":[1], "loaded":[]}),
+            )
+            .unwrap();
+        }
+        let mut base = store.snapshot().unwrap();
+        base.agents = std::sync::Arc::new(vec![peer, agent]);
+        write_temp_then_rename_cache(&store.paths().latest_snapshot().unwrap(), &base).unwrap();
+        let frame = rimz::sidebar::frame::assemble_frame(
+            vec![pane],
+            rimz::utils::time::unix_now_ms(),
+            &session,
+        );
+        write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+        let card = PublishedSnapshotReader::new(runtime.clone(), session, None)
+            .read(store.paths())
+            .unwrap();
+        let peers = rimz::address::addressable_agents(&card);
+        let leader = peers
+            .iter()
+            .find(|agent| agent.agent_id == "leader")
+            .unwrap();
+        let handle = if peer_state == "unbound" {
+            "@pet"
+        } else {
+            "@reviewer"
+        };
+        assert_eq!(rimz::address::agent_handle(leader, &peers, false), handle);
+        let text = success(command(&env, &["workflow", "list"]));
+        assert!(
+            text.contains(&format!("with you in {handle}")),
+            "{peer_state}: {text}"
+        );
+    }
+}
+
 fn json_show(env: &Env, target: &str) -> Value {
     show(env, target)
 }
@@ -734,23 +920,24 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
     save(&env, &window);
     let text = success(command(&env, &["workflow", "list"]));
     let needs = text.split_once("NEEDS YOU").unwrap().1;
-    let (needs, rest) = needs.split_once("HELD").expect("capacity starts need HELD");
-    let (held, active) = rest.split_once("ACTIVE").unwrap();
+    let (needs, group) = needs
+        .split_once("review · ")
+        .expect("runs need their workflow group");
     assert!(needs.contains("review#f-fix"), "{text}");
     assert!(
-        held.contains("review#d-held") && held.contains("review#e-legacy"),
+        group.contains("#d-held") && group.contains("#e-legacy"),
         "{text}"
     );
-    assert!(active.contains("review#g-window"), "{text}");
-    assert!(held.contains("queued: 1 start ahead"), "{text}");
-    assert!(!held.contains('×'), "{text}");
+    assert!(group.contains("#g-window"), "{text}");
+    assert!(group.contains("held · queued: 1 start ahead"), "{text}");
+    assert!(!group.contains('×'), "{text}");
     assert!(
-        held.contains("legacy hold") && !held.contains("×1"),
+        group.contains("held · legacy hold") && !group.contains("×1"),
         "{text}"
     );
-    assert!(!held.contains("held 4m"), "{text}");
+    assert!(!group.contains("held 4m"), "{text}");
     assert!(
-        text.find("NEEDS YOU").unwrap_or(usize::MAX) < text.find("ACTIVE").unwrap_or(0),
+        text.find("NEEDS YOU").unwrap_or(usize::MAX) < text.find("review · ").unwrap_or(0),
         "{text}"
     );
     assert!(
@@ -771,13 +958,21 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
     ] {
         let line = text
             .lines()
-            .find(|line| line.contains(&format!("review#{lane}")) && !line.contains('→'))
+            .find(|line| line.contains(&format!("#{lane} ")) && !line.contains('→'))
             .unwrap();
         assert!(
             line.starts_with(&format!("  {} ", glyph(role))) && line.ends_with(age),
             "{line}"
         );
     }
+    assert!(
+        group.find("#g-window").unwrap() < group.find("#d-held").unwrap(),
+        "{text}"
+    );
+    assert!(
+        !text.contains("HELD\n") && !text.contains("ACTIVE\n"),
+        "{text}"
+    );
     assert!(
         text.contains("  → rimz workflow show 'review#z-park'"),
         "{text}"

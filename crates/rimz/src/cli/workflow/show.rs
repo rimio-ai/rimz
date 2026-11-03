@@ -256,15 +256,7 @@ impl View<'_> {
 
     fn origin(&self, out: &mut impl Write) -> Result<()> {
         let record = self.record;
-        let origin = record.task.as_ref().map_or_else(
-            || "hand".into(),
-            |task| {
-                format!(
-                    "loop task {task}{}",
-                    if record.manual { ", fired by hand" } else { "" }
-                )
-            },
-        );
+        let origin = run_origin(record);
         let attempts = self
             .journal
             .iter()

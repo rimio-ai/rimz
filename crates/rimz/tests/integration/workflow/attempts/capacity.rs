@@ -328,7 +328,7 @@ fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() 
     );
     let listed = success(room.command(&["workflow", "list"]).output().unwrap());
     assert!(
-        listed.contains("HELD")
+        listed.contains(" · 1 held")
             && listed.contains(wait["detail"].as_str().unwrap())
             && !listed.contains("×2"),
         "{listed}"

@@ -2133,7 +2133,8 @@ path = "crates/rimz/src/harness"
 # workflow::Limit shares the strict limit table with engine and CLI (+1).
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
-surface-budget = 1074
+# CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
+surface-budget = 1075
 
 [[verdict]]
 kind = "item"
