@@ -84,6 +84,7 @@ fn context_meter_scales_tokens_rebased_percentages_and_compaction_estimates() {
     .collect();
     let reading = |percent, precise_percent, estimated_percent| ContextMeterReading {
         window: Some(1_000_000),
+        capacity: Some(1_000_000),
         compact_at: Some(200_000),
         percent,
         precise_percent,
@@ -111,6 +112,7 @@ fn context_meter_fallbacks_preserve_window_readings_and_window_priority() {
     let base = meter_row();
     let window_reading = ContextMeterReading {
         window: Some(1_000_000),
+        capacity: Some(1_000_000),
         compact_at: None,
         percent: Some(16),
         precise_percent: Some(16.0),
@@ -167,6 +169,63 @@ fn context_meter_fallbacks_preserve_window_readings_and_window_priority() {
     assert_eq!(
         process.context_meter(ContextMeterScale::Compaction).percent,
         None
+    );
+}
+
+#[test]
+fn codex_meter_matches_limits_to_the_live_model_and_keeps_the_usable_window() {
+    let mut row = meter_row();
+    row.name = "codex".into();
+    let card = row.as_agent_mut().unwrap();
+    card.auto_compact = Some(372_000);
+    card.usage.context_window = Some(258_400);
+    let context = card.context.as_mut().unwrap();
+    context.model_id = Some("gpt-6-sol".into());
+    context.model_context_limits = Some(crate::agents::context::ModelContextLimits {
+        model: "gpt-6-sol".into(),
+        max_window: Some(872_000),
+        usable_percent: Some(80),
+        own_compact_limit: None,
+    });
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(217_600),
+        current_context_tokens: Some(108_800),
+        ..Default::default()
+    });
+    let matched = row.context_meter(ContextMeterScale::Compaction);
+    assert_eq!(
+        (
+            matched.window,
+            matched.capacity,
+            matched.compact_at,
+            matched.percent
+        ),
+        (Some(217_600), Some(872_000), Some(217_600), Some(50))
+    );
+    let window = row.context_meter(ContextMeterScale::Window);
+    assert_eq!(
+        (
+            window.window,
+            window.capacity,
+            window.compact_at,
+            window.percent
+        ),
+        (Some(217_600), Some(217_600), None, Some(50))
+    );
+    row.as_agent_mut()
+        .unwrap()
+        .context
+        .as_mut()
+        .unwrap()
+        .model_id = Some("another-model".into());
+    let mismatched = row.context_meter(ContextMeterScale::Compaction);
+    assert_eq!(
+        (
+            mismatched.window,
+            mismatched.capacity,
+            mismatched.compact_at
+        ),
+        (Some(217_600), Some(229_052), Some(206_146))
     );
 }
 
@@ -800,6 +859,7 @@ fn agent_card_session_history_requires_positive_evidence() {
 
 fn context_with_cost(total_cost_usd: f64) -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),

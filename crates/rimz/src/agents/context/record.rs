@@ -128,6 +128,11 @@ impl AgentContextRecord {
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
         context.post_compaction_tokens = self.context.post_compaction_tokens;
+        if context.model_context_limits.is_none() {
+            context
+                .model_context_limits
+                .clone_from(&self.context.model_context_limits);
+        }
         if context.cost.is_none() {
             context.cost.clone_from(&self.context.cost);
         }

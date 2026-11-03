@@ -988,6 +988,7 @@ fn observed_at() -> Timestamp {
 
 fn observed_context() -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "pi".to_owned(),

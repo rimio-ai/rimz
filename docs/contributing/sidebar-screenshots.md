@@ -49,6 +49,8 @@ Set `RIMZ_BIN=/path/to/rimz` to capture with a specific binary. Without it, `xta
 
 `sidebar play` is hidden and requires a `testkit` build. Checked-in stories live in `crates/rimz/scenarios/`: `pilot.scn` animates delegation, a countdown, an ask held by a layout freeze, its release, and completion. The other files cover the former still scenes, including both clock glyph sets. Cards contain only state their provider can reach on a default configuration.
 
+A measured Codex preset card with a `272k` usable window and no RimZ launch count shows Codex's own point over the inferred raw capacity (`257k/286k`) on compaction scale, with fill toward that point. Codex cards without a reported window show no context label or wall.
+
 ```sh
 cargo run --quiet -p rimz --bin rimz --features testkit -- sidebar play crates/rimz/scenarios/pilot.scn --check
 cargo run --quiet -p rimz --bin rimz --features testkit -- sidebar play crates/rimz/scenarios/pilot.scn --frames "$TMPDIR/sidebar-frames"

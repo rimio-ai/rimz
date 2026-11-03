@@ -14,15 +14,15 @@ expression: rendered
 ▌  approve staged migration                          ▐
 ▌  󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────── 34.0% 󰪣 52m▐
 ▌  󰿦 347k · 󱥸 299k  34k  13k  43k ·  1           ▐
-▎⢄ coder-2 · GPT 5.5 · xhigh · 272k             $2.93🮇
+▎⢄ coder-2 · GPT 5.5 · xhigh · 257k/286k        $2.93🮇
 ▎  patch rollout smoke harness                       🮇
-▎  󰕰 ━━━━━━━━━━━━━━━━━━╺───────────────── 52.0% 󰪞  5m🮇
+▎  󰕰 ━━━━━━━━━━━━━━━━━━╺───────────────── 55.2% 󰪞  5m🮇
 ▎   subagents (2)                                   🮇
 
   ci-retry                  ⇡1 ⇣1  +880 -240   main
-  codex · GPT 5.5 · xhigh · 272k               $4.58
+  codex · GPT 5.5 · xhigh · 257k/286k          $4.58
    API error
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━╺────────────── 61.0% 󰪢 44m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺───────────── 65.0% 󰪢 44m
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

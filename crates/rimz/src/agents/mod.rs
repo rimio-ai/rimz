@@ -139,8 +139,7 @@ pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::PriceBook;
 use pricing::TokenSplit;
 pub(crate) use registry::{
-    ResumeProbe, native_compaction_point, resumed_session_id_for_root,
-    resumed_session_id_from_cmdline,
+    ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
 };
 pub use registry::{
     SoftCompactSkip, all_definitions, compact_command, definition_by_kind, find_definition,

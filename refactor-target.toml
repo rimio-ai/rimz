@@ -337,8 +337,9 @@ upward-dependencies = ["address"]
 # AgentState::attention_ask shares blocking-ask visibility across attention readers (+1).
 # LaunchSpec::settle_permission_mode and LaunchPermissionArgs::resolve_mode share per-kind permission settlement (+2).
 # LaunchPermissionArgs::of_kind shares permission-table lookup with identity for unknown kinds (+1).
-# native_compaction_point and its facade export share provider caps with the read model (+2).
-surface-budget = 1228
+# native_compaction shares provider caps with the read model and doctor.
+# ModelContextLimits and NativeCompaction carry catalog facts and their resolved display (+1).
+surface-budget = 1229
 
 [[verdict]]
 kind = "item"
@@ -412,8 +413,18 @@ reason = "Pane repair distinguishes resumed, settled and retryable process-chain
 
 [[verdict]]
 kind = "item"
-key = "agents::registry::native_compaction_point"
-reason = "The snapshot read model applies provider-owned native compaction caps without importing private adapters."
+key = "agents::registry::native_compaction"
+reason = "Cards and doctor share the provider-capped point, model capacity and lowered setting without importing private adapters."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::NativeCompaction"
+reason = "The shared display decision carries the effective point, capacity and lowered count to cards and doctor."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::ModelContextLimits"
+reason = "Model-keyed catalog facts travel on the context sidecar without replacing its reported session window."
 
 [[verdict]]
 kind = "item"

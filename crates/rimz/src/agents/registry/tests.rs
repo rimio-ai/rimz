@@ -3,7 +3,7 @@ use crate::agents::{AgentStatus, ConcernCoverage, IntegrationConcern};
 use crate::ids::AgentKind;
 
 #[test]
-fn native_compaction_point_applies_provider_caps() {
+fn native_compaction_applies_provider_caps() {
     let cases = [
         ("claude", 372_000, 1_000_000, Some(372_000)),
         ("claude", 200_000, 200_000, None),
@@ -19,9 +19,112 @@ fn native_compaction_point_applies_provider_caps() {
     ];
     let actual: Vec<_> = cases
         .iter()
-        .map(|&(kind, configured, window, _)| native_compaction_point(kind, configured, window))
+        .map(|&(kind, configured, window, _)| {
+            native_compaction(kind, Some(configured), window, None).map(|limits| limits.point)
+        })
         .collect();
     assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
+}
+
+#[test]
+fn native_compaction_separates_the_trigger_from_model_capacity() {
+    use crate::agents::context::ModelContextLimits;
+    let limits = ModelContextLimits {
+        model: "gpt-6.1-sol".into(),
+        max_window: Some(872_000),
+        usable_percent: Some(95),
+        own_compact_limit: Some(300_000),
+    };
+    let expected = |point, capacity, raw_window, lowered| {
+        Some(NativeCompaction {
+            point,
+            capacity,
+            raw_window,
+            lowered,
+        })
+    };
+    let cases = [
+        (
+            Some(372_000),
+            828_400,
+            Some(limits.clone()),
+            expected(372_000, 872_000, 872_000, None),
+        ),
+        (
+            Some(372_000),
+            258_400,
+            Some(limits.clone()),
+            expected(244_800, 872_000, 272_000, Some(372_000)),
+        ),
+        (
+            None,
+            828_400,
+            Some(limits.clone()),
+            expected(300_000, 872_000, 872_000, None),
+        ),
+        (
+            None,
+            828_400,
+            Some(ModelContextLimits {
+                own_compact_limit: None,
+                ..limits.clone()
+            }),
+            expected(784_800, 872_000, 872_000, None),
+        ),
+        (
+            Some(372_000),
+            258_400,
+            Some(ModelContextLimits {
+                max_window: None,
+                ..limits.clone()
+            }),
+            expected(244_800, 272_000, 272_000, Some(372_000)),
+        ),
+        (
+            Some(372_000),
+            258_400,
+            None,
+            expected(244_800, 272_000, 272_000, Some(372_000)),
+        ),
+        (
+            Some(372_000),
+            217_600,
+            Some(ModelContextLimits {
+                usable_percent: Some(80),
+                ..limits
+            }),
+            expected(217_600, 872_000, 272_000, Some(372_000)),
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(count, window, limits, _)| {
+            native_compaction("codex", *count, *window, limits.as_ref())
+        })
+        .collect();
+    assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
+}
+
+#[test]
+fn native_compaction_preserves_claude_and_unsupported_kinds() {
+    assert_eq!(
+        native_compaction("claude", Some(372_000), 1_000_000, None),
+        Some(NativeCompaction {
+            point: 372_000,
+            capacity: 1_000_000,
+            raw_window: 1_000_000,
+            lowered: None,
+        })
+    );
+    for (kind, count) in [
+        ("claude", None),
+        ("claude", Some(200_000)),
+        ("claude", Some(272_000)),
+        ("amp", Some(100_000)),
+        ("process-plugin", Some(100_000)),
+    ] {
+        assert_eq!(native_compaction(kind, count, 200_000, None), None);
+    }
 }
 
 #[test]

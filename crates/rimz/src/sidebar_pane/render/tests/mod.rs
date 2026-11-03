@@ -413,6 +413,7 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
 /// length (the value itself is scrubbed by `assert_snapshot`).
 fn claude_context(now: Timestamp) -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),
@@ -482,6 +483,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
 /// for missing fields.
 fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "codex".to_owned(),

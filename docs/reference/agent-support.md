@@ -407,7 +407,7 @@ The `auto-compact` field on a profile or team role sets the agent's native auto-
 | Agent | Auto-compaction window | How the agent receives it |
 | --- | :--: | --- |
 | Claude Code | ✓ | `--autocompact <tokens>`; needs Claude Code 2.1.221 or later, and Claude caps it at the model's context window |
-| Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`; Codex clamps it to 90% of the raw model window, not the usable window shown on the card (normally 95% of raw). A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
+| Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`; Codex clamps it to 90% of the raw model window, not the session's usable window (normally 95% of raw); the compaction-scaled card pairs the effective point with the model's maximum capacity. A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
 | Every other agent and process plugins | ✗ | skipped with a warning at launch |
 
 Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles; bare-kind launches are unchanged. A switch to a provider without a window flag silently drops this injected default; a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.

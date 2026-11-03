@@ -11,6 +11,7 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths) {
 
 fn ctx(observed_at: Timestamp) -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),
