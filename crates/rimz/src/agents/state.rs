@@ -835,6 +835,10 @@ pub struct AgentState {
     /// Resident loop task whose subscriptions this prompt leader arms at registration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// Workflow attempt this agent launched for. The launcher copies the pin onto
+    /// every cell of a step's layout, so it alone does not name the leader: the
+    /// leader is the pinned cell whose `name` matches the attempt's recorded
+    /// `AttemptRun.handle`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<super::observation::WorkflowAttemptRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
