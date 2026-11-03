@@ -441,12 +441,13 @@ After a minute the card shrinks to its stale line, and a minute past the last re
 
 ### Hold a card in the compaction gap with an estimate
 
-After a compaction the meter shows `↻` and the compacted size as an estimate until the first real reading. A Claude stub reaches that state from a transcript whose last line is a `compact_boundary` carrying `postTokens`, read by the compaction hooks. Give the card its window through a statusline without `current_usage` first: a nonzero `current_usage` is a real reading and ends the gap. With `$ROOT` and `$BIN` from the room card, this draws 6,092 tokens in a 1M window:
+After a compaction the meter shows `↻` and the compacted size as an estimate until the first real reading. A Claude stub reaches that state from a transcript whose last line is a `compact_boundary` carrying `postTokens`, read by the compaction hooks. Give the card its window through a statusline without `current_usage` first: a nonzero `current_usage` is a real reading and ends the gap. With `$ROOT` and `$BIN` from the room card, this selects window scaling and draws 6,092 tokens in a 1M window:
 
 ```sh
 s=$(uuidgen); w="$ROOT/home/room-worktrees/probe"; t="$ROOT/tmp/compacted.jsonl"
 printf '%s\n' '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":90000,"postTokens":6092}}' > "$t"
 feed() { target/debug/xtask sandbox in "$ROOT" --as '@reviewer#probe' -- "$BIN" --tmux "$@"; }
+feed config set theme.display.context_meter.scale window
 jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"SessionStart",session_id:$s,cwd:$w,source:"startup"}' | feed hooks feed --source claude
 jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"UserPromptSubmit",session_id:$s,cwd:$w,prompt:"estimate probe"}' | feed hooks feed --source claude
 jq -nc --arg s "$s" '{session_id:$s,model:{id:"claude-sonnet-4-6",display_name:"Sonnet 4.6"},context_window:{context_window_size:1000000,used_percentage:0},cost:{total_cost_usd:0.01}}' | feed statusline feed --source claude
@@ -457,7 +458,7 @@ jq -nc --arg s "$s" --arg w "$w" --arg t "$t" '{hook_event_name:"SessionStart",s
 jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,last_assistant_message:"done"}' | feed hooks feed --source claude
 ```
 
-The `#probe` sidebar then draws the reviewer's meter as `↻ ╸───…   <1%`, with no stats line beneath it. Change `postTokens` or `context_window_size` for another estimate.
+The `#probe` sidebar then draws the reviewer's meter as `↻ ╸───…  0.6%`, with no stats line beneath it. Estimates show one decimal, or `<0.1%` for a positive fraction below a tenth; a zero estimate reads `0.0%` with no fill. Change `postTokens` or `context_window_size` for another estimate.
 
 ### Check a provider account
 
