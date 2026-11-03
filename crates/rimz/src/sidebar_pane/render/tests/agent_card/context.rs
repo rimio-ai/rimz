@@ -2265,7 +2265,7 @@ fn small_post_compaction_estimates_draw_one_half_cell() {
                 ..Default::default()
             },
         );
-        for (window, value) in [(200_000, "0.1%"), (1_000_000, "<0.1%")] {
+        for (window, value) in [(200_000, " 0.1%"), (1_000_000, "<0.1%")] {
             let snapshot = compacted_estimate_snapshot(Some(300), window, 0);
             for width in [32, 46, 58] {
                 let lines = group_lines_at_width(&snapshot, &theme, 0, width);
