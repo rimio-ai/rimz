@@ -437,7 +437,7 @@ RimZ applies room-scoped multiplexer settings when it creates or reattaches a se
 ```toml
 [mux]
 default = "tmux"
-status_bar = "full"           # full, compact, or off; tmux rooms only for now
+status_bar = "full"           # full, compact, or off; Zellij full and compact look the same
 
 [zellij]
 pane_frames = true            # an optional override; unset, your config.kdl wins
@@ -448,7 +448,9 @@ pane_border_status = "top"    # optional; unset: inherit, except stack-window ti
 
 `[mux] default` picks the backend, consulted after an explicit `--mux <name>`, its `--zellij` and `--tmux` shorthands, and the check for a Zellij or tmux you are already inside. Left unset, RimZ takes tmux when both are installed. If the configured backend is not installed, RimZ skips the setting and auto-detects an installed backend; room start warns. An already-open room keeps its backend until it is reset.
 
-`[mux] status_bar` selects the room's status bar: `"full"` (the default) leaves your tmux bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. Zellij rooms ignore this setting for now. See [large tmux rooms](./multiplexer.md#large-tmux-rooms) for the compact bar's trade-offs.
+`[mux] status_bar` selects the room's status bar. On tmux, `"full"` (the default) leaves your bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. See [large rooms](./multiplexer.md#large-rooms) for the compact bar's trade-offs.
+
+On Zellij, `"full"` and `"compact"` both keep Zellij's one-row compact bar, and `"off"` omits it. A change reaches tabs RimZ opens at once and the rest of the room at its next birth; `rimz reload` does not change a Zellij room's bar. See [large rooms](./multiplexer.md#large-rooms) for what the Zellij bar shows and when a change applies.
 
 The two backends differ in what an unset key means.
 
@@ -461,7 +463,7 @@ The two backends differ in what an unset key means.
 | `session_serialization` | `false` | RimZ owns rebirth; a resurrected Zellij room comes back with dead panes. |
 | `disable_session_metadata` | `true` | Stops Zellij's per-second metadata and `ps` loop. |
 
-Every other key, `pane_frames` and `copy_clipboard` among them, is asserted only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl` at room birth. Six behaviours are not keys at all: the room starts in locked mode, a directionless new pane splits the focused pane rather than the largest one, swap layouts are off, resizing stacks panes rather than shrinking them, every view carries RimZ's own layout with its one-row compact bar in place of Zellij's built-in tab and status bars, and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
+Every other key, `pane_frames` and `copy_clipboard` among them, is asserted only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl` at room birth. Six behaviours have no `[zellij]` key: the room starts in locked mode, a directionless new pane splits the focused pane rather than the largest one, swap layouts are off, resizing stacks panes rather than shrinking them, every view carries RimZ's own layout in place of Zellij's built-in tab and status bars (with a one-row compact bar unless `[mux] status_bar = "off"`), and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
 
 A session value here overrides `config.kdl` absolutely. Most changes apply on the next `rimz start` or reattach; start-only settings and removal of optional keys wait for a new room. Client settings apply per attach, but `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only keys and how to apply changes.
 

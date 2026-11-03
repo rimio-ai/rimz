@@ -460,11 +460,13 @@ Markdown definitions fail differently. A broken profile, team, or subagent defin
 
 ### Window switching is slow in a large tmux room
 
-With hundreds of windows, the full status tab list can dominate redraw work. Run `rimz config set mux.status_bar compact` for a smaller clickable strip, or `rimz config set mux.status_bar off` to hide it, then `rimz reload` to apply the change to the open room. See [large tmux rooms](./multiplexer.md#large-tmux-rooms) for what compact preserves and when its tab text refreshes.
+With hundreds of windows, the full status tab list can dominate redraw work. Run `rimz config set mux.status_bar compact` for a smaller clickable strip, or `rimz config set mux.status_bar off` to hide it, then `rimz reload` to apply the change to the open room. See [large rooms](./multiplexer.md#large-rooms) for what compact preserves and when its tab text refreshes.
 
 ### A `[zellij]` or `[tmux]` setting did nothing
 
 Run `rimz start` to apply changes to an open room. On tmux, `rimz reload` also re-applies options to the live session and its current windows without reattaching. Zellij's start-only settings, and removal of an optional `[zellij]` key, need a new room. If `[zellij] mouse_mode = true` still leaves the mouse disabled, remove or change `mouse_mode false` in `config.kdl` before attaching. If `pane_frames = true` draws no frame, split the work pane: Zellij frames a pane only when its tab holds another framed pane, and the sidebar and bottom bar do not count. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only list and when each backend applies changes.
+
+On Zellij, a `[mux] status_bar` change reaches tabs RimZ opens at once, while existing tabs and tabs you open yourself follow at the next room birth; `rimz reload` does not change the Zellij bar ([large rooms](./multiplexer.md#large-rooms)).
 
 ### A theme or width change did nothing
 

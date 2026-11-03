@@ -272,6 +272,86 @@ fn open_sidebar_births_native_layout_and_template() {
 
     wait_for_pane_count(xdg, &name, 4);
 }
+
+#[test]
+fn status_bar_off_births_barless_template_and_rimz_tabs() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("barless");
+    let xdg = room.path();
+    let name = room.name();
+    std::fs::write(xdg.join(".zshrc"), "").expect("disable zsh first-run menu");
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let mut opts = sidebar_opts(name, cwd.path(), stub, 120);
+    opts.config.status_bar = rimz::config::MuxStatusBar::Off;
+    publish_room_bin(xdg, &opts);
+    room.backend()
+        .open_sidebar(&opts, None)
+        .expect("barless birth");
+    wait_for_pane_count(xdg, name, 2);
+    assert_session_has_no_bottom_bar(xdg, name);
+
+    let mut client = AttachedClient::attach(&room, 120, 40);
+    let before = poll_until(
+        Duration::from_secs(10),
+        || list_panes(xdg, name),
+        |snapshot| {
+            snapshot
+                .sidebar()
+                .is_some_and(|pane| pane.pane_columns == 30 && pane.pane_rows == 40)
+        },
+        "barless birth sidebar at client size",
+    );
+    assert_sidebar_is_left_thirty_percent(xdg, name);
+    let sidebar = before.sidebar().expect("birth sidebar");
+    assert_eq!(sidebar.pane_columns, 30, "{before:#?}");
+    let initial_tab = sidebar.tab_id;
+    let template = new_tab_template_dump(xdg, name);
+    assert!(!template.contains("compact-bar"), "{template}");
+    assert!(template.contains("rimz-sidebar"), "{template}");
+
+    open_new_tab(xdg, name);
+    wait_for_pane_count(xdg, name, 4);
+    let template_tab = expect_list_panes(xdg, name);
+    let work = template_tab
+        .panes
+        .iter()
+        .find(|pane| pane.tab_id != initial_tab && pane.is_live_terminal() && !pane.is_sidebar())
+        .expect("template work pane");
+    let work = work.pane_ref(name).pane_id;
+    client.go_to_tab_until(2, &work, "barless template work pane");
+    client.assert_input_reaches(&work, "barless template work pane");
+    assert_session_has_no_bottom_bar(xdg, name);
+
+    room.backend()
+        .open_tab(&rimz::mux::TabOptions {
+            env: Default::default(),
+            title: "barless-rimz".to_owned(),
+            panes: rimz::mux::LayoutPanes {
+                columns: vec![tiled_column(vec![rimz::mux::PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+                focused_pane: 0,
+            },
+            focus: true,
+            dock_sidebar: true,
+            after: None,
+            sidebar: opts,
+        })
+        .expect("open barless RimZ tab");
+    let after = expect_list_panes(xdg, name);
+    let sidebar = after
+        .panes
+        .iter()
+        .find(|pane| !template_tab.tab_ids().contains(&pane.tab_id) && pane.is_sidebar())
+        .expect("RimZ tab sidebar");
+    assert_eq!(sidebar.pane_x, 0, "{after:#?}");
+    assert_eq!(sidebar.pane_rows, 40, "{after:#?}");
+    assert_session_has_no_bottom_bar(xdg, name);
+}
+
 /// The pre-attach health gate: an absent room is born clean and RUNNING
 /// (`Reborn`), a probe of the resulting live room reports `Healthy`, and a second
 /// gate call leaves the working panes untouched (`Healthy`, no rebirth). This is

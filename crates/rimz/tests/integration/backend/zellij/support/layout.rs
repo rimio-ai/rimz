@@ -21,17 +21,29 @@ pub(in crate::backend::zellij) fn serve_processes_for(session: &str) -> Result<u
         .count())
 }
 
+fn has_bottom_bar(snapshot: &PaneSnapshot) -> bool {
+    snapshot.panes.iter().any(|pane| {
+        pane.is_plugin
+            && pane
+                .title
+                .as_deref()
+                .is_some_and(|title| title.contains("compact-bar"))
+    })
+}
+
 pub(in crate::backend::zellij) fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
     let snapshot = PaneSnapshot::expect(xdg, session);
     assert!(
-        snapshot.panes.iter().any(|pane| {
-            pane.is_plugin
-                && pane
-                    .title
-                    .as_deref()
-                    .is_some_and(|title| title.contains("compact-bar"))
-        }),
+        has_bottom_bar(&snapshot),
         "session {session} should carry a bottom bar plugin: {snapshot:?}",
+    );
+}
+
+pub(in crate::backend::zellij) fn assert_session_has_no_bottom_bar(xdg: &Path, session: &str) {
+    let snapshot = PaneSnapshot::expect(xdg, session);
+    assert!(
+        !has_bottom_bar(&snapshot),
+        "session {session} should carry no bottom bar plugin: {snapshot:?}",
     );
 }
 
