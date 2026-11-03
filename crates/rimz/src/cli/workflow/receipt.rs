@@ -70,7 +70,7 @@ pub(super) fn resume(
             step.tripped_visit_bound(&record).or_else(|| {
                 step.visit_bounds(
                     record.visits.get(&record.node),
-                    record.key.as_ref(),
+                    record.visit_bucket(),
                     record.visit_grant,
                 )
                 .next()

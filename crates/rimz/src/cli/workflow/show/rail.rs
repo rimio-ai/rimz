@@ -38,26 +38,28 @@ impl View<'_> {
                 .steps
                 .get(&row.name)
                 .and_then(|step| {
-                    let key = if is_current
+                    let bucket = if is_current
                         || workflow_view::session_attempt(self.record)
                             .is_some_and(|attempt| attempt.node == row.name)
                     {
-                        self.record.key.as_ref()
+                        self.record.visit_bucket()
                     } else {
                         self.journal
                             .iter()
                             .rev()
                             .find_map(|entry| match &entry.event {
-                                JournalEvent::Attempt { key, .. } if entry.node == row.name => {
-                                    Some(key.as_ref())
+                                JournalEvent::Attempt { routed_by, key, .. }
+                                    if entry.node == row.name =>
+                                {
+                                    Some((routed_by.as_deref(), key.as_ref()))
                                 }
                                 _ => None,
                             })
-                            .flatten()
+                            .unwrap_or((None, None))
                     };
                     step.visit_bounds(
                         self.record.visits.get(&row.name),
-                        key,
+                        bucket,
                         self.record.visit_grant,
                     )
                     .next()
@@ -280,6 +282,9 @@ fn entries(hops: &[Hop]) -> BTreeMap<&str, u64> {
     let mut counts = BTreeMap::new();
     let mut position = None;
     for hop in hops {
+        if hop.kind == HopKind::VisitsReset {
+            continue;
+        }
         let node = hop.node.as_str();
         if position != Some(node) || hop.kind == HopKind::Resume {
             *counts.entry(node).or_default() += 1;

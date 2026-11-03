@@ -16,8 +16,8 @@ use crate::harness::schedule::{
 };
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
-    self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, KeyVisits,
-    LiveAttempt, ParkReason, RunRecord, RunState, Scope, ScopeKind,
+    self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
+    ParkReason, RunRecord, RunState, Scope, ScopeKind,
 };
 
 mod accounting;
@@ -642,7 +642,7 @@ fn prepare(
                 "cap",
                 json!({
                     "outcome":"cap", "step":t.record.node, "bound":bound,
-                    "visits":visits, "max":max
+                    "visits":visits, "max":max, "routed_by":t.record.visit_bucket().0
                 }),
                 &spec.engine_target(&t.record.node, "cap"),
                 ParkReason::Cap,
@@ -769,16 +769,13 @@ fn prepare(
     if step.is_some() {
         t.close_wait();
         seen.clear();
-        let visits = t.record.visits.entry(t.record.node.clone()).or_default();
-        visits.total += 1;
-        if let Some(key) = visits.keys.iter_mut().find(|v| v.key == t.record.key) {
-            key.visits += 1;
-        } else {
-            visits.keys.push(KeyVisits {
-                key: t.record.key.clone(),
-                visits: 1,
-            });
-        }
+        let bucket = t.record.visit_bucket();
+        let bucket = (bucket.0.map(str::to_owned), bucket.1.cloned());
+        t.record
+            .visits
+            .entry(t.record.node.clone())
+            .or_default()
+            .bump(bucket);
         t.record.entered_at = t.now;
     }
     let seq = t.record.next_seq;
@@ -927,7 +924,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
     if step {
         let visits = &record.visits[&record.node];
         context["visits"] = json!(visits.total);
-        context["visit"] = json!(visits.for_key(record.key.as_ref()));
+        context["visit"] = json!(visits.for_bucket(record.visit_bucket()));
     }
     if let Some(session) = record
         .held
@@ -941,7 +938,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
         let visits = &record.visits[&session.node];
         context["live_attempt"] = json!({
             "step":session.node, "seq":session.seq,
-            "visit":visits.for_key(record.key.as_ref()), "visits":visits.total,
+            "visit":visits.for_bucket(record.visit_bucket()), "visits":visits.total,
             "key":record.key, "started_at":session.started_at,
             "handle":session.run.as_ref().map(|run| &run.handle),
             "run_id":session.run.as_ref().map(|run| &run.run_id),

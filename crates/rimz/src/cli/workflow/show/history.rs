@@ -307,6 +307,9 @@ impl View<'_> {
                         value(&input)
                     )?;
                 }
+                JournalEvent::VisitsReset { step, outcome } => {
+                    writeln!(out, "{step} visits reset on {outcome}")?;
+                }
                 JournalEvent::Wait {
                     outcome,
                     recheck_at,
@@ -752,6 +755,7 @@ mod tests {
                 outcome: records::AttemptOutcome::Ended,
                 visit: seq,
                 key: None,
+                routed_by: None,
                 digests: BTreeMap::from([("prompt.md".into(), format!("digest-{seq}"))]),
                 started_at: at(seq as i64),
                 ended_at: at(seq as i64),

@@ -1,6 +1,6 @@
 use super::*;
 
-const CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\nkey=7\n";
+const CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n";
 
 fn board(env: &Env, stage: &str) {
     fs::create_dir_all(env.project_root.join(".rimz/team")).unwrap();
@@ -83,7 +83,7 @@ fn condition_holds_merge_survive_wakes_and_restart_after_another_answer() {
     let done = settled(&env, &id, "done");
     assert_eq!(
         done["record"]["input"],
-        json!({"outcome":"ready", "case":0, "key":7, "readings":{"team.stage":"Done"}})
+        json!({"outcome":"ready", "case":0, "readings":{"team.stage":"Done"}})
     );
     assert_eq!(
         events(&done, "evaluation").last().unwrap()["origin"],

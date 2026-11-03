@@ -165,17 +165,36 @@ impl View<'_> {
         else {
             return Ok(());
         };
-        let per_key = bound == "max-visits-per-key";
-        let key = if per_key {
-            format!(" for key {}", serde_json::to_string(&self.record.key)?)
+        let per_outcome = bound == "max-visits-per-outcome";
+        let bucket = self.record.visit_bucket();
+        let key = bucket
+            .1
+            .map(serde_json::to_string)
+            .transpose()?
+            .map(|key| format!(" key {key}"))
+            .unwrap_or_default();
+        let bucket_label = if per_outcome {
+            format!(" for {}{key}", bucket.0.unwrap_or("null"))
         } else {
             String::new()
         };
-        writeln!(out, "{bound}{key}: {used} of {max} visits used")?;
-        for (index, entry) in self.journal.iter().enumerate() {
+        writeln!(out, "{bound}{bucket_label}: {used} of {max} visits used")?;
+        let since = if per_outcome {
+            self.journal
+                .iter()
+                .rposition(|entry| match &entry.event {
+                    JournalEvent::VisitsReset { step, .. } => step == &self.record.node,
+                    _ => false,
+                })
+                .map_or(0, |index| index + 1)
+        } else {
+            0
+        };
+        for (index, entry) in self.journal.iter().enumerate().skip(since) {
             let JournalEvent::Attempt {
                 visit,
                 key,
+                routed_by,
                 handle,
                 code,
                 outcome,
@@ -187,7 +206,9 @@ impl View<'_> {
             else {
                 continue;
             };
-            if entry.node != self.record.node || (per_key && key != &self.record.key) {
+            if entry.node != self.record.node
+                || (per_outcome && (routed_by.as_deref(), key.as_ref()) != bucket)
+            {
                 continue;
             }
             let sender = match self.sender(&self.journal[..index]) {
@@ -218,7 +239,7 @@ impl View<'_> {
         let visit = used.saturating_add(1);
         writeln!(
             out,
-            "  {} {} {visit} refused: {bound}{key} {max}",
+            "  {} {} {visit} refused: {bound}{bucket_label} {max}",
             self.clock(
                 self.record
                     .park

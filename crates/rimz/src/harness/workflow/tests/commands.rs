@@ -38,18 +38,22 @@ fn command_steps_bypass_every_agent_host_operation_and_prompt() {
 }
 
 #[test]
-fn command_step_cycles_stop_at_total_and_keyed_caps_without_consuming_a_sequence() {
+fn command_step_cycles_stop_at_total_and_outcome_caps_without_consuming_a_sequence() {
     let mut results = Vec::new();
     for keyed in [false, true] {
         let bound = if keyed {
-            "max-visits-per-key"
+            "max-visits-per-outcome"
         } else {
             "max-visits"
         };
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='again'\nmax-visits={}\n{}\n[checks.again]\nshell='true'\non={{pass='build',fail='@failed'}}\n",
             if keyed { 3 } else { 1 },
-            if keyed { "max-visits-per-key=1" } else { "" }
+            if keyed {
+                "max-visits-per-outcome=1"
+            } else {
+                ""
+            }
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let host = FakeHost::new();
@@ -61,8 +65,8 @@ fn command_step_cycles_stop_at_total_and_keyed_caps_without_consuming_a_sequence
             && ended
                 .visits
                 .get("build")
-                .is_some_and(|visits| visits.total == 1)
-            && ended.next_seq == 3
+                .is_some_and(|visits| visits.total == if keyed { 2 } else { 1 })
+            && ended.next_seq == if keyed { 5 } else { 3 }
             && ended
                 .input
                 .as_ref()

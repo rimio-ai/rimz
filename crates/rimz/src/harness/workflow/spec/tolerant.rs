@@ -87,6 +87,9 @@ pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
         if path.len() > 4 && path[0] == "checks" && path[2] == "wake" {
             path.truncate(4);
         }
+        if path.len() > 3 && path[0] == "steps" && path[2] == "max-visits-per-outcome" {
+            path.truncate(3);
+        }
         let dotted = original_path(&path, &indices);
         if !remove(&mut value, &path, &mut indices) {
             return Err(SpecErr::Toml {
@@ -177,7 +180,7 @@ fn optional(path: &[String]) -> bool {
     match parts.as_slice() {
         [] | ["workflow"] | ["workflow", "scope" | "start", ..] => false,
         ["workflow", "on", ..] | ["checks" | "steps", _, "on"] => false,
-        ["checks", _, "cases", _, "for" | "key", ..] => true,
+        ["checks", _, "cases", _, "for", ..] => true,
         ["checks", _, "cases", ..] => false,
         ["checks", _, "wake", _, "signal", ..] => false,
         _ => true,

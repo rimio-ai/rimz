@@ -3,13 +3,19 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
-    self as records, AttemptOutcome, Host, JournalEvent, Key, KeyVisits, RunRecord, RunState,
+    self as records, AttemptOutcome, Host, JournalEvent, Key, OutcomeVisits, RunRecord, RunState,
     StepVisits,
 };
 use serde_json::{Value, json};
 
 const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
-const KEYED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-key=2\n";
+const OUTCOME_CAPPED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-outcome=2\n";
+
+const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
+    [checks.watch]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',blue='build',queued='@wait'}\n\
+    [checks.judge]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',queued='@wait'}\n\
+    [steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n\
+    max-visits-per-outcome={limit=2,reset-on='queued'}\n";
 
 mod until;
 
@@ -39,6 +45,236 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
     let result = advance(state, id, host);
     assert!(result.is_ok(), "agent steps must be admitted: {result:?}");
     records::load(&state.workflow(id)).unwrap()
+}
+
+fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value) -> RunRecord {
+    fs::write(
+        record.spec_dir.join("answer.json"),
+        serde_json::to_vec(&object).unwrap(),
+    )
+    .unwrap();
+    let mut current = records::load(&state.workflow(&record.id)).unwrap();
+    current.recheck_at = None;
+    update(state, &current);
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let observed = host.observed.clone();
+    *host.on_launch.borrow_mut() = Some(Box::new(move || {
+        observed.borrow_mut().status = RunStatus::Running;
+    }));
+    advance_ok(state, &record.id, host)
+}
+
+#[test]
+fn per_outcome_cap_leaves_other_outcomes_admissible() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let host = FakeHost::new();
+    for (outcome, visit, total) in [("red", 1, 1), ("blue", 1, 2), ("red", 2, 3)] {
+        let live = answer(&state, &record, &host, json!({"outcome":outcome}));
+        let ctx: Value =
+            serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
+        assert_eq!(
+            (ctx["visit"].as_u64(), ctx["visits"].as_u64()),
+            (Some(visit), Some(total))
+        );
+        assert_eq!(live.visits["build"].total, total);
+    }
+    let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
+    assert_eq!(host.launched.borrow().len(), 3);
+    assert_eq!(
+        capped.input,
+        Some(json!({
+            "outcome":"cap", "step":"build", "bound":"max-visits-per-outcome", "visits":2, "max":2,
+            "routed_by":"red"
+        }))
+    );
+}
+
+#[test]
+fn resuming_a_cap_keeps_the_refused_bucket_and_grants_one_more_visit() {
+    let mut actual = Vec::new();
+    for at in [None, Some("build")] {
+        let (_dir, state, record) = setup(OUTCOME_STEP);
+        let host = FakeHost::new();
+        for _ in 0..3 {
+            answer(
+                &state,
+                &record,
+                &host,
+                json!({"outcome":"red", "key":"lint"}),
+            );
+        }
+        let paths = state.workflow(&record.id);
+        assert_eq!(records::load(&paths).unwrap().state, RunState::Parked);
+        resume(&state, &record.id, at, &["visits=+1".into()]).unwrap();
+        advance_ok(&state, &record.id, &host);
+        let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
+        let capped = answer(
+            &state,
+            &record,
+            &host,
+            json!({"outcome":"red", "key":"lint"}),
+        );
+        actual.push((
+            context["visit"].as_u64().unwrap(),
+            capped.state,
+            capped.visits["build"].total,
+            host.launched.borrow().len(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [(3, RunState::Parked, 3, 3), (3, RunState::Parked, 3, 3)],
+        "both resume forms continue red at visit 3, then refuse its fourth launch"
+    );
+}
+
+#[test]
+fn cap_routed_into_a_different_step_counts_under_cap() {
+    let text = format!(
+        "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        OUTCOME_STEP
+    );
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    for _ in 0..3 {
+        answer(
+            &state,
+            &record,
+            &host,
+            json!({"outcome":"red", "key":"lint"}),
+        );
+    }
+    let live = records::load(&state.workflow(&record.id)).unwrap();
+    assert_eq!(live.node, "recover");
+    assert_eq!(
+        live.visits["recover"].outcomes,
+        [OutcomeVisits {
+            outcome: Some("cap".into()),
+            key: Some(Key::String("lint".into())),
+            visits: 1,
+        }]
+    );
+}
+
+#[test]
+fn the_same_outcome_from_two_checks_shares_a_bucket_and_keys_split_it() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red", "key":7}));
+    let mut waiting = answer(&state, &record, &host, json!({"outcome":"blue", "key":7}));
+    waiting.node = "judge".into();
+    waiting.attempt = None;
+    update(&state, &waiting);
+    answer(&state, &record, &host, json!({"outcome":"red", "key":7}));
+    let ctx: Value =
+        serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
+    assert_eq!(ctx["visit"], 2, "the sending check is not part of a bucket");
+    let live = answer(&state, &record, &host, json!({"outcome":"red", "key":"7"}));
+    let counts = serde_json::to_value(&live).unwrap();
+    assert_eq!(
+        counts["visits"]["build"]["outcomes"],
+        json!([
+            {"outcome":"red", "key":7, "visits":2},
+            {"outcome":"blue", "key":7, "visits":1},
+            {"outcome":"red", "key":"7", "visits":1}
+        ])
+    );
+}
+
+#[test]
+fn a_waiting_success_resets_rows_once_and_context_and_previous_attempt_restart() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    answer(&state, &record, &host, json!({"outcome":"blue"}));
+    let waiting = answer(&state, &record, &host, json!({"outcome":"queued"}));
+    assert_eq!(waiting.visits["build"].total, 2);
+    assert_eq!(
+        serde_json::to_value(&waiting).unwrap()["visits"]["build"]["outcomes"],
+        json!([])
+    );
+    answer(&state, &record, &host, json!({"outcome":"queued"}));
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    let ctx: Value =
+        serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
+    assert_eq!(ctx["visit"], 1);
+    assert_eq!(ctx["visits"], 3);
+    let waiting = answer(&state, &record, &host, json!({"outcome":"queued"}));
+    assert_eq!(waiting.prev_attempt.as_ref().unwrap().visit, 1);
+    assert_eq!(
+        serde_json::to_value(&waiting).unwrap()["prev_attempt"]["routed_by"],
+        "red"
+    );
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    let resets = journal
+        .iter()
+        .filter_map(|entry| {
+            let value = serde_json::to_value(entry).unwrap();
+            (value["event"] == "visits_reset").then_some(value)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        resets.len(),
+        2,
+        "an already clear step does not journal another reset"
+    );
+    assert!(
+        resets.iter().all(|row| row["step"] == "build"
+            && row["outcome"] == "queued"
+            && row["node"] == "watch")
+    );
+    assert!(
+        hops(&super::super::spec::parse(OUTCOME_STEP).unwrap(), &journal)
+            .iter()
+            .any(|hop| { hop.node == "build" && hop.outcome.as_deref() == Some("queued") }),
+        "the trail includes the reset step and outcome"
+    );
+}
+
+#[test]
+fn reset_keeps_the_total_cap_and_visit_grants_count_from_the_reset() {
+    let text = OUTCOME_STEP.replace("max-visits=6", "max-visits=3");
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    answer(&state, &record, &host, json!({"outcome":"queued"}));
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
+    assert_eq!(capped.input.as_ref().unwrap()["bound"], "max-visits");
+    assert_eq!(capped.input.as_ref().unwrap()["visits"], 3);
+    let extended = resume(&state, &record.id, Some("watch"), &["visits=+2".into()]).unwrap();
+    assert_eq!(extended.visit_grant, 2);
+    for count in 3..=4 {
+        let live = answer(&state, &record, &host, json!({"outcome":"red"}));
+        let ctx: Value =
+            serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
+        assert_eq!(ctx["visit"], count);
+        assert_eq!(live.state, RunState::Active);
+    }
+    let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
+    assert_eq!(capped.input.as_ref().unwrap()["bound"], "max-visits");
+}
+
+#[test]
+fn step_then_forwards_the_routed_outcome_into_the_next_context() {
+    let text = OUTCOME_STEP.replace("then='watch'", "then='finish'");
+    let text =
+        format!("{text}[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n");
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red", "key":7}));
+    let live = answer(&state, &record, &host, json!({"outcome":"blue"}));
+    assert_eq!(live.node, "finish");
+    let ctx: Value =
+        serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
+    assert_eq!(ctx["input"], json!({"outcome":"red","key":7}));
+    assert_eq!(
+        serde_json::to_value(&live).unwrap()["visits"]["finish"]["outcomes"],
+        json!([
+            {"outcome":"red","key":7,"visits":1}
+        ])
+    );
 }
 
 fn cancel_row(state: &StatePaths, id: &WorkflowRunId) -> Value {
@@ -115,7 +351,8 @@ fn cancel_reason_is_recorded_for_script_attempts() {
         "build".into(),
         StepVisits {
             total: 1,
-            keys: vec![KeyVisits {
+            outcomes: vec![OutcomeVisits {
+                outcome: None,
                 key: None,
                 visits: 1,
             }],
@@ -265,7 +502,7 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
         capped.input,
         Some(json!({
             "outcome":"cap", "step":"build", "bound":"max-visits",
-            "visits":2, "max":2, "key":8
+            "visits":2, "max":2, "key":8, "routed_by":"work"
         }))
     );
     assert_eq!(host.launched.borrow().len(), 2);
@@ -276,23 +513,33 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     host.observed.borrow_mut().status = RunStatus::Running;
     let extended = advance_ok(&state, &record.id, &host);
     assert_eq!(extended.visits["build"].total, 3);
-    assert_eq!(extended.visits["build"].keys[1].visits, 2);
+    assert_eq!(extended.visits["build"].outcomes.len(), 2);
+    assert_eq!(
+        extended.visits["build"].outcomes[1],
+        OutcomeVisits {
+            outcome: Some("work".into()),
+            key: Some(Key::Integer(8)),
+            visits: 2,
+        }
+    );
 }
 
 #[test]
-fn per_key_cap_preserves_counts_sequence_and_route_evidence() {
-    let (_dir, state, mut record) = setup(KEYED_STEP);
+fn per_outcome_cap_preserves_counts_sequence_and_route_evidence() {
+    let (_dir, state, mut record) = setup(OUTCOME_CAPPED_STEP);
     record.key = Some(Key::Integer(7));
     record.visits.insert(
         "build".into(),
         StepVisits {
             total: 3,
-            keys: vec![
-                KeyVisits {
+            outcomes: vec![
+                OutcomeVisits {
+                    outcome: None,
                     key: record.key.clone(),
                     visits: 2,
                 },
-                KeyVisits {
+                OutcomeVisits {
+                    outcome: None,
                     key: Some(Key::Integer(8)),
                     visits: 1,
                 },
@@ -309,8 +556,8 @@ fn per_key_cap_preserves_counts_sequence_and_route_evidence() {
     );
     assert_eq!(capped.park.as_ref().unwrap().text, None);
     let input = json!({
-        "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
-        "visits":2, "max":2, "key":7
+        "outcome":"cap", "step":"build", "bound":"max-visits-per-outcome",
+        "visits":2, "max":2, "key":7, "routed_by":null
     });
     assert_eq!(capped.input.as_ref(), Some(&input));
     assert_eq!(capped.visits, record.visits);
@@ -329,14 +576,15 @@ fn per_key_cap_preserves_counts_sequence_and_route_evidence() {
 }
 
 #[test]
-fn per_key_cap_leaves_other_keys_admissible() {
-    let (_dir, state, mut record) = setup(KEYED_STEP);
+fn per_outcome_cap_leaves_other_keys_admissible() {
+    let (_dir, state, mut record) = setup(OUTCOME_CAPPED_STEP);
     record.key = Some(Key::Integer(7));
     record.visits.insert(
         "build".into(),
         StepVisits {
             total: 2,
-            keys: vec![KeyVisits {
+            outcomes: vec![OutcomeVisits {
+                outcome: None,
                 key: record.key.clone(),
                 visits: 2,
             }],
@@ -353,10 +601,11 @@ fn per_key_cap_leaves_other_keys_admissible() {
     let live = advance_ok(&state, &record.id, &host);
     assert_eq!(host.launched.borrow().len(), 1);
     assert_eq!(live.visits["build"].total, 3);
-    assert_eq!(live.visits["build"].keys[0].visits, 2);
+    assert_eq!(live.visits["build"].outcomes[0].visits, 2);
     assert_eq!(
-        live.visits["build"].keys[1],
-        KeyVisits {
+        live.visits["build"].outcomes[1],
+        OutcomeVisits {
+            outcome: None,
             key: capped.key,
             visits: 1
         }
@@ -365,22 +614,25 @@ fn per_key_cap_leaves_other_keys_admissible() {
 
 #[test]
 fn total_cap_wins_when_both_visit_bounds_trip() {
-    let (_dir, state, mut record) = setup(KEYED_STEP);
+    let (_dir, state, mut record) = setup(OUTCOME_CAPPED_STEP);
     record.key = Some(Key::Integer(7));
     record.visits.insert(
         "build".into(),
         StepVisits {
             total: 5,
-            keys: vec![
-                KeyVisits {
+            outcomes: vec![
+                OutcomeVisits {
+                    outcome: None,
                     key: record.key.clone(),
                     visits: 2,
                 },
-                KeyVisits {
+                OutcomeVisits {
+                    outcome: None,
                     key: Some(Key::Integer(8)),
                     visits: 2,
                 },
-                KeyVisits {
+                OutcomeVisits {
+                    outcome: None,
                     key: Some(Key::Integer(9)),
                     visits: 1,
                 },
@@ -394,20 +646,21 @@ fn total_cap_wins_when_both_visit_bounds_trip() {
         capped.input,
         Some(json!({
             "outcome":"cap", "step":"build", "bound":"max-visits",
-            "visits":5, "max":5, "key":7
+            "visits":5, "max":5, "key":7, "routed_by":null
         }))
     );
     assert!(host.launched.borrow().is_empty());
 }
 
 #[test]
-fn unkeyed_visits_share_the_per_key_cap() {
-    let (_dir, state, mut record) = setup(KEYED_STEP);
+fn unkeyed_visits_share_the_per_outcome_cap() {
+    let (_dir, state, mut record) = setup(OUTCOME_CAPPED_STEP);
     record.visits.insert(
         "build".into(),
         StepVisits {
             total: 2,
-            keys: vec![KeyVisits {
+            outcomes: vec![OutcomeVisits {
+                outcome: None,
                 key: None,
                 visits: 2,
             }],
@@ -420,22 +673,23 @@ fn unkeyed_visits_share_the_per_key_cap() {
     assert_eq!(
         capped.input,
         Some(json!({
-            "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
-            "visits":2, "max":2
+            "outcome":"cap", "step":"build", "bound":"max-visits-per-outcome",
+            "visits":2, "max":2, "routed_by":null
         }))
     );
     assert!(host.launched.borrow().is_empty());
 }
 
 #[test]
-fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_key() {
-    let (_dir, state, mut record) = setup(KEYED_STEP);
+fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_outcome() {
+    let (_dir, state, mut record) = setup(OUTCOME_CAPPED_STEP);
     record.key = Some(Key::String("lint".into()));
     record.visits.insert(
         "build".into(),
         StepVisits {
             total: 2,
-            keys: vec![KeyVisits {
+            outcomes: vec![OutcomeVisits {
+                outcome: None,
                 key: record.key.clone(),
                 visits: 2,
             }],
@@ -452,7 +706,7 @@ fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_key() {
         update(&state, &capped);
         host.observed.borrow_mut().status = RunStatus::Running;
         let live = advance_ok(&state, &record.id, &host);
-        assert_eq!(live.visits["build"].keys[0].visits, count);
+        assert_eq!(live.visits["build"].outcomes[0].visits, count);
         host.observed.borrow_mut().status = RunStatus::Completed;
         capped = advance_ok(&state, &record.id, &host);
     }
@@ -464,8 +718,8 @@ fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_key() {
     assert_eq!(
         capped.input,
         Some(json!({
-            "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
-            "visits":4, "max":4, "key":"lint"
+            "outcome":"cap", "step":"build", "bound":"max-visits-per-outcome",
+            "visits":4, "max":4, "key":"lint", "routed_by":null
         }))
     );
 }

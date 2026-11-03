@@ -10344,7 +10344,7 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::KeyVisits"
+key = "store::workflow::OutcomeVisits"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
 [[verdict]]
@@ -10520,7 +10520,7 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Case"
-reason = "Workflow condition cases share ordered predicates, hold durations, and fixed keys with their derived schema."
+reason = "Workflow condition cases share ordered predicates and hold durations with their derived schema."
 
 [[verdict]]
 kind = "item"
@@ -10586,6 +10586,11 @@ reason = "Workflow admission and answer normalization share one reserved-outcome
 kind = "item"
 key = "harness::workflow::Step"
 reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::OutcomeCap"
+reason = "Definition views and visit admission share the per-outcome limit and reset outcomes."
 
 [[verdict]]
 kind = "item"

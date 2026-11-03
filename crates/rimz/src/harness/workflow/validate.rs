@@ -329,11 +329,11 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("steps.{node}"),
-                if step.max_visits_per_key.is_some() {
+                if step.max_visits_per_outcome.is_some() {
                     concat!(
                         "cycle through steps has no max-visits bound; ",
-                        "a per-key bound does not bound the cycle: ",
-                        "a check can name a new key every time; max-visits is needed"
+                        "a per-outcome bound does not bound the cycle: ",
+                        "a check can name a new outcome or key every time; max-visits is needed"
                     )
                 } else {
                     "cycle through steps has no max-visits bound"

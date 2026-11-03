@@ -631,10 +631,10 @@ fn validation_rejects_each_invalid_spec() {
         ),
     ];
     let keyed_cases = [(
-        "per-key cap does not bound a cycle",
-        VALID.replace("max-visits = 3", "max-visits-per-key = 2"),
+        "per-outcome cap does not bound a cycle",
+        VALID.replace("max-visits = 3", "max-visits-per-outcome = 2"),
         "steps.build",
-        "a per-key bound does not bound the cycle: a check can name a new key every time; max-visits is needed",
+        "a per-outcome bound does not bound the cycle: a check can name a new outcome or key every time; max-visits is needed",
     )];
     let command = VALID
         .replace("agent = \"claude\"", "shell = 'true'\ntimeout = '1m'")
@@ -1013,10 +1013,8 @@ fn schema_is_derived_from_the_loader_types() {
         value["$defs"]["Limit"]["properties"]["max-active"]["minimum"],
         1
     );
-    assert_eq!(
-        value["$defs"]["Step"]["properties"]["max-visits-per-key"]["minimum"],
-        1
-    );
+    assert!(value["$defs"]["Case"]["properties"].get("key").is_none());
+    assert!(value["$defs"]["Step"]["properties"]["max-visits-per-outcome"].is_object());
     for item in ["Header", "Check", "Step"] {
         assert_eq!(
             value["$defs"][item]["properties"]["summary"]["type"],

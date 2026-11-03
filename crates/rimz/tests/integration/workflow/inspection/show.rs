@@ -262,17 +262,20 @@ fn cap_explains_each_visit_and_the_refused_visit_with_copyable_options() {
 }
 
 #[test]
-fn per_key_cap_filters_visits_and_uses_the_granted_limit() {
+fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
-            [steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=10\nmax-visits-per-key=1\n"
+            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\ntimeout='1h'\non={{red='build',blue='build',queued='@wait'}}\n\
+            [steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=10\nmax-visits-per-outcome={{limit=1,reset-on='queued'}}\n"
         ),
         "n=0; count=\"$RIMZ_WORKFLOW_DIR/count\"\n\
          if [ -f \"$count\" ]; then read -r n < \"$count\"; fi\n\
          printf '%s\\n' \"$((n+1))\" > \"$count\"\n\
-         if [ \"$n\" = 0 ]; then key=other; else key=lint; fi\n\
-         printf '{\"outcome\":\"ok\",\"key\":\"%s\"}\\n' \"$key\"\n",
+         case $n in\n\
+           1) printf '{\"outcome\":\"queued\"}';;\n\
+           2) printf '{\"outcome\":\"blue\",\"key\":\"lint\"}';;\n\
+           *) printf '{\"outcome\":\"red\",\"key\":\"lint\"}';;\n\
+         esac\n",
     );
     let receipt = success(
         env.rimz()
@@ -282,6 +285,21 @@ fn per_key_cap_filters_visits_and_uses_the_granted_limit() {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
+    success(command(&env, &["workflow", "advance", id]));
+    let value = until(&env, id, |value| {
+        value["record"]["wait"]["outcome"] == "queued"
+    });
+    let mut record: RunRecord = serde_json::from_value(value["record"].clone()).unwrap();
+    assert_eq!(record.visits["build"].total, 1);
+    let waiting = success(command(&env, &["workflow", "show", id]));
+    assert!(
+        waiting.contains("build visits reset on queued"),
+        "{waiting}"
+    );
+    record.recheck_at = None;
+    let paths = env.state_path_for(&env.project_root).workflow(&record.id);
+    fs::write(paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    success(command(&env, &["workflow", "advance", id]));
     success(
         env.rimz()
             .env("RIMZ_BIN", "/bin/true")
@@ -291,12 +309,14 @@ fn per_key_cap_filters_visits_and_uses_the_granted_limit() {
     );
     success(command(&env, &["workflow", "advance", id]));
     let value = settled(&env, id, "parked");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 3);
+    assert_eq!(value["record"]["visits"]["build"]["total"], 4);
+    assert_eq!(value["record"]["input"]["routed_by"], "red");
     let text = success(command(&env, &["workflow", "show", id]));
     contains(
         &text,
         &[
-            "max-visits-per-key",
+            "max-visits-per-outcome",
+            "for red",
             "key \"lint\"",
             "2 of 2",
             "build 1",
@@ -310,7 +330,20 @@ fn per_key_cap_filters_visits_and_uses_the_granted_limit() {
         1,
         "only lint's visit 1: {text}"
     );
-    assert!(text.contains("build 2 of 2 for key \"lint\""), "{text}");
+    assert!(text.contains("build 2 of 2 for red key \"lint\""), "{text}");
+    let history = success(command(&env, &["workflow", "show", id, "--history"]));
+    assert!(
+        history.contains("build visits reset on queued"),
+        "{history}"
+    );
+    let cap = value["journal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|row| row["event"] == "route" && row["outcome"] == "cap")
+        .unwrap();
+    assert_eq!(cap["input"]["bound"], "max-visits-per-outcome");
 }
 
 #[test]
@@ -800,11 +833,11 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
 }
 
 #[test]
-fn a_past_steps_per_key_visit_uses_its_last_attempt_not_the_current_key() {
+fn a_past_steps_per_outcome_visit_uses_its_last_attempt_not_the_current_key() {
     let (env, _) = super::super::fixture(
         &format!(
             "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
-             [steps.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits-per-key=2\n\
+             [steps.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits-per-outcome=2\n\
              [checks.next]\nrun='sh checks/pr.sh'\non.other='finish'\n\
              [steps.finish]\nshell='true'\ntimeout='1h'\nthen='waiting'\n\
              [checks.waiting]\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n"
@@ -823,7 +856,10 @@ fn a_past_steps_per_key_visit_uses_its_last_attempt_not_the_current_key() {
         value["record"]["wait"]["outcome"] == "pending"
     });
     assert_eq!(value["record"]["key"], "other", "{value:#}");
-    assert_eq!(value["record"]["visits"]["build"]["keys"][0]["key"], "lint");
+    assert_eq!(
+        value["record"]["visits"]["build"]["outcomes"][0]["key"],
+        "lint"
+    );
     let text = success(command(&env, &["workflow", "show", &id]));
     contains(&text, &["visit 1 of 2"]);
 }

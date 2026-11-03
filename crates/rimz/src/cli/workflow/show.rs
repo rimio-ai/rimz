@@ -225,7 +225,7 @@ impl View<'_> {
             .and_then(|step| {
                 step.visit_bounds(
                     self.record.visits.get(&self.record.node),
-                    self.record.key.as_ref(),
+                    self.record.visit_bucket(),
                     self.record.visit_grant,
                 )
                 .next()
@@ -370,15 +370,19 @@ impl View<'_> {
                 continue;
             };
             let total = step
-                .visit_bounds(Some(visits), None, self.record.visit_grant)
+                .visit_bounds(Some(visits), (None, None), self.record.visit_grant)
                 .find(|(bound, _, _)| *bound == "max-visits");
             if let Some((_, used, max)) = total {
                 writeln!(out, "visits  {name} {used} of {max}")?;
             }
-            for (index, key) in visits.keys.iter().enumerate() {
+            for (index, row) in visits.outcomes.iter().enumerate() {
                 let Some((_, used, max)) = step
-                    .visit_bounds(Some(visits), key.key.as_ref(), self.record.visit_grant)
-                    .find(|(bound, _, _)| *bound == "max-visits-per-key")
+                    .visit_bounds(
+                        Some(visits),
+                        (row.outcome.as_deref(), row.key.as_ref()),
+                        self.record.visit_grant,
+                    )
+                    .find(|(bound, _, _)| *bound == "max-visits-per-outcome")
                 else {
                     break;
                 };
@@ -387,10 +391,17 @@ impl View<'_> {
                 } else {
                     ""
                 };
+                let key = row
+                    .key
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?
+                    .map(|key| format!(" key {key}"))
+                    .unwrap_or_default();
                 writeln!(
                     out,
-                    "{label}  {name} {used} of {max} for key {}",
-                    serde_json::to_string(&key.key)?
+                    "{label}  {name} {used} of {max} for {}{key}",
+                    row.outcome.as_deref().unwrap_or("null")
                 )?;
             }
         }
@@ -407,6 +418,11 @@ impl View<'_> {
         for hop in &hops[earlier..] {
             let fact = match hop.kind {
                 HopKind::Resume => format!("resumed → {}", hop.node),
+                HopKind::VisitsReset => format!(
+                    "{} visits reset on {}",
+                    hop.node,
+                    hop.outcome.as_deref().unwrap_or_default()
+                ),
                 HopKind::Park { reason } => format!("parked {}", reason.as_str()),
                 HopKind::Terminal { state } => state.as_str().into(),
                 HopKind::Route => format!(
