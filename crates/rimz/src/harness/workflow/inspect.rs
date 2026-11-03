@@ -82,6 +82,18 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
     hops
 }
 
+/// The latest resume at a node or route into it, shared by arrival and park views.
+pub fn routing_hop(spec: &WorkflowSpec, journal: &[JournalEntry], node: &str) -> Option<Hop> {
+    hops(spec, journal)
+        .into_iter()
+        .rev()
+        .find(|hop| match hop.kind {
+            HopKind::Resume => hop.node == node,
+            HopKind::Route => hop.target.as_deref() == Some(node),
+            _ => false,
+        })
+}
+
 /// Whether a route repeats the immediately preceding evaluation's non-null answer.
 pub fn repeats_evaluation(entry: &JournalEntry, previous: Option<&JournalEntry>) -> bool {
     let Some(previous) = previous else {

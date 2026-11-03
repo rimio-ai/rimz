@@ -2097,7 +2097,8 @@ path = "crates/rimz/src/harness"
 # workflow::cancel_args shares reason-bearing cancellation argv with removal callers (+1).
 # workflow::Limit shares the strict limit table with engine and CLI (+1).
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
-surface-budget = 1073
+# workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
+surface-budget = 1074
 
 [[verdict]]
 kind = "item"
@@ -10484,6 +10485,11 @@ reason = "Journal inspection distinguishes routing decisions, resumes, parks, an
 kind = "item"
 key = "harness::workflow::hops"
 reason = "One read-only journal reader folds repeated checks without double-counting engine evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::routing_hop"
+reason = "Workflow park views and launch briefs share the newest resume or route into the current node."
 
 [[verdict]]
 kind = "item"
