@@ -851,7 +851,7 @@ Automated starts that need a fix add warning notices above the footer, one per c
 ```
  ⚠ capacity check failing: claude exit 1 · 4 held · rimz doctor
  ⚠ starts held: free disk 1G < 2G at /repo · rimz doctor
- ⚠ starts held: cannot count active agents: broken record · 2 held · rimz doctor
+ ⚠ starts held: cannot count open agents: broken record · 2 held · rimz doctor
 ```
 
 Self-clearing holds add no sidebar line; inspect them with `rimz loop list` or `rimz workflow list`.
