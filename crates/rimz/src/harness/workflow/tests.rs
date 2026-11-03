@@ -198,6 +198,107 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn validation_rejects_unanswerable_resets_and_requires_a_total_after_cleanup() {
+    let (_home, dir) = fixture();
+    let text = format!(
+        "{}[checks.after]\nrun='true'\non.ok='@done'\n",
+        VALID.replace("then = \"pick\"", "then='after'")
+    );
+    let actual = [
+        ("max-visits=3", "{limit=2,reset-on='missing'}"),
+        ("max-visits=3", "{limit=2,reset-on='timeout'}"),
+        ("max-visits=3", "{limit=2,reset-on='unknown'}"),
+        ("", "{limit=2,reset-on='done'}"),
+        ("max-visits=0", "{limit=2,reset-on='done'}"),
+        ("max-visits=3", "{limit=0,reset-on='missing'}"),
+        ("max-visits=3", "{limit=3,reset-on='missing'}"),
+    ]
+    .map(|(total, cap)| {
+        fs::write(
+            dir.join("workflow.toml"),
+            text.replace(
+                "max-visits = 3",
+                &format!("{total}\nmax-visits-per-outcome={cap}"),
+            ),
+        )
+        .unwrap();
+        validate(&dir, &LoadedDefinitions::default(), None)
+            .errors
+            .into_iter()
+            .map(|issue| issue.path)
+            .collect::<Vec<_>>()
+    });
+    let path = "steps.build.max-visits-per-outcome.reset-on".to_owned();
+    assert_eq!(
+        actual,
+        [
+            vec![path.clone()],
+            vec![path.clone()],
+            vec![path.clone()],
+            vec![path.clone()],
+            vec![path],
+            vec![],
+            vec![],
+        ]
+    );
+}
+
+#[test]
+fn validation_warns_for_one_inbound_outcome_unless_reset_or_start() {
+    let (_home, dir) = fixture();
+    let capped = format!("{VALID}max-visits-per-outcome=2\n");
+    let actual = [
+        capped.clone(),
+        capped.replace(
+            "max-visits-per-outcome=2",
+            "max-visits-per-outcome={limit=2,reset-on='done'}",
+        ),
+        capped.replace("ready = \"build\"", "ready = \"build\", again = \"build\""),
+        capped.replace("start = \"pick\"", "start='build'"),
+        capped
+            .replace("run = \"python3 checks/pick.py\"", "shell='true'")
+            .replace(
+                "on = { ready = \"build\", done = \"@done\", pending = \"@wait\" }",
+                "on={pass='build',fail='@done'}",
+            ),
+        capped.replace(
+            "run = \"python3 checks/pick.py\"",
+            "agent='claude'\nprompt-file='prompts/build.md'",
+        ),
+        format!("{capped}[checks.other]\nrun='true'\non.ready='build'\n"),
+    ]
+    .map(|text| {
+        fs::write(dir.join("workflow.toml"), text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(report.errors.is_empty(), "{report:?}");
+        let warnings = report
+            .warnings
+            .iter()
+            .filter(|issue| issue.path == "steps.build.max-visits-per-outcome")
+            .collect::<Vec<_>>();
+        (
+            warnings.len(),
+            warnings.iter().all(|issue| {
+                issue.message.contains("repeats max-visits")
+                    && issue.message.contains("unless a check answers keys")
+            }),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (1, true),
+            (0, true),
+            (0, true),
+            (0, true),
+            (1, true),
+            (1, true),
+            (1, true)
+        ]
+    );
+}
+
+#[test]
 fn validation_carries_check_and_step_summaries() {
     let (_home, dir) = fixture();
     let text = VALID

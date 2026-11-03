@@ -188,9 +188,52 @@ pub(super) fn validate_spec(
             edges,
         });
     }
+    let answerable = spec
+        .checks
+        .keys()
+        .flat_map(|node| spec.edges(node))
+        .map(|edge| edge.outcome)
+        .filter(|outcome| !RESERVED_OUTCOMES.contains(&outcome.as_str()))
+        .collect::<BTreeSet<_>>();
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
         report.node_name(&path, node);
+        if let Some(cap) = &step.max_visits_per_outcome {
+            let cap_path = format!("{path}.max-visits-per-outcome");
+            if !cap.reset_on().is_empty() && step.max_visits.is_none() {
+                report.error(
+                    &format!("{cap_path}.reset-on"),
+                    "reset-on requires max-visits",
+                );
+            }
+            for outcome in cap.reset_on() {
+                if !answerable.contains(outcome) {
+                    report.error(
+                        &format!("{cap_path}.reset-on"),
+                        format!("no check answers outcome {outcome}"),
+                    );
+                }
+            }
+            if cap.reset_on().is_empty() && spec.workflow.start != *node {
+                let inbound = spec
+                    .checks
+                    .keys()
+                    .chain(spec.steps.keys())
+                    .flat_map(|source| spec.edges(source))
+                    .filter(|edge| edge.target == *node)
+                    .map(|edge| edge.outcome)
+                    .collect::<BTreeSet<_>>();
+                if inbound.len() == 1 && !inbound.contains("then") {
+                    report.warnings.push(issue(
+                        &cap_path,
+                        concat!(
+                            "without reset-on, a step reached by only one outcome repeats ",
+                            "max-visits unless a check answers keys"
+                        ),
+                    ));
+                }
+            }
+        }
         if step.kind().is_none() {
             report.error(&path, "set exactly one of agent, run, or shell");
         }
