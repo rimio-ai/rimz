@@ -364,7 +364,7 @@ impl Queue {
         (wakes, deadline)
     }
 
-    fn ranked(&self) -> Vec<PaneId> {
+    fn view_ranks(&self) -> HashMap<&ViewId, (u8, usize, bool)> {
         let frame = self
             .record
             .fold
@@ -402,6 +402,26 @@ impl Queue {
                         }
                         (3, ordinal.abs_diff(current), ordinal > current)
                     });
+                ranks.insert(&tab.view_id, rank);
+            }
+        }
+        ranks
+    }
+
+    fn ranked(&self) -> Vec<PaneId> {
+        let view_ranks = self.view_ranks();
+        let mut ranks = HashMap::new();
+        if let Some(frame) = self
+            .record
+            .fold
+            .as_ref()
+            .and_then(|fold| fold.frame.as_ref())
+        {
+            for tab in &frame.tabs {
+                let rank = view_ranks
+                    .get(&tab.view_id)
+                    .copied()
+                    .unwrap_or((4, 0, false));
                 for pane in &tab.panes {
                     ranks.insert(&pane.pane_id, rank);
                 }
