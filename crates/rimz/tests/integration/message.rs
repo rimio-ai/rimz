@@ -567,6 +567,40 @@ fn interrupt_idle_skips_escape() {
 }
 
 #[test]
+fn interrupt_failed_turn_skips_escape_while_running_gets_it() {
+    let (env, panes) = interrupt_fixture("claude");
+    for failed in [false, true] {
+        if failed {
+            seed_turn_error(&env, "sess-interrupt", TurnErrorClass::Failed, false);
+        }
+        let snapshot = env.store().snapshot_cached().unwrap();
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-interrupt")
+            .unwrap();
+        assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
+        let trace = env
+            .project_root
+            .join(format!("interrupt-provider-error-{failed}.log"));
+        run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+                .args(["message", "--interrupt", "@claude", "new direction"]),
+            "interrupt provider error",
+        );
+        assert_text_then_enter(&trace, &user_message("new direction"));
+        let lines = trace_lines(&trace);
+        assert_eq!(
+            lines.iter().filter(|line| is_escape_key(line)).count(),
+            usize::from(!failed),
+            "failed={failed}: {lines:?}"
+        );
+    }
+}
+
+#[test]
 fn interrupt_keyless_refuses_before_record() {
     let (env, panes) = interrupt_fixture("pi");
     let output = env
@@ -13514,6 +13548,10 @@ fn register_old_idle_role_agent(
     at
 }
 
+/// A reply-wait agent whose simulated owner process exits after 30 seconds.
+///
+/// Tests that can outlast that window must drive hooks with `run_hook_for_owner`
+/// and `Env::agent_owner_pid` instead of the fixture's default hook helpers.
 struct ReplyAgentFixture {
     session_id: String,
     branch: String,
