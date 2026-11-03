@@ -1325,11 +1325,11 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
 
     let meter = rendered
         .lines()
-        .find(|line| line.contains("24.6%"))
+        .find(|line| line.contains("26.0%"))
         .unwrap_or_else(|| panic!("the context meter shows the precise fill:\n{rendered}"));
     assert!(
         meter.contains('━'),
-        "the precise 24.6% fill overrides the stale integer 0% scalar:\n{meter}"
+        "the precise 26.0% compaction fill overrides the stale integer 0% scalar:\n{meter}"
     );
     assert!(
         rendered.contains("▤ 63k · ◌ 56k ↘ 6k ↗ 825"),
@@ -1350,7 +1350,8 @@ fn context_meter_can_restore_linear_fill_geometry() {
     codex.usage.context_pct = Some(40);
     codex.usage.context_window = Some(1_000_000);
     codex.usage.total_tokens = Some(400_000);
-    let snapshot = snapshot_with(vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
+    snapshot.theme.display.context_meter.scale = crate::config::ContextMeterScale::Window;
     let theme = Theme::fixed(false);
     let meter_geometry = |snapshot: &SidebarSnapshot| {
         let meter = group_lines(snapshot, &theme, usize::MAX)
@@ -2724,7 +2725,7 @@ fn codex_compaction_events_render_an_estimate_until_the_first_real_call() {
                         .contains(theme.glyph(GlyphRole::MeterCompacted))
                 })
                 .unwrap_or_else(|| panic!("{set}, {width}:\n{rendered}"));
-            assert!(meter.to_string().contains("5.2%"), "{meter}");
+            assert!(meter.to_string().contains("5.5%"), "{meter}");
             assert!(
                 meter.to_string().contains('━'),
                 "a filled estimate: {meter}"

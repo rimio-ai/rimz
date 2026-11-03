@@ -323,6 +323,7 @@ fn agent(activity: i64) -> AgentState {
 fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str) -> AgentState {
     let mut agent = agent(activity);
     agent.context = Some(AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),

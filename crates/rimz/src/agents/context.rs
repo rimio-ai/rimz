@@ -159,6 +159,9 @@ pub struct AgentContext {
     pub post_compaction_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<AgentTokenUsage>,
+    /// Local catalog facts; retained across rich refreshes and ignored after a model switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context_limits: Option<ModelContextLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<AgentRateLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,6 +198,18 @@ pub struct AgentContext {
     /// When the producer observed this record. Snapshot liveness comes from
     /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,
+}
+
+/// Provider catalog facts for one model, independent of the session's reported window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelContextLimits {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usable_percent: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_compact_limit: Option<u64>,
 }
 
 /// Why a turn came to rest without a `Stop` hook to record its end. A provider
@@ -255,6 +270,7 @@ impl Default for AgentContext {
             last_cache_write: None,
             post_compaction_tokens: None,
             tokens: None,
+            model_context_limits: None,
             rate_limits: None,
             pr: None,
             account: None,
@@ -382,6 +398,7 @@ pub struct LocalContextPatch {
     pub effort: FieldPatch<String>,
     pub fast: FieldPatch<bool>,
     pub tokens: LocalTokenPatch,
+    pub model_context_limits: FieldPatch<ModelContextLimits>,
     pub cost: FieldPatch<AgentCost>,
     pub last_cache_write: FieldPatch<CacheWriteRetention>,
     pub post_compaction_tokens: FieldPatch<u64>,
@@ -411,6 +428,8 @@ impl LocalContextPatch {
             .apply(&mut context.model_display_name);
         self.effort.apply(&mut context.effort);
         self.fast.apply(&mut context.fast);
+        self.model_context_limits
+            .apply(&mut context.model_context_limits);
 
         let model_changed = prior_model_id != context.model_id
             || prior_model_display_name != context.model_display_name;

@@ -978,6 +978,7 @@ fn transcript_tokens() -> AgentTokenUsage {
 
 fn app_server_context(app_at: Timestamp) -> AgentContext {
     AgentContext {
+        model_context_limits: None,
         last_cache_write: None,
         post_compaction_tokens: None,
         source: "codex".to_owned(),

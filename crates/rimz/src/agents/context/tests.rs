@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn model_context_limits_survive_context_writers_and_legacy_records() {
+    let definition = crate::agents::spec_by_kind("codex").unwrap();
+    let limits = ModelContextLimits {
+        model: "gpt-6.1-sol".into(),
+        max_window: Some(872_000),
+        usable_percent: Some(95),
+        own_compact_limit: Some(300_000),
+    };
+    let legacy = serde_json::to_value(AgentContext::default()).unwrap();
+    assert!(legacy.get("model_context_limits").is_none());
+    let context: AgentContext = serde_json::from_value(legacy).unwrap();
+    let mut record = record::AgentContextRecord::new("codex", "agent", context);
+    LocalContextPatch {
+        model_context_limits: FieldPatch::Set(limits.clone()),
+        ..Default::default()
+    }
+    .apply(&mut record.context, definition);
+    assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
+    record.apply_context_refresh("codex", "agent", AgentContext::default(), None);
+    assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
+    record.merge_observed("codex", AgentContext::default(), Timestamp::UNIX_EPOCH);
+    assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
+    let wire = serde_json::to_value(&record).unwrap();
+    assert_eq!(
+        serde_json::from_value::<record::AgentContextRecord>(wire).unwrap(),
+        record
+    );
+    LocalContextPatch {
+        model_context_limits: FieldPatch::Clear,
+        ..Default::default()
+    }
+    .apply(&mut record.context, definition);
+    assert!(record.context.model_context_limits.is_none());
+}
+
+#[test]
 fn cache_write_survives_each_context_writer() {
     let definition = crate::agents::spec_by_kind("claude").unwrap();
     let now = Timestamp::now();

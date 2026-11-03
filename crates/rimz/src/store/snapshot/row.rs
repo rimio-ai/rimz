@@ -248,12 +248,24 @@ impl SidebarRow {
             return ContextMeterReading::default();
         };
         let window = display_context_window(self);
-        let compact_at = match scale {
+        let compaction = match scale {
             ContextMeterScale::Compaction => window.and_then(|window| {
-                crate::agents::native_compaction_point(&self.name, agent.auto_compact?, window)
+                let limits = agent.context.as_ref().and_then(|context| {
+                    context
+                        .model_context_limits
+                        .as_ref()
+                        .filter(|limits| context.model_id.as_deref() == Some(limits.model.as_str()))
+                });
+                crate::agents::registry::native_compaction(
+                    &self.name,
+                    agent.auto_compact,
+                    window,
+                    limits,
+                )
             }),
             ContextMeterScale::Window => None,
         };
+        let compact_at = compaction.map(|limits| limits.point);
         let compacted = agent.compacted_unmeasured;
         let percent = if compacted {
             agent.usage.context_pct
@@ -262,6 +274,7 @@ impl SidebarRow {
         };
         let mut reading = ContextMeterReading {
             window,
+            capacity: compaction.map(|limits| limits.capacity).or(window),
             compact_at,
             percent,
             precise_percent: (!compacted).then(|| precise_context_pct(self)).flatten(),
@@ -302,10 +315,11 @@ impl SidebarRow {
     }
 }
 
-/// The model window, native point when selected, and fractions on that scale.
+/// The usable session window, label capacity, native point and fractions on that scale.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct ContextMeterReading {
     pub(crate) window: Option<u64>,
+    pub(crate) capacity: Option<u64>,
     pub(crate) compact_at: Option<u64>,
     pub(crate) percent: Option<u8>,
     pub(crate) precise_percent: Option<f64>,

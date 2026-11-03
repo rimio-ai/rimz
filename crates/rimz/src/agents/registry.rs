@@ -102,20 +102,58 @@ pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
 }
 
-/// Cap a configured native compaction count against the card's runtime window.
-pub(crate) fn native_compaction_point(kind: &str, configured: u64, window: u64) -> Option<u64> {
-    let point = match kind {
-        "claude" => configured,
+/// The native trigger and model capacity, with any configured count the provider lowered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeCompaction {
+    pub point: u64,
+    pub capacity: u64,
+    pub raw_window: u64,
+    pub lowered: Option<u64>,
+}
+
+/// Resolve display limits from a reported usable window and model-matched catalog facts.
+pub fn native_compaction(
+    kind: &str,
+    configured: Option<u64>,
+    window: u64,
+    limits: Option<&super::context::ModelContextLimits>,
+) -> Option<NativeCompaction> {
+    if window == 0 {
+        return None;
+    }
+    match kind {
+        "claude" => configured
+            .filter(|point| *point < window)
+            .map(|point| NativeCompaction {
+                point,
+                capacity: window,
+                raw_window: window,
+                lowered: None,
+            }),
         "codex" => {
-            // The rollout reports the usable window, assumed to be 95% of raw;
-            // a remote model catalog can violate that premise. Compaction caps
-            // at 90% of the raw window, not 90% of the usable window.
-            let raw = u128::from(window) * 100 / 95;
-            u128::from(configured).min(raw * 9 / 10) as u64
+            let percent = limits
+                .and_then(|limits| limits.usable_percent)
+                .filter(|percent| (1..=100).contains(percent))
+                .unwrap_or(95);
+            let raw = u128::from(window) * 100 / u128::from(percent);
+            let cap = raw * 9 / 10;
+            let target = configured
+                .or_else(|| limits.and_then(|limits| limits.own_compact_limit))
+                .map(u128::from)
+                .unwrap_or(cap);
+            let point = target.min(cap).min(u128::from(window)) as u64;
+            let raw_window = u64::try_from(raw).unwrap_or(u64::MAX);
+            Some(NativeCompaction {
+                point,
+                capacity: limits
+                    .and_then(|limits| limits.max_window)
+                    .unwrap_or(raw_window),
+                raw_window,
+                lowered: configured.filter(|configured| point < *configured),
+            })
         }
-        _ => return None,
-    };
-    (point < window).then_some(point)
+        _ => None,
+    }
 }
 
 /// The compaction command for `agent`, carrying the harness brief for its

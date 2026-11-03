@@ -240,7 +240,7 @@ impl Default for ContextMeterConfig {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContextMeterScale {
-    /// Use the native compaction point when known and below the window.
+    /// Use the native compaction point when known.
     Compaction,
     /// Use the full model context window.
     Window,

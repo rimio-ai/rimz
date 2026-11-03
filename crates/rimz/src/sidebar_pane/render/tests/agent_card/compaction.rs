@@ -53,6 +53,13 @@ fn codex_identity_shows_compaction_only_after_a_reported_window() {
             ..Default::default()
         }));
         state.context = Some(AgentContext {
+            model_id: Some("gpt-6.1-sol".into()),
+            model_context_limits: Some(crate::agents::context::ModelContextLimits {
+                model: "gpt-6.1-sol".into(),
+                max_window: Some(872_000),
+                usable_percent: Some(95),
+                own_compact_limit: None,
+            }),
             tokens: window.map(|window| AgentTokenUsage {
                 context_window_size: Some(window),
                 ..Default::default()
@@ -69,9 +76,88 @@ fn codex_identity_shows_compaction_only_after_a_reported_window() {
         let text = identity.to_string();
         assert!(!text.contains("272k"), "{text}");
         assert_eq!(text.contains('/'), window.is_some(), "{text}");
-        assert_eq!(text.contains("372k/828k"), window.is_some(), "{text}");
+        assert_eq!(text.contains("372k/872k"), window.is_some(), "{text}");
         assert_eq!(text.contains("372k"), window.is_some(), "{text}");
+        assert_eq!(
+            lines.iter().any(|line| line.to_string().contains('┤')),
+            window.is_some()
+        );
+        if window.is_some() {
+            assert_snapshot(
+                "codex_compaction_capacity",
+                snapshot_to_screen_with_alert_and_ui(
+                    &snapshot,
+                    None,
+                    &selected_ui(),
+                    &UiState::default(),
+                    58,
+                    17,
+                ),
+            );
+        }
     }
+}
+
+#[test]
+fn codex_cards_show_lowered_compaction_points() {
+    codex_compaction_frame(Some(372_000), 258_400, None, "244k/872k", "lowered");
+}
+
+#[test]
+fn codex_cards_show_provider_owned_compaction_points() {
+    codex_compaction_frame(None, 828_400, Some(300_000), "300k/872k", "own");
+}
+
+fn codex_compaction_frame(
+    count: Option<u64>,
+    window: u64,
+    own: Option<u64>,
+    label: &str,
+    name: &str,
+) {
+    let mut snapshot = compaction_snapshot();
+    let row = snapshot.rows_mut().next().unwrap();
+    row.name = "codex".into();
+    let card = row.as_agent_mut().unwrap();
+    card.auto_compact = count;
+    card.model = Some("gpt-6.1-sol".into());
+    card.usage.total_tokens = Some(100_000);
+    card.context = Some(AgentContext {
+        model_id: Some("gpt-6.1-sol".into()),
+        model_context_limits: Some(crate::agents::context::ModelContextLimits {
+            model: "gpt-6.1-sol".into(),
+            max_window: Some(872_000),
+            usable_percent: Some(95),
+            own_compact_limit: own,
+        }),
+        tokens: Some(AgentTokenUsage {
+            context_window_size: Some(window),
+            current_context_tokens: Some(100_000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 58);
+    assert!(
+        lines.iter().any(|line| line.to_string().contains(label)),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.to_string().contains('┤')),
+        "missing compaction wall"
+    );
+    assert_snapshot(
+        &format!("codex_compaction_{name}"),
+        snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &selected_ui(),
+            &UiState::default(),
+            58,
+            17,
+        ),
+    );
 }
 
 #[test]
