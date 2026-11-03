@@ -322,6 +322,10 @@ fn loop_section_follows_identity_and_precedes_environment() {
     assert!(render(&request).starts_with(
             "<system_reminder>\nYou are @fixer, running on Opus.\n\n### Loop\n\nThe user fired the rule `x` by hand.\n\n### Environment\n\n"
         ));
+    request.reminder_section = Some(ReminderSection::Workflow("A workflow step.".into()));
+    assert!(render(&request).starts_with(
+        "<system_reminder>\nYou are @fixer, running on Opus.\n\n### Workflow\n\nA workflow step.\n\n### Environment\n\n"
+    ));
 }
 
 #[test]
@@ -373,6 +377,20 @@ fn headless_check_section_replaces_loop_in_the_same_slot() {
         .unwrap();
     assert!(text.find("Haiku").unwrap() < check);
     assert!(check < text.find("### Environment").unwrap());
+    request.reminder_section = Some(ReminderSection::Workflow("A workflow check.".into()));
+    let text = render(
+        &request,
+        &LaunchReminders {
+            env: true,
+            ..Default::default()
+        },
+        Path::new("/w"),
+        None,
+    );
+    assert!(!text.contains("### Judge"));
+    let workflow = text.find("### Workflow\n\nA workflow check.").unwrap();
+    assert!(text.find("Haiku").unwrap() < workflow);
+    assert!(workflow < text.find("### Environment").unwrap());
 }
 
 #[test]

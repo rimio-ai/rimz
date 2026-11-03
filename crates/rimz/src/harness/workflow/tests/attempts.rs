@@ -17,6 +17,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
     [steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n\
     max-visits-per-outcome={limit=2,reset-on='queued'}\n";
 
+mod brief;
 mod until;
 
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {

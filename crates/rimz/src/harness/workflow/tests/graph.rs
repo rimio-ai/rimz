@@ -235,7 +235,7 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     );
 }
 
-const LAND: &str = r#"
+pub(super) const LAND: &str = r#"
 [workflow]
 scope='worktree'
 start='begin'
@@ -266,7 +266,7 @@ then='ruled'
 max-visits=2
 "#;
 
-const RALPH: &str = r#"
+pub(super) const RALPH: &str = r#"
 [workflow]
 scope='project'
 start='evidence'

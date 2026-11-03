@@ -250,6 +250,7 @@ pub(super) fn launch(
                     .expect("agent step layout"),
                 lifecycle: attempt.lifecycle,
                 prompt,
+                workflow_note: super::super::brief::step(paths, spec, record),
                 cwd: record.scope.path.clone(),
                 throttle_turn,
             })

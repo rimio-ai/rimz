@@ -192,6 +192,9 @@ impl workflow::AttemptHost for Host<'_> {
                 resident_loop: None,
                 workflow: Some(step.workflow.clone()),
                 leader_run: Some(launcher::LeaderRun {
+                    reminder_section: Some(rimz::harness::launch::ReminderSection::Workflow(
+                        step.workflow_note,
+                    )),
                     lifecycle: if step.lifecycle.is_turn() {
                         RunLifecycle::Turn
                     } else {

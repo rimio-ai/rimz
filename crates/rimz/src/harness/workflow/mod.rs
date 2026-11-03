@@ -10,6 +10,7 @@ use crate::store::StoreErr;
 use crate::store::run::RunStatus;
 use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
 
+mod brief;
 mod engine;
 mod graph;
 mod inspect;
@@ -114,6 +115,7 @@ pub struct StepLaunch {
     pub agent: String,
     pub lifecycle: crate::store::workflow::StepLifecycle,
     pub prompt: String,
+    pub workflow_note: String,
     pub cwd: PathBuf,
     pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
 }

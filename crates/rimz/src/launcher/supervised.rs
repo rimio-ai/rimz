@@ -36,6 +36,9 @@ pub(super) fn prepare_run_layout(
         .description
         .clone_from(&request.launch.cohort.description);
     supervised.workflow.clone_from(&leader.workflow);
+    supervised
+        .reminder_section
+        .clone_from(&leader.reminder_section);
     supervised.throttle_turn.clone_from(&leader.throttle_turn);
     supervised.subagent = leader.subagent;
     supervised.force_new_tab = true;
@@ -494,6 +497,7 @@ fn prepare(
             grace: request.grace,
             loop_task: request.loop_task.clone(),
             workflow: request.workflow.clone(),
+            reminder_section: request.reminder_section.clone(),
             throttle_turn: None,
             reader,
             response_receipt: agent_launched,
