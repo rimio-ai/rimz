@@ -71,6 +71,9 @@ fn run(
         role: WorkflowAttemptRole::Judge,
     });
     let mut request = ExecRequest::fresh(&profile.cell, identity, None, false);
+    request.reminder_section = Some(crate::harness::launch::ReminderSection::Workflow(
+        super::super::brief::judge(spec, record),
+    ));
     request.action = ExecAction::Launch {
         prompt: Some(prompt),
         extra_args: profile.cell.args.clone(),

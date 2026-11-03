@@ -189,6 +189,8 @@ A script or shell check runs as a child process in the checkout, with no stdin, 
 
 An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind, profile, virtual cell such as `claude-auto`, or a layout such as `claude,nvim` or `yagni,reflect-notes`. It needs an unambiguous prompt leader and cannot name a team. Judges still take one profile. The layout opens in an unfocused new tab titled `run <leader kind>`. Every agent cell gets the same workflow environment variables; only the leader gets the composed prompt and owns the supervised run. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to every agent. Attempt cost counts the leader only; companion spend still appears on their cards and in stats.
 
+Only the leader also gets a `### Workflow` launch note: what a workflow is, a compact graph rail marking this step, who started the run, why it arrived here, applicable visit caps, the previous attempt, and what follows its turn. It points to `context.json` and `rimz workflow show` for the full record. Automatic runs name the loop task and its current trigger when available. The note is separate from the prompt and is not saved: agent restart, resume, and rebirth do not carry it, including a restarted `until` session.
+
 For an agent step, `lifecycle = "turn"` is the default. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
 
 Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `<step> is with you` in `show`, or `asking you: …` and `<step> is asking you` while a blocking question is open. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step warns and ignores `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
@@ -331,6 +333,8 @@ on = { approve = "@done", revise = "fix" }
 timeout = "1d"
 ```
 
+The judge gets a shorter `### Workflow` launch note naming its check, the graph position and the run's origin, and explaining that its answer chooses where the run goes. The prompt still carries the JSON answer contract.
+
 `checks/review.md` says what to judge and what each outcome means:
 
 ```markdown
@@ -444,6 +448,8 @@ Any other field travels too: the whole object becomes the next node's `input`. A
 A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
 
 ### The context file
+
+The `### Workflow` note points here for the input and previous attempt in full; its visit numbers are the same as this attempt's `visit` and `visits` below.
 
 | Field | Meaning |
 | --- | --- |

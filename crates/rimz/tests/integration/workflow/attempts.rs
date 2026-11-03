@@ -515,6 +515,15 @@ fn turn_layout_pins_every_agent_and_wraps_commands() {
         let payload = fs::read_to_string(payload).unwrap();
         let request = rimz::harness::launch::decode_exec_request(kind, None, &payload).unwrap();
         assert_eq!(request.identity.params.workflow, runs[0].workflow);
+        assert!(request.identity.params.loop_task.is_none());
+        if kind == "codex" {
+            assert!(matches!(
+                request.reminder_section,
+                Some(rimz::harness::launch::ReminderSection::Workflow(_))
+            ));
+        } else {
+            assert!(request.reminder_section.is_none());
+        }
     }
 }
 
@@ -1722,6 +1731,10 @@ fn supervised_identity_prompt_and_lifecycle_completion() {
     let payload = fs::read_to_string(payload).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     assert_eq!(request.identity.params.workflow, run.workflow);
+    assert!(request.identity.params.loop_task.is_none());
+    assert!(
+        matches!(request.reminder_section, Some(rimz::harness::launch::ReminderSection::Workflow(body)) if body.starts_with("You are one step of a RimZ workflow:"))
+    );
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
     let snapshot = room.env.store().snapshot_cached().unwrap();
     assert_eq!(

@@ -353,6 +353,12 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                             && prompt.contains("other fields"),
                         "the prompt must carry the open object contract: {prompt}"
                     );
+                    assert!(
+                        prompt.contains("### Workflow\n\nYou are a check in a RimZ workflow:")
+                            && prompt.contains("You are the check `pr` of the workflow `review`")
+                            && prompt.contains("\n\n[pr]\n\n"),
+                        "the compiled judge request must carry its Workflow section: {prompt}"
+                    );
                 }
                 assert!(Path::new(context(&value)["output_path"].as_str().unwrap()).is_file());
             }
