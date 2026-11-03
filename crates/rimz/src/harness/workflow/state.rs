@@ -499,7 +499,7 @@ impl Transition<'_> {
         let attempt = self.record.attempt.as_ref().expect("live step attempt");
         let visits = &self.record.visits[&attempt.node];
         let bucket = self.record.visit_bucket();
-        let visit = visits.for_bucket(bucket);
+        let visit = attempt.visit.unwrap_or_else(|| visits.for_bucket(bucket));
         PreviousAttempt {
             step: attempt.node.clone(),
             outcome,

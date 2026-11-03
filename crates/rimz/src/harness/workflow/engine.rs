@@ -785,6 +785,7 @@ fn prepare(
         lifecycle: step.and_then(|step| step.lifecycle).unwrap_or_default(),
         seq,
         node: t.record.node.clone(),
+        visit: step.map(|_| t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket())),
         started_at: t.now,
         host: agent::identity(),
         woken: false,
@@ -924,7 +925,11 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
     if step {
         let visits = &record.visits[&record.node];
         context["visits"] = json!(visits.total);
-        context["visit"] = json!(visits.for_bucket(record.visit_bucket()));
+        context["visit"] = json!(
+            attempt
+                .visit
+                .unwrap_or_else(|| visits.for_bucket(record.visit_bucket()))
+        );
     }
     if let Some(session) = record
         .held
@@ -938,7 +943,8 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
         let visits = &record.visits[&session.node];
         context["live_attempt"] = json!({
             "step":session.node, "seq":session.seq,
-            "visit":visits.for_bucket(record.visit_bucket()), "visits":visits.total,
+            "visit":session.visit.unwrap_or_else(|| visits.for_bucket(record.visit_bucket())),
+            "visits":visits.total,
             "key":record.key, "started_at":session.started_at,
             "handle":session.run.as_ref().map(|run| &run.handle),
             "run_id":session.run.as_ref().map(|run| &run.run_id),

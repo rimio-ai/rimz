@@ -85,6 +85,52 @@ fn wait_keeps_consume_each_turn_once_without_relaunch_or_input_changes() {
     keeps("@wait");
 }
 
+#[test]
+fn visit_number_stays_with_an_until_session_across_count_resets() {
+    let text = UNTIL.replace(
+        "max-visits=2",
+        "max-visits=3\nmax-visits-per-outcome={limit=2,reset-on=['pending','done']}",
+    );
+    let (dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let paths = state.workflow(&record.id);
+    let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
+    let mut visits = vec![
+        context["visit"].as_u64().unwrap(),
+        context["live_attempt"]["visit"].as_u64().unwrap(),
+    ];
+    for (index, outcome) in ["pending", "pending", "done"].into_iter().enumerate() {
+        check(dir.path(), json!({"outcome":outcome}));
+        let mut observed = turn();
+        observed.end.ended_at += std::time::Duration::from_secs(index as u64);
+        host.observed.borrow_mut().turn = Some(observed);
+        let current = advance_ok(&state, &record.id, &host);
+        assert!(current.visits["build"].outcomes.is_empty());
+        let checking: Value =
+            serde_json::from_slice(&fs::read(paths.work.join("check-view.json")).unwrap()).unwrap();
+        visits.push(checking["live_attempt"]["visit"].as_u64().unwrap());
+        if outcome == "done" {
+            assert_eq!(current.state, RunState::Done);
+            visits.push(current.prev_attempt.unwrap().visit);
+        } else {
+            let restored: Value =
+                serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
+            visits.push(restored["visit"].as_u64().unwrap());
+            visits.push(restored["live_attempt"]["visit"].as_u64().unwrap());
+        }
+    }
+    visits.extend(records::journal(&paths).unwrap().into_iter().filter_map(
+        |row| match row.event {
+            JournalEvent::Attempt { visit, .. } => Some(visit),
+            _ => None,
+        },
+    ));
+    assert!(visits.iter().all(|visit| *visit >= 1), "{visits:?}");
+    assert_eq!(visits, [1; 11]);
+    assert_eq!(host.launched.borrow().len(), 1);
+}
+
 fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
     let (dir, state, mut record) =
         setup(&UNTIL.replace("on.pending='build'", &format!("on.pending='{target}'")));
