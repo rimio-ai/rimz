@@ -141,6 +141,7 @@
 
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
+# status_bar = "full"                 # full, compact, or off; tmux rooms only for now (Zellij ignores it)
 
 [zellij]
 # The room invariants you can see and set. RimZ also fixes room behaviours that
