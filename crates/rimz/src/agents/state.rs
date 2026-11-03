@@ -1895,8 +1895,9 @@ impl AgentState {
     /// sibling tools also touch activity. Newer activity self-clears keyless
     /// and derived asks. A newer provider interruption releases an ask keyed
     /// or not. A turn-ending error closes asks too, but releases pane input
-    /// only for a recorded Auto row. Other modes, including unknown mode,
-    /// keep an ask that still reserved input reserved until newer activity
+    /// only for a recorded Auto or Yolo row, which shows no approval dialog
+    /// for a background approval. Other modes, including unknown mode, keep
+    /// an ask that still reserved input reserved until newer activity
     /// retires the marker, because a background Code Mode approval may still
     /// be live.
     pub fn is_awaiting_input(&self) -> bool {
@@ -1912,7 +1913,10 @@ impl AgentState {
             && waiting_turn_ended(self.context.as_ref(), self.last_activity)
         {
             return ask_reserves
-                && self.mode != Some(super::PermissionMode::Auto)
+                && !matches!(
+                    self.mode,
+                    Some(super::PermissionMode::Auto | super::PermissionMode::Yolo)
+                )
                 && settled != Some(TurnSettleOutcome::Interrupted);
         }
         matches!(

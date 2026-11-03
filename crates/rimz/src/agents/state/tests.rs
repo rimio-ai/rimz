@@ -1821,6 +1821,20 @@ fn turn_ended_non_auto_permission_reserves_input_but_not_attention() {
 }
 
 #[test]
+fn turn_ended_yolo_permission_releases_input() {
+    let mut agent = ended_permission_turn(TurnErrorClass::PausedOverloaded, 1_010);
+    agent.mode = Some(crate::agents::PermissionMode::Yolo);
+    let now = Timestamp::from_second(1_061).unwrap();
+    assert!(!agent.is_awaiting_input());
+    assert!(!agent.holds_open_turn());
+    assert!(agent.attention_ask(now).is_none());
+    assert_eq!(agent.effective_status(now), AgentStatus::Paused);
+
+    agent.mode = Some(crate::agents::PermissionMode::Plan);
+    assert!(agent.is_awaiting_input(), "Plan keeps the pane reserved");
+}
+
+#[test]
 fn turn_ending_failure_releases_permission_and_displays_failed() {
     let agent = ended_permission_turn(TurnErrorClass::Failed, 1_010);
     let now = Timestamp::from_second(1_061).unwrap();
