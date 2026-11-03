@@ -134,6 +134,8 @@ glyph_roles! {
         PipelineCurrent => "current",
         PipelineFuture => "future",
         PipelineDone => "done",
+        PipelineCheckPassed => "check_passed",
+        PipelineCheckFuture => "check_future",
     }
     "card" {
         CardSubagents => "subagents",

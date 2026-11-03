@@ -135,6 +135,8 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `current` | `◉` | `◉` | current stage |
 | `future` | `○` | `○` | after the current stage; in the `warn` tone when the run already reached it |
 | `done` | `●` | `󰗠` (U+F05E0) | replaces the last dot at `Done` |
+| `check_passed` | `◆` | `◆` | a reached check on a workflow rail, not used by team stages |
+| `check_future` | `◇` | `◇` | an unreached check on a workflow rail, not used by team stages |
 
 ### Subagent and wait glyphs
 

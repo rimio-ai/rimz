@@ -229,6 +229,8 @@
 ## current = "◉"
 ## future = "○"
 ## done = "●"
+## check_passed = "◆"
+## check_future = "◇"
 
 [theme.glyphs.unicode.card]
 ## subagents = "⧉"
@@ -365,6 +367,8 @@
 ## current = "◉"
 ## future = "○"
 ## done = "󰗠"
+## check_passed = "◆"
+## check_future = "◇"
 
 [theme.glyphs.nerd_font.card]
 ## subagents = ""
