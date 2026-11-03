@@ -282,6 +282,10 @@ pub(super) fn sort_groups_for_presentation(
         }
         group.inactive = inactive;
     }
+    sort_presented_groups(groups);
+}
+
+pub(super) fn sort_presented_groups(groups: &mut Arc<Vec<SidebarWorktreeGroup>>) {
     if !groups
         .iter()
         .is_sorted_by(|a, b| compare_groups(a, b).is_le())

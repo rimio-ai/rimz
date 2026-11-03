@@ -552,6 +552,11 @@ impl SidebarSnapshot {
         );
     }
 
+    /// Order renderer-adjusted fold membership without recomputing it.
+    pub(crate) fn sort_presented_groups(&mut self) {
+        layout::sort_presented_groups(&mut self.worktree_groups);
+    }
+
     pub(crate) fn project_stuck_stages(&mut self) {
         use crate::agents::AgentStatus;
 
