@@ -615,7 +615,7 @@ impl MuxBackend for TmuxBackend {
                 .args(["set-environment", "-t", &opts.session_name, key, value])
                 .run()?;
         }
-        self.apply_room_options(&opts.session_name, &opts.config.tmux)
+        self.apply_room_options(&opts.session_name, &opts.config)
     }
 
     fn attach_command(

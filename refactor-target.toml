@@ -2984,7 +2984,8 @@ path = "crates/rimz/src/mux"
 # ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
 # CompanionAppendErr distinguishes pre-spawn fallback from an uncertain spawn (+1).
 # SidebarTarget::zellij_step shares the bounded grid with controllers and live tests (+1).
-surface-budget = 299
+# TmuxBackend::apply_room_options shares the existing-session apply with reload (+1).
+surface-budget = 300
 
 [[verdict]]
 kind = "item"
