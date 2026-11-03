@@ -59,8 +59,8 @@ pub(crate) enum Component {
     /// A landed worktree ready to remove — muted resting verdict; the merge
     /// glyph carries the state and dollar green stays the right rail's green.
     WorktreeMerged,
-    /// The landed chip's quiet fill, marking the history toggle as a control.
-    LandedChip,
+    /// The inactive chip's quiet fill, marking the history toggle as a control.
+    InactiveChip,
     /// A local rebase/merge/cherry-pick in progress — warning tone.
     WorktreeReconciling,
     /// An open pull request for the worktree branch — cool link tone.
@@ -151,7 +151,7 @@ impl Component {
         Component::BranchDelta,
         Component::WorktreePristine,
         Component::WorktreeMerged,
-        Component::LandedChip,
+        Component::InactiveChip,
         Component::WorktreeReconciling,
         Component::WorktreePrOpen,
         Component::WorktreePrClosed,
@@ -210,7 +210,7 @@ impl Component {
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
             FastMode => palette.fast_mode(),
-            WorktreeQualifier | WorktreeMerged | LandedChip | WindowMedium | RemoteControlOff
+            WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
             | ContextCompacted => palette.muted,
         })
     }

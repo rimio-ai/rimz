@@ -89,7 +89,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// a finished agent pod the collapse empties still renders its header and
+/// an inactive agent pod the collapse empties still renders its header and
 /// two-line receipt when totals exist. The live more/less line is
 /// filter-suppressed because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
@@ -125,9 +125,9 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     // otherwise), and its dotted `┄` seal shows only then, so an unselected
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
-    let folded = finished_folded(visible_group);
+    let folded = inactive_folded(visible_group);
     let group_target = folded
-        .then(|| finished_members(visible_group, roster).next())
+        .then(|| inactive_members(visible_group, roster).next())
         .flatten()
         .map_or_else(
             || HitTarget::ToggleGroup(group.key.clone()),
@@ -291,7 +291,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     block
 }
 
-fn finished_folded(group: &VisibleGroup<'_>) -> bool {
+fn inactive_folded(group: &VisibleGroup<'_>) -> bool {
     group.hidden_count() > 0 && !group.expanded() && group.source().collapses()
 }
 
@@ -413,13 +413,13 @@ fn worktree_tail(
     let hidden = visible_group.hidden_count();
     if hidden > 0 && !visible_group.expanded() {
         return [
-            Some(if finished_folded(visible_group) {
-                finished_roster_line(ctx, visible_group, roster)
+            Some(if inactive_folded(visible_group) {
+                inactive_roster_line(ctx, visible_group, roster)
             } else {
                 Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
             }),
             collapses
-                .then(|| finished_totals_line(ctx, group))
+                .then(|| inactive_totals_line(ctx, group))
                 .flatten(),
         ];
     }
@@ -430,7 +430,7 @@ fn worktree_tail(
     }
 }
 
-fn finished_members<'a>(
+fn inactive_members<'a>(
     visible_group: &VisibleGroup<'a>,
     roster: &VisibleRoster<'a>,
 ) -> impl Iterator<Item = (&'a SidebarRow, AgentStatus)> {
@@ -447,13 +447,13 @@ fn finished_members<'a>(
         .filter_map(|row| row.status().map(|status| (row, status)))
 }
 
-fn finished_roster_line(
+fn inactive_roster_line(
     ctx: &RowCtx<'_>,
     visible_group: &VisibleGroup<'_>,
     roster: &VisibleRoster<'_>,
 ) -> Line<'static> {
     let group = visible_group.source();
-    let members = finished_members(visible_group, roster).collect::<Vec<_>>();
+    let members = inactive_members(visible_group, roster).collect::<Vec<_>>();
     let process_count = visible_group.hidden_count().saturating_sub(members.len());
 
     let team = group.team.as_deref();
@@ -546,7 +546,7 @@ fn finished_roster_line(
     pin_right(spans, cost_spans, width)
 }
 
-fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
+fn inactive_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
     let idle_since = group
         .rows
         .iter()

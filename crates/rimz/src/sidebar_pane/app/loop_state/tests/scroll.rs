@@ -179,7 +179,7 @@ fn paint_scrolled(source: &mut Rig, offset: usize) {
     source.view().ui().scroll_offset = offset;
     source.view().ui().offset_authoritative = true;
     source.view().ui().scroll_ease.cancel();
-    source.view().ui().landed_open = true;
+    source.view().ui().inactive_open = true;
     source.state.pane.dirty = true;
     paint_at(source, 0);
 }
@@ -2869,7 +2869,7 @@ fn wheel_glide_brackets_moving_frames_but_not_still_animation() {
 }
 
 #[test]
-fn click_after_wheel_ease_hits_the_landed_frame() {
+fn click_after_wheel_ease_hits_the_settled_frame() {
     let (mut rig, _) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);

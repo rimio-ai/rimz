@@ -6135,7 +6135,7 @@ reason = "Pass 29e: shared fusion and one producer/login boundary leave cx 9.8 (
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::sections::worktree::group_header"
-reason = "Pass 29e: cx 12.4 (cognitive/cyclomatic/SLOC 31/39/203) remains in external/root/channel identity, finished label tone, unclipped qualifier/team styles, and selected seal fill. Linked PR admission (5a0fcf120) and stack fallback (15273618d) have distinct budgets: the stack requires the full label, while strict CI-then-badge admission preserves one label cell and pre-admission CI link offsets. Width, style and hit-region pins hold these policies; a common admission helper would merge different boundaries."
+reason = "Pass 29e: cx 12.4 (cognitive/cyclomatic/SLOC 31/39/203) remains in external/root/channel identity, inactive label tone, unclipped qualifier/team styles, and selected seal fill. Linked PR admission (5a0fcf120) and stack fallback (15273618d) have distinct budgets: the stack requires the full label, while strict CI-then-badge admission preserves one label cell and pre-admission CI link offsets. Width, style and hit-region pins hold these policies; a common admission helper would merge different boundaries."
 
 [[verdict]]
 kind = "item"

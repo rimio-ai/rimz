@@ -434,7 +434,7 @@ mod tests {
         );
         assert!(
             ids(&filtered).is_empty(),
-            "success excludes finished groups even under focus"
+            "success excludes inactive groups even under focus"
         );
     }
 
@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn roster_collapses_lone_finished_row() {
+    fn roster_collapses_lone_inactive_row() {
         let mut finished = group(vec![agent_row("done", AgentStatus::Success)]);
         finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let snapshot = snapshot(vec![finished]);
@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn success_lens_reveals_only_unfinished_results() {
+    fn success_lens_reveals_only_active_results() {
         let mut finished = group(vec![agent_row("landed", AgentStatus::Success)]);
         finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
         let snapshot = snapshot(vec![

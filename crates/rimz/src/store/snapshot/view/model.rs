@@ -881,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn finished_groups_collapse_with_any_agent() {
+    fn inactive_groups_collapse_with_any_agent() {
         assert!(collapse_test_group(vec![collapse_test_row("solo", true)]).collapses());
         assert!(
             !collapse_test_group(vec![

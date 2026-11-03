@@ -125,8 +125,8 @@ glyph_roles! {
         WorktreeReconciling => "reconciling",
         WorktreeExpand => "expand",
         WorktreeDotted => "dotted",
-        WorktreeLandedClosed => "landed_closed",
-        WorktreeLandedOpen => "landed_open",
+        WorktreeInactiveClosed => "inactive_closed",
+        WorktreeInactiveOpen => "inactive_open",
         ChannelHash => "channel_hash",
     }
     "pipeline" {

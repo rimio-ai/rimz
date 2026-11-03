@@ -1,4 +1,4 @@
-//! Shared room-runtime cockpit lens applied to sidebar body membership.
+//! Shared room-runtime lens applied to sidebar body membership.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -9,7 +9,7 @@ use tracing::debug;
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::store::snapshot::{
-    SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, UnitStatus, WorktreePrState,
+    SidebarInactive, SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, UnitStatus, WorktreePrState,
 };
 
 #[cfg(test)]
@@ -28,6 +28,8 @@ pub(crate) enum BodyFilter {
     Status(AgentStatus),
     Unread,
     OpenPr,
+    Inactive,
+    Unlanded,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -81,6 +83,8 @@ impl BodyFilter {
             }
             Self::Unread => row.unread,
             Self::OpenPr => facts.group.pr_state == Some(WorktreePrState::Open),
+            Self::Inactive => facts.group.inactive.is_some(),
+            Self::Unlanded => facts.group.inactive == Some(SidebarInactive::Unlanded),
         }
     }
 
@@ -92,11 +96,11 @@ impl BodyFilter {
                     .units
                     .get(&facts.group.unit_key(row))
                     .is_some_and(|unit| unit.carries(row, status)),
-                Self::Unread | Self::OpenPr => true,
+                Self::Unread | Self::OpenPr | Self::Inactive | Self::Unlanded => true,
             }
     }
 
-    /// Full-roster matching units for status lenses, or matching rows for unread and open PRs.
+    /// Full-roster matching units for status lenses, or matching rows for other lenses.
     pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
         match self {
             Self::Status(_) => groups
@@ -120,6 +124,16 @@ impl BodyFilter {
             Self::OpenPr => groups
                 .iter()
                 .filter(|group| group.pr_state == Some(WorktreePrState::Open))
+                .map(|group| group.rows.len())
+                .sum(),
+            Self::Inactive => groups
+                .iter()
+                .filter(|group| group.inactive.is_some())
+                .map(|group| group.rows.len())
+                .sum(),
+            Self::Unlanded => groups
+                .iter()
+                .filter(|group| group.inactive == Some(SidebarInactive::Unlanded))
                 .map(|group| group.rows.len())
                 .sum(),
         }
@@ -383,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn success_count_and_lens_exclude_finished_groups_only() {
+    fn success_count_and_lens_exclude_inactive_groups_only() {
         let groups = [true, false].map(|finished| {
             let mut group = team_group(&[AgentStatus::Success, AgentStatus::Success]);
             group.inactive = (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
@@ -434,14 +448,52 @@ mod tests {
     }
 
     #[test]
+    fn inactive_lenses_show_every_row_of_the_matching_groups() {
+        use crate::store::snapshot::{RowCard, SidebarInactive};
+        let mut landed = team_group(&[AgentStatus::Success, AgentStatus::Idle]);
+        landed.inactive = Some(SidebarInactive::Landed);
+        let mut unlanded = landed.clone();
+        unlanded.inactive = Some(SidebarInactive::Unlanded);
+        std::sync::Arc::make_mut(&mut unlanded.rows)[1].card = RowCard::Process(Default::default());
+        let groups = [landed, unlanded, team_group(&[AgentStatus::Idle])];
+        for (filter, expected) in [
+            (BodyFilter::Inactive, vec![(0, 0), (0, 1), (1, 0), (1, 1)]),
+            (BodyFilter::Unlanded, vec![(1, 0), (1, 1)]),
+        ] {
+            let shown = groups
+                .iter()
+                .enumerate()
+                .flat_map(|(group_index, group)| {
+                    let facts = GroupFacts::new(group);
+                    group
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(index, row)| {
+                            filter.shown(row, &facts).then_some((group_index, index))
+                        })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(shown, expected, "{filter:?}");
+            assert_eq!(filter.total(&groups), shown.len());
+        }
+    }
+
+    #[test]
     fn round_trip_missing_and_invalid_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         assert_eq!(load(&runtime), BodyLens::default());
 
-        let filter = BodyLens::from(BodyFilter::Status(AgentStatus::Waiting));
-        write(&runtime, &filter).expect("write filter");
-        assert_eq!(load(&runtime), filter);
+        for filter in [
+            BodyFilter::Status(AgentStatus::Waiting),
+            BodyFilter::Inactive,
+            BodyFilter::Unlanded,
+        ] {
+            let lens = BodyLens::from(filter);
+            write(&runtime, &lens).expect("write filter");
+            assert_eq!(load(&runtime), lens);
+        }
 
         fs::write(runtime.sidebar_filter_path(), b"not json").expect("garbage file");
         assert_eq!(load(&runtime), BodyLens::default());

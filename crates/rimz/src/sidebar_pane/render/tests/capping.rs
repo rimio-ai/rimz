@@ -185,7 +185,7 @@ fn make_up_filter_ignores_held_visible_rows() {
 }
 
 #[test]
-fn finished_group_collapses_unread_success_until_revealed() {
+fn inactive_group_collapses_unread_success_until_revealed() {
     let mut rows = vec![
         agent_row("success-unread", AgentStatus::Success),
         agent_row("success", AgentStatus::Success),
@@ -213,7 +213,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
         )
         .len(),
         0,
-        "the success lens excludes finished groups"
+        "the success lens excludes inactive groups"
     );
 
     let focused_pane = group.rows[1].pane.as_ref().expect("pane").pane_id.clone();
@@ -316,7 +316,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
 }
 
 #[test]
-fn finished_group_reveals_when_a_members_child_is_focused() {
+fn inactive_group_reveals_when_a_members_child_is_focused() {
     let mut group = group(vec![
         agent_row("parent", AgentStatus::Success),
         agent_row("sibling", AgentStatus::Success),
@@ -342,7 +342,7 @@ fn finished_group_reveals_when_a_members_child_is_focused() {
 }
 
 #[test]
-fn finished_roster_names_keep_soft_provider_brand_tones() {
+fn inactive_roster_names_keep_soft_provider_brand_tones() {
     let mut planner = agent_row("planner", AgentStatus::Success);
     planner.name = "claude".to_owned();
     planner.as_agent_mut().expect("agent row").handle = Some("planner".to_owned());
@@ -383,7 +383,7 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
 }
 
 #[test]
-fn finished_roster_leads_with_the_projected_team() {
+fn inactive_roster_leads_with_the_projected_team() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -406,7 +406,7 @@ fn finished_roster_leads_with_the_projected_team() {
 }
 
 #[test]
-fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
+fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
     let mut finished_rows = vec![
         agent_row("finished-one", AgentStatus::Success),
         agent_row("finished-two", AgentStatus::Success),
@@ -431,7 +431,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         &snapshot,
         None,
         &ViewState {
-            landed_open: true,
+            inactive_open: true,
             ..Default::default()
         },
         &UiState::default(),
@@ -471,7 +471,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     );
     assert!(
         expanded.contains("finished-one") && expanded.contains("finished-two"),
-        "expanding the finished group reveals its member rows:\n{expanded}"
+        "expanding the inactive group reveals its member rows:\n{expanded}"
     );
 
     let filtered = snapshot_to_screen_with_alert_and_ui(
@@ -488,7 +488,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     );
     assert!(
         !filtered.contains("merged-pod") && !filtered.contains("finished-one"),
-        "a filter-empty finished group is skipped whole:\n{filtered}"
+        "a filter-empty inactive group is skipped whole:\n{filtered}"
     );
     assert!(
         filtered.contains("live-runner"),
@@ -497,7 +497,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
 }
 
 #[test]
-fn finished_roster_pins_the_member_cost() {
+fn inactive_roster_pins_the_member_cost() {
     let total = 0.42 + 0.58;
     let mut finished = group(vec![
         agent_row_with_cost("first", 0.42),
@@ -556,7 +556,7 @@ fn finished_roster_pins_the_member_cost() {
 }
 
 #[test]
-fn expanded_finished_group_cards_show_seat_lifetime_cost() {
+fn expanded_inactive_group_cards_show_seat_lifetime_cost() {
     let seats = BTreeMap::from([
         (
             "planner".to_owned(),
@@ -634,7 +634,7 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
 }
 
 #[test]
-fn finished_roster_folds_overflow_without_clipping_names() {
+fn inactive_roster_folds_overflow_without_clipping_names() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -651,7 +651,7 @@ fn finished_roster_folds_overflow_without_clipping_names() {
 }
 
 #[test]
-fn finished_roster_folds_process_rows_into_the_remainder() {
+fn inactive_roster_folds_process_rows_into_the_remainder() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -666,7 +666,7 @@ fn finished_roster_folds_process_rows_into_the_remainder() {
 }
 
 #[test]
-fn finished_process_only_group_stays_expanded() {
+fn inactive_process_only_group_stays_expanded() {
     let mut finished = group(vec![process_row("shell-one"), process_row("shell-two")]);
     finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
 
@@ -684,7 +684,7 @@ fn finished_process_only_group_stays_expanded() {
 }
 
 #[test]
-fn held_member_reveals_the_whole_finished_roster() {
+fn held_member_reveals_the_whole_inactive_roster() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -741,7 +741,7 @@ fn held_member_reveals_the_whole_finished_roster() {
 }
 
 #[test]
-fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
+fn inactive_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
     let mut finished = group(idle_rows(2));
     finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
     let (texts, map, hits) = render_group(&finished, true);
@@ -767,7 +767,7 @@ fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
 }
 
 #[test]
-fn lone_finished_agent_collapses_but_process_stays_visible() {
+fn lone_inactive_agent_collapses_but_process_stays_visible() {
     for (kind, row, identity) in [
         ("agent", agent_row_with_cost("solo", 1.25), "✓ solo"),
         ("process", process_row("shell"), "○ zsh"),
@@ -828,7 +828,7 @@ fn lone_finished_agent_collapses_but_process_stays_visible() {
 }
 
 #[test]
-fn narrow_finished_receipt_still_targets_first_member_before_the_shell() {
+fn narrow_inactive_receipt_still_targets_first_member_before_the_shell() {
     let mut finished = group(vec![
         process_row("shell"),
         agent_row("first-long-name", AgentStatus::Success),
@@ -857,7 +857,7 @@ fn narrow_finished_receipt_still_targets_first_member_before_the_shell() {
 }
 
 #[test]
-fn finished_receipt_pins_cost_then_tokens_and_muted_active_duration() {
+fn inactive_receipt_pins_cost_then_tokens_and_muted_active_duration() {
     let mut first = agent_row_with_cost("planner", 0.42);
     first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let first_agent = first.as_agent_mut().expect("agent row");
@@ -930,7 +930,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_active_duration() {
 }
 
 #[test]
-fn finished_receipt_aggregates_session_cache_hit_percent() {
+fn inactive_receipt_aggregates_session_cache_hit_percent() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -976,7 +976,7 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
 }
 
 #[test]
-fn finished_totals_degrade_tokens_before_the_right_pin() {
+fn inactive_totals_degrade_tokens_before_the_right_pin() {
     let mut row = agent_row_with_cost("planner", 1.0);
     row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let agent = row.as_agent_mut().expect("agent row");

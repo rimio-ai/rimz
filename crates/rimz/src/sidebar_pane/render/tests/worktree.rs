@@ -406,14 +406,14 @@ fn render_pipeline_folded_stage() {
     group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     let closed = snapshot_to_screen(&snapshot, 54, 20);
     assert!(
-        closed.contains("[ ▸ 1 landed ]") && !closed.contains("forge · Done"),
+        closed.contains("[ ▸ 1 inactive ]") && !closed.contains("forge · Done"),
         "{closed}"
     );
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
         &ViewState {
-            landed_open: true,
+            inactive_open: true,
             ..Default::default()
         },
         &UiState::default(),
@@ -1700,7 +1700,7 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
 }
 
 #[test]
-fn finished_worktree_age_stays_full_past_an_hour() {
+fn inactive_worktree_age_stays_full_past_an_hour() {
     let mut card = agent(
         "worker",
         "claude",
@@ -1732,7 +1732,7 @@ fn finished_worktree_age_stays_full_past_an_hour() {
 }
 
 #[test]
-fn finished_worktree_age_uses_the_newest_member_cache_request() {
+fn inactive_worktree_age_uses_the_newest_member_cache_request() {
     let members = [1200, 2400].map(|seconds| {
         let mut member = agent(
             &format!("worker-{seconds}"),
@@ -1773,7 +1773,7 @@ fn finished_worktree_age_uses_the_newest_member_cache_request() {
 }
 
 #[test]
-fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
+fn render_inactive_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Merged));
@@ -1785,7 +1785,7 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
         .spans
         .iter()
         .find(|span| span.content.contains("feature-migration"))
-        .expect("finished worktree label");
+        .expect("inactive worktree label");
     assert_eq!(
         finished_label.style,
         theme.muted().add_modifier(Modifier::BOLD)

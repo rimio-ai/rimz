@@ -969,7 +969,7 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
     );
 }
 
-fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
+fn inactive_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
     let mut snapshot = filterable_snapshot(&workspace());
     let template = snapshot.worktree_groups[0].clone();
     let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
@@ -994,30 +994,119 @@ fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
         .unwrap()
         .pane_id
         .clone();
-    let mut finished = template;
-    finished.key = "landed".to_owned();
-    finished.label = "landed".to_owned();
-    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
-    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
+    let mut inactive = template;
+    inactive.key = "inactive".to_owned();
+    inactive.label = "inactive".to_owned();
+    inactive.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
+    inactive.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         active_secs: Some(60),
         ..Default::default()
     });
-    finished.rows = vec![filter_row(
+    inactive.rows = vec![filter_row(
         true,
         "done",
         "claude",
         Some(crate::agents::AgentStatus::Success),
         "terminal_done",
-        "/repo/landed",
+        "/repo/inactive",
     )]
     .into();
-    groups.push(finished);
+    groups.push(inactive);
     (snapshot, selected)
 }
 
 #[test]
-fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals() {
-    let (snapshot, selected) = landed_click_snapshot(6);
+fn inactive_chip_counts_remain_clickable_to_switch_and_clear_their_lenses() {
+    use crate::sidebar::body_filter::BodyFilter;
+    let (mut snapshot, _) = inactive_click_snapshot(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .last_mut()
+        .unwrap()
+        .inactive = Some(crate::store::snapshot::SidebarInactive::Unlanded);
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    for (filter, expected) in [
+        (BodyFilter::Inactive, Some(BodyFilter::Inactive)),
+        (BodyFilter::Unlanded, Some(BodyFilter::Unlanded)),
+        (BodyFilter::Unlanded, None),
+        (BodyFilter::Inactive, Some(BodyFilter::Inactive)),
+        (BodyFilter::Inactive, None),
+    ] {
+        paint(&mut view, &mut ui, &snapshot, 64);
+        let (column, line) = (0..64)
+            .find_map(|line| {
+                (0..128)
+                    .find(|column| {
+                        ui.interactions.target_at(*column, line)
+                            == Some(HitTarget::BodyFilter(filter))
+                    })
+                    .map(|column| (column, line))
+            })
+            .expect("each count remains clickable under its own lenses");
+        handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
+        assert_eq!(view.make_up_filter.filter, expected);
+    }
+}
+
+#[test]
+fn inactive_key_toggles_and_reveals_without_moving_selection() {
+    use super::super::super::input::{InputMode, resolve_key};
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let (snapshot, selected) = inactive_click_snapshot(14);
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(selected));
+    paint(&mut view, &mut ui, &snapshot, 24);
+    let offset = view.scroll_offset;
+    let selected = view.selected_pane.clone();
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let action = resolve_key(
+        &keymap,
+        InputMode::Normal,
+        KeyCode::Char('i'),
+        KeyModifiers::NONE,
+    );
+    for open in [true, false] {
+        handle_key(action, &mut view, &mut ui, &snapshot);
+        assert_eq!(view.inactive_open, open);
+        assert_eq!(view.inactive_reveal, open);
+        paint(&mut view, &mut ui, &snapshot, 24);
+        if open {
+            assert!(view.scroll_offset > offset);
+            assert!(
+                ui.interactions
+                    .line_for_target(&HitTarget::ExpandGroup {
+                        key: "inactive".into(),
+                        row: "done".into(),
+                    })
+                    .is_some()
+            );
+        }
+        assert!(
+            ui.interactions
+                .line_for_target(&HitTarget::ToggleInactive)
+                .is_some()
+        );
+        assert_eq!(view.selected_pane, selected);
+    }
+    let keymap = super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
+        down: "i".to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(
+        resolve_key(
+            &keymap,
+            InputMode::Normal,
+            KeyCode::Char('i'),
+            KeyModifiers::NONE
+        ),
+        KeyAction::Down
+    );
+}
+
+#[test]
+fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals() {
+    let (snapshot, selected) = inactive_click_snapshot(6);
     let mut ui = render::ViewState {
         scroll_offset: usize::MAX,
         offset_authoritative: true,
@@ -1039,13 +1128,13 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
     for open in [true, false] {
         let (column, line) = pane_ui
             .interactions
-            .line_for_target(&HitTarget::ToggleLanded)
-            .expect("landed chip click");
+            .line_for_target(&HitTarget::ToggleInactive)
+            .expect("inactive chip click");
         assert_eq!(
             handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome::redraw()
         );
-        assert_eq!(ui.landed_open, open);
+        assert_eq!(ui.inactive_open, open);
         paint(&mut ui, &mut pane_ui, &snapshot, 24);
         assert_eq!(ui.scroll_offset, offset + if open { 4 } else { 0 });
         assert_eq!(Some(ui.scroll_offset), pane_ui.drawn_scroll_max);
@@ -1054,7 +1143,7 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
         assert!(
             pane_ui
                 .interactions
-                .line_for_target(&HitTarget::ToggleLanded)
+                .line_for_target(&HitTarget::ToggleInactive)
                 .is_some(),
             "the chip stays on screen"
         );
@@ -1067,14 +1156,14 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
             row_ids
         );
     }
-    ui.landed_open = true;
+    ui.inactive_open = true;
     ui.scroll_offset = usize::MAX;
     ui.offset_authoritative = true;
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
     let (_, header) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ExpandGroup {
-            key: "landed".into(),
+            key: "inactive".into(),
             row: "done".into(),
         })
         .expect("singleton header/receipt hit");
@@ -1088,40 +1177,40 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
             ))],
         }
     );
-    assert!(ui.expanded_groups.contains("landed"));
+    assert!(ui.expanded_groups.contains("inactive"));
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
     let (_, header) = pane_ui
         .interactions
-        .line_for_target(&HitTarget::ToggleGroup("landed".to_owned()))
+        .line_for_target(&HitTarget::ToggleGroup("inactive".to_owned()))
         .unwrap();
     handle_mouse_click(0, header, &mut ui, &mut pane_ui, &snapshot);
-    assert!(!ui.expanded_groups.contains("landed"));
+    assert!(!ui.expanded_groups.contains("inactive"));
 }
 
-fn finished_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
-    let (mut snapshot, selected) = landed_click_snapshot(open_groups);
+fn inactive_expansion_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
+    let (mut snapshot, selected) = inactive_click_snapshot(open_groups);
     let group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .last_mut()
         .unwrap();
-    group.label = "finished-click".into();
+    group.label = "inactive-click".into();
     std::sync::Arc::make_mut(&mut group.rows).push(filter_row(
         true,
         "second",
         "claude",
         Some(crate::agents::AgentStatus::Success),
         "terminal_second",
-        "/repo/landed",
+        "/repo/inactive",
     ));
     (snapshot, selected)
 }
 
 #[test]
-fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
-    let (snapshot, selected) = finished_click_snapshot(0);
+fn folded_inactive_header_and_receipt_lines_expand_and_focus_first_member() {
+    let (snapshot, selected) = inactive_expansion_snapshot(0);
     let mut results = Vec::new();
     for line_offset in 0..3 {
         let mut ui = render::ViewState {
-            landed_open: true,
+            inactive_open: true,
             ..Default::default()
         };
         let mut pane_ui = UiState::default();
@@ -1133,7 +1222,7 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
         let header = composed
             .lines
             .iter()
-            .position(|line| line.to_string().contains("finished-click"))
+            .position(|line| line.to_string().contains("inactive-click"))
             .unwrap();
         pane_ui.interactions = composed.interactions;
         remember_roster(&mut ui, &mut pane_ui, &snapshot);
@@ -1144,7 +1233,7 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
             &mut pane_ui,
             &snapshot,
         );
-        assert!(ui.expanded_groups.contains("landed"));
+        assert!(ui.expanded_groups.contains("inactive"));
         results.push((
             outcome,
             ui.selected_pane.clone(),
@@ -1169,8 +1258,8 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
 }
 
 #[test]
-fn folded_finished_click_without_first_members_pane_expands_without_focus() {
-    let (mut snapshot, selected) = finished_click_snapshot(0);
+fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
+    let (mut snapshot, selected) = inactive_expansion_snapshot(0);
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
             .last_mut()
@@ -1179,7 +1268,7 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
     )[0]
     .pane = None;
     let mut ui = render::ViewState {
-        landed_open: true,
+        inactive_open: true,
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1189,7 +1278,7 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
         vec![render::HitRegion::whole_line(
             0,
             HitTarget::ExpandGroup {
-                key: "landed".into(),
+                key: "inactive".into(),
                 row: "done".into(),
             },
         )],
@@ -1198,16 +1287,16 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
         handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
-    assert!(ui.expanded_groups.contains("landed"));
+    assert!(ui.expanded_groups.contains("inactive"));
     assert_eq!(ui.selected_pane, Some(selected));
     assert_eq!(ui.reveal_row, None);
 }
 
 #[test]
 fn stale_folded_target_keeps_an_already_expanded_group_open() {
-    let (snapshot, _) = finished_click_snapshot(0);
+    let (snapshot, _) = inactive_expansion_snapshot(0);
     let mut ui = render::ViewState {
-        expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
+        expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
         ..Default::default()
     };
     let mut pane_ui = UiState {
@@ -1216,7 +1305,7 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
             vec![render::HitRegion::whole_line(
                 0,
                 HitTarget::ExpandGroup {
-                    key: "landed".into(),
+                    key: "inactive".into(),
                     row: "done".into(),
                 },
             )],
@@ -1233,14 +1322,14 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
             ))],
         }
     );
-    assert!(ui.expanded_groups.contains("landed"));
+    assert!(ui.expanded_groups.contains("inactive"));
 }
 
 #[test]
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
-    let (snapshot, selected) = finished_click_snapshot(6);
+    let (snapshot, selected) = inactive_expansion_snapshot(6);
     let mut ui = render::ViewState {
-        landed_open: true,
+        inactive_open: true,
         offset_authoritative: true,
         ..Default::default()
     };
@@ -1251,7 +1340,7 @@ fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let header = full
         .lines
         .iter()
-        .position(|line| line.to_string().contains("finished-click"))
+        .position(|line| line.to_string().contains("inactive-click"))
         .unwrap();
     let height = (header + 1 + full.bottom_height) as u16;
     paint(&mut ui, &mut pane_ui, &snapshot, height);
@@ -1266,8 +1355,8 @@ fn folded_header_on_viewports_last_line_reveals_focused_member() {
 }
 
 #[test]
-fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
-    let (mut snapshot, _) = landed_click_snapshot(0);
+fn inactive_click_keeps_viewport_when_first_receipt_already_fits() {
+    let (mut snapshot, _) = inactive_click_snapshot(0);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
     let mut ui = render::ViewState {
         offset_authoritative: true,
@@ -1278,7 +1367,7 @@ fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
     assert_eq!(ui.scroll_offset, 0);
     let (column, line) = pane_ui
         .interactions
-        .line_for_target(&HitTarget::ToggleLanded)
+        .line_for_target(&HitTarget::ToggleInactive)
         .unwrap();
     handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot);
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
@@ -1287,14 +1376,14 @@ fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
     assert_eq!(
         pane_ui
             .interactions
-            .line_for_target(&HitTarget::ToggleLanded),
+            .line_for_target(&HitTarget::ToggleInactive),
         Some((column, line))
     );
 }
 
 #[test]
-fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
-    let (snapshot, selected) = landed_click_snapshot(6);
+fn inactive_click_pins_chip_when_receipt_outgrows_viewport() {
+    let (snapshot, selected) = inactive_click_snapshot(6);
     let mut ui = render::ViewState {
         scroll_offset: usize::MAX,
         offset_authoritative: true,
@@ -1308,13 +1397,13 @@ fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
     paint(&mut ui, &mut pane_ui, &snapshot, height);
     let (column, line) = pane_ui
         .interactions
-        .line_for_target(&HitTarget::ToggleLanded)
+        .line_for_target(&HitTarget::ToggleInactive)
         .unwrap();
     handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot);
     paint(&mut ui, &mut pane_ui, &snapshot, height);
     let (_, chip) = pane_ui
         .interactions
-        .line_for_target(&HitTarget::ToggleLanded)
+        .line_for_target(&HitTarget::ToggleInactive)
         .unwrap();
     assert_eq!(usize::from(chip), pane_ui.scroll_zone_top);
     let painted = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, height);
@@ -1474,7 +1563,7 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     let (_, header_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
-        .expect("finished group header hit");
+        .expect("inactive group header hit");
 
     assert_eq!(
         handle_mouse_click(0, header_line, &mut ui, &mut pane_ui, &snapshot),

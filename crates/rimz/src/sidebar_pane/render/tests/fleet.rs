@@ -876,7 +876,7 @@ fn cockpit_spend_has_only_agents_prs_and_spend() {
 }
 
 #[test]
-fn render_cockpit_counts_open_prs_including_finished_lanes() {
+fn render_cockpit_counts_open_prs_including_inactive_lanes() {
     let mut snapshot = make_up_snapshot();
     let mut merged = snapshot.worktree_groups[0].clone();
     merged.key.push_str("-merged");

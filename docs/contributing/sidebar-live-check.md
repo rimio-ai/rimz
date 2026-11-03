@@ -466,7 +466,7 @@ A held room's account cache is `$ROOT/home/.rimz/cache/providers/accounts.json`,
 
 ## Land the team's worktree
 
-A fresh room's `probe` worktree is pristine, not finished, so it draws no receipt and no landed chip. To check a folded finished group, give each agent a finished turn, close the board, and merge a commit from the worktree into the trunk. The `--no-ff` merge matters: the branch commit that is not on the trunk's first-parent line is the evidence that the worktree did work. Run this with `$ROOT`, `$BIN` and `<mux>` from the room card:
+A fresh room's `probe` worktree is active, so it draws no receipt and no inactive chip. To check a landed inactive group, give each agent a finished turn, close the board, and merge a commit from the worktree into the trunk. The `--no-ff` merge matters: the branch commit that is not on the trunk's first-parent line is the evidence that the worktree did work. Run this with `$ROOT`, `$BIN` and `<mux>` from the room card:
 
 ```sh
 WT="$ROOT/home/room-worktrees/probe"
@@ -482,10 +482,10 @@ target/debug/xtask sandbox in "$ROOT" -- "$BIN" --<mux> teams flip Done 'landed 
 target/debug/xtask sandbox in "$ROOT" --cwd "$WT" -- git commit --allow-empty -m 'Exercise landed receipt'
 target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/room" -- git merge --no-ff probe -m 'Land probe'
 target/debug/xtask sandbox in "$ROOT" -- "$BIN" --<mux> sidebar snapshot --json |
-  jq '.worktree_groups[] | {key, finished, clean, trunk_sync}'
+  jq '.worktree_groups[] | {key, inactive, clean, trunk_sync}'
 ```
 
-The `probe` group should report `finished: true`, `clean: true` and `trunk_sync: "merged"`. Focus a pane outside the group (a new pane started in `$ROOT/home/room`), since focusing a member keeps its cards open. Then click `[ ▸ 1 landed ]` to show the receipt.
+The `probe` group should report `clean: true` and `trunk_sync: "merged"`. The first snapshot right after the merge can still read `"pristine"` until the next git read lands, so repeat the snapshot after a few seconds. It becomes `inactive: "landed"` only after more than `agents.attention.inactive_after_secs` (one hour by default) since its latest agent launch or non-keepalive prompt; merging alone does not fold it. For a quick disposable-room check, lower that window and `archive_after_secs` before the room starts. The room reads `$ROOT/home/.rimz/config.toml`, which `sandbox room` creates as it starts, so point `RIMZ_BIN` at a wrapper script that runs `"$REAL" config set agents.attention.inactive_after_secs 60` and `"$REAL" config set agents.attention.archive_after_secs 120` when its first two arguments are `--tmux start` or `--zellij start` (the sandbox starts the room as `"$RIMZ_BIN" --<mux> start <repo> --no-attach`), then `exec "$REAL" "$@"`, where `REAL` is the testkit binary. Move both selection and focus outside the group and let the layout freeze release. Click the chip's glyph or brackets, or press `i`, to show the receipt. Click `N inactive` and, with an older unlanded group present, `M unlanded` to check their separate filters; `A` clears the pick.
 
 ## Native subagent replay
 

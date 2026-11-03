@@ -5,7 +5,8 @@ use crate::config::{GlyphRole, ScrollbarMode};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
-    SidebarSnapshot, SidebarWorktreeGroup, actionable_unread_count, lead_unread_row,
+    SidebarInactive, SidebarSnapshot, SidebarWorktreeGroup, actionable_unread_count,
+    lead_unread_row,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -58,7 +59,7 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// changed card selection when no card line is visible, or an entry selection
 /// whose lines are clipped inside an already visible card.
 /// Wheel, banner, and toggle inputs make the offset authoritative once; opening
-/// the landed chip also reveals its first newly shown receipt, and the banner
+/// the inactive chip also reveals its first newly shown receipt, and the banner
 /// reveals the full-roster lead where it sits. The unread
 /// banner decides from the target; the cards, scrollbar, and hit geometry use
 /// the visible row from `ViewState::scroll_ease`, clamped to that viewport. Both
@@ -133,7 +134,7 @@ pub(super) fn compose_lines_with_meter(
         .min(height);
 
     let held_expansions = view.effective_held_expansions(&roster);
-    let (scroll, landed_span) = scroll_lines_windowed(
+    let (scroll, inactive_span) = scroll_lines_windowed(
         snapshot,
         view,
         ui,
@@ -152,7 +153,7 @@ pub(super) fn compose_lines_with_meter(
         scroll_map: scroll.interactions.row_map(),
         scroll_interactions: &scroll.interactions,
         card_starts: &scroll.card_starts,
-        landed_span,
+        inactive_span,
         scroll_len: scroll.lines.len(),
         top_len: top.lines.len(),
         height,
@@ -240,7 +241,7 @@ pub(super) fn compose_lines_with_meter(
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
         walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
         walk.measuring = false;
-        let (painted, painted_landed_span) = scroll_lines_windowed(
+        let (painted, painted_inactive_span) = scroll_lines_windowed(
             snapshot,
             view,
             ui,
@@ -256,7 +257,7 @@ pub(super) fn compose_lines_with_meter(
             painted.interactions.row_map()
         );
         debug_assert_eq!(scroll.card_starts, painted.card_starts);
-        debug_assert_eq!(landed_span, painted_landed_span);
+        debug_assert_eq!(inactive_span, painted_inactive_span);
         debug_assert_eq!(scroll.lines.len(), painted.lines.len());
         painted
     } else {
@@ -335,7 +336,7 @@ struct ZoneInputs<'a, 'snapshot> {
     scroll_map: &'a [Option<usize>],
     scroll_interactions: &'a FrameInteractions,
     card_starts: &'a [(usize, usize)],
-    landed_span: Option<(usize, usize)>,
+    inactive_span: Option<(usize, usize)>,
     scroll_len: usize,
     top_len: usize,
     height: usize,
@@ -734,8 +735,8 @@ fn resolve_scroll_offset(
                 auto_scroll_to_selection(input.scroll_map, index, resolved.offset, viewport)
                     .min(max_offset);
         }
-        if view.landed_reveal
-            && let Some((chip, last)) = input.landed_span
+        if view.inactive_reveal
+            && let Some((chip, last)) = input.inactive_span
         {
             resolved.offset = if last - chip + 1 > viewport {
                 chip
@@ -1167,7 +1168,7 @@ fn scroll_lines_windowed(
     walk: &mut CardWalk<'_>,
 ) -> (RenderedBlock, Option<(usize, usize)>) {
     let mut block = RenderedBlock::default();
-    let mut landed_span = None;
+    let mut inactive_span = None;
 
     let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
     let ctx = RowCtx {
@@ -1218,37 +1219,47 @@ fn scroll_lines_windowed(
         return (block, None);
     }
     if !snapshot.worktree_groups.is_empty() {
-        let filtered = view.make_up_filter.filter.is_some()
-            || view
+        let hide_inactive_chip =
+            view.make_up_filter.filter.is_some_and(|filter| {
+                !matches!(filter, BodyFilter::Inactive | BodyFilter::Unlanded)
+            }) || view
                 .search_draft
                 .as_ref()
                 .map_or(view.make_up_filter.query.is_some(), |draft| {
                     !draft.is_empty()
                 });
-        let landed_count = snapshot
+        let inactive_count = snapshot
             .worktree_groups
             .iter()
             .filter(|group| group.inactive.is_some())
             .count();
-        let mut landed_chip = None;
+        let unlanded_count = snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| group.inactive == Some(SidebarInactive::Unlanded))
+            .count();
+        let mut inactive_chip = None;
         let mut emitted = false;
         for group in roster.groups() {
-            if group.source().inactive.is_some() && !filtered {
-                if landed_chip.is_none() {
+            if group.source().inactive.is_some() && !hide_inactive_chip {
+                if inactive_chip.is_none() {
                     if emitted {
                         block.push_inert(Line::from(""));
                     }
-                    landed_chip = Some(block.lines.len());
-                    let mut chip = RenderedBlock::default();
-                    chip.push_target(
-                        pad_chrome(landed_line(theme, width, landed_count, view.landed_open)),
-                        HitTarget::ToggleLanded,
+                    inactive_chip = Some(block.lines.len());
+                    let mut chip = inactive_line(
+                        theme,
+                        width,
+                        inactive_count,
+                        unlanded_count,
+                        view.inactive_open,
+                        view.make_up_filter.filter,
                     );
                     chip.tag("chrome");
                     block.append(chip);
                     emitted = true;
                 }
-                if !view.landed_open && group.is_empty() {
+                if !view.inactive_open && group.is_empty() {
                     continue;
                 }
             }
@@ -1269,27 +1280,56 @@ fn scroll_lines_windowed(
                 },
                 walk,
             ));
-            if landed_span.is_none()
+            if inactive_span.is_none()
                 && group.source().inactive.is_some()
                 && group.is_empty()
-                && let Some(chip) = landed_chip
+                && let Some(chip) = inactive_chip
             {
-                landed_span = Some((chip, block.lines.len() - 1));
+                inactive_span = Some((chip, block.lines.len() - 1));
             }
         }
     }
 
-    (block, landed_span)
+    (block, inactive_span)
 }
 
-fn landed_line(theme: &Theme, width: usize, count: usize, open: bool) -> Line<'static> {
+fn inactive_line(
+    theme: &Theme,
+    width: usize,
+    count: usize,
+    unlanded: usize,
+    open: bool,
+    picked: Option<BodyFilter>,
+) -> RenderedBlock {
     let glyph = theme.glyph(if open {
-        GlyphRole::WorktreeLandedOpen
+        GlyphRole::WorktreeInactiveOpen
     } else {
-        GlyphRole::WorktreeLandedClosed
+        GlyphRole::WorktreeInactiveClosed
     });
-    let label = format!("[ {glyph} {count} landed ]");
     let width = content_width(width);
+    let prefix = format!("[ {glyph} ");
+    let frame_width = text_width(&prefix) + 2;
+    let separator = labels::value_seam(theme);
+    let separator_width = text_width(&separator);
+    let mut name = format!("{count} inactive");
+    let mut breakdown = (unlanded > 0).then(|| format!("{unlanded} unlanded"));
+    if breakdown.as_ref().is_some_and(|text| {
+        frame_width + text_width(&name) + separator_width + text_width(text) > width
+    }) {
+        breakdown = None;
+    }
+    if frame_width + text_width(&name) > width {
+        name = count.to_string();
+    }
+    let framed = frame_width + text_width(&name) <= width;
+    let label = if framed {
+        let text = breakdown
+            .as_ref()
+            .map_or_else(|| name.clone(), |text| format!("{name}{separator}{text}"));
+        format!("{prefix}{text} ]")
+    } else {
+        name.clone()
+    };
     let spare = width.saturating_sub(text_width(&label));
     let left = spare / 2;
     let right = spare - left;
@@ -1301,17 +1341,65 @@ fn landed_line(theme: &Theme, width: usize, count: usize, open: bool) -> Line<'s
             theme.faint(),
         ));
     }
-    spans.push(Span::styled(
-        label,
-        theme.picked_chip(theme.component(Component::LandedChip), Modifier::empty()),
-    ));
+    let label_start = super::layout::spans_width(&spans);
+    let tone = theme.component(Component::InactiveChip);
+    let style = theme.picked_chip(tone, Modifier::empty());
+    let picked_style = theme.picked_chip(tone, Modifier::BOLD);
+    if picked.is_none() {
+        spans.push(Span::styled(label, style));
+    } else {
+        if framed {
+            spans.push(Span::styled(prefix.clone(), style));
+        }
+        spans.push(Span::styled(
+            name.clone(),
+            if picked == Some(BodyFilter::Inactive) {
+                picked_style
+            } else {
+                style
+            },
+        ));
+        if let Some(text) = &breakdown {
+            spans.push(Span::styled(separator.clone(), style));
+            spans.push(Span::styled(
+                text.clone(),
+                if picked == Some(BodyFilter::Unlanded) {
+                    picked_style
+                } else {
+                    style
+                },
+            ));
+        }
+        if framed {
+            spans.push(Span::styled(" ]", style));
+        }
+    }
     if right > 0 {
         spans.push(Span::styled(
             format!(" {}", dotted.repeat(right - 1)),
             theme.faint(),
         ));
     }
-    Line::from(trim_spans_to_width(spans, width))
+    let start = (label_start + if framed { text_width(&prefix) } else { 0 } + 1) as u16;
+    let end = start + text_width(&name) as u16;
+    let mut hits = vec![
+        (0..u16::MAX, HitTarget::ToggleInactive),
+        (start..end, HitTarget::BodyFilter(BodyFilter::Inactive)),
+    ];
+    if let Some(text) = breakdown {
+        let start = end + separator_width as u16;
+        hits.push((
+            start..start + text_width(&text) as u16,
+            HitTarget::BodyFilter(BodyFilter::Unlanded),
+        ));
+    }
+    let mut block = RenderedBlock::default();
+    block.push_with_regions(
+        pad_chrome(Line::from(trim_spans_to_width(spans, width))),
+        None,
+        hits,
+    );
+    block
 }
 
 /// Append structural (non-row) lines, tagging each map slot `None` and opening

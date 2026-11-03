@@ -2201,7 +2201,7 @@ impl LoopState {
         }
         source.view.scroll_ease.cancel();
         source.view.offset_authoritative = false;
-        source.view.landed_reveal = false;
+        source.view.inactive_reveal = false;
         source.view.reveal_row = None;
         source.view.focus_placement = None;
         source.view.own_input_reveal = false;

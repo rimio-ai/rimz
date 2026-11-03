@@ -96,7 +96,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
-| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card, wait, and finished-group ages fill over an hour and stay full past it, never ringed. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window; `◉` also leads the cache-expired line, not a card age. |
+| `◔ 8m` | an age, never a duration. The face rounds down to completed quarters (eighths with Nerd Font), with a minimum first face. Card, wait, and inactive-group ages fill over an hour and stay full past it, never ringed. Child quiet fills over `stalled_after_secs` and keeps `◉` past that window; `◉` also leads the cache-expired line, not a card age. |
 | `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1M` | the model's context window size |
 | `ϟ` (Nerd Font: ``) | fast mode, after the model on a card, after the effort on a subagent row (after the model when the row has no effort): bold amber, always still on child rows; on cards, still at rest and crackling only while running |
@@ -122,7 +122,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `+127 -43` | lines added and removed against the trunk |
 | `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
 | `▸` | a collapsed inactive group |
-| `▸` / `▾` (`worktree.landed_closed` / `worktree.landed_open`) | the landed chip, closed / open; both glyph sets use these shapes |
+| `▸` / `▾` (`worktree.inactive_closed` / `worktree.inactive_open`) | the inactive chip, closed / open; both glyph sets use these shapes |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
 ### Pipeline glyphs
@@ -273,7 +273,7 @@ A room with no agents has no make-up line:
 
 The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. Previous selections stay open while the layout freeze is armed, even when there is room to collapse them. Only data or configuration changes with no room to absorb them still move the card at the top or bottom.
 
-Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip scrolls only far enough to show the first receipt it reveals. Unfolding an inactive group also brings the member it focuses into view with the least motion.
+Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the inactive chip scrolls only far enough to show the first receipt it reveals. Unfolding an inactive group also brings the member it focuses into view with the least motion.
 
 A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
@@ -683,28 +683,28 @@ The first line lists the team name when the members share one, each member's fin
 
 Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
-inactive groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed chip replaces their headers and receipts:
+Inactive groups follow all active project work and precede `external`. At 54 columns, the closed inactive chip replaces their headers and receipts:
 
 ```
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-Click anywhere on the chip's line to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Click the chip again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice follows the client view between tabs, starts closed after a host restart, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
+Click the chip's glyph or brackets, or press `i`, to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice follows the client view between tabs and starts closed after a host restart. Open groups remain collapsed to receipts until revealed:
 
 ```
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
- ↩ landed-a
- ▸ ○ landed-a
+ ↩ inactive-a
+ ▸ ○ inactive-a
 
- ↩ landed-b
- ▸ ✓ landed-b
+ ↩ inactive-b
+ ▸ ✓ inactive-b
 
- ↩ landed-c
- ▸ ✓ landed-c
+ ↩ inactive-c
+ ▸ ✓ inactive-c
 ```
 
-The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+The counts are groups, not agents. Click `N inactive` to filter to every row in inactive groups, or `M unlanded` to show the unlanded groups among them. The breakdown is omitted when M is zero. These body filters persist, broadcast and clear like the cockpit's picks. The chip stays visible under these two picks and marks the chosen count; click it again to clear, or the other count to switch. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any other filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
 
 A folded inactive group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -925,6 +925,7 @@ An active `Sidebar degraded` alert hides the hook-drainer line; after refresh re
 │ ✉ m   read/unread    ✉ M     read all   │
 │ ↔ ←/→ account tabs   ⟳ r     reload     │
 │ ✕ x   dismiss        ↕ a/d   width      │
+│   i   inactive fold                     │
 │                                         │
 │ filter                                  │
 │ ? q   waiting        ! e     attention  │
@@ -955,6 +956,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `N` | the same walk, backward |
 | `m` | mark the selected card read or unread, without jumping; with no selection, do nothing |
 | `M` | mark every card read |
+| `i` | toggle the inactive fold; opening reveals its chip and first receipt without moving selection |
 | `←` / `→` | switch the dashboard tab |
 | `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `r` | reload this tab's sidebar |
@@ -973,7 +975,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `w` | working |
 | `z` | sleeping |
 | `o` | idle |
-| `A` | all; clear both the status/unread/PR pick and the text search |
+| `A` | all; clear both the body pick and the text search |
 
 Pressing the active filter's key again clears just that pick; a text search stays active. Movement keys and `a` / `d` can be rebound under `[sidebar.keys]`, and outside search typing a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
 
@@ -1020,7 +1022,8 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click `+K more`, `− less` | expand or cap the group without moving focus |
 | click a folded inactive group's header or either receipt line | show its cards and focus the first receipt member's live pane, revealing its card |
 | click an expanded inactive group's header | collapse its cards without moving focus |
-| click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts in this client view; opening scrolls to the first receipt it reveals |
+| click the inactive chip's glyph or brackets, or press `i` | show or hide inactive receipts in this client view; opening scrolls to the first receipt it reveals |
+| click `N inactive` / `M unlanded` | filter to all inactive groups / their unlanded subset; the picked count stays marked, clicking it again clears, and the other count switches |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |
