@@ -681,6 +681,48 @@ impl ParsedTrigger {
     }
 }
 
+pub(super) fn trigger_clause(parsed: &ParsedTrigger, condition_predicate: &str) -> Option<String> {
+    Some(match &parsed.trigger {
+        // `describe` prints a raw cron as a noun phrase, which no verb can follow.
+        Trigger::Schedule(ParsedSchedule {
+            schedule: Schedule::RawCron(expr),
+            ..
+        }) => format!(" on the cron schedule {}", span(expr)),
+        Trigger::Schedule(_) => format!(" {}", verbatim(&parsed.describe())),
+        Trigger::Signal { .. } => {
+            let described = parsed.describe();
+            let selector = described.strip_prefix("on ").unwrap_or(&described);
+            format!(" on the signal {}", span(selector))
+        }
+        Trigger::Condition { expr, hold } => {
+            let mut clause = format!(" when {} {condition_predicate}", span(&expr.to_string()));
+            if let Some(hold) = hold {
+                clause.push_str(&format!(" for {}", arm::duration_label(*hold)));
+            }
+            clause
+        }
+        Trigger::Watch(_) => return None,
+    })
+}
+
+pub(super) fn span(text: &str) -> String {
+    format!("`{}`", verbatim(text))
+}
+
+/// User text shown as typed: only `<`, which could open or close the
+/// reminder tag, and control characters are escaped.
+pub(super) fn verbatim(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '<' => escaped.push_str("&lt;"),
+            ch if ch.is_control() => escaped.extend(ch.escape_default()),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 impl ParsedSchedule {
     /// A short human description for listings.
     fn describe(&self) -> String {
