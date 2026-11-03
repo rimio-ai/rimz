@@ -71,6 +71,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
         spend_fold: FieldPatch::Set(fold),
+        model_context_limits_key: None,
     })
 }
 

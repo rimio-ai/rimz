@@ -10,6 +10,361 @@ use crate::agents::{
 };
 
 #[test]
+fn local_context_reads_model_catalog_limits_with_tolerant_fallbacks() {
+    let model = "gpt-6.1-sol";
+    let entry = json!({"slug": model, "context_window": 500_000,
+        "max_context_window": 872_000, "effective_context_window_percent": 95,
+        "auto_compact_token_limit": 300_000});
+    let catalog = |entry| json!({"client_version": "0.166.0", "models": [entry]}).to_string();
+    let cases = [
+        (
+            Some(catalog(entry.clone())),
+            "",
+            Some(872_000),
+            Some(95),
+            Some(300_000),
+        ),
+        (None, "", None, None, None),
+        (Some("not JSON".into()), "", None, None, None),
+        (Some("{}".into()), "", None, None, None),
+        (
+            Some(catalog(json!({"slug": "another-model"}))),
+            "",
+            None,
+            None,
+            None,
+        ),
+        (
+            Some(catalog(
+                json!({"slug": model, "max_context_window": 872_000,
+            "auto_compact_token_limit": null}),
+            )),
+            "",
+            Some(872_000),
+            None,
+            None,
+        ),
+        (
+            Some(catalog(entry.clone())),
+            "model_auto_compact_token_limit = 200000\n",
+            Some(872_000),
+            Some(95),
+            Some(200_000),
+        ),
+        (
+            None,
+            "model_auto_compact_token_limit = 200000\n",
+            None,
+            None,
+            Some(200_000),
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(catalog, config, _, _, _)| {
+            let home = tempfile::tempdir().unwrap();
+            let config_dir = tempfile::tempdir().unwrap();
+            let config_path = config_dir.path().join("config.toml");
+            std::fs::write(&config_path, config).unwrap();
+            // The override owns config only; a decoy catalog beside it must not win.
+            std::fs::write(
+                config_dir.path().join("models_cache.json"),
+                r#"{"models":[{"slug":"gpt-6.1-sol","max_context_window":1}]}"#,
+            )
+            .unwrap();
+            if let Some(catalog) = catalog {
+                std::fs::write(home.path().join("models_cache.json"), catalog).unwrap();
+            }
+            let login_env = BTreeMap::from([
+                (
+                    "CODEX_HOME".into(),
+                    home.path().to_string_lossy().into_owned(),
+                ),
+                (
+                    "RIMZ_CODEX_CONFIG".into(),
+                    config_path.to_string_lossy().into_owned(),
+                ),
+            ]);
+            let pricing = home.path().join("pricing.json");
+            let ctx = crate::agents::LocalContextRefreshCtx {
+                login_env: &login_env,
+                agent_id: "catalog-session",
+                model_hint: Some(model),
+                prior_session_name: None,
+                current_transcript_path: None,
+                prior_transcript_path: None,
+                prior_transcript_stat: None,
+                prior_spend_fold: None,
+                prior_model_context_limits_key: None,
+                shared_pricing_cache_path: &pricing,
+            };
+            CodexAdapter
+                .local_context_refresh(crate::agents::RefreshTrigger::Tick, &ctx)
+                .and_then(|refresh| refresh.context.model_context_limits.as_set().cloned())
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, _, max_window, usable_percent, own_compact_limit)| {
+            Some(crate::agents::context::ModelContextLimits {
+                model: model.into(),
+                max_window: *max_window,
+                usable_percent: *usable_percent,
+                own_compact_limit: *own_compact_limit,
+            })
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+struct ModelLimitsFixture {
+    home: tempfile::TempDir,
+    env: BTreeMap<String, String>,
+    pricing: std::path::PathBuf,
+    prior: crate::agents::context::record::AgentContextRecord,
+}
+
+impl ModelLimitsFixture {
+    fn new() -> Self {
+        use crate::agents::context::record::{AgentContextRecord, ModelContextLimitsKey};
+        let home = tempfile::tempdir().unwrap();
+        let catalog = home.path().join("models_cache.json");
+        std::fs::write(
+            &catalog,
+            json!({"models": [
+                {"slug": "gpt-6.1-sol", "max_context_window": 872000,
+                 "effective_context_window_percent": 95, "auto_compact_token_limit": null},
+                {"slug": "another-model", "max_context_window": 1000000}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let config = home.path().join("config.toml");
+        std::fs::write(&config, "model_auto_compact_token_limit = 300000\n").unwrap();
+        let rollout = home.path().join("rollout.jsonl");
+        std::fs::write(
+            &rollout,
+            "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6.1-sol\"}}\n",
+        )
+        .unwrap();
+        let mut prior = AgentContextRecord::new(
+            "codex",
+            "limits-session",
+            AgentContext {
+                model_id: Some("gpt-6.1-sol".into()),
+                model_context_limits: Some(crate::agents::context::ModelContextLimits {
+                    model: "gpt-6.1-sol".into(),
+                    max_window: Some(872_000),
+                    usable_percent: Some(95),
+                    own_compact_limit: Some(300_000),
+                }),
+                ..Default::default()
+            },
+        );
+        prior.transcript_path = Some(rollout.to_string_lossy().into_owned());
+        prior.transcript_stat = TranscriptStat::from_path(&rollout);
+        prior.model_context_limits_key = Some(ModelContextLimitsKey {
+            model: "gpt-6.1-sol".into(),
+            catalog: TranscriptStat::from_path(&catalog),
+            config: TranscriptStat::from_path(&config),
+        });
+        prior.rate_limits_observed_at = Some(jiff::Timestamp::now());
+        let env = BTreeMap::from([
+            (
+                "CODEX_HOME".into(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+            (
+                "RIMZ_CODEX_CONFIG".into(),
+                config.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let pricing = home.path().join("pricing.json");
+        Self {
+            home,
+            env,
+            pricing,
+            prior,
+        }
+    }
+
+    fn ctx<'a>(&'a self, model: &'a str) -> crate::agents::LocalContextRefreshCtx<'a> {
+        crate::agents::LocalContextRefreshCtx {
+            login_env: &self.env,
+            agent_id: "limits-session",
+            model_hint: Some(model),
+            prior_session_name: self.prior.context.session_name.as_deref(),
+            current_transcript_path: None,
+            prior_transcript_path: self.prior.transcript_path.as_deref(),
+            prior_transcript_stat: self.prior.transcript_stat.as_ref(),
+            prior_spend_fold: self.prior.spend_fold.as_ref(),
+            prior_model_context_limits_key: self.prior.model_context_limits_key.as_ref(),
+            shared_pricing_cache_path: &self.pricing,
+        }
+    }
+}
+
+#[test]
+fn catalog_rewrite_refreshes_limits_with_an_unchanged_rollout() {
+    assert_model_limits_gate_refreshes("catalog");
+}
+
+#[test]
+fn config_edit_refreshes_limits_with_an_unchanged_rollout() {
+    assert_model_limits_gate_refreshes("config");
+}
+
+#[test]
+fn model_switch_refreshes_limits_with_an_unchanged_rollout() {
+    assert_model_limits_gate_refreshes("model");
+}
+
+fn assert_model_limits_gate_refreshes(change: &str) {
+    let mut fixture = ModelLimitsFixture::new();
+    let (model, max_window, percent, own_limit) = match change {
+        "catalog" => {
+            let path = fixture.home.path().join("models_cache.json");
+            let content = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("872000", "900000");
+            std::fs::write(path, format!("{content} ")).unwrap();
+            ("gpt-6.1-sol", 900_000, Some(95), 300_000)
+        }
+        "config" => {
+            std::fs::write(
+                fixture.home.path().join("config.toml"),
+                "model_auto_compact_token_limit = 200000\n# edited\n",
+            )
+            .unwrap();
+            ("gpt-6.1-sol", 872_000, Some(95), 200_000)
+        }
+        "model" => ("another-model", 1_000_000, None, 300_000),
+        _ => unreachable!("test cases above exhaust the gate inputs"),
+    };
+    let refresh = CodexAdapter
+        .local_context_refresh(crate::agents::RefreshTrigger::Tick, &fixture.ctx(model));
+    assert!(
+        refresh.is_some(),
+        "{change} must refresh without rollout growth"
+    );
+    let refresh = refresh.unwrap();
+    assert_eq!(
+        refresh.context.model_context_limits.as_set(),
+        Some(&crate::agents::context::ModelContextLimits {
+            model: model.into(),
+            max_window: Some(max_window),
+            usable_percent: percent,
+            own_compact_limit: Some(own_limit),
+        })
+    );
+    assert_eq!(refresh.transcript_stat, fixture.prior.transcript_stat);
+    let key = refresh.model_context_limits_key.as_ref().unwrap();
+    assert_eq!(key.model, model);
+    assert_eq!(
+        key.catalog,
+        TranscriptStat::from_path(&fixture.home.path().join("models_cache.json"))
+    );
+    assert_eq!(
+        key.config,
+        TranscriptStat::from_path(&fixture.home.path().join("config.toml"))
+    );
+    fixture
+        .prior
+        .apply_local_refresh(CodexAdapter.spec(), refresh, jiff::Timestamp::now());
+    assert!(
+        CodexAdapter
+            .local_context_refresh(crate::agents::RefreshTrigger::Tick, &fixture.ctx(model))
+            .is_none(),
+        "persisting the key gates the next pass"
+    );
+}
+
+#[test]
+fn unchanged_limits_key_skips_both_reads_and_survives_a_name_only_refresh() {
+    let mut fixture = ModelLimitsFixture::new();
+    let prior = fixture.prior.clone();
+    for (file, from, to) in [
+        ("models_cache.json", "872000", "900000"),
+        ("config.toml", "300000", "200000"),
+    ] {
+        let path = fixture.home.path().join(file);
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let replacement = std::fs::read_to_string(&path).unwrap().replace(from, to);
+        std::fs::write(&path, replacement).unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+    assert_eq!(
+        prior.model_context_limits_key.as_ref().unwrap().catalog,
+        TranscriptStat::from_path(&fixture.home.path().join("models_cache.json"))
+    );
+    assert_eq!(
+        prior.model_context_limits_key.as_ref().unwrap().config,
+        TranscriptStat::from_path(&fixture.home.path().join("config.toml"))
+    );
+    assert!(
+        CodexAdapter
+            .local_context_refresh(
+                crate::agents::RefreshTrigger::Tick,
+                &fixture.ctx("gpt-6.1-sol")
+            )
+            .is_none()
+    );
+    std::fs::write(
+        fixture.home.path().join("session_index.jsonl"),
+        "{\"id\":\"limits-session\",\"thread_name\":\"A new title\"}\n",
+    )
+    .unwrap();
+    let refresh = CodexAdapter
+        .local_context_refresh(
+            crate::agents::RefreshTrigger::Tick,
+            &fixture.ctx("gpt-6.1-sol"),
+        )
+        .unwrap();
+    assert_eq!(
+        refresh.model_context_limits_key,
+        prior.model_context_limits_key
+    );
+    assert_eq!(refresh.context.model_context_limits, FieldPatch::Keep);
+    fixture
+        .prior
+        .apply_local_refresh(CodexAdapter.spec(), refresh, jiff::Timestamp::now());
+    assert_eq!(
+        fixture.prior.context.model_context_limits,
+        prior.context.model_context_limits
+    );
+    assert_eq!(
+        fixture.prior.context.session_name.as_deref(),
+        Some("A new title")
+    );
+}
+
+#[test]
+fn explicit_context_refresh_reads_catalog_even_when_the_rollout_and_app_server_are_gated() {
+    let mut fixture = ModelLimitsFixture::new();
+    fixture.prior.model_context_limits_key = None;
+    let refresh = CodexAdapter.refresh_session_context(&SessionContextInput {
+        login_env: &fixture.env,
+        session_id: "limits-session",
+        model: Some("gpt-6.1-sol"),
+        server_url: None,
+        prior: Some(&fixture.prior),
+        pricing_cache_path: &fixture.pricing,
+        broker_socket: None,
+    });
+    assert!(
+        refresh
+            .as_ref()
+            .and_then(|refresh| refresh.local.as_ref())
+            .and_then(|local| local.context.model_context_limits.as_set())
+            .is_some(),
+        "the explicit helper must use the catalog refresh, not only the rollout gate"
+    );
+}
+
+#[test]
 fn rollout_tail_without_its_last_usage_keeps_model_but_reports_unknown_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout.jsonl");

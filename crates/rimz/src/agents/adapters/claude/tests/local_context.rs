@@ -209,6 +209,7 @@ fn cache_write_retention_keeps_on_resume_and_clears_on_replacement() {
                 prior_transcript_path: path.to_str(),
                 prior_transcript_stat: resumed.transcript_stat.as_ref(),
                 prior_spend_fold: resumed.spend_fold.as_set(),
+                prior_model_context_limits_key: None,
                 shared_pricing_cache_path: &dir.path().join("pricing.json"),
                 login_env: &BTreeMap::new(),
             },
@@ -404,6 +405,7 @@ fn refresh<'a>(
             prior_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_stat: prior_stat,
             prior_spend_fold: prior_fold,
+            prior_model_context_limits_key: None,
             shared_pricing_cache_path: &path.with_extension("pricing.json"),
         },
     )

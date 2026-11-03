@@ -226,6 +226,9 @@ fn refresh_session_transcript_context_core(
                 .and_then(|record| record.transcript_stat.as_ref())
         },
         prior_spend_fold: prior.as_ref().and_then(|record| record.spend_fold.as_ref()),
+        prior_model_context_limits_key: prior
+            .as_ref()
+            .and_then(|record| record.model_context_limits_key.as_ref()),
         shared_pricing_cache_path: &shared_pricing_cache_path,
     };
     let refresh = adapter.local_context_refresh(trigger, &ctx);

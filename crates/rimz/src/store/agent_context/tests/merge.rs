@@ -34,6 +34,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         }),
     });
     let refresh = LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             model_id: FieldPatch::Set("deepseek-v4-pro".to_owned()),
             model_display_name: FieldPatch::Set("DeepSeek V4 Pro".to_owned()),
@@ -90,6 +91,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     );
 
     let unresolved_model = LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             model_id: FieldPatch::Clear,
             model_display_name: FieldPatch::Set("Other Model".to_owned()),
@@ -732,6 +734,7 @@ fn prior_exact_kimi_window(observed_at: Timestamp) -> AgentContextRecord {
 
 fn full_local_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             model_id: FieldPatch::Set("gpt-5.5".to_owned()),
             effort: FieldPatch::Set("xhigh".to_owned()),
@@ -758,6 +761,7 @@ fn full_local_refresh() -> LocalContextRefresh {
 
 fn unpriced_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             model_id: FieldPatch::Set("gpt-5".to_owned()),
             effort: FieldPatch::Set("high".to_owned()),
@@ -785,6 +789,7 @@ fn unknown_effort_refresh() -> LocalContextRefresh {
 
 fn fresh_zero_kimi_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             effort: FieldPatch::Set("high".to_owned()),
             tokens: LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
@@ -803,6 +808,7 @@ fn fresh_zero_kimi_refresh() -> LocalContextRefresh {
 
 fn fallback_window_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        model_context_limits_key: None,
         context: LocalContextPatch {
             effort: FieldPatch::Set("high".to_owned()),
             tokens: LocalTokenPatch::PreserveEstablished(Some(tokens(

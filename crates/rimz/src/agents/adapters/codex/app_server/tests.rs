@@ -929,6 +929,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
         crate::agents::spec_by_kind("codex").expect("Codex adapter is registered"),
         "sess-1",
         LocalContextRefresh {
+            model_context_limits_key: None,
             context: crate::agents::LocalContextPatch {
                 model_id: crate::agents::FieldPatch::Set("gpt-5".to_owned()),
                 effort: crate::agents::FieldPatch::Set("xhigh".to_owned()),

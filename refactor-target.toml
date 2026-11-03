@@ -339,7 +339,8 @@ upward-dependencies = ["address"]
 # LaunchPermissionArgs::of_kind shares permission-table lookup with identity for unknown kinds (+1).
 # native_compaction shares provider caps with the read model and doctor.
 # ModelContextLimits and NativeCompaction carry catalog facts and their resolved display (+1).
-surface-budget = 1229
+# ModelContextLimitsKey carries the independent catalog/config/model stat gate (+1).
+surface-budget = 1230
 
 [[verdict]]
 kind = "item"
@@ -425,6 +426,11 @@ reason = "The shared display decision carries the effective point, capacity and 
 kind = "item"
 key = "agents::context::ModelContextLimits"
 reason = "Model-keyed catalog facts travel on the context sidecar without replacing its reported session window."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::record::ModelContextLimitsKey"
+reason = "Refresh callers carry the independent catalog/config/model gate on the sidecar record, not the snapshot context."
 
 [[verdict]]
 kind = "item"

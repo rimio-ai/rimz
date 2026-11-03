@@ -775,6 +775,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing_cache_path,
     };
     let refresh = CodexAdapter
@@ -836,6 +837,7 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
         prior_transcript_path: Some(&transcript_path),
         prior_transcript_stat: Some(&transcript_stat),
         prior_spend_fold: None,
+        prior_model_context_limits_key: None,
         shared_pricing_cache_path: &pricing_cache_path,
     };
 
@@ -864,6 +866,7 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
     let unchanged_ctx = crate::agents::LocalContextRefreshCtx {
         login_env: &std::collections::BTreeMap::new(),
         prior_session_name: Some("Plan database migration"),
+        prior_model_context_limits_key: refresh.model_context_limits_key.as_ref(),
         ..ctx
     };
     assert!(refresh_local_context_under(&unchanged_ctx, Some(dir.path())).is_none());
