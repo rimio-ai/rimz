@@ -604,32 +604,290 @@ fn apply_freeze_arms_holds_and_expires() {
 }
 
 #[test]
-fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
-    for was_finished in [false, true] {
-        let mut groups = vec![
-            group("a", vec![row("a1", "terminal_1")]),
-            group("b", vec![row("b1", "terminal_2")]),
-            group("c", vec![row("c1", "terminal_3")]),
-            group("external", vec![row("e1", "terminal_4")]),
-        ];
-        groups[1].inactive =
-            (was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
-        groups[2].inactive =
-            (was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
-        groups[3].kind = SidebarWorktreeKind::External;
-        let mut current = snapshot_with_groups(groups);
+fn first_fetch_admits_inactive_groups_while_initial_focus_arms_freeze() {
+    let previous = snapshot_with_groups(Vec::new());
+    let mut next = inactivity_boundary();
+    next.now += std::time::Duration::from_secs(1);
+    next.sort_groups_for_presentation();
+    assert!(inactive_group(&next, "b"));
+    let clock = super::super::clock::LoopClock::play(next.now);
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut ui = ViewState::default();
+
+    let (presented, _, _) = reconcile_fold(next, &previous, &mut ui, &clock, Some(focused.clone()));
+
+    assert_eq!(ui.selected_pane, Some(focused));
+    assert!(ui.freeze.is_some(), "initial focus must arm the freeze");
+    assert!(
+        inactive_group(&presented, "b"),
+        "the first fetch must preserve producer-folded groups during the initial freeze"
+    );
+}
+
+#[test]
+fn inactive_admission_waits_for_freeze_release_but_revival_is_immediate() {
+    let previous = inactivity_boundary();
+    let clock = super::super::clock::LoopClock::play(previous.now);
+    let mut ui = ViewState::default();
+    ui.last_order = capture_order(&previous, &ui);
+    arm_freeze(&mut ui, clock.now_ms() as i64);
+    clock.advance(std::time::Duration::from_secs(1));
+    let mut next = previous.clone();
+    next.now = clock.timestamp();
+    let (held, _, expired) = reconcile_fold(next, &previous, &mut ui, &clock, None);
+    assert_eq!(
+        (group_keys(&held), inactive_group(&held, "b"), expired),
+        (vec!["a", "b", "c", "external"], false, false),
+        "time alone must not admit a group during the hold"
+    );
+
+    clock.advance(LAYOUT_FREEZE - std::time::Duration::from_secs(1));
+    let mut next = held.clone();
+    next.now = clock.timestamp();
+    let (admitted, _, expired) = reconcile_fold(next, &held, &mut ui, &clock, None);
+    assert_eq!(
+        (
+            group_keys(&admitted),
+            inactive_group(&admitted, "b"),
+            expired
+        ),
+        (vec!["a", "c", "b", "external"], true, true),
+        "the releasing pass must admit the previously deferred group"
+    );
+
+    ui.last_order = capture_order(&admitted, &ui);
+    arm_freeze(&mut ui, clock.now_ms() as i64);
+    let mut next = admitted.clone();
+    let group = std::sync::Arc::make_mut(&mut next.worktree_groups)
+        .iter_mut()
+        .find(|group| group.key == "b")
+        .unwrap();
+    std::sync::Arc::make_mut(&mut group.rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .engaged_at = Some(next.now);
+    let (revived, _, _) = reconcile_fold(next, &admitted, &mut ui, &clock, None);
+    assert!(!inactive_group(&revived, "b"));
+    assert_eq!(group_keys(&revived), ["a", "c", "b", "external"]);
+    assert!(ui.freeze.is_some(), "revival does not wait for the hold");
+}
+
+#[test]
+fn success_lens_survives_inactive_admission_deferred_by_the_hold() {
+    let previous = inactivity_boundary();
+    let clock = super::super::clock::LoopClock::play(previous.now);
+    let filter = crate::sidebar::body_filter::BodyFilter::Status(AgentStatus::Success);
+    let mut ui = ViewState::default();
+    ui.make_up_filter.filter = Some(filter);
+    ui.last_order = capture_order(&previous, &ui);
+    arm_freeze(&mut ui, clock.now_ms() as i64);
+    clock.advance(std::time::Duration::from_secs(1));
+    let mut next = previous.clone();
+    next.now = clock.timestamp();
+
+    let (presented, persist_filter, _) = reconcile_fold(next, &previous, &mut ui, &clock, None);
+
+    assert!(ui.freeze.is_some());
+    assert!(!inactive_group(&presented, "b"));
+    assert_eq!(ui.make_up_filter.filter, Some(filter));
+    assert!(!persist_filter);
+
+    clock.advance(LAYOUT_FREEZE - std::time::Duration::from_secs(1));
+    let mut next = presented.clone();
+    next.now = clock.timestamp();
+    let (released, persist_filter, expired) =
+        reconcile_fold(next, &presented, &mut ui, &clock, None);
+    assert!(expired);
+    assert!(inactive_group(&released, "b"));
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert!(persist_filter);
+    assert!(ui.freeze.is_none(), "clearing must not arm another hold");
+}
+
+#[test]
+fn unread_lens_clears_and_persists_while_freeze_is_held() {
+    let mut unread = agent_row("a2", "terminal_2", AgentStatus::Running);
+    unread.unread = true;
+    let previous = snapshot_with_groups(vec![group(
+        "a",
+        vec![agent_row("a1", "terminal_1", AgentStatus::Running), unread],
+    )]);
+    let clock = super::super::clock::LoopClock::play(previous.now);
+    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let filter = crate::sidebar::body_filter::BodyFilter::Unread;
+    let mut ui = ViewState::default();
+    ui.make_up_filter.filter = Some(filter);
+    ui.selected_pane = Some(focused.clone());
+    ui.selected_index = Some(0);
+    ui.baseline_pane = Some(focused.clone());
+    ui.last_order = capture_order(&previous, &ui);
+    arm_freeze(&mut ui, clock.now_ms() as i64);
+    clock.advance(std::time::Duration::from_secs(1));
+    let mut next = previous.clone();
+    next.now = clock.timestamp();
+    let group = &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0];
+    std::sync::Arc::make_mut(&mut group.rows)[1].unread = false;
+
+    let (held, persist_filter, expired) =
+        reconcile_fold(next, &previous, &mut ui, &clock, Some(focused.clone()));
+    assert!(ui.freeze.is_some());
+    assert_eq!(filter.total(&held.worktree_groups), 0);
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert!(persist_filter);
+    assert!(!expired);
+    assert_eq!(ui.selected_pane, Some(focused.clone()));
+    assert_eq!(ui.selected_index, Some(1));
+    assert_eq!(ui.visible_roster(&held).rows().len(), 2);
+
+    clock.advance(LAYOUT_FREEZE);
+    let mut next = held.clone();
+    next.now = clock.timestamp();
+    let (_, persist_filter, expired) =
+        reconcile_fold(next, &held, &mut ui, &clock, Some(focused.clone()));
+    assert!(expired);
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert!(!persist_filter);
+    assert!(ui.freeze.is_none(), "clearing must not arm another hold");
+    assert_eq!(ui.selected_pane, Some(focused));
+    assert_eq!(ui.selected_index, Some(1));
+}
+
+#[test]
+fn viewed_active_group_waits_until_selection_moves_and_the_hold_releases() {
+    for focused in [false, true] {
+        let previous = inactivity_boundary();
+        let clock = super::super::clock::LoopClock::play(previous.now);
+        let viewed = pane("terminal_2", "tab_0", false).pane_id;
         let mut ui = ViewState::default();
-        ui.last_order = capture_order(&current, &ui);
-        apply_freeze(&mut ui, &mut current, true, 1_000, false);
+        if !focused {
+            ui.selected_pane = Some(viewed.clone());
+            ui.baseline_pane = Some(viewed.clone());
+        }
+        clock.advance(std::time::Duration::from_secs(1));
+        let mut next = previous.clone();
+        next.now = clock.timestamp();
+        let (held, _, _) = reconcile_fold(
+            next,
+            &previous,
+            &mut ui,
+            &clock,
+            focused.then_some(viewed.clone()),
+        );
+        assert!(!inactive_group(&held, "b"), "focused={focused}");
+        assert_eq!(ui.selected_pane, Some(viewed));
 
-        let changed = if was_finished { 2 } else { 1 };
-        std::sync::Arc::make_mut(&mut current.worktree_groups)[changed].inactive =
-            (!was_finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
-        apply_freeze(&mut ui, &mut current, false, 1_001, false);
-
-        assert_eq!(group_keys(&current), vec!["a", "c", "b", "external"]);
-        assert!(ui.freeze.is_some(), "the hold remains armed");
+        ui.last_order = capture_order(&held, &ui);
+        let other = pane("terminal_1", "tab_0", false).pane_id;
+        ui.selected_pane = Some(other.clone());
+        ui.baseline_pane = Some(other.clone());
+        arm_freeze(&mut ui, clock.now_ms() as i64);
+        clock.advance(std::time::Duration::from_secs(1));
+        let mut next = held.clone();
+        next.now = clock.timestamp();
+        let (deferred, _, _) = reconcile_fold(next, &held, &mut ui, &clock, Some(other.clone()));
+        assert!(!inactive_group(&deferred, "b"));
+        clock.advance(LAYOUT_FREEZE - std::time::Duration::from_secs(1));
+        let mut next = deferred.clone();
+        next.now = clock.timestamp();
+        let (admitted, _, expired) =
+            reconcile_fold(next, &deferred, &mut ui, &clock, Some(other.clone()));
+        assert!(inactive_group(&admitted, "b"));
+        assert!(expired);
+        assert_eq!(ui.selected_pane, Some(other));
     }
+}
+
+#[test]
+fn viewing_an_existing_inactive_group_keeps_membership_and_order() {
+    let mut previous = inactivity_boundary();
+    previous.now += std::time::Duration::from_secs(1);
+    previous.sort_groups_for_presentation();
+    let clock = super::super::clock::LoopClock::play(previous.now);
+    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let mut next = previous.clone();
+    next.focused_pane = Some(focused.clone());
+    let mut ui = ViewState::default();
+    let (viewed, _, _) = reconcile_fold(next, &previous, &mut ui, &clock, Some(focused));
+    assert!(inactive_group(&viewed, "b"));
+    assert_eq!(group_keys(&viewed), group_keys(&previous));
+    assert!(
+        ui.visible_roster(&viewed)
+            .rows()
+            .iter()
+            .any(|row| row.id == "b1")
+    );
+}
+
+fn inactivity_boundary() -> SidebarSnapshot {
+    let mut current = snapshot_with_groups(vec![
+        group("a", vec![agent_row("a1", "terminal_1", AgentStatus::Idle)]),
+        group(
+            "b",
+            vec![agent_row("b1", "terminal_2", AgentStatus::Success)],
+        ),
+        group("c", vec![agent_row("c1", "terminal_3", AgentStatus::Idle)]),
+        group("external", vec![row("e1", "terminal_4")]),
+    ]);
+    current.now = jiff::Timestamp::from_second(100_000).unwrap();
+    for (group, age) in std::sync::Arc::make_mut(&mut current.worktree_groups)
+        .iter_mut()
+        .zip([0, 3600, 8000, 0])
+    {
+        let row = &mut std::sync::Arc::make_mut(&mut group.rows)[0];
+        row.last_activity = current.now;
+        if let Some(agent) = row.as_agent_mut() {
+            let registered = current.now - std::time::Duration::from_secs(age);
+            agent.registered_at = Some(registered);
+            agent.engaged_at = Some(registered);
+        }
+        if group.key == "b" {
+            group.clean = Some(true);
+            group.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
+        }
+        if group.key == "external" {
+            group.kind = SidebarWorktreeKind::External;
+        }
+    }
+    current.sort_groups_for_presentation();
+    current
+}
+
+fn inactive_group(current: &SidebarSnapshot, key: &str) -> bool {
+    current
+        .worktree_groups
+        .iter()
+        .find(|group| group.key == key)
+        .unwrap()
+        .inactive
+        .is_some()
+}
+
+fn reconcile_fold(
+    current: SidebarSnapshot,
+    previous: &SidebarSnapshot,
+    ui: &mut ViewState,
+    clock: &super::super::clock::LoopClock,
+    focused: Option<PaneId>,
+) -> (SidebarSnapshot, bool, bool) {
+    use super::super::view_state::{SelectionFold, ViewContext};
+    let mut context = ViewContext::new(current, clock.now());
+    let selected = ui.selected_pane.clone();
+    let filter = ui.make_up_filter.clone();
+    let (persist_filter, expired) = context.reconcile_selection_and_order(
+        ui,
+        SelectionFold {
+            previous,
+            selected,
+            focused,
+            cleared: false,
+            filter: Some(filter),
+            mux: crate::MuxName::Zellij,
+            clock,
+            now: clock.now(),
+            parked: false,
+        },
+    );
+    (context.current, persist_filter, expired)
 }
 
 #[test]

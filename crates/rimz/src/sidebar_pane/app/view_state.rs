@@ -26,7 +26,9 @@ use super::gate::{GateState, apply_gate};
 use super::health::Health;
 use super::layout_freeze;
 use super::loop_state::own_tab_viewed;
-use super::selection::{reconcile_selection, set_make_up_filter};
+use super::selection::{
+    reconcile_selection, reconcile_selection_with_previous, set_make_up_filter,
+};
 use super::state::{
     FetchDiagnostics, ReadClear, apply_manual_unread_guard, compute_next_state, fetch_diagnostics,
     read_receipt_for_row, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
@@ -515,6 +517,14 @@ impl ViewContext {
         // below can keep this sorted order stable across a read-clear long enough
         // for the user to confirm where they landed.
         self.current.sort_groups_for_presentation();
+        // Keep the viewed row visible before selection reconciliation can lose it.
+        let mut deferred = layout_freeze::defer_inactive_admission(
+            &mut self.current,
+            previous,
+            ui.selected_pane.as_ref(),
+            focused.as_ref(),
+            false,
+        );
         // Reconcile the highlight as part of the fold, before the next frame paints:
         // re-anchor the identity-keyed selection to its row (so a status-churn
         // reorder never slides it onto a neighbour) and re-derive the baseline from
@@ -531,7 +541,7 @@ impl ViewContext {
             set_make_up_filter(ui, &self.current, filter);
         }
         let previous_filter = ui.make_up_filter.filter;
-        reconcile_selection(ui, &self.current, focused);
+        reconcile_selection_with_previous(ui, &self.current, focused.clone(), Some(previous));
         if derived_focus_pane && ui.selected_pane.is_some() && ui.selected_pane != selected {
             let dwell = match mux {
                 MuxName::Tmux => FOCUS_MARKER_TMUX_DWELL,
@@ -539,10 +549,6 @@ impl ViewContext {
             };
             self.focus_marker = Some(FocusMarker::Dwelling(clock.now() + dwell));
         }
-        let persist_filter = authoritative_filter_fold
-            && !self.current.worktree_groups.is_empty()
-            && previous_filter.is_some()
-            && ui.make_up_filter.filter.is_none();
         if derived_focus_pane && let Some(requested) = &self.pending_input_focus {
             let landed = self
                 .current
@@ -561,6 +567,32 @@ impl ViewContext {
         let interacted = cleared || ui.selected_pane != selected || acted;
         let held = ui.freeze.is_some();
         layout_freeze::apply_freeze(ui, &mut self.current, interacted, now_ms, parked);
+        deferred |= layout_freeze::defer_inactive_admission(
+            &mut self.current,
+            previous,
+            ui.selected_pane.as_ref(),
+            focused.as_ref(),
+            ui.freeze.is_some(),
+        );
+        if deferred {
+            if let Some(hold) = &ui.freeze {
+                layout_freeze::reorder_to_frozen(&mut self.current, &hold.frozen);
+            } else {
+                self.current.sort_presented_groups();
+            }
+            super::selection::anchor_selection(ui, &self.current);
+        }
+        if ui.freeze.is_none()
+            && let Some(filter) = ui.make_up_filter.filter
+            && filter.total(&self.current.worktree_groups) == 0
+        {
+            ui.make_up_filter.filter = None;
+            reconcile_selection(ui, &self.current, focused);
+        }
+        let persist_filter = authoritative_filter_fold
+            && !self.current.worktree_groups.is_empty()
+            && previous_filter.is_some()
+            && ui.make_up_filter.filter.is_none();
         (persist_filter, held && ui.freeze.is_none())
     }
 

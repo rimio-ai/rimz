@@ -257,6 +257,8 @@ A co-launched team is one line of work, so it holds one contiguous block. The bl
 
 Groups holding an ask or failure lead, followed by the main checkout. Other active groups sort by their newest agent's launch, newest first; a new agent lifts an older group. Groups without agents follow by newest pane creation. Inactive groups sort by their latest agent activity, newest first. Process activity counts only in groups without agents. Landed means a merged or closed pull request, or work the trunk already contains, with a clean or unknown tree state. A dirty merged checkout uses the unlanded window; a pristine fork is not landed.
 
+Newly inactive work waits outside the fold while the layout is held or you are viewing one of its cards. It folds on the first pass after you move away and the hold releases. A new launch or prompt revives it immediately, even during a hold. Viewing work already inside the fold opens its cards where they are, without changing its position or the count.
+
 ### What never moves
 
 Four partitions hold regardless of any score, so the column keeps one stable outline:

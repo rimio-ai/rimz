@@ -824,8 +824,11 @@ pub(super) fn unseat_selection(ui: &mut ViewState) {
 /// Ordered rules:
 /// 0. **Make-up filter.** The status filter clears when its bucket's
 ///    full-roster unit count drops to zero — the body's twin of a dashboard-tab
-///    pick ending when its panel leaves. First, because every rule below
-///    walks the filtered universe.
+///    pick ending when its panel leaves. A held layout freeze defers the clear
+///    only when deferred inactive admissions would keep that count nonzero.
+///    The releasing pass checks final membership and reconciles selection
+///    again after clearing. Otherwise first, because every rule below walks
+///    the filtered universe.
 /// 1. **Hold-last baseline.** A `Some` derivation advances `baseline_pane`; a
 ///    `None` holds it, so a momentary "no active row" gap (the sidebar itself
 ///    focused) never blanks or moves the highlight.
@@ -847,6 +850,15 @@ pub(super) fn reconcile_selection(
     ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
+) {
+    reconcile_selection_with_previous(ui, snapshot, derived, None);
+}
+
+pub(super) fn reconcile_selection_with_previous(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    derived: Option<PaneId>,
+    previous: Option<&SidebarSnapshot>,
 ) {
     let focus = derived.as_ref().map(|card| {
         snapshot
@@ -871,7 +883,7 @@ pub(super) fn reconcile_selection(
         ui.browse = None;
         ui.entry_cursor = None;
     }
-    reconcile_filter_and_baseline(ui, snapshot, derived);
+    reconcile_filter_and_baseline(ui, snapshot, derived, previous);
     reconcile_browse_and_selection(ui, snapshot);
     reconcile_dashboard(ui, snapshot);
     if focus_changed {
@@ -884,11 +896,23 @@ fn reconcile_filter_and_baseline(
     ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
+    previous: Option<&SidebarSnapshot>,
 ) {
     if let Some(filter) = ui.make_up_filter.filter
         && filter.total(&snapshot.worktree_groups) == 0
     {
-        ui.make_up_filter.filter = None;
+        let held_total = previous
+            .filter(|_| ui.freeze.is_some())
+            .map_or(0, |previous| {
+                let mut held = snapshot.clone();
+                super::layout_freeze::defer_inactive_admission(
+                    &mut held, previous, None, None, true,
+                );
+                filter.total(&held.worktree_groups)
+            });
+        if held_total == 0 {
+            ui.make_up_filter.filter = None;
+        }
     }
     if let Some(pane) = derived {
         ui.baseline_pane = Some(pane);

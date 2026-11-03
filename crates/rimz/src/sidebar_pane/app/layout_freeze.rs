@@ -98,6 +98,41 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &ViewState) -> Frozen
     }
 }
 
+pub(super) fn defer_inactive_admission(
+    current: &mut SidebarSnapshot,
+    previous: &SidebarSnapshot,
+    selected: Option<&PaneId>,
+    focused: Option<&PaneId>,
+    held: bool,
+) -> bool {
+    let viewed = [selected, focused].map(|pane| {
+        pane.and_then(|pane| current.row_owning_pane(pane))
+            .map(|row| row.id.clone())
+    });
+    let defer = |group: &SidebarWorktreeGroup| {
+        group.inactive.is_some()
+            && previous
+                .worktree_groups
+                .iter()
+                .any(|old| old.key == group.key && old.inactive.is_none())
+            && (held
+                || group
+                    .rows
+                    .iter()
+                    .any(|row| viewed.iter().flatten().any(|id| id == &row.id)))
+    };
+    if !current.worktree_groups.iter().any(defer) {
+        return false;
+    }
+    for group in std::sync::Arc::make_mut(&mut current.worktree_groups)
+        .iter_mut()
+        .filter(|group| defer(group))
+    {
+        group.inactive = None;
+    }
+    true
+}
+
 /// Fallback for an external or recovered focus anchor without a live source view.
 pub(super) fn adopt_shared_order(
     ui: &mut ViewState,
@@ -116,7 +151,7 @@ pub(super) fn adopt_shared_order(
     ui.last_order = capture_order(current, ui);
 }
 
-fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
+pub(super) fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
     let group_pos: HashMap<&str, usize> = frozen
         .groups
         .iter()
