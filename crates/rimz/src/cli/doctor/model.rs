@@ -938,10 +938,24 @@ pub(super) struct AgentRow {
     pub(super) account: String,
     pub(super) turn_error: Option<String>,
     pub(super) attributed_to_account: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) compaction_lowered: Option<CompactionLowered>,
     #[serde(skip)]
     pub(super) restartable: bool,
     #[serde(skip)]
     pub(super) historical: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct CompactionLowered {
+    pub(super) configured: u64,
+    pub(super) effective: u64,
+    pub(super) model: String,
+    pub(super) raw_window: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) max_window: Option<u64>,
+    #[serde(skip)]
+    pub(super) fix: String,
 }
 
 #[derive(Debug, Default, Serialize)]

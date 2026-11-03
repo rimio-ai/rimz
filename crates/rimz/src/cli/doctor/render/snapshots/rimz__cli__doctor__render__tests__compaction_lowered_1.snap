@@ -1,0 +1,14 @@
+---
+source: crates/rimz/src/cli/doctor/render/tests.rs
+expression: "format!(\"{body}\\n{closing}\")"
+---
+
+AGENTS
+  1 live: 1 running
+   HANDLE  ACCOUNT        BRANCH  STATUS   REASON                                              SEEN
+!  @otter  codex@default  main    running  372k lowered to 244k: gpt-6-sol runs a 272k window  0s ago
+
+
+! 1 warning in AGENTS
+  ! AGENTS: @otter: 372k lowered to 244k: gpt-6-sol runs a 272k window
+      fix: set `model_context_window` in /account/config.toml

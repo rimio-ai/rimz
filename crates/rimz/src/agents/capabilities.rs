@@ -469,6 +469,11 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    /// User-level model settings file. Resolving a path performs no provider-file I/O.
+    fn model_config_path(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        None
+    }
+
     /// Where the provider discovers user-level skills. The scoped view overlays this root; `None` means RimZ knows no skill discovery for the provider.
     fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         env.get("HOME")

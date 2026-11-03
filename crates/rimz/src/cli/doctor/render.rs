@@ -3022,11 +3022,31 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                 "", "HANDLE", "ACCOUNT", "BRANCH", "STATUS", "REASON", "SEEN",
             ]);
             for agent in rows {
+                let (compaction_reason, compaction_badge) = agent
+                    .compaction_lowered
+                    .as_ref()
+                    .map(|lowered| {
+                        let reason = format!(
+                            "{} lowered to {}: {} runs a {} window",
+                            compact_count(lowered.configured),
+                            compact_count(lowered.effective),
+                            lowered.model,
+                            compact_count(lowered.raw_window),
+                        );
+                        let badge = counted(
+                            tally,
+                            Severity::Warning,
+                            format!("{}: {reason}", agent.handle),
+                            &lowered.fix,
+                        );
+                        (Some(reason), Some(badge))
+                    })
+                    .unwrap_or_default();
                 let badge = if agent.attributed_to_account
                     || agent.historical
                     || agent.status == AgentStatus::Waiting
                 {
-                    badge(Health::Info)
+                    compaction_badge.unwrap_or_else(|| badge(Health::Info))
                 } else if matches!(agent.status, AgentStatus::Failed | AgentStatus::Paused) {
                     let fix = if agent.restartable {
                         format!("rimz agents restart {}", agent.handle)
@@ -3057,7 +3077,12 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                         fix,
                     )
                 } else {
-                    badge(status_health(agent.status))
+                    compaction_badge.unwrap_or_else(|| badge(status_health(agent.status)))
+                };
+                let reason = match (agent.turn_error.as_deref(), compaction_reason.as_deref()) {
+                    (Some(error), Some(compaction)) => format!("{error}; {compaction}"),
+                    (Some(reason), None) | (None, Some(reason)) => reason.to_owned(),
+                    (None, None) => "-".to_owned(),
                 };
                 let style = status::agent(agent.status, agent.phase);
                 table.row([
@@ -3066,7 +3091,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                     cell(agent.account.as_str()).fg(palette::identity(&agent.kind)),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
                     cell(agent.status.as_str()).fg(style),
-                    cell(agent.turn_error.as_deref().unwrap_or("-")).dash(),
+                    cell(reason).dash(),
                     cell(age_short(now, agent.last_seen)),
                 ]);
             }

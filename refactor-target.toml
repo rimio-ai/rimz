@@ -340,7 +340,8 @@ upward-dependencies = ["address"]
 # native_compaction shares provider caps with the read model and doctor.
 # ModelContextLimits and NativeCompaction carry catalog facts and their resolved display (+1).
 # ModelContextLimitsKey carries the independent catalog/config/model stat gate (+1).
-surface-budget = 1230
+# LaunchCapability::model_config_path resolves native model-settings remedies for doctor (+1).
+surface-budget = 1231
 
 [[verdict]]
 kind = "item"
@@ -421,6 +422,11 @@ reason = "Cards and doctor share the provider-capped point, model capacity and l
 kind = "item"
 key = "agents::registry::NativeCompaction"
 reason = "The shared display decision carries the effective point, capacity and lowered count to cards and doctor."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::model_config_path"
+reason = "Doctor resolves the account's model-settings remedy through the provider's existing config resolver, without importing private adapters."
 
 [[verdict]]
 kind = "item"

@@ -1117,6 +1117,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         ManualSkill::OpenAiPolicy
     }
 
+    fn model_config_path(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        install::codex_config_path(env).ok()
+    }
+
     fn is_interactive_process(&self, command: &str) -> bool {
         process::is_interactive_process(command)
     }
