@@ -220,22 +220,42 @@ fn cap_evidence_names_the_engine_route_that_entered_the_step() {
 
 #[test]
 fn cap_explains_each_visit_and_the_refused_visit_with_copyable_options() {
-    let (env, mut record) = fixture(
-        "parked",
-        Some("cap"),
-        vec![
-            evaluation("ok", json!({"outcome":"ok"})),
-            attempt(1, json!("lint")),
-            json!({"event":"resume", "node":"build", "visit_grant":0, "deadline":null}),
-            attempt(2, json!("lint")),
-            evaluation("ok", json!({"outcome":"ok"})),
-            json!({"event":"route", "node":"build", "outcome":"cap",
-            "input":{"bound":"max-visits", "visits":2, "max":2}}),
-        ],
+    let (env, _) = super::super::fixture(
+        &SPEC
+            .replace("run='true'", "run='sh checks/pr.sh'")
+            .replace("shell='true'", "shell='true'\ntimeout='1h'")
+            .replace("max-visits=2", "max-visits=1"),
+        "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
     );
-    record.node = "build".into();
-    record.visits = serde_json::from_value(json!({"build":{"total":2,"keys":[]}})).unwrap();
-    save(&env, &record);
+    let id = start(&env);
+    let parked = settled(&env, &id, "parked");
+    assert_eq!(parked["record"]["park"]["reason"], "cap", "{parked:#}");
+    success(
+        env.rimz()
+            .env("RIMZ_BIN", "/bin/true")
+            .args(["workflow", "resume", &id, "--extend", "visits=+1"])
+            .output()
+            .unwrap(),
+    );
+    success(command(&env, &["workflow", "advance", &id]));
+    let value = settled(&env, &id, "parked");
+    assert_eq!(value["record"]["park"]["reason"], "cap", "{value:#}");
+    let record: RunRecord = serde_json::from_value(value["record"].clone()).unwrap();
+    let rows = value["journal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            if row["event"] == "attempt" {
+                row["started_at"] = json!(AT);
+                row["ended_at"] = json!("2000-01-01T12:01:00Z");
+                row["cost_usd"] = json!(1.25);
+            }
+            row
+        })
+        .collect();
+    journal(&env, &record, rows);
     let text = human(&env, &record, false);
     contains(
         &text,

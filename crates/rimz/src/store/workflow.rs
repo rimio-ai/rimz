@@ -662,6 +662,7 @@ pub enum JournalEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// Written by workflow resume for both parked-run resumption and active-run `--extend`.
     Resume {
         visit_grant: u64,
         deadline: Option<Timestamp>,

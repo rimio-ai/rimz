@@ -10489,7 +10489,7 @@ reason = "One read-only journal reader folds repeated checks without double-coun
 [[verdict]]
 kind = "item"
 key = "harness::workflow::routing_hop"
-reason = "Workflow park views and launch briefs share the newest resume or route into the current node."
+reason = "Workflow park views and launch briefs share the newest parked resume or route into the current node, ignoring active-run extensions."
 
 [[verdict]]
 kind = "item"
