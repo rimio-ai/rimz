@@ -257,8 +257,13 @@ impl Row {
                             ));
                         }
                         if let Some(max) = &step.max_visits_per_outcome {
+                            let reset_on = match max.reset_on() {
+                                [] => String::new(),
+                                outcomes => format!(" (reset-on {})", outcomes.join(", ")),
+                            };
                             row.details.push(format!(
-                                "max-visits-per-outcome {max}, then {}",
+                                "max-visits-per-outcome {}{reset_on}, then {}",
+                                max.limit(),
                                 target(name, &edge.target, order)
                             ));
                         }

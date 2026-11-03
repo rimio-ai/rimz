@@ -42,7 +42,7 @@ fn graph() -> (Env, PathBuf) {
 
 #[test]
 fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
-    let (env, _) = graph();
+    let (env, dir) = graph();
     seed(&env, &env.project_root, &env.project_root, "parked");
     let text = success(command(&env, &["workflow", "show", "review"]));
     for fragment in [
@@ -59,7 +59,6 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "red → fix",
         "waits ≤3d, then @user",
         "4 visits, then @user",
-        "max-visits-per-outcome 2, reset-on green, then @user",
         "takes over",
         "capacity-wait 6h",
         "only when a loop task starts the run",
@@ -82,6 +81,31 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     assert!(!text.contains("never:"), "{text}");
     assert!(!text.contains("invalid →"), "{text}");
     assert!(!text.contains("waits ≤1h"), "{text}");
+    let caps = [
+        (
+            "{ limit = 2, reset-on = 'green' }",
+            "max-visits-per-outcome 2 (reset-on green), then @user",
+        ),
+        (
+            "{ limit = 2, reset-on = ['green', 'red'] }",
+            "max-visits-per-outcome 2 (reset-on green, red), then @user",
+        ),
+        ("2", "max-visits-per-outcome 2, then @user"),
+    ]
+    .map(|(cap, expected)| {
+        fs::write(
+            dir.join("workflow.toml"),
+            GRAPH.replace("{ limit = 2, reset-on = 'green' }", cap),
+        )
+        .unwrap();
+        let text = success(command(&env, &["workflow", "show", "review"]));
+        let line = text
+            .lines()
+            .find(|line| line.contains("max-visits-per-outcome"))
+            .unwrap();
+        (line.contains(expected), expected, line.to_owned())
+    });
+    assert!(caps.iter().all(|(matches, ..)| *matches), "{caps:#?}");
 }
 
 #[test]
