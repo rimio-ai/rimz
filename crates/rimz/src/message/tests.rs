@@ -252,6 +252,30 @@ fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
 }
 
 #[test]
+fn delivery_gates_admit_a_fatal_provider_error_only_on_any() {
+    let now = Timestamp::from_second(1_100).unwrap();
+    let mut running = agent("sess-running", None);
+    running.status = AgentStatus::Running;
+    running.last_activity = now - jiff::SignedDuration::from_secs(1);
+    running.context = Some(AgentContext {
+        turn_error: Some(AgentTurnError {
+            ended_turn: false,
+            class: TurnErrorClass::Failed,
+            at: now,
+            label: None,
+        }),
+        ..AgentContext::new("claude", now)
+    });
+    assert!(gate_open_for_agent(DeliveryGate::Any, &running, false, now));
+    assert!(!gate_open_for_agent(
+        DeliveryGate::Done,
+        &running,
+        false,
+        now
+    ));
+}
+
+#[test]
 fn when_condition_uses_raw_status_and_status_specific_dwell_base() {
     let now = Timestamp::from_second(10_000).unwrap();
     let cases = [

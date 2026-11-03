@@ -53,7 +53,7 @@ A hook belongs to a child session when its payload carries `subagentType`. Every
 | `SessionStart` | `registered` on `sessionId` | `source: new` marks fresh lineage. `source: load` marks forked lineage when `summary.json` names a nonempty `parent_session_id` and `session_kind` is `fork`, `worktree`, or `headless`. `summary.json` also supplies the model, effort, title, and a worktree fallback |
 | `UserPromptSubmit` | `turn_started` | turn id `promptId`, with the sanitized optional prompt |
 | `PostToolUse` | `tool_used` | mutating and editing by tool name from the spec's `tools` lists |
-| `PostToolUseFailure` | `tool_used`, neither mutating nor editing | `error` becomes the turn-error label |
+| `PostToolUseFailure` | `tool_used`, neither mutating nor editing | no turn error: the tool failure goes back to the model and the turn continues |
 | `Notification` | `awaiting_input` for an exact ask, else nothing | see [Notifications](#notifications) |
 | `Stop` | `turn_ended`, clean | only for `reason: end_turn`. Every other reason, such as the session-close `channel_closed` and `shutdown`, is ignored |
 | `StopFailure` | `turn_ended`, errored | label `errorDetails`, else `error`, cut to 160 characters. `rate_limit` is `paused_rate_limit`, `server_error` is `paused_overloaded`, `authentication_failed`, `invalid_request`, and `max_output_tokens` fail, and any other kind is classified from the label (`TurnErrorClass::classify_label`) |
@@ -82,7 +82,7 @@ An ask opens only on an exact pair of `notificationType` and label, where the la
 | `permission_prompt` | `Plan approval requested` | PlanApproval |
 | `elicitation_dialog` | `User question requested` | Question |
 
-A near match opens nothing. An `agent_error` notification opens no ask and records its `error`, else its `message`, as the turn-error label. Human answers stay in Grok's native pane, and a `Notification` reply is always empty.
+A near match opens nothing. An `agent_error` notification opens no ask and records no turn error, because Grok can recover within the same turn. An unrecovered failure reaches `StopFailure`, which records the turn error. Human answers stay in Grok's native pane, and a `Notification` reply is always empty.
 
 A root `idle_prompt` notification with a parseable timestamp writes an `Interrupted` context settle marker and no lifecycle report. The card rests only when that timestamp is newer than its last activity, so a delayed older notification cannot settle a newer prompt. A child notification, or one with a missing or invalid timestamp, attaches nothing. Local context refresh preserves the marker, and later hook activity clears it. The comparison holds because Grok and its feed child read the same host clock. One race remains: when Grok builds the envelope after a new prompt has already reached ingress, the card reads idle until the next hook.
 

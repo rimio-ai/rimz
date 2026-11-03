@@ -456,6 +456,7 @@ pub(super) enum TerminalPayload {
     Run(Box<RunRecord>),
     Agent {
         agent: Box<AgentState>,
+        completion: TurnCompletion,
         last_message: Option<String>,
     },
     Disappeared,
@@ -476,12 +477,11 @@ impl TargetOutcome {
             ),
             TerminalPayload::Agent {
                 agent,
+                completion,
                 last_message,
             } => WaitEntryJson::new(
                 self.name.clone(),
-                if agent.effective_status(jiff::Timestamp::now())
-                    == rimz::agents::AgentStatus::Failed
-                {
+                if *completion == TurnCompletion::Failed {
                     RunStatus::Failed
                 } else {
                     RunStatus::Completed
@@ -704,6 +704,7 @@ fn poll_target(
                         name: agent_name(agent).to_owned(),
                         payload: TerminalPayload::Agent {
                             agent: Box::new(agent.clone()),
+                            completion,
                             last_message,
                         },
                     }))

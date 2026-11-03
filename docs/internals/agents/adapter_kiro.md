@@ -47,7 +47,7 @@ Kiro supplies three inputs to the binding order in [instances.md](./instances.md
 - A pane whose command line carries `--resume-id` binds that exact session first.
 - The observation's projection is `Lifecycle`, so its fold overlays an exact durable row under the rule in that page's projection table.
 
-Through the fresh fallback, a new session binds the unique closest same-directory pane whose incarnation clock (the live process start, or a provisional launch's `registered_at`) is no later than `createdAt`. With neither clock, or with two equally close panes, the session stays unbound until a hook or a resume id arrives. A bind onto a pane that holds a provisional launch row reuses that row, so it keeps the launch-owned fields (`store/snapshot/view/live.rs::merge_bound_local_session`). Observations are not persisted, so a dead pane removes the card while the history stays in Kiro's store.
+Through the fresh fallback, a new session binds the unique closest same-directory pane whose incarnation clock (the live process start, or a provisional launch's `registered_at`) is no later than `createdAt`. With neither clock, or with two equally close panes, the session stays unbound until a hook or a resume id arrives. A bind onto a pane that holds a provisional launch row reuses that row, so it keeps the launch-owned fields (`crates/rimz/src/store/snapshot/view/live.rs::merge_bound_local_session`). Observations are not persisted, so a dead pane removes the card while the history stays in Kiro's store.
 
 ## Hooks
 
@@ -166,7 +166,7 @@ Kiro meters credits ([reference](../../externals/agent-adapter/kiro-reference.md
 
 `rimz coverage --wiring` prints the current wired, partial, and unsupported grid. These gaps have a reason worth recording:
 
-- Errored and cancelled turns fire no hook. The context refresh settles a cancellation as `Interrupted`, which releases `message --wait` and `agents wait` once a sidebar tick or a hook runs the refresh. A failed turn sets a `Failed` turn error, which does not release a running row's waiter. Supervised runs read only durable run records, so both outcomes wait out the run's deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
+- Errored and cancelled turns fire no hook. The context refresh settles a cancellation as `Interrupted` and records a failed turn as a `Failed` turn error. Both release `message --wait` and `agents wait` once a sidebar tick or a hook runs the refresh. Supervised runs read only durable run records, so both outcomes wait out the run's deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
 - Kiro CLI older than 2.31.0 gets no hooks: install refuses and the detected-agents install skips Kiro. A managed file written before a downgrade still counts as installed, though, and the hook preflight does not check the version.
 - Pending approvals and questions have no hook. The waiting card comes from the store, stays out of `rimz asks`, and is answered in Kiro's pane.
 - Credits are not dollars. Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.

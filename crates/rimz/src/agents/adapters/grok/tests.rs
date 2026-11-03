@@ -795,15 +795,36 @@ fn only_failure_hooks_contribute_turn_errors() {
         .cloned()
         .is_none()
     );
-    assert_eq!(
+    let failure = hook_output(
+        &adapter,
+        "StopFailure",
+        &json!({"error":"invalid_request","errorDetails":"provider failed"}),
+    );
+    let error = failure.turn_error().unwrap();
+    assert_eq!(error.class, TurnErrorClass::Failed);
+    assert_eq!(error.label.as_deref(), Some("provider failed"));
+    for payload in [
+        json!({"notificationType":"agent_error","error":"provider failed"}),
+        json!({"notificationType":"agent_error","message":"provider failed"}),
+    ] {
+        assert!(
+            hook_output(&adapter, "Notification", &payload)
+                .turn_error()
+                .is_none(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn tool_failures_do_not_contribute_turn_errors() {
+    assert!(
         hook_output(
-            &adapter,
-            "Notification",
-            &json!({"notificationType":"agent_error","message":"provider failed"})
+            &GrokAdapter,
+            "PostToolUseFailure",
+            &json!({"sessionId":"s1","toolName":"apply_patch","error":"denied"})
         )
         .turn_error()
-        .cloned()
-        .and_then(|error| error.label),
-        Some("provider failed".to_owned())
+        .is_none()
     );
 }

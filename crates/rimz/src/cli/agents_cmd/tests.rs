@@ -2685,6 +2685,7 @@ fn plural_wait_block_for_agent_payload_prints_last_message() {
         name: "quiet-lynx".to_owned(),
         payload: wait::TerminalPayload::Agent {
             agent: Box::new(agent),
+            completion: rimz::agents::TurnCompletion::Completed,
             last_message: Some("reviewed; two findings".to_owned()),
         },
     };
@@ -2708,6 +2709,44 @@ fn plural_wait_block_for_agent_payload_prints_last_message() {
         serde_json::to_value(outcome.entry()).unwrap()["last_message"],
         "reviewed; two findings"
     );
+}
+
+#[test]
+fn agent_wait_entry_keeps_the_settled_completion_after_status_changes() {
+    use rimz::agents::TurnCompletion;
+
+    for (completion, status, exit) in [
+        (TurnCompletion::Failed, "failed", 1),
+        (TurnCompletion::Completed, "completed", 0),
+    ] {
+        for later_status in [
+            AgentStatus::Running,
+            AgentStatus::Success,
+            AgentStatus::Failed,
+        ] {
+            let agent = agent_with_status(
+                "agent_0123456789abcdef0123456789abcdef",
+                later_status,
+                TurnPhase::Idle,
+                1_000,
+            );
+            let outcome = wait::TargetOutcome {
+                reference: "quiet-lynx".to_owned(),
+                name: "quiet-lynx".to_owned(),
+                payload: wait::TerminalPayload::Agent {
+                    agent: Box::new(agent),
+                    completion,
+                    last_message: None,
+                },
+            };
+            let entry = serde_json::to_value(outcome.entry()).unwrap();
+            assert_eq!(
+                entry["status"], status,
+                "{completion:?} then {later_status:?}"
+            );
+            assert_eq!(entry["exit"], exit, "{completion:?} then {later_status:?}");
+        }
+    }
 }
 
 #[test]

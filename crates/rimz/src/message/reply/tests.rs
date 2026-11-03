@@ -202,6 +202,71 @@ fn turn_wait_reason_projects_each_open_status() {
 }
 
 #[test]
+fn provider_error_settles_the_reply_decision_until_new_activity() {
+    use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
+
+    let at = Timestamp::from_second(1_000).unwrap();
+    let now = Timestamp::from_second(2_000).unwrap();
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let view = TurnWaitView {
+        snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], now),
+        messages: vec![],
+        now,
+    };
+    let reply = WaitPhase::Reply {
+        turn_started_at: Some(at),
+    };
+    for (class, second, completion, reason, decision) in [
+        (
+            TurnErrorClass::PausedOverloaded,
+            1_010,
+            TurnCompletion::Open,
+            Some(TurnWaitReason::Paused),
+            Step::Wait(reply),
+        ),
+        (
+            TurnErrorClass::Failed,
+            1_000,
+            TurnCompletion::Open,
+            Some(TurnWaitReason::Running),
+            Step::Wait(reply),
+        ),
+        (
+            TurnErrorClass::Failed,
+            1_010,
+            TurnCompletion::Failed,
+            None,
+            Step::Finish(RunStatus::Failed),
+        ),
+    ] {
+        let mut agent = crate::testkit::agent_state("claude", "sess-error", at);
+        agent.status = AgentStatus::Running;
+        agent.turn_started_at = Some(at);
+        agent.context = Some(AgentContext {
+            turn_error: Some(AgentTurnError {
+                ended_turn: false,
+                class,
+                at: Timestamp::from_second(second).unwrap(),
+                label: None,
+            }),
+            ..AgentContext::new("claude", now)
+        });
+        assert_eq!(view.completion(&agent), completion, "{class:?} at {second}");
+        assert_eq!(view.reason(&agent), reason, "{class:?} at {second}");
+        assert_eq!(
+            step(
+                reply,
+                DeliveryKind::Boundary,
+                MessageStatus::Delivered,
+                Some(view.card(&agent))
+            ),
+            decision,
+            "{class:?} at {second}"
+        );
+    }
+}
+
+#[test]
 fn turn_wait_reason_defers_person_until_permission_review_expires() {
     let at = Timestamp::from_second(1_000).unwrap();
     let mut agent = crate::testkit::agent_state("codex", "child", at);
