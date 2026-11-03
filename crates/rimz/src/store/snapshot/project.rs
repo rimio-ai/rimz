@@ -811,6 +811,7 @@ fn carried_base(
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.turn_started_at = prior.turn_started_at;
         state.user_turn_started_at = prior.user_turn_started_at;
+        state.last_prompt_at = prior.last_prompt_at;
         state.keepalive_since = prior.keepalive_since;
         state.pinged_at = prior.pinged_at;
         state.registered_at = prior.registered_at.or(Some(event_ts));
@@ -1064,10 +1065,11 @@ fn inherit_compaction_registration(
         return;
     };
     let predecessor_key = (continuation.kind.clone(), compacted_from.clone());
-    let Some(predecessor_registered_at) = map
-        .get(&predecessor_key)
-        .and_then(|predecessor| predecessor.registered_at)
-    else {
+    let Some(predecessor) = map.get(&predecessor_key) else {
+        return;
+    };
+    continuation.last_prompt_at = continuation.last_prompt_at.max(predecessor.last_prompt_at);
+    let Some(predecessor_registered_at) = predecessor.registered_at else {
         return;
     };
     if continuation
@@ -1367,6 +1369,9 @@ fn fold_lifecycle(
     let turn_started = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. });
     let keepalive_turn =
         turn_started && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only);
+    if turn_started && !keepalive_turn {
+        state.last_prompt_at = Some(timestamp);
+    }
     if resets_context || ((opened_turn || turn_started) && !keepalive_turn) {
         state.keepalive_since = None;
     } else if opened_turn {
@@ -1482,6 +1487,7 @@ fn carry_across_ping(
     state.turn_started_at = prior.turn_started_at;
     state.turn_ended_at = prior.turn_ended_at;
     state.user_turn_started_at = prior.user_turn_started_at;
+    state.last_prompt_at = prior.last_prompt_at;
     state.waiting_since = prior.waiting_since;
     state.open_ask.clone_from(&prior.open_ask);
     state.queued_asks.clone_from(&prior.queued_asks);

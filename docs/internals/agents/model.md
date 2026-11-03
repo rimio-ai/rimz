@@ -57,6 +57,7 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | Lifetime | Fields | Rule |
 | --- | --- | --- |
 | identity | `kind`, `agent_id`, `registered_at` | Set when the row is created. A compaction continuation takes its predecessor's earlier `registered_at`, so it keeps the predecessor's ownership rank. |
+| engagement | `last_prompt_at` | Latest non-keepalive `TurnStarted`, including harness prompts, steers and prompts into parked work. Registration, state snapshots, compaction and pings carry it; a compaction continuation inherits it. The sidebar projects the later of registration and this stamp as `engaged_at`. |
 | lineage | `parent_agent_id` | Set by the event that creates the row. On an existing parentless row only a `SubagentAdopted` event can set it. An established parent never changes. |
 | prompt baseline | `system_prompt_digest` | Optional lowercase SHA-256 of a fresh launch's configured system-prompt inputs. A launch event's present value replaces it, and an absent value keeps it. Lifecycle and attach events preserve it, and resume and fork establish no new baseline. |
 | launch | `launch_id`, `prior_launch_ids`, `launch_warnings`, `profile`, `profile_scope`, `login`, `record`, `tier`, `mode`, `isolation`, `role`, `team`, `workflow`, `automation`, `channel`, `checkout`, `launch_group`, `launch_ordinal`, `launch_depth`, `launched_by` | Set from launch parameters, then carried. The fields with their own rule follow the table. |
@@ -143,7 +144,7 @@ This table applies to real edges, not the state snapshots above.
 | Signal | Status | Also |
 | --- | --- | --- |
 | `registered` | any → `idle` | Establishes a row. On a row that has opened a turn, advances both turn-start boundaries, which retires the prior turn's subagents (a `/clear`). Carries `turn_ended_at`. |
-| `turn_started` | any → `running` | Records the provider turn id when known. Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, never a harness-delivered one. Any opened turn that is not a [keepalive ping](#keepalive-pings), and a context reset, clears `keepalive_since`. On a `parked` row it resumes the same turn and keeps both boundaries. |
+| `turn_started` | any → `running` | Records the provider turn id when known. Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, never a harness-delivered one. Any non-keepalive prompt stamps `last_prompt_at`, including a steer or a prompt into parked work. Any opened turn that is not a [keepalive ping](#keepalive-pings), and a context reset, clears `keepalive_since`. On a `parked` row it resumes the same turn and keeps both turn-start boundaries. |
 | `turn_ended` clean | → `success` | Rests the phase, stamps `turn_ended_at`, and records the closed provider turn id. A [late report](#late-turn-reports) is ignored and stamps nothing. |
 | `turn_ended` errored | → `failed` | The error bit wins over the parked bit. Stamps `turn_ended_at` unless ignored, and records the closed provider turn id unless parked. |
 | `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)) and stamps `turn_ended_at` unless ignored. |

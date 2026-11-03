@@ -1,6 +1,119 @@
 use super::*;
 
 #[test]
+fn prompt_clock_survives_a_compaction_continuation() {
+    let events = [
+        raw_lifecycle_at(
+            "codex",
+            1,
+            json!({
+                "agent_id": "original", "signal": {"signal": "turn_started"}, "prompt": "task"
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "continued", "compacted_from": "original",
+                "signal": {"signal": "compaction_ended", "failed": false}
+            }),
+        ),
+    ];
+    let rows = reduce_agent_states(&events);
+    let row = rows.iter().find(|row| row.agent_id == "continued").unwrap();
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["last_prompt_at"],
+        json!(events[0].timestamp)
+    );
+}
+
+#[test]
+fn prompt_clock_tracks_prompts_including_steers_and_parked_work_but_not_resumes() {
+    let mut events = Vec::new();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (offset, params, last_prompt) in [
+        (1, json!({"signal": {"signal": "registered"}}), None),
+        (
+            2,
+            json!({"signal": {"signal": "turn_started"}, "prompt": "task"}),
+            Some(2),
+        ),
+        (
+            3,
+            json!({"signal": {"signal": "turn_started"}, "prompt": "steer"}),
+            Some(3),
+        ),
+        (
+            4,
+            json!({"signal": {"signal": "turn_ended", "errored": false,
+            "parked_on_background": true}}),
+            Some(3),
+        ),
+        (
+            5,
+            json!({"signal": {"signal": "turn_started"}, "prompt": "parked task"}),
+            Some(5),
+        ),
+        (
+            6,
+            json!({"signal": {"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}}),
+            Some(5),
+        ),
+        (
+            7,
+            json!({"signal": {"signal": "registered"}, "event_name": "rimz.agent-resumed"}),
+            Some(5),
+        ),
+        (8, json!({"signal": {"signal": "registered"}}), Some(5)),
+        (
+            9,
+            json!({"signal": {"signal": "compaction_ended", "failed": false,
+            "auto": false}}),
+            Some(5),
+        ),
+        (
+            10,
+            json!({"signal": {"signal": "turn_started"},
+            "prompt": "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."}),
+            Some(5),
+        ),
+        (
+            11,
+            json!({"signal": {"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}}),
+            Some(5),
+        ),
+        (
+            12,
+            json!({"signal": {"signal": "turn_started"}, "state_snapshot": true}),
+            Some(5),
+        ),
+        (
+            13,
+            json!({"signal": {"signal": "turn_started"},
+            "prompt": "Type: MESSAGE\nFrom: @peer\nContent:\nPlease review."}),
+            Some(13),
+        ),
+    ] {
+        let mut params = params;
+        params["agent_id"] = json!("session");
+        events.push(raw_lifecycle_at("opencode", offset, params));
+        let row = reduce_agent_states(&events).remove(0);
+        let card =
+            super::super::super::row::AgentCard::from_agent(&row, events.last().unwrap().timestamp);
+        actual.push((
+            serde_json::to_value(&row).unwrap()["last_prompt_at"].clone(),
+            serde_json::to_value(card).unwrap()["engaged_at"].clone(),
+        ));
+        let stamp = last_prompt.map(|secs| epoch() + std::time::Duration::from_secs(secs));
+        expected.push((json!(stamp), json!(stamp.or(row.registered_at))));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn finished_clock_survives_reap_reconciliation_and_ping_but_restarts_with_a_turn() {
     let mut payload = launch_payload("child", "worker");
     payload.launch.parent_agent_id = Some("parent".into());
