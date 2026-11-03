@@ -84,15 +84,18 @@ pub(super) fn tokens_short(count: u64) -> String {
 }
 
 /// The context bar's right-hand value, sized to fit the bar's 5-cell value
-/// column. Prefers a one-decimal precise fraction (`78.2%`) when the caller can
-/// derive it from the current-message token composition; otherwise the agent's
-/// integer `used_percentage` (`38%`). Clamps to `100%` so it never spills past
-/// five cells (`100.0%` would).
+/// column, always with one decimal (`78.2%`, `1.0%`). Prefers the precise
+/// fraction when the caller has one; otherwise the agent's integer
+/// `used_percentage`. A positive fraction under a tenth reads `<0.1%`, and the
+/// label clamps to `100%` so it never spills past five cells (`100.0%` would).
 pub(super) fn pct_label(precise: Option<f64>, whole: u8) -> String {
-    match precise {
-        Some(fraction) if fraction >= 99.95 => "100%".to_owned(),
-        Some(fraction) => format!("{:.1}%", fraction.clamp(0.0, 100.0)),
-        None => format!("{}%", whole.min(100)),
+    let fraction = precise.unwrap_or_else(|| f64::from(whole));
+    if fraction >= 99.95 {
+        "100%".to_owned()
+    } else if fraction > 0.0 && fraction < 0.1 {
+        "<0.1%".to_owned()
+    } else {
+        format!("{:.1}%", fraction.max(0.0))
     }
 }
 
@@ -238,7 +241,11 @@ mod tests {
             (Some(78.23), 78, "78.2%"),
             (Some(9.9), 9, "9.9%"),
             (Some(99.96), 99, "100%"),
-            (None, 38, "38%"),
+            (Some(0.04), 0, "<0.1%"),
+            (Some(0.1), 0, "0.1%"),
+            (Some(0.0), 0, "0.0%"),
+            (None, 1, "1.0%"),
+            (None, 38, "38.0%"),
             (None, 200, "100%"),
         ] {
             let label = pct_label(precise, whole);

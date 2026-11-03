@@ -1355,7 +1355,7 @@ fn context_meter_can_restore_linear_fill_geometry() {
     let meter_geometry = |snapshot: &SidebarSnapshot| {
         let meter = group_lines(snapshot, &theme, usize::MAX)
             .into_iter()
-            .find(|line| line.to_string().contains("40%"))
+            .find(|line| line.to_string().contains("40.0%"))
             .unwrap_or_else(|| panic!("context meter renders"))
             .to_string();
         let bar_cells = meter
@@ -2204,12 +2204,7 @@ fn post_compaction_sidecar_estimate_renders_the_same_frame_as_a_fold_estimate() 
                 let actual = group_lines_at_width(&sidecar, &theme, 0, width);
                 let expected = group_lines_at_width(&fold, &theme, 0, width);
                 let rendered = line_texts(&actual).join("\n");
-                let percent = tokens * 100 / window;
-                let value = if percent == 0 {
-                    "<1%".to_owned()
-                } else {
-                    format!("{percent}%")
-                };
+                let value = format!("{:.1}%", tokens as f64 * 100.0 / window as f64);
                 assert!(
                     actual
                         .iter()
@@ -2270,7 +2265,7 @@ fn small_post_compaction_estimates_draw_one_half_cell() {
                 ..Default::default()
             },
         );
-        for window in [200_000, 1_000_000] {
+        for (window, value) in [(200_000, "0.1%"), (1_000_000, "<0.1%")] {
             let snapshot = compacted_estimate_snapshot(Some(300), window, 0);
             for width in [32, 46, 58] {
                 let lines = group_lines_at_width(&snapshot, &theme, 0, width);
@@ -2286,7 +2281,7 @@ fn small_post_compaction_estimates_draw_one_half_cell() {
                     !rendered.contains(theme.glyph(GlyphRole::MeterBarFilled)),
                     "{rendered}"
                 );
-                assert!(rendered.contains("<1%"), "{rendered}");
+                assert!(rendered.contains(value), "{rendered}");
             }
         }
     }
@@ -2405,7 +2400,7 @@ fn post_compaction_estimate_fallbacks_keep_the_integer_meter() {
                     "{set}, {width}, {tokens:?}/{window}"
                 );
                 assert!(
-                    actual.to_string().contains(&format!("{percent}%")),
+                    actual.to_string().contains(&format!("{percent}.0%")),
                     "{actual}"
                 );
                 if percent == 0 {
@@ -2637,7 +2632,7 @@ fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
     );
     let rendered = snapshot_to_screen(&snapshot_with(vec![fresh]), 58, 17);
     assert!(
-        rendered.contains('▢') && rendered.contains(" 0%"),
+        rendered.contains('▢') && rendered.contains(" 0.0%"),
         "{rendered}"
     );
 }
@@ -2729,7 +2724,7 @@ fn codex_compaction_events_render_an_estimate_until_the_first_real_call() {
                         .contains(theme.glyph(GlyphRole::MeterCompacted))
                 })
                 .unwrap_or_else(|| panic!("{set}, {width}:\n{rendered}"));
-            assert!(meter.to_string().contains("5%"), "{meter}");
+            assert!(meter.to_string().contains("5.2%"), "{meter}");
             assert!(
                 meter.to_string().contains('━'),
                 "a filled estimate: {meter}"

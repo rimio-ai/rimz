@@ -99,12 +99,12 @@ pub(super) fn bar_row(
 /// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
 /// cache-read run carries severity when present; `▣` follows the fill's tone
 /// while the `▤` stats head always keeps severity. The value prefers a
-/// one-decimal precise fraction (`78.2%`) over the integer gauge. Only an
+/// precise fraction over the integer gauge and always shows one decimal
+/// (`78.2%`, `1.0%`), `<0.1%` for a positive fraction under a tenth. Only an
 /// exactly empty drawn fraction reads the hollow `▢`; any usage fills it to
 /// `▣`. A completed compaction keeps its own glyph until the first real
 /// reading. A provider estimate fills the track flat in its ordinary tone from
-/// its own fraction with a percentage, `<1%` for a
-/// positive estimate under one percent; without one, the glyph is healthy green
+/// its own fraction with a percentage; without one, the glyph is healthy green
 /// and the empty track stays muted, without a percentage.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
@@ -143,10 +143,8 @@ pub(super) fn gauge_line(
     let estimate = meter.estimated_percent;
     let value = if compacted_empty {
         String::new()
-    } else if estimate.is_some_and(|pct| pct > 0.0 && pct < 1.0) {
-        "<1%".to_owned()
     } else {
-        pct_label(precise, percent)
+        pct_label(precise.or(estimate), percent)
     };
     let drawn = precise.or(estimate).unwrap_or_else(|| f64::from(percent));
     let fill = if bands.log_scale {

@@ -87,9 +87,9 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 
 | mark | meaning |
 |------|---------|
-| `▣ ━━━╺━───┤  75%` | context meter: progress toward native compaction when known below the window, otherwise the share of the model window in use with an open track; `▢` while nothing is in use |
+| `▣ ━━━╺━───┤ 75.0%` | context meter: progress toward native compaction when known below the window, otherwise the share of the model window in use with an open track; `▢` while nothing is in use |
 | `┤` and `372k/1M` | native compaction point: the wall and `372k` share dim violet, while `/1M` recedes; the wall stays on idle and narrow cards even when the label drops |
-| `↻ ─────────` / `↻ ━──────── 5%` (Nerd Font: ``) | compacted context awaiting its first real reading: a green glyph on an empty muted track without a size estimate, otherwise a flat estimate fill and percentage; a positive estimate below 1% reads `<1%` with a sliver; no stats line in either case |
+| `↻ ─────────` / `↻ ━──────── 5.0%` (Nerd Font: ``) | compacted context awaiting its first real reading: a green glyph on an empty muted track without a size estimate, otherwise a flat estimate fill and percentage; a positive estimate below 0.1% reads `<0.1%` with a sliver; no stats line in either case |
 | `▤ 76k` | tokens in the context window now |
 | `◌` `◍` `↘` `↗` | cache-read, cache-write, fresh input, and output tokens. The cockpit, dashboard, and fleet store have no `◍` column, so their `↘` includes cache writes. |
 | `◇` | total tokens: `↘` plus `↗`, with `◌` counted beside it and not in it |
@@ -283,10 +283,10 @@ Here the focused card sits below the view after a tab switch:
  ⑂ alpha
  ⣾ codex
    task-0
-   ▢ ──────────────────────────    0%
+   ▢ ──────────────────────────  0.0%
  ⣾ codex
    task-1
-   ▢ ──────────────────────────    0%
+   ▢ ──────────────────────────  0.0%
  ↓ codex
  ────────────────────────────────────
 ```
@@ -306,7 +306,7 @@ The selected card includes its stats line:
 |------|-------|
 | identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context size: `372k/1M` when compaction-scaled, otherwise the window alone. The point shares the wall's dim violet; `/window` is muted. From L1, when it fits without shortening the handle, a fast model adds a bold amber bolt immediately after its name, before reasoning or context size: still at rest, crackling only while running. A provider's live fast-mode reading wins; a fast launch supplies the badge only while the live reading is unknown. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
 | description | The open ask while waiting for input, when available, led by its first question and wrapped over at most two lines. Otherwise the displayed error or pause reason in italics, else the first working wait's label while working through a wait or first sleeping wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
-| context meter | Progress toward the configured native compaction point when known below the model window; otherwise the percent of the window in use. A compaction-scaled track ends in `┤`, reserved inside the existing bar width. Fill and percentage stop at 100%, reaching but never covering the wall. The fill shows where the context went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the selected scale fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` wears the same expired-cache tone. Between compaction and the next prompt, the old cache no longer expires the meter. After a compaction completes, `↻` stays until the first real context reading from a model call. A provider-reported compacted size fills the track as a flat estimate with a percentage and the glyph in the fill's tone; a positive estimate below 1% reads `<1%` with a sliver, while a zero estimate reads `0%` with no fill. Without an estimate, the glyph is green and the empty track stays muted, with no percentage. The wall stays through both states. An agent that reports no context usage keeps this state after its first compaction. For measured usage, `▢` means exactly empty, while any positive fraction uses `▣`. A fresh, never-prompted card keeps `▢` and `0%`. |
+| context meter | Progress toward the configured native compaction point when known below the model window; otherwise the percent of the window in use. The label shows one decimal, except for `<0.1%` below a tenth and `100%` at the ceiling. A compaction-scaled track ends in `┤`, reserved inside the existing bar width. Fill and percentage stop at 100%, reaching but never covering the wall. The fill shows where the context went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the selected scale fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` wears the same expired-cache tone. Between compaction and the next prompt, the old cache no longer expires the meter. After a compaction completes, `↻` stays until the first real context reading from a model call. A provider-reported compacted size fills the track as a flat estimate with a percentage and the glyph in the fill's tone; a positive estimate below 0.1% reads `<0.1%` with a sliver, while a zero estimate reads `0.0%` with no fill. Without an estimate, the glyph is green and the empty track stays muted, with no percentage. The wall stays through both states. An agent that reports no context usage keeps this state after its first compaction. For measured usage, `▢` means exactly empty, while any positive fraction uses `▣`. A fresh, never-prompted card keeps `▢` and `0.0%`. |
 | stats line | On a selected or held engaged card, or under `expanded` density: `▤` tokens in the window, the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. Hidden entirely between a compaction and its first real reading, even when the meter shows an estimate; the reading restores it, including `↻ N`. From 46 columns the age is on the meter; below that it pins right on this line, or stays on the meter while the line is hidden. |
 | cache line | On a selected or held engaged card, or under `expanded` density, below the meter and any stats: a countdown once the cache warning band starts, then the expired-cache notice and available rebuild estimate. Hidden between compaction and the next prompt. |
 | subagents and waits | Present once the session has spawned a subagent or armed a wait, except on closed, unreached idle and done cards. See [Subagents and waits](#subagents-and-waits). |
@@ -343,7 +343,7 @@ With a provider-reported estimate, the same mark keeps the flat fill and percent
 ```
 ▌✓ codex                                                 ▐
 ▌  compact the context                                   ▐
-▌  ↻ ━━╸─────────────────────────────────────    5%      ▐
+▌  ↻ ━━╸─────────────────────────────────────  5.2%      ▐
 ```
 
 A resting fast-mode card at L2 (54 columns):
@@ -406,8 +406,8 @@ A card's slots are set by its stage, age, density, and selection reach. Data fil
 |------|-------|
 | stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, or a subagents and waits section clicked open restores the card |
 | fresh: idle, never prompted, including held cards | identity, plus the description when it was launched with one |
-| fresh, live-selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
-| engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |
+| fresh, live-selected | adds the empty meter `▢ 0.0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
+| engaged, resting: after its first prompt | identity, description, meter, with `▢ 0.0%` until data arrives |
 | engaged, with subagents or waits | adds the subagents and waits line, except on unreached idle and done cards with their entries closed |
 | selected or held, engaged | adds the stats line (`▤ 0` until data arrives) below the meter and lists the subagent and wait entries below the card; only the live selection lights the spines |
 
@@ -490,7 +490,7 @@ A waiting or failed card looks like any other card with `?` or `!` in the lead. 
 ```
 ▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
 ▌  Allow the pricing cache write?                    ▐
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◑ 40m▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━────────── 71.0% ◑ 40m▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
 ▌  ◉ cache expired                                   ▐
 ```
@@ -512,7 +512,7 @@ A sleeping card names its first sleeping wait in the description:
 ```
 ▌☾ claude                                  ▐
 ▌  wakes in 12m                            ▐
-▌  ▢ ────────────────────────────────    0%▐
+▌  ▢ ────────────────────────────────  0.0%▐
 ▌  ▤ 0                                     ▐
 ▌  ⧖ 1                                     ▐
 ▌    ◷ timer · in 12m                 ◔ <1m▐
@@ -602,16 +602,16 @@ No selection, compact cards:
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇    ← selected group: lane spine and dotted seal
 ▌? claude                                              ▐    ← selected card: bright spine on both edges
 ▌  permission                                          ▐
-▌  ▢ ──────────────────────────────────────    0%      ▐
+▌  ▢ ──────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                 ▐
 ▎⣾ codex · GPT 5.5 · 272k                              🮇    ← same group, not selected
 ▎  add tests                                           🮇
-▎  ▢ ──────────────────────────────────────    0%      🮇
+▎  ▢ ──────────────────────────────────────  0.0%      🮇
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1     ← panes outside the project, with its own ? and ! count
  ? claude
    Deploy staging?
-   ▢ ──────────────────────────────────────    0%
+   ▢ ──────────────────────────────────────  0.0%
 ```
 
 Panes outside the project (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. It keeps a `? n` or `! n` count so an ask from outside the project still shows.
@@ -622,7 +622,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
 ▌⣾ claude                                              ▐
 ▌  db migrate                                          ▐
-▌  ▢ ──────────────────────────────────────    0%      ▐
+▌  ▢ ──────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                 ▐
 
  agents                                                     ← the directory's own group: name only

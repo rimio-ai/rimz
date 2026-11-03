@@ -98,7 +98,6 @@ fn compaction_wall_and_label_render_across_meter_states_and_glyph_sets() {
                 assert!(
                     text.contains(match state {
                         "full" => "100%",
-                        "estimate" => "75%",
                         _ => "75.0%",
                     }),
                     "{text}"
