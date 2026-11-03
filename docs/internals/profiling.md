@@ -152,7 +152,7 @@ Check these signals in order. The earlier ones find more for less effort.
 2. Refold rate against event rate. Compare the store's events per second with the host fetch worker's fold rate. Pane requests coalesce through the shared worker, so the fold rate must not grow with tab count.
 3. The host's thread split. Sum thread-level CPU: fetch and refresher cost points at shared reads, and attachment-heavy cost points at rendering multiplied by pane count.
 4. Allocation share. A large share of allocator (`malloc`, `sdallocx`, `je_*`), `memmove`, and `clone` frames in fold or enrich paths means deep clones on a hot path, the cost the `Arc` handles from `crates/rimz/src/disk/parse_cache.rs` remove.
-5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Zellij's compact-bar instances and scrollback footprint are upstream costs that RimZ bounds but does not own ([performance.md → Deferred and rejected](./performance.md#deferred-and-rejected)).
+5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Compare Zellij with its compact-bar on and off before attributing tab-count growth to the bar ([30-/268-tab comparison](./performance.md#deferred-and-rejected)). Measure scrollback separately; that comparison did not fill it.
 
 ## Two hard cases
 
