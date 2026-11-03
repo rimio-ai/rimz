@@ -406,6 +406,8 @@ pub enum ViewFit {
 pub struct LaggingViews {
     pub target: ViewSize,
     pub views: Vec<crate::ids::ViewId>,
+    /// Normal-screen history lines, keyed by the lagging view.
+    pub reflow_lines: std::collections::HashMap<crate::ids::ViewId, u64>,
 }
 
 /// A jump destination that needs fitting before it is revealed.

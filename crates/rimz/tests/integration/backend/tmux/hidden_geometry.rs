@@ -3,6 +3,52 @@ use rimz::ids::ViewId;
 use rimz::mux::{ViewFit, ViewSize};
 
 #[test]
+fn lagging_cost_includes_retained_history_but_not_alternate_screen_panes() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "history-cost";
+    server.ensure_with_shell(session);
+    server.tmux(&["set-option", "-t", session, "status", "off"]);
+    server.tmux(&["set-option", "-t", session, "history-limit", "10000"]);
+    let current = server.display(session, "#{window_id}");
+    let hidden = server.stdout(&[
+        "new-window", "-d", "-P", "-F", "#{window_id}", "-t", session,
+        "sh -c 'seq 1 2000; printf \"history-ready\\n\"; read line; printf \"\\033[?1049h\"; sleep 120'",
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server
+        .display(&hidden, "#{history_size}")
+        .parse::<u64>()
+        .unwrap()
+        < 1900
+    {
+        assert!(Instant::now() < deadline, "history did not fill");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _client = AttachedTmuxClient::attach(&server.socket, session, 240, 65);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display(&current, "#{window_width}") != "240" {
+        assert!(Instant::now() < deadline, "current window did not grow");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let view = ViewId::new_unchecked(&hidden);
+    let lag = server.backend.lagging_views(session).unwrap().unwrap();
+    assert!(
+        lag.reflow_lines
+            .get(&view)
+            .is_some_and(|lines| *lines >= 1900)
+    );
+    server.tmux(&["send-keys", "-t", &hidden, "Enter"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display(&hidden, "#{alternate_on}") != "1" {
+        assert!(Instant::now() < deadline, "alternate screen did not start");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let lag = server.backend.lagging_views(session).unwrap().unwrap();
+    assert_eq!(lag.reflow_lines[&view], 0);
+}
+
+#[test]
 fn fit_views_batches_250_windows_preserving_order_options_and_zoom() {
     require_tmux!();
     let server = TmuxServer::new();

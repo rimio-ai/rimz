@@ -162,7 +162,9 @@ impl TmuxBackend {
         &self,
         session: &str,
     ) -> Result<Option<crate::mux::LaggingViews>> {
-        let format = format!("{WINDOW_GEOMETRY} {SIZING_CLIENT}");
+        let format = format!(
+            "{WINDOW_GEOMETRY} {SIZING_CLIENT}|#{{P:#{{history_size}}:#{{alternate_on}}#,}}"
+        );
         let output = self
             .cmd()
             .args(["list-windows", "-t", session, "-F", &format])
@@ -1507,6 +1509,7 @@ struct WindowGeometry {
     stack: usize,
     manual: bool,
     attached: bool,
+    reflow_lines: u64,
 }
 
 fn geometry_error() -> MuxErr {
@@ -1548,6 +1551,25 @@ fn parse_detached_geometry(output: &str) -> Option<DetachedGeometry<'_>> {
 }
 
 fn parse_window_geometry(line: &str) -> Option<WindowGeometry> {
+    // Jump reads need no history; sweep reads append each pane's history and screen mode.
+    let (line, reflow_lines) = match line.split_once('|') {
+        None => (line, 0),
+        Some((line, history)) => {
+            let lines = history
+                .strip_suffix(',')?
+                .split(',')
+                .try_fold(0_u64, |total, pane| {
+                    let (lines, alternate) = pane.split_once(':')?;
+                    let lines = lines.parse::<u64>().ok()?;
+                    match alternate {
+                        "0" => total.checked_add(lines),
+                        "1" => Some(total),
+                        _ => None,
+                    }
+                })?;
+            (line, lines)
+        }
+    };
     let mut fields = line.split_whitespace();
     let view = fields.next()?;
     view.strip_prefix('@')?.parse::<u32>().ok()?;
@@ -1576,6 +1598,7 @@ fn parse_window_geometry(line: &str) -> Option<WindowGeometry> {
         stack,
         manual,
         attached,
+        reflow_lines,
     })
 }
 
@@ -1652,6 +1675,10 @@ fn select_lagging_views(output: &str) -> Result<Option<crate::mux::LaggingViews>
     });
     Ok(Some(crate::mux::LaggingViews {
         target,
+        reflow_lines: hidden
+            .iter()
+            .map(|window| (window.view.clone(), window.reflow_lines))
+            .collect(),
         views: hidden.into_iter().map(|window| window.view).collect(),
     }))
 }
@@ -1769,7 +1796,7 @@ mod tests {
 
     #[test]
     fn lagging_selection_orders_mru_and_excludes_current_manual_and_equal() {
-        let output = "@0 1 200 60 0 latest 1\n@1 0 180 50 0 latest 1\n@2 0 180 50 2 largest 1\n@3 0 180 50 1 smallest 1\n@4 0 180 50 3 manual 1\n@5 0 200 60 4 latest 1\n";
+        let output = "@0 1 200 60 0 latest 1|0:0,\n@1 0 180 50 0 latest 1|100:0,\n@2 0 180 50 2 largest 1|200:0,\n@3 0 180 50 1 smallest 1|300:0,\n@4 0 180 50 3 manual 1|400:0,\n@5 0 200 60 4 latest 1|500:0,\n";
         assert_eq!(
             select_lagging_views(output).unwrap(),
             Some(LaggingViews {
@@ -1778,14 +1805,34 @@ mod tests {
                     rows: 60
                 },
                 views: ["@3", "@2", "@1"].map(ViewId::new_unchecked).into(),
+                reflow_lines: [("@1", 100), ("@2", 200), ("@3", 300)]
+                    .map(|(view, lines)| (ViewId::new_unchecked(view), lines))
+                    .into(),
             })
         );
     }
 
     #[test]
+    fn lagging_cost_sums_only_normal_screen_history() {
+        let output =
+            "@0 1 200 60 0 latest 1|0:0,\n@1 0 180 50 1 latest 1|12000:0,90000:1,8000:0,\n";
+        let result = select_lagging_views(output);
+        assert!(result.is_ok(), "pane history rows must parse: {result:?}");
+        let lag = result.unwrap().unwrap();
+        assert_eq!(lag.reflow_lines[&ViewId::new_unchecked("@1")], 20000);
+        for history in ["-1:0,", "1:2,", "1:0,extra", "1:0,,", "1:0:0,"] {
+            assert!(
+                select_lagging_views(&format!("@0 1 200 60 0 latest 1|{history}")).is_err(),
+                "malformed pane history: {history}"
+            );
+        }
+    }
+
+    #[test]
     fn detached_views_are_not_fitted_and_malformed_rows_are_rejected() {
         assert_eq!(
-            select_lagging_views("@0 1 200 60 0 latest 0\n@1 0 180 50 1 latest 0").unwrap(),
+            select_lagging_views("@0 1 200 60 0 latest 0|0:0,\n@1 0 180 50 1 latest 0|10:0,")
+                .unwrap(),
             None
         );
         for output in [
