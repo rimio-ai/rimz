@@ -1103,6 +1103,32 @@ fn account_link_maintenance_is_contained_until_a_name_repeats() {
 }
 
 #[test]
+fn account_link_repeat_stays_investigate_when_quieter_upkeep_merges() {
+    let upkeep = |repeated: &[&str]| {
+        serde_json::from_value::<DiagEvent>(serde_json::json!({
+            "kind": "account_links_maintained", "login": "claude@work",
+            "account_home": "/accounts/work", "removed": [],
+            "aside_dir": "/accounts/work/.rimz-aside/stamp",
+            "set_aside": ["history.jsonl"], "repeated": repeated,
+        }))
+        .unwrap()
+    };
+    let incidents = diagnostic_incidents(
+        vec![
+            diag_record(1, upkeep(&["history.jsonl"])),
+            diag_record(10_001, upkeep(&[])),
+        ],
+        12,
+        None,
+        0,
+    );
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0].record_count, 2);
+    assert_eq!(incidents[0].state, model::DoctorState::Investigate);
+    assert_eq!(incidents[0].impact, model::DoctorImpact::Warn);
+}
+
+#[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
     let retained_line = serde_json::to_string(&serde_json::json!({
         "v": "rimz.diag.v1",
