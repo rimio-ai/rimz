@@ -1,7 +1,7 @@
 //! Sidebar view-model assembly: the `Sidebar*` renderer contract and the
 //! grouping, ranking, capping, and status projection that fills it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,6 +36,7 @@ mod score;
 use providers::format_plan_label;
 pub(crate) use providers::sort_windows;
 
+pub(crate) use layout::HeldRank;
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
@@ -545,16 +546,40 @@ impl SidebarSnapshot {
     /// inputs land. Unread affects group inactivity, not row rank. This preserves
     /// the producer's row cap and status counts.
     pub fn sort_groups_for_presentation(&mut self) {
+        self.sort_groups_with_holds(&HashMap::new());
+    }
+
+    pub(crate) fn capture_held_rank(
+        &self,
+        pane: &PaneId,
+        held: &HashMap<PaneId, HeldRank>,
+    ) -> Option<HeldRank> {
+        layout::capture_held_rank(self, pane, held)
+    }
+
+    pub(crate) fn sort_groups_with_holds(&mut self, held: &HashMap<PaneId, HeldRank>) {
+        let held = layout::held_rows(self, held);
         layout::sort_groups_for_presentation(
             &mut self.worktree_groups,
             self.now,
             aggregate::AttentionWindows::from_config(&self.attention),
+            &held,
         );
     }
 
     /// Order renderer-adjusted fold membership without recomputing it.
-    pub(crate) fn sort_presented_groups(&mut self) {
-        layout::sort_presented_groups(&mut self.worktree_groups);
+    pub(crate) fn sort_presented_groups(&mut self, held: &HashMap<PaneId, HeldRank>) {
+        let held = layout::held_rows(self, held);
+        layout::sort_presented_groups(&mut self.worktree_groups, &held);
+    }
+
+    pub(crate) fn sort_rows_in_order<'a>(
+        &mut self,
+        order: impl Iterator<Item = &'a str>,
+        held: &HashMap<PaneId, HeldRank>,
+    ) {
+        let held = layout::held_rows(self, held);
+        layout::sort_rows_in_order(&mut self.worktree_groups, order, &held);
     }
 
     pub(crate) fn project_stuck_stages(&mut self) {

@@ -143,7 +143,14 @@ mod tests {
             let mut ui = ViewState::default();
             let mut snapshot = snapshot(&workspace());
             arm_freeze(&mut ui, clock.timestamp_at(clock.now()).as_millisecond());
-            apply_freeze(&mut ui, &mut snapshot, false, clock.now_ms() as i64, false);
+            apply_freeze(
+                &mut ui,
+                &mut snapshot,
+                false,
+                clock.now_ms() as i64,
+                false,
+                &std::collections::HashMap::new(),
+            );
             assert!(ui.freeze.is_some(), "fresh freeze survives a skewed epoch");
             apply_freeze(
                 &mut ui,
@@ -151,6 +158,7 @@ mod tests {
                 false,
                 clock.now_ms() as i64 + 10_000,
                 false,
+                &std::collections::HashMap::new(),
             );
             assert!(
                 ui.freeze.is_none(),

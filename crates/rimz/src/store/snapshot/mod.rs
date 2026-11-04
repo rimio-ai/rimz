@@ -56,6 +56,7 @@ pub use row::{
     AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
     RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
+pub(crate) use view::HeldRank;
 pub(crate) use view::sort_windows;
 pub use view::{
     AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, ParkedWorkflow,

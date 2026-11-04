@@ -16,8 +16,9 @@ expression: review
 {"frame":11,"t_ms":17500,"beat":11,"label":"17.5s ui expand @coder","changed":["","@coder#main","@planner#main"],"key":true,"text":"0011.txt","ansi":"0011.ansi"}
 {"frame":12,"t_ms":19100,"beat":12,"label":"19s @coder answered","changed":["@coder#main","cockpit"],"key":true,"text":"0012.txt","ansi":"0012.ansi"}
 {"frame":13,"t_ms":21000,"beat":13,"label":"21s @coder done \"sidebar story shipped\"","changed":["@coder#main","cockpit"],"key":true,"text":"0013.txt","ansi":"0013.ansi"}
-{"frame":14,"t_ms":23000,"beat":15,"label":"23s @fox leaves","changed":["","@coder#main","@planner#main"],"key":true,"text":"0014.txt","ansi":"0014.ansi"}
-{"frame":15,"t_ms":24000,"beat":16,"label":"24s @coder idle","changed":["","@coder#main","@planner#main","cockpit"],"key":true,"text":"0015.txt","ansi":"0015.ansi"}
+{"frame":14,"t_ms":22600,"beat":13,"label":"21s @coder done \"sidebar story shipped\"","changed":["","@planner#main"],"key":true,"text":"0014.txt","ansi":"0014.ansi"}
+{"frame":15,"t_ms":23000,"beat":15,"label":"23s @fox leaves","changed":["","@coder#main","@planner#main"],"key":true,"text":"0015.txt","ansi":"0015.ansi"}
+{"frame":16,"t_ms":24000,"beat":16,"label":"24s @coder idle","changed":["","@coder#main","@planner#main","cockpit"],"key":true,"text":"0016.txt","ansi":"0016.ansi"}
 
 == 0ms: 0s @coder idle ==
 cockpit       │  ⌘ query-engine                /srv/code/query-engine
@@ -523,6 +524,42 @@ chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.0
 chrome        │
 chrome        │                                            ? for help
 
+== 22600ms: 21s @coder done "sidebar story shipped" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▌✓ coder                                             ▐
+@coder#main   │ ▌  sidebar story shipped                             ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
 == 23000ms: 23s @fox leaves ==
 cockpit       │  ⌘ query-engine                /srv/code/query-engine
 cockpit       │
@@ -539,7 +576,7 @@ cockpit       │
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@planner#main │ ▎  ▤ 0                                               🮇
+              │
               │
               │
               │

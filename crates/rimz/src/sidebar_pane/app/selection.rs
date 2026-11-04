@@ -909,7 +909,11 @@ fn reconcile_filter_and_baseline(
             .map_or(0, |previous| {
                 let mut held = snapshot.clone();
                 super::layout_freeze::defer_inactive_admission(
-                    &mut held, previous, None, None, true,
+                    &mut held,
+                    previous,
+                    None,
+                    &[],
+                    true,
                 );
                 filter.total(&held.worktree_groups)
             });

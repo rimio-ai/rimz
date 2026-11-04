@@ -666,6 +666,20 @@ impl Views {
         })
     }
 
+    pub(super) fn focused_panes(&self, pane: &PaneId) -> Vec<PaneId> {
+        let Some(id) = self.panes.get(pane) else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        self.clients
+            .values()
+            .filter(|client| client.view == *id && client.departed.is_none())
+            .filter(|client| &client.focused != pane)
+            .filter(|client| seen.insert(client.focused.clone()))
+            .map(|client| client.focused.clone())
+            .collect()
+    }
+
     #[cfg(test)]
     pub(super) fn context(
         &mut self,

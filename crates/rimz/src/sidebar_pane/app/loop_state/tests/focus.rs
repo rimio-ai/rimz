@@ -69,6 +69,83 @@ fn deliver_sampled(
     );
 }
 
+#[test]
+fn every_coviewer_holds_its_card_and_a_release_freezes_without_a_selection_change() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let (mut rig, own, p, q) = sampled_focus_rig(mux);
+        let mut snapshot = rig.view().ctx().current.clone();
+        let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
+        let mut sidebar = pane(own.raw(), "tab_1", false);
+        sidebar.pane_id = own.clone();
+        sidebar.command = Some("rimz-sidebar".into());
+        panes.push(sidebar);
+        let client = |index, target| crate::pane::ClientPaneView {
+            client_id: match mux {
+                MuxName::Tmux => crate::ids::MuxClientId::Tmux(format!("client-{index}")),
+                MuxName::Zellij => crate::ids::MuxClientId::Zellij(index),
+            },
+            pane_id: target,
+        };
+        let mut frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
+        frame.client_views = vec![client(1, p.clone()), client(2, q.clone())];
+        frame.client_view_fresh = true;
+        deliver_sampled(&mut rig, snapshot.clone(), frame.clone());
+        let expected: Vec<_> = rig
+            .view()
+            .ctx()
+            .current
+            .rows()
+            .map(|row| row.id.clone())
+            .collect();
+        for group in Arc::make_mut(&mut snapshot.worktree_groups) {
+            for row in Arc::make_mut(&mut group.rows) {
+                row.card = crate::store::snapshot::RowCard::Agent(Arc::new(
+                    crate::store::snapshot::AgentCard {
+                        status: if row.pane.as_ref().unwrap().pane_id == q {
+                            crate::agents::AgentStatus::Waiting
+                        } else {
+                            crate::agents::AgentStatus::Running
+                        },
+                        registered_at: Some(snapshot.now),
+                        attention_at_ms: Some(30),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        rig.state.pane.clock.advance(Duration::from_secs(31));
+        deliver_sampled(&mut rig, snapshot.clone(), frame.clone());
+        assert_eq!(
+            rig.view()
+                .ctx()
+                .current
+                .rows()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>(),
+            expected,
+            "{mux:?}: disagreement must hold both panes beyond the timed freeze"
+        );
+        let selected = rig.view().ui().selected_pane.clone();
+        rig.state.pane.clock.advance(Duration::from_secs(1));
+        frame.client_views = vec![client(1, own), client(2, q)];
+        deliver_sampled(&mut rig, snapshot, frame);
+        assert_eq!(
+            rig.view().ui().selected_pane,
+            selected,
+            "consensus stays absent"
+        );
+        let released_at = rig.state.pane.clock.timestamp().as_millisecond();
+        assert_eq!(
+            rig.view()
+                .ui()
+                .freeze
+                .as_ref()
+                .map(|freeze| freeze.armed_ms),
+            Some(released_at)
+        );
+    }
+}
+
 fn focus_event_advances_selection(mux: MuxName) {
     let (mut rig, _, p, q) = sampled_focus_rig(mux);
     assert!(rig.state.observed_watched());
@@ -2561,6 +2638,46 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_freeze() {
 }
 
 #[test]
+fn working_focus_without_a_client_sample_does_not_create_a_rank_hold() {
+    let mut rig = Rig::new();
+    let mut before = agent_snapshot(&rig.ws);
+    set_agent_status(&mut before, crate::agents::AgentStatus::Running);
+    let rows = Arc::make_mut(&mut Arc::make_mut(&mut before.worktree_groups)[0].rows);
+    let focused = rows[0].pane.as_ref().unwrap().pane_id.clone();
+    rows[0].as_agent_mut().unwrap().attention_at_ms = Some(10);
+    let mut other = rows[0].clone();
+    other.id = "agent-2".into();
+    other.pane = Some(pane("terminal_1", "tab_0", false));
+    other.as_agent_mut().unwrap().attention_at_ms = Some(20);
+    rows.push(other);
+    before.focused_pane = Some(focused.clone());
+    before.viewed_panes = vec![rig.state.pane.config.own_pane.clone()];
+    before.sort_groups_for_presentation();
+    rig.view().ctx().current = before.clone();
+    rig.view().ui().selected_pane = Some(focused.clone());
+    rig.view().ui().baseline_pane = Some(focused);
+    assert!(!rig.views.lock().has_sample());
+
+    let mut after = before;
+    let row = Arc::make_mut(&mut Arc::make_mut(&mut after.worktree_groups)[0].rows)
+        .iter_mut()
+        .find(|row| row.id == "agent-1")
+        .unwrap();
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+    rig.fold(after, SnapshotSource::Produced);
+    assert_eq!(
+        rig.view()
+            .ctx()
+            .current
+            .rows()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["agent-1", "agent-2"]
+    );
+}
+
+#[test]
 fn answering_focused_agent_holds_the_pre_answer_order() {
     let mut rig = Rig::new();
     let mut before = agent_snapshot(&rig.ws);
@@ -2582,10 +2699,25 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut before.worktree_groups)[0].rows)
         .push(other);
     before.focused_pane = Some(selected.clone());
+    before.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: selected.clone(),
+    }];
     // Only the sidebar itself is viewed: the sidebar watches, and the fold stays independent of
     // the existing focus-read hold trigger.
     before.viewed_panes = vec![rig.state.pane.config.own_pane.clone()];
     before.sort_groups_for_presentation();
+    let mut frame = super::super::super::fixtures::fold(
+        before.clone(),
+        Some(&rig.state.pane.config.own_pane),
+        Vec::new(),
+    )
+    .frame
+    .unwrap();
+    Arc::make_mut(&mut frame).client_view_fresh = true;
+    rig.views
+        .lock()
+        .reconcile_frame(&frame, rig.state.pane.clock.now(), Duration::from_secs(60));
     rig.view().ctx().current = before.clone();
     rig.view().ui().selected_pane = Some(selected.clone());
     rig.view().ui().baseline_pane = Some(selected);
@@ -2608,9 +2740,12 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
         "the live rank moves the answered row down"
     );
 
-    rig.fold(after, SnapshotSource::Produced);
+    rig.fold(after.clone(), SnapshotSource::Produced);
 
-    assert!(rig.view().ui().freeze.is_some());
+    assert!(
+        rig.view().ui().freeze.is_none(),
+        "focus holds without a timer"
+    );
     assert_eq!(
         rig.view().ctx().current.worktree_groups[0]
             .rows
@@ -2618,6 +2753,17 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>(),
         vec!["agent-1", "agent-2"]
+    );
+    rig.state.pane.clock.advance(Duration::from_secs(31));
+    rig.fold(after, SnapshotSource::Produced);
+    assert_eq!(
+        rig.view()
+            .ctx()
+            .current
+            .rows()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["agent-1", "agent-2"]
     );
 }
 

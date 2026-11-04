@@ -925,7 +925,9 @@ impl LoopState {
 
     #[cfg(test)]
     fn admits_clock_only(&self, rejected: bool) -> bool {
-        self.inspect_view(|state, context| self.pane.admits_clock_only(state, context, rejected))
+        self.inspect_view(|state, context| {
+            self.pane.admits_clock_only(state, context, rejected, None)
+        })
     }
 
     #[cfg(test)]
@@ -1033,7 +1035,8 @@ impl LoopState {
             if seed {
                 return state.reduce_snapshot(v, prepared, update, true);
             }
-            let clock_only = state.admits_clock_only(v.state, v.context, false);
+            let clock_only =
+                state.admits_clock_only(v.state, v.context, false, v.held_panes.as_deref());
             let config = &state.config;
             #[cfg(test)]
             let mut projections = 0;
@@ -2573,11 +2576,17 @@ impl PaneState {
     /// clock-only delivery. Renderer-local reconciliation state blocks it, so
     /// that state always meets full content. Exhaustive: a new field must be
     /// named here, as a blocker or as irrelevant to delivery.
-    fn admits_clock_only(&self, ui: &ViewState, view: &ViewContext, rejected: bool) -> bool {
+    fn admits_clock_only(
+        &self,
+        ui: &ViewState,
+        view: &ViewContext,
+        rejected: bool,
+        held_panes: Option<&[PaneId]>,
+    ) -> bool {
         let Self {
             // Blockers: an exit, a held overlay or focus fence, a gate episode,
             // a failure streak, a frozen order, an armed read dwell, an empty
-            // confirmation, and a pending focus repair each resolve on a fold.
+            // confirmation, pending focus repair, and changed focus holds resolve on a fold.
             should_exit,
             fold_effects: _,
             baseline_seed: _,
@@ -2653,7 +2662,7 @@ impl PaneState {
             tab_read_dwell_until,
             pending_input_focus,
             focus_marker: _,
-            current: _,
+            current,
             last_focus_observation: _,
             last_pulled_rows: _,
             observation: _,
@@ -2667,6 +2676,8 @@ impl PaneState {
             confirmed_focus_intent_ms: _,
             filter_observed_at: _,
             anim_start: _,
+            held_ranks,
+            released_ranks: _,
         } = view;
         !should_exit
             && !rejected
@@ -2678,6 +2689,13 @@ impl PaneState {
             && !self_close.confirming_empty()
             && pending_focus_repair.is_none()
             && pending_input_focus.is_none()
+            && held_panes.is_none_or(|panes| {
+                held_ranks.keys().all(|pane| panes.contains(pane))
+                    && panes
+                        .iter()
+                        .filter(|pane| current.row_owning_pane(pane).is_some())
+                        .all(|pane| held_ranks.contains_key(pane))
+            })
     }
 
     fn on_focus_failed(
@@ -3207,6 +3225,7 @@ impl PaneState {
             SelectionFold {
                 previous: prev_good,
                 selected: prev_selected,
+                held_panes: v.held_panes.clone().unwrap_or_default(),
                 focused: focused_pane,
                 cleared,
                 filter,

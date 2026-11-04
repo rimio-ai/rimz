@@ -1,9 +1,10 @@
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agents::{AgentState, AgentStatus};
+use crate::ids::PaneId;
 use crate::store::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -264,32 +265,111 @@ pub(super) fn sort_groups_for_presentation(
     groups: &mut Arc<Vec<SidebarWorktreeGroup>>,
     now: jiff::Timestamp,
     windows: AttentionWindows,
+    held: &BTreeMap<String, &HeldRank>,
 ) {
     for index in 0..groups.len() {
         let group = &groups[index];
         let rows_sorted = group
             .rows
             .iter()
-            .is_sorted_by_key(|row| rank_key(row_rank_facts(row)));
+            .is_sorted_by_key(|row| presentation_row_key(row, held));
         let inactive = group_inactive(group, now, windows);
         if rows_sorted && group.inactive == inactive {
             continue;
         }
         let group = &mut Arc::make_mut(groups)[index];
         if !rows_sorted {
-            sort_rows(Arc::make_mut(&mut group.rows).as_mut_slice());
+            Arc::make_mut(&mut group.rows)
+                .sort_by_cached_key(|row| presentation_row_key(row, held));
         }
         group.inactive = inactive;
     }
-    sort_presented_groups(groups);
+    sort_presented_groups(groups, held);
 }
 
-pub(super) fn sort_presented_groups(groups: &mut Arc<Vec<SidebarWorktreeGroup>>) {
-    if !groups
+pub(super) fn sort_presented_groups(
+    groups: &mut Arc<Vec<SidebarWorktreeGroup>>,
+    held: &BTreeMap<String, &HeldRank>,
+) {
+    let key = |group: &SidebarWorktreeGroup| presentation_group_key(group, held);
+    if !groups.iter().is_sorted_by_key(key) {
+        Arc::make_mut(groups).sort_by_cached_key(key);
+    }
+}
+
+/// A pane's captured presentation rank; only this module interprets its keys.
+#[derive(Clone)]
+pub(crate) struct HeldRank {
+    row: RankKey,
+    group: GroupRankKey,
+}
+
+pub(super) fn capture_held_rank(
+    snapshot: &SidebarSnapshot,
+    pane: &PaneId,
+    held: &HashMap<PaneId, HeldRank>,
+) -> Option<HeldRank> {
+    let row = snapshot.row_owning_pane(pane)?;
+    let group = snapshot
+        .worktree_groups
         .iter()
-        .is_sorted_by(|a, b| compare_groups(a, b).is_le())
-    {
-        Arc::make_mut(groups).sort_by(compare_groups);
+        .find(|group| group.rows.iter().any(|member| member.id == row.id))?;
+    let held = held_rows(snapshot, held);
+    Some(HeldRank {
+        row: presentation_row_key(row, &held),
+        group: presentation_group_key(group, &held),
+    })
+}
+
+pub(super) fn held_rows<'a>(
+    snapshot: &SidebarSnapshot,
+    held: &'a HashMap<PaneId, HeldRank>,
+) -> BTreeMap<String, &'a HeldRank> {
+    held.iter()
+        .filter_map(|(pane, rank)| {
+            snapshot
+                .row_owning_pane(pane)
+                .map(|row| (row.id.clone(), rank))
+        })
+        .collect()
+}
+
+fn presentation_row_key(row: &SidebarRow, held: &BTreeMap<String, &HeldRank>) -> RankKey {
+    held.get(&row.id)
+        .map_or_else(|| rank_key(row_rank_facts(row)), |held| held.row.clone())
+}
+
+fn presentation_group_key(
+    group: &SidebarWorktreeGroup,
+    held: &BTreeMap<String, &HeldRank>,
+) -> GroupRankKey {
+    if let Some(held) = group.rows.iter().find_map(|row| held.get(&row.id)) {
+        return held.group.clone();
+    }
+    live_group_key(group)
+}
+
+pub(super) fn sort_rows_in_order<'a>(
+    groups: &mut Arc<Vec<SidebarWorktreeGroup>>,
+    order: impl Iterator<Item = &'a str>,
+    held: &BTreeMap<String, &HeldRank>,
+) {
+    let positions: HashMap<_, _> = order.enumerate().map(|(index, id)| (id, index)).collect();
+    let key = |row: &SidebarRow| {
+        (
+            held.get(&row.id)
+                .map_or_else(|| row.is_process(), |held| held.row.is_process),
+            positions
+                .get(row.id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    };
+    for index in 0..groups.len() {
+        if groups[index].rows.iter().is_sorted_by_key(key) {
+            continue;
+        }
+        Arc::make_mut(&mut Arc::make_mut(groups)[index].rows).sort_by_key(key);
     }
 }
 
@@ -453,23 +533,20 @@ pub(super) fn compare_groups(
     left: &SidebarWorktreeGroup,
     right: &SidebarWorktreeGroup,
 ) -> Ordering {
+    live_group_key(left).cmp(&live_group_key(right))
+}
+
+fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
     // External stays last; inactive groups follow active project work. Only
     // actionable groups use urgency. Other active groups rank by their newest
     // agent registration, and inactive groups by their latest agent activity.
     group_sort_key(
-        left.rows.iter().map(row_rank_facts),
-        left.kind,
-        left.inactive.is_some(),
-        left.root_lane,
-        &left.label,
+        group.rows.iter().map(row_rank_facts),
+        group.kind,
+        group.inactive.is_some(),
+        group.root_lane,
+        &group.label,
     )
-    .cmp(&group_sort_key(
-        right.rows.iter().map(row_rank_facts),
-        right.kind,
-        right.inactive.is_some(),
-        right.root_lane,
-        &right.label,
-    ))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

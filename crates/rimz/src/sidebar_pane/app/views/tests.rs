@@ -144,6 +144,24 @@ fn publication_reconciles_before_any_reader_and_records_latest_outcomes() {
     assert_record(&handle);
 }
 
+#[test]
+fn focus_holds_include_disagreeing_coviewers_but_not_chrome_or_departed_clients() {
+    let clock = clock();
+    let mut views = Views::default();
+    views.reconcile_frame(
+        &frame(&[(1, 11), (2, 12), (3, 21), (4, 10)]),
+        clock.now(),
+        HOLD,
+    );
+    assert_eq!(views.focused(&pane(10)), None);
+    assert_eq!(views.focused_panes(&pane(10)), [pane(11), pane(12)]);
+    assert_eq!(views.focused_panes(&pane(20)), [pane(21)]);
+    views.reconcile_frame(&frame(&[(2, 12), (3, 21), (4, 10)]), clock.now(), HOLD);
+    assert_eq!(views.focused(&pane(10)), None);
+    assert_eq!(views.focused_panes(&pane(10)), [pane(12)]);
+    assert_eq!(views.focused_panes(&pane(99)), []);
+}
+
 fn clock() -> LoopClock {
     LoopClock::play("2026-06-01T00:00:00Z".parse().unwrap())
 }

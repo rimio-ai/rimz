@@ -38,6 +38,7 @@ pub(super) struct ViewBorrow<'a> {
     pub(super) token: Option<(ViewId, u64, u64)>,
     pub(super) latest: bool,
     pub(super) focused: Option<Option<PaneId>>,
+    pub(super) held_panes: Option<Vec<PaneId>>,
     pub(super) focus_event: Option<u64>,
     pub(super) parked: Option<bool>,
     pub(super) resolved: bool,
@@ -169,6 +170,7 @@ impl ViewAccess {
             token: None,
             latest: false,
             focused: None,
+            held_panes: None,
             focus_event: None,
             parked: None,
             resolved,
@@ -246,6 +248,7 @@ impl ViewAccess {
             let own_pane_unlisted = frame.is_some() && own_view.is_none();
             // Unresolved copies never follow an unrelated client's session focus.
             let focused = views.has_sample().then(|| views.focused(&own_pane));
+            let held_panes = views.has_sample().then(|| views.focused_panes(&own_pane));
             let parked = views.has_sample().then(|| views.parked(&own_pane));
             let focus_event = views.attributed_focus_event(&own_pane);
             let revision = views.revision;
@@ -319,6 +322,7 @@ impl ViewAccess {
                 token: None,
                 latest: has_latest,
                 focused,
+                held_panes,
                 focus_event,
                 parked,
                 resolved,
@@ -330,7 +334,12 @@ impl ViewAccess {
                 && let Some(prepared) = prepared.filter(|_| entry.cursor.revision != revision)
             {
                 for latest in latest.since(entry.cursor.revision) {
-                    let clock_only = pane.admits_clock_only(borrow.state, borrow.context, false);
+                    let clock_only = pane.admits_clock_only(
+                        borrow.state,
+                        borrow.context,
+                        false,
+                        borrow.held_panes.as_deref(),
+                    );
                     let update = entry.cursor.replay(
                         latest,
                         |fold| {
