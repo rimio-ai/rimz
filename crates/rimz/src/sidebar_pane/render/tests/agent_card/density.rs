@@ -106,7 +106,7 @@ fn stale_cards_shrink_only_unread_free_resting_history() {
             .unwrap()
             .to_string();
         assert!(text.contains("try the"), "{text}");
-        assert!(text.contains("$3.10") && text.ends_with("2d "), "{text}");
+        assert!(text.contains(" 2d  ") && text.ends_with("$3.10 "), "{text}");
         assert_snapshot(
             if width == 36 {
                 "stale_card_narrow"

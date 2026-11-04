@@ -264,15 +264,16 @@ pub(super) fn stale_line(
 ) -> Line<'static> {
     let theme = ctx.theme;
     let width = content_width(ctx.width);
-    let mut right = cost_spans(ctx, row, cost_usd);
-    if !right.is_empty() {
-        right.push(Span::raw("  "));
-    }
     let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.idle_since(), ctx.now));
-    right.push(Span::styled(
+    let mut right = vec![Span::styled(
         format!("{age:>3}"),
         cache_age_style(theme, row, ctx.now),
-    ));
+    )];
+    let cost = cost_spans(ctx, row, cost_usd);
+    if !cost.is_empty() {
+        right.push(Span::raw("  "));
+        right.extend(cost);
+    }
     let mut left = vec![
         agent_lead_cell(
             theme,
