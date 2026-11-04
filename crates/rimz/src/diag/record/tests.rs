@@ -811,6 +811,19 @@ fn agent_card_without_process_has_stable_diagnostic_identity() {
 
 #[test]
 fn severity_table_pins_conditional_and_regression_categories() {
+    for (repeated, expected) in [
+        (Vec::<String>::new(), DiagSeverity::Info),
+        (vec!["history.jsonl".into()], DiagSeverity::Warn),
+    ] {
+        let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+            "kind": "account_links_maintained", "login": "claude@work",
+            "account_home": "/accounts/work", "removed": [],
+            "aside_dir": "/accounts/work/.rimz-aside/stamp",
+            "set_aside": ["history.jsonl"], "repeated": repeated,
+        }));
+        assert!(event.is_ok(), "account-link upkeep must decode: {event:?}");
+        assert_eq!(event.unwrap().severity(), expected);
+    }
     let repairs = [
         ("scoped_bind_restored", DiagSeverity::Info),
         ("scoped_bind_restore_failed", DiagSeverity::Error),
@@ -989,6 +1002,47 @@ fn scoped_bind_records_partition_agent_and_paths_not_error_text() {
             let other = serde_json::from_value::<DiagEvent>(wire).unwrap();
             assert_eq!(event.identity_key(), other.identity_key());
         }
+    }
+}
+
+#[test]
+fn account_link_maintenance_keeps_wire_evidence_and_partitions_by_login() {
+    let wire = serde_json::json!({
+        "kind": "account_links_maintained", "login": "claude@work",
+        "account_home": "/accounts/work", "removed": ["policy-limits.json", "state.tmp"],
+        "aside_dir": "/accounts/work/.rimz-aside/stamp",
+        "set_aside": ["history.jsonl", "other-state"], "repeated": ["history.jsonl"],
+    });
+    let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+    assert!(
+        decoded.is_ok(),
+        "account-link upkeep must decode: {decoded:?}"
+    );
+    let event = decoded.unwrap();
+    assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+    assert_eq!(event.kind_name(), "account_links_maintained");
+    assert_eq!(event.identity_key(), "account_links_maintained:claude@work");
+    assert_eq!(event.family_key(), event.identity_key());
+    assert!(event.evidence_refs().is_empty());
+    let mut other = wire;
+    other["login"] = "claude@personal".into();
+    assert_ne!(
+        event.identity_key(),
+        serde_json::from_value::<DiagEvent>(other)
+            .unwrap()
+            .identity_key()
+    );
+    let summary = event.summary();
+    for text in [
+        "claude@work",
+        "policy-limits.json",
+        "state.tmp",
+        "history.jsonl",
+        "other-state",
+        "/accounts/work/.rimz-aside/stamp",
+        "repeated",
+    ] {
+        assert!(summary.contains(text), "{summary}");
     }
 }
 

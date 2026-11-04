@@ -5,7 +5,10 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-use crate::common::{Env, hermetic_providers as hermetic, provider_bin};
+use crate::common::{
+    CommandTimeoutExt, Env, exec_args, hermetic_providers as hermetic, path_with_front,
+    provider_bin, write_env_dump_shim, write_fake_login_shell,
+};
 
 fn accounts(env: &Env, args: &[&str]) -> Output {
     hermetic(env, &mut env.rimz())
@@ -13,6 +16,110 @@ fn accounts(env: &Env, args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("run rimz accounts")
+}
+
+#[test]
+fn launch_account_link_upkeep_is_recorded_without_console_or_card_warnings() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let home = env.home_root.join("work-account");
+    let native = env.home_root.join(".claude");
+    for root in [&home, &native] {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("settings.json"), "{}").unwrap();
+        std::fs::write(root.join("history.jsonl"), "history").unwrap();
+    }
+    std::os::unix::fs::symlink(
+        native.join("policy-limits.json"),
+        home.join("policy-limits.json"),
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[accounts.claude.work]\nhome = '{}'\n", home.display()),
+    )
+    .unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::new(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "agent",
+            "agent.launched",
+            json!({"agent_id": "link-launch", "launch_id": "link-launch",
+                "agent_name": "link-agent", "agent_name_explicit": true, "state": "starting"}),
+        ))
+        .unwrap();
+    let mut request = rimz::harness::launch::ExecRequest::bare_launch(
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        Vec::new(),
+    );
+    request.identity.launch_id = Some("link-launch".into());
+    request.identity.name = Some("link-agent".into());
+    request.identity.params.login = Some("work".parse().unwrap());
+    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    let shell = write_fake_login_shell(&env, "link-shell", &[]);
+    let shim = write_env_dump_shim(&env, "claude");
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("link-env"))
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let warnings: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("rimz: claude@work account: "))
+        .collect();
+    let aside = aside(&home);
+    let expected = format!(
+        "moved {} aside to {}; the account now reads the copy in {}",
+        home.join("settings.json").display(),
+        aside.join("settings.json").display(),
+        native.display(),
+    );
+    assert_eq!(warnings, [expected.as_str()], "{stderr}");
+    let shown = env
+        .rimz()
+        .args(["agents", "show", "@link-agent", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["agent"]["launch_warnings"],
+        json!([format!("claude@work account: {expected}")])
+    );
+    let state = env.store().paths().clone();
+    let sink =
+        rimz::diag::DiagSink::under(state.root, state.workspace_id, workspace.session_name, None);
+    let log = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
+    let records: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["event"]["kind"] == "account_links_maintained")
+        .collect();
+    assert_eq!(records.len(), 1, "{log}");
+    assert_eq!(records[0]["event"]["login"], "claude@work");
+    assert_eq!(
+        records[0]["event"]["account_home"],
+        home.display().to_string()
+    );
+    assert_eq!(
+        records[0]["event"]["removed"],
+        json!(["policy-limits.json"])
+    );
+    assert_eq!(
+        records[0]["event"]["aside_dir"],
+        aside.display().to_string()
+    );
+    assert_eq!(records[0]["event"]["set_aside"], json!(["history.jsonl"]));
+    assert_eq!(records[0]["event"]["repeated"], json!([]));
+    assert_eq!(records[0]["severity"], "info");
 }
 
 #[test]

@@ -153,13 +153,17 @@ impl HeadlessProfile {
             Some(&self.effective),
             &|| Err("no room".into()),
             |_, login| {
-                let shared =
-                    crate::agents::account_links::reconcile(login, &ambient_env(), &|| {
-                        crate::room::other_live_agents_on(&login.key(), &[]).ok()
-                    })?;
-                Ok(shared.iter().flat_map(|shared| shared.warnings()).collect())
+                crate::agents::account_links::reconcile(login, &ambient_env(), &|| {
+                    crate::room::other_live_agents_on(&login.key(), &[]).ok()
+                })
             },
         );
+        if let Some(maintenance) = prepared.link_maintenance {
+            match StatePaths::for_project_root(root) {
+                Ok(state) => diag_sink(&state).emit(maintenance),
+                Err(error) => tracing::debug!(%error, "diagnostic sink unavailable"),
+            }
+        }
         let mut warnings = self.warnings;
         warnings.extend(prepared.link_warnings);
         warnings.extend(prepared.model_warnings);
@@ -170,6 +174,21 @@ impl HeadlessProfile {
         launch_plan::apply(&plan).map_err(|error| HeadlessErr::Plan(Box::new(error)))?;
         Ok((plan, warnings))
     }
+}
+
+/// The project room's diagnostics sink, named by its recorded session.
+fn diag_sink(state: &StatePaths) -> crate::diag::DiagSink {
+    let session = crate::workspace::record::read_optional(&state.workspace_record)
+        .ok()
+        .flatten()
+        .map(|record| record.session_name)
+        .unwrap_or_else(|| state.dir_name.as_str().to_owned());
+    crate::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        session,
+        None,
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -237,18 +256,7 @@ impl AdmittedLaunch<'_> {
         for key in &process.unset {
             command.env_remove(key);
         }
-        let state = plan.state();
-        let session = crate::workspace::record::read_optional(&state.workspace_record)
-            .ok()
-            .flatten()
-            .map(|record| record.session_name)
-            .unwrap_or_else(|| state.dir_name.as_str().to_owned());
-        let diag = crate::diag::DiagSink::under(
-            state.root.clone(),
-            state.workspace_id.clone(),
-            session,
-            None,
-        );
+        let diag = diag_sink(plan.state());
         let kind = plan.request.kind.clone();
         let name = plan.request.identity.name.clone();
         let guard = crate::sandbox::BindGuard::arm(

@@ -206,12 +206,9 @@ fn launch_and_supervise(
                 .into_iter()
                 .chain(exec_attach_target(request).into_iter().map(|(_, id)| id))
                 .collect();
-            let shared = rimz::agents::account_links::reconcile(
-                login,
-                &rimz::agents::ambient_env(),
-                &|| rimz::room::other_live_agents_on(&login.key(), &launching).ok(),
-            )?;
-            Ok(shared.iter().flat_map(|shared| shared.warnings()).collect())
+            rimz::agents::account_links::reconcile(login, &rimz::agents::ambient_env(), &|| {
+                rimz::room::other_live_agents_on(&login.key(), &launching).ok()
+            })
         },
     );
     let diag = match rimz::StatePaths::for_project_root(&workspace.project_root) {
@@ -226,6 +223,9 @@ fn launch_and_supervise(
             rimz::diag::DiagSink::disabled()
         }
     };
+    if let Some(maintenance) = prepared.link_maintenance {
+        diag.emit(maintenance);
+    }
     if let Some(failure) = prepared.model_refresh_failure {
         diag.emit(rimz::diag::record::DiagEvent::ModelCatalogRefreshFailed {
             agent_kind: kind.clone(),

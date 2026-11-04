@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::agents::ProviderLogin;
-use crate::agents::account_links::ShareErr;
+use crate::agents::account_links::{ShareErr, ShareReport};
 use crate::agents::capabilities::SystemTextChannel;
 use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, SkillLinkPlan};
 use crate::config::effective::{LaunchAgents, ProfileScope};
@@ -242,11 +242,13 @@ impl LaunchPlan {
 }
 
 /// What the exec wrapper's launch decisions produced. The account-link and
-/// model warnings, the refresh failure, and the alias move survive a later
-/// failure, since the wrapper reports them either way.
+/// model warnings, quiet maintenance, the refresh failure, and the alias move
+/// survive a later failure, since the wrapper reports them either way.
 pub struct ExecPreparation {
-    /// What `link_account` reported, printed ahead of the model warnings.
+    /// Declared-entry set-asides and cross-filesystem notices, ahead of model warnings.
     pub link_warnings: Vec<String>,
+    /// Quiet account-link upkeep, emitted before reading the compilation outcome.
+    pub link_maintenance: Option<crate::diag::record::DiagEvent>,
     pub model_warnings: Vec<String>,
     pub model_refresh_failure: Option<ModelRefreshFailure>,
     /// The alias move, with the login whose catalog moved.
@@ -292,9 +294,10 @@ pub fn prepare_exec(
     machine: &crate::config::MachineConfig,
     effective: Option<&LaunchAgents>,
     room_agents: &dyn Fn() -> Result<Vec<crate::agents::AgentState>, String>,
-    link_account: impl Fn(&ExecRequest, &ProviderLogin) -> Result<Vec<String>, ShareErr>,
+    link_account: impl Fn(&ExecRequest, &ProviderLogin) -> Result<Option<ShareReport>, ShareErr>,
 ) -> ExecPreparation {
     let mut link_warnings = Vec::new();
+    let mut link_maintenance = None;
     let mut model_warnings = Vec::new();
     let mut model_move = None;
     let mut model_refresh_failure = None;
@@ -326,7 +329,19 @@ pub fn prepare_exec(
             request.identity.params.login.as_ref(),
             &machine.accounts,
         )?;
-        link_warnings = link_account(&request, &login)?;
+        if let Some(report) = link_account(&request, &login)? {
+            link_warnings = report.launch_warnings();
+            link_maintenance = report.maintenance().map(|quiet| {
+                crate::diag::record::DiagEvent::AccountLinksMaintained {
+                    login: quiet.login,
+                    account_home: quiet.account_home,
+                    removed: quiet.removed,
+                    aside_dir: quiet.aside_dir,
+                    set_aside: quiet.set_aside,
+                    repeated: quiet.repeated,
+                }
+            });
+        }
         let recorded_session = match &request.action {
             launch::ExecAction::Launch { .. } | launch::ExecAction::Pick { .. } => None,
             launch::ExecAction::Resume { session_id, .. }
@@ -385,6 +400,7 @@ pub fn prepare_exec(
     ExecPreparation {
         outcome: prepare(),
         link_warnings,
+        link_maintenance,
         model_warnings,
         model_refresh_failure,
         model_move,

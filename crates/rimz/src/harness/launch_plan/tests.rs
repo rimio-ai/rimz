@@ -3688,8 +3688,72 @@ fn prepare(
         machine,
         effective,
         room_agents,
-        |_, _| Ok(Vec::new()),
+        |_, _| Ok(None),
     )
+}
+
+#[test]
+fn prepare_exec_routes_account_link_notices_and_preserves_maintenance_on_failure() {
+    for quiet in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let named = root.path().join("named");
+        let native = root.path().join(".claude");
+        for home in [&named, &native] {
+            std::fs::create_dir_all(home).unwrap();
+            std::fs::write(home.join("settings.json"), "{}").unwrap();
+            if quiet {
+                std::fs::write(home.join("history.jsonl"), "history").unwrap();
+            }
+        }
+        let machine: crate::config::MachineConfig = toml::from_str(&format!(
+            "[accounts.claude.work]\nhome = '{}'\n",
+            named.display()
+        ))
+        .unwrap();
+        let mut request = host_request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        request.identity.params.login = Some("work".parse().unwrap());
+        request.system_prompt_file = Some(root.path().join("missing-prompt.txt").into());
+        let ambient = BTreeMap::from([("HOME".into(), root.path().display().to_string())]);
+        let prepared = prepare_exec(
+            envelope(&request, None),
+            root.path(),
+            root.path(),
+            Path::new("/bin/rimz"),
+            &machine,
+            None,
+            &|| Ok(Vec::new()),
+            |_, login| crate::agents::account_links::reconcile(login, &ambient, &|| Some(0)),
+        );
+        assert_eq!(
+            prepared.link_warnings.len(),
+            1,
+            "{:?}",
+            prepared.link_warnings
+        );
+        assert!(prepared.link_warnings[0].contains("/settings.json "));
+        assert!(prepared.outcome.is_err(), "later compilation must fail");
+        assert_eq!(prepared.link_maintenance.is_some(), quiet);
+        if quiet {
+            let event = serde_json::to_value(prepared.link_maintenance.unwrap()).unwrap();
+            assert_eq!(event["kind"], "account_links_maintained");
+            assert_eq!(event["login"], "claude@work");
+            assert_eq!(event["account_home"], named.display().to_string());
+            assert_eq!(event["removed"], serde_json::json!([]));
+            assert_eq!(event["set_aside"], serde_json::json!(["history.jsonl"]));
+            assert_eq!(event["repeated"], serde_json::json!([]));
+            let aside = PathBuf::from(event["aside_dir"].as_str().unwrap());
+            assert_eq!(
+                std::fs::read_to_string(aside.join("history.jsonl")).unwrap(),
+                "history"
+            );
+        }
+    }
 }
 
 #[test]
@@ -3866,7 +3930,7 @@ fn exec_scope_requires_cached_admission_even_when_explicitly_enabled() {
             &machine,
             None,
             &|| Ok(Vec::new()),
-            |_, _| Ok(Vec::new()),
+            |_, _| Ok(None),
         );
         let (plan, _) = prepared.outcome.unwrap();
         assert_eq!(

@@ -96,6 +96,103 @@ impl Fixture {
 }
 
 #[test]
+fn launch_reports_keep_declared_and_history_moves_but_record_upkeep() {
+    let home = Fixture::new("claude");
+    for root in [&home.named, &home.native] {
+        fs::create_dir_all(root.join("projects")).unwrap();
+        fs::write(root.join("settings.json"), "{}").unwrap();
+        fs::write(root.join("history.jsonl"), "history").unwrap();
+    }
+    for name in ["policy-limits.json", "settings.json.tmp.123"] {
+        symlink(home.native.join(name), home.named.join(name)).unwrap();
+    }
+    let mut report = home.run(true);
+    report.left_local.push(home.named.join("unmovable"));
+    let all = report.warnings();
+    assert_eq!(all.len(), 6);
+    let launch = report.launch_warnings();
+    assert_eq!(launch.len(), 3, "{launch:?}");
+    for name in ["settings.json", "projects", "unmovable"] {
+        assert!(
+            launch
+                .iter()
+                .any(|line| line.contains(&format!("/{name} ")))
+        );
+    }
+    for line in &all {
+        assert!(report.to_string().contains(line));
+    }
+    let quiet = report.maintenance().expect("upkeep needs a record");
+    assert_eq!(quiet.login, home.account);
+    assert_eq!(quiet.account_home, home.named);
+    assert_eq!(
+        quiet.removed,
+        ["policy-limits.json", "settings.json.tmp.123"]
+    );
+    assert_eq!(quiet.aside_dir, Some(home.aside()));
+    assert_eq!(quiet.set_aside, ["history.jsonl"]);
+    assert!(quiet.repeated.is_empty());
+    let clean = home.run(true);
+    assert!(clean.launch_warnings().is_empty());
+    assert!(clean.maintenance().is_none());
+    symlink(
+        home.native.join("policy-limits.json"),
+        home.named.join("policy-limits.json"),
+    )
+    .unwrap();
+    let removed = home.run(true);
+    assert!(removed.launch_warnings().is_empty());
+    let quiet = removed.maintenance().unwrap();
+    assert_eq!(quiet.removed, ["policy-limits.json"]);
+    assert!(quiet.aside_dir.is_none());
+    assert!(quiet.set_aside.is_empty() && quiet.repeated.is_empty());
+}
+
+#[test]
+fn quiet_set_asides_repeat_by_account_and_name() {
+    let home = Fixture::new("claude");
+    for root in [&home.named, &home.native] {
+        fs::create_dir_all(root).unwrap();
+        fs::write(root.join("settings.json"), "{}").unwrap();
+        fs::write(root.join("history.jsonl"), "first").unwrap();
+    }
+    let first = home.run(true);
+    assert!(
+        first.maintenance().is_some(),
+        "first quiet move needs a record"
+    );
+    assert!(first.maintenance().unwrap().repeated.is_empty());
+    for name in ["settings.json", "history.jsonl"] {
+        fs::remove_file(home.named.join(name)).unwrap();
+        fs::write(home.named.join(name), "{}").unwrap();
+    }
+    fs::write(home.native.join("other-state"), "shared").unwrap();
+    fs::write(home.named.join("other-state"), "local").unwrap();
+    let second = home.run(true);
+    assert_eq!(second.launch_warnings().len(), 1);
+    let quiet = second.maintenance().unwrap();
+    assert_eq!(quiet.set_aside, ["history.jsonl", "other-state"]);
+    assert_eq!(quiet.repeated, ["history.jsonl"]);
+    let sibling = home.sibling("personal");
+    fs::write(sibling.named.join("history.jsonl"), "separate").unwrap();
+    assert!(sibling.run(true).maintenance().unwrap().repeated.is_empty());
+}
+
+#[test]
+fn earlier_asides_count_even_when_the_preserved_link_is_dangling() {
+    let home = Fixture::new("claude");
+    let earlier = home.named.join(ASIDE_DIR).join("earlier");
+    fs::create_dir_all(&earlier).unwrap();
+    symlink("/missing/provider-state", earlier.join("history.jsonl")).unwrap();
+    fs::create_dir_all(&home.native).unwrap();
+    fs::write(home.native.join("history.jsonl"), "shared").unwrap();
+    fs::write(home.named.join("history.jsonl"), "local").unwrap();
+    let report = home.run(true);
+    assert!(report.maintenance().is_some(), "quiet move needs a record");
+    assert_eq!(report.maintenance().unwrap().repeated, ["history.jsonl"]);
+}
+
+#[test]
 fn a_fresh_shared_account_links_every_entry_that_is_not_private() {
     let home = Fixture::new("codex");
     fs::create_dir_all(home.native.join("sessions")).unwrap();

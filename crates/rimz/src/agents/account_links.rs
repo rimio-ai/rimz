@@ -140,6 +140,7 @@ fn daemon_writers(sessions: Option<NonZeroUsize>, kind: &AgentKind, writes: &str
 #[derive(Debug)]
 pub struct ShareReport {
     account: LoginKey,
+    account_home: PathBuf,
     default_home: PathBuf,
     shared: bool,
     linked: Vec<String>,
@@ -149,6 +150,8 @@ pub struct ShareReport {
     /// Links a standalone account no longer shares.
     unlinked: Vec<String>,
     set_aside: Vec<(PathBuf, PathBuf)>,
+    quiet_set_aside: Vec<String>,
+    repeated: Vec<String>,
     /// Links removed from names no account shares.
     repaired: Vec<PathBuf>,
     /// Entries that could not move to the provider's own home.
@@ -156,7 +159,74 @@ pub struct ShareReport {
     notes: Vec<String>,
 }
 
+pub(crate) struct LinkMaintenance {
+    pub login: LoginKey,
+    pub account_home: PathBuf,
+    pub removed: Vec<String>,
+    pub aside_dir: Option<PathBuf>,
+    pub set_aside: Vec<String>,
+    pub repeated: Vec<String>,
+}
+
 impl ShareReport {
+    pub(crate) fn launch_warnings(&self) -> Vec<String> {
+        self.set_aside
+            .iter()
+            .filter(|(slot, _)| !self.quiet_aside(slot))
+            .map(|(slot, aside)| self.set_aside_warning(slot, aside))
+            .chain(self.left_local_warnings())
+            .collect()
+    }
+
+    pub(crate) fn maintenance(&self) -> Option<LinkMaintenance> {
+        if self.repaired.is_empty() && self.quiet_set_aside.is_empty() {
+            return None;
+        }
+        Some(LinkMaintenance {
+            login: self.account.clone(),
+            account_home: self.account_home.clone(),
+            removed: self
+                .repaired
+                .iter()
+                .filter_map(|slot| slot.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .collect(),
+            aside_dir: self
+                .set_aside
+                .iter()
+                .find(|(slot, _)| self.quiet_aside(slot))
+                .and_then(|(_, aside)| aside.parent())
+                .map(Path::to_path_buf),
+            set_aside: self.quiet_set_aside.clone(),
+            repeated: self.repeated.clone(),
+        })
+    }
+
+    fn quiet_aside(&self, slot: &Path) -> bool {
+        self.quiet_set_aside.iter().any(|name| slot.ends_with(name))
+    }
+
+    fn set_aside_warning(&self, slot: &Path, aside: &Path) -> String {
+        format!(
+            "{} account: moved {} aside to {}; the account now reads the copy in {}",
+            self.account,
+            slot.display(),
+            aside.display(),
+            self.default_home.display()
+        )
+    }
+
+    fn left_local_warnings(&self) -> impl Iterator<Item = String> {
+        self.left_local.iter().map(|slot| {
+            format!(
+                "{} account: {} stays in the account home; it cannot move to {} on another filesystem",
+                self.account,
+                slot.display(),
+                self.default_home.display()
+            )
+        })
+    }
+
     /// The provider home the account shares with.
     pub fn default_home(&self) -> &Path {
         &self.default_home
@@ -167,9 +237,8 @@ impl ShareReport {
         self.shared
     }
 
-    /// What the account's owner must hear about: every link removed from a
-    /// name no account shares, every entry set aside, and every entry left in
-    /// the account home.
+    /// The full report for account setup and failures: every removed link at an
+    /// unshared name, every entry set aside, and every entry left in the account home.
     pub fn warnings(&self) -> Vec<String> {
         let repaired = self.repaired.iter().map(|slot| {
             format!(
@@ -179,24 +248,14 @@ impl ShareReport {
                 self.default_home.display()
             )
         });
-        let set_aside = self.set_aside.iter().map(|(slot, aside)| {
-            format!(
-                "{} account: moved {} aside to {}; the account now reads the copy in {}",
-                self.account,
-                slot.display(),
-                aside.display(),
-                self.default_home.display()
-            )
-        });
-        let left_local = self.left_local.iter().map(|slot| {
-            format!(
-                "{} account: {} stays in the account home; it cannot move to {} on another filesystem",
-                self.account,
-                slot.display(),
-                self.default_home.display()
-            )
-        });
-        repaired.chain(set_aside).chain(left_local).collect()
+        let set_aside = self
+            .set_aside
+            .iter()
+            .map(|(slot, aside)| self.set_aside_warning(slot, aside));
+        repaired
+            .chain(set_aside)
+            .chain(self.left_local_warnings())
+            .collect()
     }
 }
 
@@ -234,6 +293,8 @@ struct PlannedLink {
     target: PathBuf,
     link_text: PathBuf,
     action: Action,
+    declared: bool,
+    repeated: bool,
 }
 
 fn io_err(path: &Path, source: std::io::Error) -> ShareErr {
@@ -455,12 +516,19 @@ fn reconcile_homes(
         let target = default_home.join(name);
         let link_text = prefix.join(name);
         let action = classify(&slot, &target, &link_text)?;
+        let declared = included.iter().any(|entry| entry.name == name.as_str())
+            || adapter.history_home_entries().contains(&name.as_str());
+        let repeated = !declared
+            && matches!(action, Action::SetAside(_))
+            && has_prior_aside(&named_home, name);
         plan.push(PlannedLink {
             name: name.clone(),
             slot,
             target,
             link_text,
             action,
+            declared,
+            repeated,
         });
     }
     let mut stale = Vec::new();
@@ -540,6 +608,7 @@ fn reconcile_homes(
 
     let mut report = ShareReport {
         account: homes.account.clone(),
+        account_home: named_home.clone(),
         default_home: default_home.clone(),
         shared: homes.shared,
         linked: Vec::new(),
@@ -547,6 +616,8 @@ fn reconcile_homes(
         moved: Vec::new(),
         unlinked: Vec::new(),
         set_aside: Vec::new(),
+        quiet_set_aside: Vec::new(),
+        repeated: Vec::new(),
         repaired: Vec::new(),
         left_local: Vec::new(),
         notes: Vec::new(),
@@ -592,6 +663,8 @@ fn apply(
         target,
         link_text,
         action,
+        declared,
+        repeated,
     } in plan
     {
         if dirs.contains(&name.as_str()) && !matches!(action, Action::Move(_)) {
@@ -650,6 +723,12 @@ fn apply(
                 let aside = dir.join(&name);
                 set_aside(real_home, &slot, &aside, &kind)?;
                 report.set_aside.push((slot.clone(), aside));
+                if !declared {
+                    report.quiet_set_aside.push(name.clone());
+                    if repeated {
+                        report.repeated.push(name.clone());
+                    }
+                }
             }
         }
         std::os::unix::fs::symlink(&link_text, &slot).map_err(|error| io_err(&slot, error))?;
@@ -664,6 +743,16 @@ fn apply(
         }
     }
     Ok(())
+}
+
+fn has_prior_aside(named_home: &Path, name: &str) -> bool {
+    let Ok(stamps) = fs::read_dir(named_home.join(ASIDE_DIR)) else {
+        return false;
+    };
+    stamps.filter_map(Result::ok).any(|stamp| {
+        stamp.file_type().is_ok_and(|kind| kind.is_dir())
+            && fs::symlink_metadata(stamp.path().join(name)).is_ok()
+    })
 }
 
 /// Move the entry at `slot` to `aside`. A relative link resolves against the
