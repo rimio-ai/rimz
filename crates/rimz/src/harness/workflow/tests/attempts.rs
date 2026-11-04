@@ -384,6 +384,64 @@ fn cancel_without_reason_keeps_the_old_journal_shape() {
 }
 
 #[test]
+fn cancel_preserves_the_stopping_node_in_the_record_and_terminal_journal() {
+    for command in [false, true] {
+        let runner = if command {
+            "[steps.work]\nshell='sleep 60'\ntimeout='1h'\nthen='after'\n"
+        } else {
+            "[checks.work]\nshell='false'\ntimeout='1h'\non.fail='@wait'\non.pass='@done'\n"
+        };
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='begin'\n\
+             [checks.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+             {runner}[checks.after]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+        );
+        let (_dir, state, record) = setup(&text);
+        let paths = state.workflow(&record.id);
+        std::thread::scope(|threads| {
+            let running =
+                command.then(|| threads.spawn(|| advance_ok(&state, &record.id, &FakeHost::new())));
+            if command {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    let live = records::load(&paths).unwrap();
+                    if live.node == "work"
+                        && live
+                            .attempt
+                            .as_ref()
+                            .is_some_and(|attempt| attempt.child.is_some())
+                    {
+                        break;
+                    }
+                    assert!(std::time::Instant::now() < deadline, "{live:?}");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            } else {
+                let waiting = advance_ok(&state, &record.id, &FakeHost::new());
+                assert_eq!(waiting.node, "work");
+                assert!(waiting.attempt.is_none() && waiting.wait.is_some());
+            }
+            assert!(cancel(&state, &record.id, &FakeHost::new(), None).unwrap());
+            if let Some(running) = running {
+                running.join().unwrap();
+            }
+        });
+        let canceled = records::load(&paths).unwrap();
+        assert_eq!(canceled.state, RunState::Canceled, "command: {command}");
+        assert_eq!(canceled.node, "work", "command: {command}");
+        let journal = records::journal(&paths).unwrap();
+        let terminal = journal.last().unwrap();
+        assert_eq!(
+            terminal.event,
+            JournalEvent::Terminal {
+                state: RunState::Canceled
+            }
+        );
+        assert_eq!(terminal.node, canceled.node, "command: {command}");
+    }
+}
+
+#[test]
 fn cancel_helper_names_the_machine_wide_id_and_reason() {
     let id = WorkflowRunId::new();
     assert_eq!(

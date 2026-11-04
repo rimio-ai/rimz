@@ -438,11 +438,11 @@ fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
     text
 }
 
-// Engine journals captured with validated specs via advance/cancel and the harness FakeHost.
+// Engine journals captured with validated specs via workflow advance/cancel.
 
 #[test]
-fn horizontal_canceled_waiting_check_marks_the_stopping_node() {
-    // Cancel a check waiting on @wait after a completed shell evaluation.
+fn horizontal_canceled_check_origin_wait_route_keeps_the_stopping_node_ending() {
+    // Pin the Check-origin @wait route, whose source already marked the ending before the fix.
     canceled_horizontal(
         r#"[checks.work]
 shell='false'
@@ -509,6 +509,74 @@ on.fail='@wait'
   },
   {
     "at": "2026-11-04T14:21:58.825484448Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+}
+
+#[test]
+fn horizontal_canceled_limited_judge_wait_marks_the_stopping_node() {
+    // Cancel a limited judge after its Engine-origin evaluation, before the scheduled recheck.
+    canceled_horizontal(
+        r#"[checks.work]
+agent='claude'
+prompt-file='prompt.md'
+timeout='1h'
+on.pass='@done'
+on.fail='@failed'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T15:13:38.534197849Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T15:13:38.534197849Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-Ml9p1z/tmp/rimz-test-home-oMUQOu/rimz-home/ws/project-09a3/owned/workflows/wf_01a1a71f72bd77248052b2b09f6ddd41/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T15:13:38.529570803Z"
+  },
+  {
+    "at": "2026-11-04T15:13:38.548114847Z",
+    "cost_usd": null,
+    "digests": {
+      "prompt.md": "5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"
+    },
+    "ended_at": "2026-11-04T15:13:38.548114847Z",
+    "event": "evaluation",
+    "node": "work",
+    "object": {
+      "outcome": "limited",
+      "reason": "Claude check failed: quota exhausted"
+    },
+    "origin": "engine",
+    "outcome": "limited",
+    "retry": null,
+    "seq": 2,
+    "started_at": "2026-11-04T15:13:38.537922564Z",
+    "stderr_tail": ""
+  },
+  {
+    "at": "2026-11-04T15:13:38.572010164Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T15:13:38.572010164Z",
     "event": "terminal",
     "node": "work",
     "seq": null,
