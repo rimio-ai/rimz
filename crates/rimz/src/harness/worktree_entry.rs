@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::agents::AgentState;
+use crate::agents::{AgentState, ParkDemotion};
+use crate::harness::auto_continue::CardStatus;
 use crate::harness::schedule::takeover::{self, Takeover};
+use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::path::normalize_path_lexical;
 use crate::worktree::{self, WorktreeErr, WorktreeMarker, WorktreeStatus};
 
@@ -24,12 +26,15 @@ pub struct WorktreeEntry {
 pub fn occupied(
     path: &Path,
     project_root: &Path,
-    alive: &[AgentState],
+    alive: &SidebarSnapshot,
 ) -> Result<bool, WorktreeErr> {
-    Ok(match takeover::read(alive, path, project_root)? {
-        Takeover::Stop(occupants) => !occupants.is_empty(),
-        Takeover::Blocked(_) => true,
-    })
+    let card_status = CardStatus::from_demotion(ParkDemotion::default());
+    Ok(
+        match takeover::read(alive, &card_status, path, project_root)? {
+            Takeover::Stop(occupants) => !occupants.is_empty(),
+            Takeover::Blocked(_) => true,
+        },
+    )
 }
 
 /// Read a marked tree's Git state and the newest activity among audit rows at or under it.

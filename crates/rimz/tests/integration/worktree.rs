@@ -4547,6 +4547,7 @@ fn entry_read_combines_git_history_activity_and_takeover_occupancy() {
     use rimz::harness::worktree_entry;
     use rimz::ids::{MuxName, PaneId};
     use rimz::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+    use rimz::store::snapshot::SidebarSnapshot;
 
     let env = Env::new();
     init_repo(&env.project_root);
@@ -4586,8 +4587,11 @@ fn entry_read_combines_git_history_activity_and_takeover_occupancy() {
         vec![dead],
         vec![row.clone()],
     ];
-    let occupied =
-        cases.map(|alive| worktree_entry::occupied(&path, &env.project_root, &alive).unwrap());
+    let occupied = cases.map(|alive| {
+        let snapshot =
+            SidebarSnapshot::build_with_agents(env.workspace_id.clone(), alive, Timestamp::now());
+        worktree_entry::occupied(&path, &env.project_root, &snapshot).unwrap()
+    });
     let facts = [vec![ended.clone(), outside.clone()], vec![]].map(|audit| {
         let entry = worktree_entry::read(&path, &marker, &audit).unwrap();
         (
@@ -4613,7 +4617,9 @@ fn entry_read_combines_git_history_activity_and_takeover_occupancy() {
     )
     .unwrap();
     row.worktree_path = Some(nested.marker.worktree_path.display().to_string());
-    let nested_occupied = worktree_entry::occupied(&path, &env.project_root, &[row]).unwrap();
+    let snapshot =
+        SidebarSnapshot::build_with_agents(env.workspace_id.clone(), vec![row], Timestamp::now());
+    let nested_occupied = worktree_entry::occupied(&path, &env.project_root, &snapshot).unwrap();
     assert_eq!(
         (occupied, facts, nested_occupied),
         ([false, false, false, false, true], expected_facts, false)
