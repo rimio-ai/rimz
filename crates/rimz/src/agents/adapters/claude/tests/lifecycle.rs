@@ -3,6 +3,116 @@ use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::ids::AgentSessionId;
 
 #[test]
+fn stop_failure_lifecycle_matches_the_error_class() {
+    use TurnErrorClass::{
+        Failed, NotEntitled, PausedOverloaded, PausedRateLimit, PausedSpendLimit,
+    };
+
+    let cases = [
+        ("api_error", "API Error: Bad Request", Failed, true),
+        ("unclassified", "API Error: Bad Request", Failed, true),
+        ("billing_error", "API Error: Bad Request", NotEntitled, true),
+        (
+            "rate_limit",
+            "API Error: Bad Request",
+            PausedRateLimit,
+            false,
+        ),
+        (
+            "overloaded",
+            "API Error: Bad Request",
+            PausedOverloaded,
+            false,
+        ),
+        (
+            "server_error",
+            "API Error: Bad Request",
+            PausedOverloaded,
+            false,
+        ),
+        (
+            "rate_limit",
+            "You've hit your monthly spend limit.",
+            PausedSpendLimit,
+            false,
+        ),
+        (
+            "api_error",
+            "API Error: Server Error",
+            PausedOverloaded,
+            false,
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(error, label, _, _)| {
+            let output = hook_output(
+                &ClaudeAdapter,
+                "StopFailure",
+                &json!({
+                    "session_id": "sess-1",
+                    "error": error,
+                    "last_assistant_message": label
+                }),
+            );
+            (
+                output.turn_error().expect("error marker").class,
+                output
+                    .lifecycle()
+                    .map(|observation| observation.signal.clone()),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, _, class, terminal)| {
+            (
+                *class,
+                terminal.then_some(LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                }),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn stop_failure_without_an_error_has_no_lifecycle_or_marker() {
+    for error in [None, Some(""), Some(" \t ")] {
+        let output = hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": error,
+                "last_assistant_message": "API Error: Bad Request"
+            }),
+        );
+        assert!(output.turn_error().is_none());
+        assert!(output.lifecycle().is_none());
+    }
+}
+
+#[test]
+fn stop_failure_never_uses_the_provider_label_as_a_final_message() {
+    for error in ["api_error", "billing_error", "rate_limit"] {
+        let output = hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": error,
+                "last_assistant_message": "API Error: Bad Request"
+            }),
+        );
+        assert_eq!(output.final_message(), None, "{error}");
+    }
+}
+
+#[test]
 fn cursor_compatibility_hooks_are_quarantined() {
     let cursor = json!({ "cursor_version": "1.7.0", "conversation_id": "conv-1" });
     assert_eq!(

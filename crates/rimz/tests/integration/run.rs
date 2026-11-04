@@ -3256,6 +3256,79 @@ mod parked {
     }
 
     #[test]
+    fn non_pausing_stop_failure_fails_the_run_and_releases_waiter() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        fixture.hook_payload(json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "provider-session",
+            "error": "api_error",
+            "last_assistant_message": "API Error: Bad Request",
+            "cwd": fixture.env.project_root,
+        }));
+        assert_eq!(fixture.record().status, RunStatus::Failed);
+        let failed = fixture.assert_terminal(RunStatus::Failed);
+        assert_eq!(failed.status.exit_code(), 1);
+        assert_eq!(failed.last_message, None);
+        let entries = rimz::transcript::read_all(fixture.store.paths()).expect("transcript");
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.entry == rimz::transcript::TranscriptKind::Error)
+            .collect();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].text, "API Error: Bad Request");
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.entry != rimz::transcript::TranscriptKind::Assistant)
+        );
+
+        fixture.hook("Stop", "");
+        fixture.hook_payload(json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "provider-session",
+            "error": "billing_error",
+            "last_assistant_message": "Subscription access denied",
+            "cwd": fixture.env.project_root,
+        }));
+        assert_eq!(fixture.record(), failed);
+    }
+
+    #[test]
+    fn rate_limit_stop_failure_keeps_the_run_and_waiter_open() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        fixture.hook_payload(json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "provider-session",
+            "error": "rate_limit",
+            "last_assistant_message": "You've hit your usage limit",
+            "cwd": fixture.env.project_root,
+        }));
+        let record = fixture.record();
+        assert_eq!(record.status, RunStatus::Running);
+        assert_eq!(record.completed_at, None);
+        fixture.runtime.block_on(async {
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_millis(30),
+                    fixture.waiter.wait_terminal(&fixture.store, None, None),
+                )
+                .await
+                .is_err(),
+                "paused run released its caller"
+            );
+        });
+        assert_eq!(fixture.record(), record);
+    }
+
+    #[test]
     fn armed_wait_keeps_run_open_until_wake_turn_finishes() {
         let env = Env::new();
         if env.skip_if_sandboxed() {

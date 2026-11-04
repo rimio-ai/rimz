@@ -253,6 +253,41 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
 }
 
 #[test]
+fn stop_over_a_rollout_error_ends_the_turn_errored() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-error.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"timestamp":"2026-07-13T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"stream_error","message":"provider failed"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let output = hook_output(
+        &CodexAdapter,
+        "Stop",
+        &json!({
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "transcript_path": path,
+        }),
+    );
+    assert!(output.turn_error().is_some());
+    assert_eq!(
+        output.lifecycle().map(|observation| &observation.signal),
+        Some(&LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: Some("turn-1".to_owned()),
+        })
+    );
+}
+
+#[test]
 fn messageless_stop_keeps_raw_turn_error_empty() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-messageless.jsonl");
