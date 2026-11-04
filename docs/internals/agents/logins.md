@@ -92,7 +92,7 @@ A session discovered in a provider home has no durable row until a hook or an at
 | `crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise` | the exec wrapper, between login resolution and compile (`launch_plan::prepare_exec`) |
 | `crates/rimz/src/harness/headless.rs::prepare` | a headless launch |
 
-`launch_plan::compile` and `rimz agents explain` never write. A launch prints the report's warnings, as `accounts add` does.
+`launch_plan::compile` and `rimz agents explain` never write. `accounts add` prints the full report. A launch uses `ShareReport::launch_warnings`: set-asides of declared settings entries (`shared_home_entries`) and history directories (`history_home_entries`), plus entries left local across filesystems. Other set-asides and removed links at unshared names go through `ShareReport::maintenance` into one `account_links_maintained` diagnostic per reconcile. `launch_plan::prepare_exec` builds that record alongside the launch lines; the exec wrapper and headless profile emit it before reading the compilation outcome. Quiet maintenance never reaches stderr or the card's `launch_warnings`.
 
 ### The link set
 
@@ -125,7 +125,7 @@ Codex's local context refresh reads the account-private `models_cache.json` from
 
 Any failed identity lookup takes the set-aside path, including a dangling absolute link. Before a `skills` directory moves or is set aside, RimZ removes its own skill links from it (`skill_links::plan` with no desired links). Before a file is set aside, the adapter may carry provider state across (`adopt_shared_file`): Codex copies `[hooks.state]` entries the native `config.toml` lacks, so hook trust survives.
 
-A link left in the account home at a name the mode no longer shares is stale and removed. A stale link at an unshared name is a defect in either mode: the provider must own that name per home. RimZ removes it without consulting the live-writer gate and reports a `ShareReport::warnings` line, which `accounts add` and a launch both print. The reconciler removes nothing but links.
+A link left in the account home at a name the mode no longer shares is stale and removed. A stale link at an unshared name is a defect in either mode: the provider must own that name per home. RimZ removes it without consulting the live-writer gate and reports a `ShareReport::warnings` line, printed by `accounts add` and recorded as diagnostic maintenance at launch. The reconciler removes nothing but links.
 
 The reconciler holds one machine-wide lock per kind (`disk::paths::account_lock`), because every shared account of a kind moves entries into the same native home.
 
@@ -146,6 +146,8 @@ The gate has four known gaps:
 - An idle daemon keeps the environment it started under. `forward_login_env` passes it `CODEX_SQLITE_HOME` only when the login sets it, which a shared login does and a standalone one does not. After a switch to standalone, its next conversation writes rollouts into the account home, and database rows into the native home if the app-server keeps the variable it inherited (provider behaviour, not observed). After a switch to shared, it runs without the variable. A `CODEX_SQLITE_HOME` the user exported reaches the daemon in either mode.
 
 A failure after a set-aside carries the set-aside lines on the error (`ShareErr::AfterSetAside`), since a rerun would no longer report them.
+
+Successful launch-time maintenance records name the login, configured account home, removed names, quiet set-aside names and their stamp directory, and repeated quiet names ([diagnostic taxonomy](../diagnostics.md#event-taxonomy)). Repetition is decided under the account lock, before the move, by looking for that name in earlier directories under the same account's `.rimz-aside/`; dangling preserved links count, read errors count as no copy, and there is no time window. Copies left by `accounts add` count too. No diagnostic is read back. The record is Info and doctor Contained unless a quiet name repeats, then Warn and Investigate. Repeated maintenance stays off the console; declared-name set-asides never enter the quiet list.
 
 ### Link text
 

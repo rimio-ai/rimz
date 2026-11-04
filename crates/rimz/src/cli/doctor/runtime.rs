@@ -1362,6 +1362,13 @@ fn classify_diagnostic(
                 },
             ..
         } => model::DoctorState::Expected,
+        DiagEvent::AccountLinksMaintained { repeated, .. } => {
+            if repeated.is_empty() {
+                model::DoctorState::Contained
+            } else {
+                model::DoctorState::Investigate
+            }
+        }
         DiagEvent::ModelCatalogRefreshFailed { rung, .. } => match rung {
             rimz::diag::record::ModelCatalogFallback::CachedCatalog => {
                 model::DoctorState::Contained

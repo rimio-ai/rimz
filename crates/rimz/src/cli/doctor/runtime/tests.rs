@@ -1074,6 +1074,35 @@ fn diagnostic_classification_requires_complete_positive_evidence() {
 }
 
 #[test]
+fn account_link_maintenance_is_contained_until_a_name_repeats() {
+    for (repeated, state, impact) in [
+        (
+            Vec::<String>::new(),
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+        (
+            vec!["history.jsonl".into()],
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+    ] {
+        let event = serde_json::from_value::<rimz::diag::record::DiagEvent>(serde_json::json!({
+            "kind": "account_links_maintained", "login": "claude@work",
+            "account_home": "/accounts/work", "removed": [],
+            "aside_dir": "/accounts/work/.rimz-aside/stamp",
+            "set_aside": ["history.jsonl"], "repeated": repeated,
+        }));
+        assert!(event.is_ok(), "account-link upkeep must decode: {event:?}");
+        let event = event.unwrap();
+        assert_eq!(
+            classify_diagnostic(&event, event.severity()),
+            (state, impact)
+        );
+    }
+}
+
+#[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
     let retained_line = serde_json::to_string(&serde_json::json!({
         "v": "rimz.diag.v1",

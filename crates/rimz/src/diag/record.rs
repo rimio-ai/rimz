@@ -662,6 +662,14 @@ pub enum DiagEvent {
         rung: ModelCatalogFallback,
         reason: String,
     },
+    AccountLinksMaintained {
+        login: LoginKey,
+        account_home: PathBuf,
+        removed: Vec<String>,
+        aside_dir: Option<PathBuf>,
+        set_aside: Vec<String>,
+        repeated: Vec<String>,
+    },
     ProviderStartupExit {
         agent_kind: String,
         agent_name: Option<String>,
@@ -775,6 +783,13 @@ impl DiagEvent {
 
     pub fn severity(&self) -> DiagSeverity {
         match self {
+            Self::AccountLinksMaintained { repeated, .. } => {
+                if repeated.is_empty() {
+                    DiagSeverity::Info
+                } else {
+                    DiagSeverity::Warn
+                }
+            }
             Self::ModelCatalogRefreshFailed { rung, .. } => match rung {
                 ModelCatalogFallback::CachedCatalog => DiagSeverity::Info,
                 ModelCatalogFallback::Baked => DiagSeverity::Warn,
@@ -899,6 +914,7 @@ impl DiagEvent {
             Self::HookIngressTruncated { .. } => "hook_ingress_truncated",
             Self::HookIngressDropped { .. } => "hook_ingress_dropped",
             Self::ModelCatalogRefreshFailed { .. } => "model_catalog_refresh_failed",
+            Self::AccountLinksMaintained { .. } => "account_links_maintained",
             Self::FrameRejected { .. } => "frame_rejected",
             Self::ResolutionFallback { .. } => "resolution_fallback",
             Self::FrameShrinkVerified { .. } => "frame_shrink_verified",
@@ -980,6 +996,9 @@ impl DiagEvent {
             Self::ModelCatalogRefreshFailed {
                 agent_kind, login, ..
             } => format!("{}:{agent_kind}:{login}", self.kind_name()),
+            Self::AccountLinksMaintained { login, .. } => {
+                format!("{}:{login}", self.kind_name())
+            }
             Self::FrameRejected { reason, .. } => format!("{}:{reason:?}", self.kind_name()),
             Self::PaneCountDrop { removed, added, .. } => {
                 format!("{}:{removed:?}:{added:?}", self.kind_name())
@@ -1445,6 +1464,34 @@ impl DiagEvent {
                     ModelCatalogFallback::Baked => "baked fallback",
                 };
                 format!("{login} alias {alias} catalog refresh failed; using {fallback}: {reason}")
+            }
+            Self::AccountLinksMaintained {
+                login,
+                account_home,
+                removed,
+                aside_dir,
+                set_aside,
+                repeated,
+            } => {
+                let mut details = Vec::new();
+                if !removed.is_empty() {
+                    details.push(format!("removed links: {}", removed.join(", ")));
+                }
+                if let Some(dir) = aside_dir {
+                    details.push(format!(
+                        "set aside {} in {}",
+                        set_aside.join(", "),
+                        dir.display()
+                    ));
+                }
+                if !repeated.is_empty() {
+                    details.push(format!("repeated: {}", repeated.join(", ")));
+                }
+                format!(
+                    "{login} account links maintained in {}: {}",
+                    account_home.display(),
+                    details.join("; ")
+                )
             }
             Self::FrameRejected {
                 reason,

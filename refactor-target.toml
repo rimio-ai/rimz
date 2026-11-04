@@ -345,7 +345,13 @@ upward-dependencies = ["address"]
 # PermissionSettle shares asking-cell completion proof between adapters and state (+1).
 # AgentState::permission_settled lets message conditions use that proof without changing raw matching (+1).
 # AgentState::settleable_permission_since gives refresh callers the one ask that proof can close.
-surface-budget = 1236
+# LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
+surface-budget = 1239
+
+[[verdict]]
+kind = "item"
+key = "agents::account_links::LinkMaintenance"
+reason = "The account reconciler returns quiet upkeep as provider-neutral data for launch preparation to turn into one diagnostic."
 
 [[verdict]]
 kind = "item"
@@ -4610,6 +4616,7 @@ allowed-dependencies = [
     "child_process",
     "config",
     "config::effective",
+    "diag",
     "disk::atomic",
     "disk::paths",
     "harness::fleet",
