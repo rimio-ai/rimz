@@ -1362,8 +1362,10 @@ fn classify_diagnostic(
                 },
             ..
         } => model::DoctorState::Expected,
+        // `severity` is the incident's maximum, so a repeat merged earlier in the
+        // episode keeps it Investigate after a quieter record lands.
         DiagEvent::AccountLinksMaintained { repeated, .. } => {
-            if repeated.is_empty() {
+            if repeated.is_empty() && severity == rimz::diag::record::DiagSeverity::Info {
                 model::DoctorState::Contained
             } else {
                 model::DoctorState::Investigate
