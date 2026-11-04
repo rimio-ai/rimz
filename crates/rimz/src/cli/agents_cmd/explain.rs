@@ -166,11 +166,6 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             None,
             resolved.team_name.as_deref(),
-            resolved
-                .team_name
-                .as_ref()
-                .and_then(|name| resolved.teams.0.get(name))
-                .map(|team| team.roles.as_slice()),
             channel.as_deref().or(finalized.inferred_lane.as_deref()),
             None,
             None,

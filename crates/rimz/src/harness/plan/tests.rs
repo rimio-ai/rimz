@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::PermissionMode;
 use crate::agents::{AgentStatus, LaunchParams};
-use crate::config::{MachineConfig, Profile, Team};
+use crate::config::{MachineConfig, Profile, RoleBinding, Team};
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
@@ -3729,7 +3729,6 @@ fn launch_request_names_and_metadata() {
         Some("docs"),
         None,
         Some("forge"),
-        None,
         Some("design"),
         Some(("draft it", 0)),
         None,
@@ -3772,7 +3771,6 @@ fn launch_request_names_and_metadata() {
         None,
         None,
         None,
-        None,
         Some(&LaunchAncestry::Peer {
             launch_generation: 2,
             launched_by: Some(crate::agents::LaunchedBy {
@@ -3807,7 +3805,6 @@ fn launch_request_names_and_metadata() {
         None,
         None,
         None,
-        None,
     )
     .unwrap();
     assert_eq!(
@@ -3815,16 +3812,14 @@ fn launch_request_names_and_metadata() {
         AgentLaunchName::Soft("my_feature".to_owned())
     );
     assert_eq!(
-        launch_identity_requests(&layout, None, None, None, None, None, None, None, None,).unwrap()
-            [0]
-        .name,
+        launch_identity_requests(&layout, None, None, None, None, None, None, None).unwrap()[0]
+            .name,
         AgentLaunchName::Mint
     );
     assert!(
         launch_identity_requests(
             &layout,
             Some("my_feature"),
-            None,
             None,
             None,
             None,
@@ -3847,11 +3842,6 @@ fn launch_identity_requests_reject_envelope_handles() {
 
 #[test]
 fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
-    let team_roles = vec![
-        role_binding("planner"),
-        role_binding("coder"),
-        role_binding("reviewer"),
-    ];
     let team_layout = LayoutSpec {
         columns: vec![Column {
             rows: vec![
@@ -3868,16 +3858,19 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
         None,
         None,
         Some("forge"),
-        Some(&team_roles),
         None,
         Some(("implement", 1)),
         None,
         None,
     )
     .unwrap();
-    assert_eq!(requests[0].launch.launch_ordinal, Some(1));
-    assert_eq!(requests[1].launch.launch_ordinal, Some(0));
-    assert_eq!(requests[2].launch.launch_ordinal, None);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.launch.launch_ordinal)
+            .collect::<Vec<_>>(),
+        [Some(0), Some(1), Some(2)]
+    );
     assert_eq!(requests[0].prompt, None);
     assert_eq!(requests[1].prompt.as_deref(), Some("implement"));
     assert!(
@@ -3893,7 +3886,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
     )
     .unwrap();
     let requests =
-        launch_identity_requests(&inline, None, None, None, None, None, None, None, None).unwrap();
+        launch_identity_requests(&inline, None, None, None, None, None, None, None).unwrap();
     let group = requests[0].launch.launch_group.as_deref().unwrap();
     assert!(group.starts_with("launch_"));
     assert_eq!(requests[1].launch.launch_group.as_deref(), Some(group));
@@ -3902,7 +3895,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
 
     let single = LayoutSpec::single(agent_cell_with_role(None));
     let requests =
-        launch_identity_requests(&single, None, None, None, None, None, None, None, None).unwrap();
+        launch_identity_requests(&single, None, None, None, None, None, None, None).unwrap();
     assert_eq!(requests[0].launch.launch_group, None);
     assert_eq!(requests[0].launch.launch_ordinal, None);
 }
@@ -4115,18 +4108,9 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
             refilled: Default::default(),
             launch_group: None,
         };
-        let identities = launch_identity_requests(
-            &layout,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(&plan),
-            None,
-        )
-        .unwrap();
+        let identities =
+            launch_identity_requests(&layout, None, None, None, None, None, Some(&plan), None)
+                .unwrap();
         assert!(identities.is_empty());
         let panes = compile_layout_panes(
             &layout,

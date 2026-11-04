@@ -11,7 +11,6 @@ use anyhow::{Result, bail};
 use crate::agents::account::{ProviderStatus, read_accounts_cache};
 use crate::agents::definition::LaunchPermissionArgs;
 use crate::agents::{PermissionMode, TierSkipReason};
-use crate::config::RoleBinding;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
@@ -1875,7 +1874,6 @@ pub fn launch_identity_requests(
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
     team: Option<&str>,
-    team_roles: Option<&[RoleBinding]>,
     channel: Option<&str>,
     prompt: Option<(&str, usize)>,
     resume: Option<&CohortResumePlan>,
@@ -1901,15 +1899,8 @@ pub fn launch_identity_requests(
         if resume.is_some_and(|plan| matches!(plan.seeds[index], CohortSeed::Resume(_))) {
             continue;
         }
-        let launch_ordinal = match team {
-            Some(_) => cell
-                .launch
-                .role
-                .as_deref()
-                .and_then(|role| team_role_ordinal(team_roles, role)),
-            None if inline_launch_group.is_some() => Some(index_to_launch_ordinal(index)),
-            None => None,
-        };
+        let launch_ordinal = (team.is_some() || inline_launch_group.is_some())
+            .then(|| index_to_launch_ordinal(index));
         let name = if agent_count == 1 && index == 0 {
             match explicit_name {
                 Some(name) => {
@@ -1972,13 +1963,6 @@ pub fn mint_launch_id() -> AgentSessionId {
 
 fn mint_launch_group() -> String {
     mint_launch_id().to_string()
-}
-
-fn team_role_ordinal(team_roles: Option<&[RoleBinding]>, role: &str) -> Option<u32> {
-    let index = team_roles?
-        .iter()
-        .position(|binding| binding.role == role)?;
-    Some(index_to_launch_ordinal(index))
 }
 
 fn index_to_launch_ordinal(index: usize) -> u32 {

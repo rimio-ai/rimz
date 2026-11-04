@@ -1611,7 +1611,6 @@ fn launch_resume_layout(
         None,
         None,
         team_name.as_deref(),
-        team.map(|team| team.roles.as_slice()),
         channel.as_deref(),
         None,
         Some(&plan),

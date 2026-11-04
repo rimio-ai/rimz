@@ -289,7 +289,6 @@ fn open_fresh(
             .as_deref()
             .or_else(|| fresh.launch.generated_name()),
         fresh.team.as_ref().map(|(name, _)| name.as_str()),
-        fresh.team.as_ref().map(|(_, team)| team.roles.as_slice()),
         fresh.channel.as_deref(),
         fresh.prompt.as_deref().zip(fresh.prompt_index),
         None,

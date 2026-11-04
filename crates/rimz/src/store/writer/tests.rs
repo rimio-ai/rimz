@@ -656,6 +656,7 @@ fn launch_batch_keeps_request_and_follow_up_order() {
         .fail_agent_launch_batch(&batch)
         .expect("fail launch batch");
     let events = store.read_events().expect("read launch events");
+    assert_eq!(events[0].timestamp, events[1].timestamp);
     let states = events
         .iter()
         .filter_map(|event| {

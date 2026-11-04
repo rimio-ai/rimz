@@ -534,7 +534,6 @@ pub(super) fn fresh_launch_request(
         None,
         None,
         agent.team.as_deref(),
-        None,
         agent.channel.as_deref(),
         None,
         None,

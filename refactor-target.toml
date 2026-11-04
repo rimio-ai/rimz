@@ -7553,7 +7553,7 @@ reason = "Three phase-wide validation loops (support, prompt files, prompt text)
 [[verdict]]
 kind = "item"
 key = "harness::plan::launch_identity_requests"
-reason = "Nine positional arguments with one-caller team/prompt flags: a request struct costs lines every caller still fills, a split duplicates the loop; the too_many_arguments expect records it (pass 19a)."
+reason = "Eight positional arguments with team/prompt flags: a request struct costs lines every caller still fills, a split duplicates the loop; the too_many_arguments expect records it (pass 19a)."
 
 [[verdict]]
 kind = "item"
