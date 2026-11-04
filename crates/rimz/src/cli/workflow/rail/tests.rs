@@ -397,6 +397,559 @@ fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
     assert_eq!(actual, [(2, 0), (1, 1)]);
 }
 
+fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
+    let spec: WorkflowSpec = toml::from_str(&format!(
+        "[workflow]\nscope='worktree'\nstart='begin'\n\
+         [checks.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+         {runner}[checks.after]\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
+         on.pass='@done'\non.fail='@failed'\n"
+    ))
+    .unwrap();
+    let journal: Vec<JournalEntry> = serde_json::from_str(journal).unwrap();
+    let hops = rimz::harness::workflow::hops(&spec, &journal);
+    let mut record = record(stopping);
+    record.state = RunState::Canceled;
+    let mut out = Vec::new();
+    horizontal(&mut out, &spec, &record, &hops, &journal, None, 0).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let good = render::palette::good();
+    assert_eq!(
+        text.matches(&render::paint(good, stopping)).count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        spec.checks
+            .keys()
+            .chain(spec.steps.keys())
+            .map(|name| text.matches(&render::paint(good, name)).count())
+            .sum::<usize>(),
+        1,
+        "{text}"
+    );
+    if stopping != "begin" {
+        assert_eq!(
+            text.matches(&render::paint(render::palette::body(), "begin"))
+                .count(),
+            1,
+            "{text}"
+        );
+    }
+    text
+}
+
+// Engine journals captured with validated specs via advance/cancel and the harness FakeHost.
+
+#[test]
+fn horizontal_canceled_waiting_check_marks_the_stopping_node() {
+    // Cancel a check waiting on @wait after a completed shell evaluation.
+    canceled_horizontal(
+        r#"[checks.work]
+shell='false'
+timeout='1h'
+on.pass='@done'
+on.fail='@wait'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.815763075Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.815763075Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmp6TI2EX/ws/tmp6TI2EX-ba2d/owned/workflows/wf_01a1a6f0268f71c3a6b283068bf37273/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.811620071Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.823464743Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.823464743Z",
+    "event": "evaluation",
+    "node": "work",
+    "object": {
+      "code": 1,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmp6TI2EX/ws/tmp6TI2EX-ba2d/owned/workflows/wf_01a1a6f0268f71c3a6b283068bf37273/work/2.check.log",
+      "outcome": "fail",
+      "reason": "exited 1"
+    },
+    "origin": "check",
+    "outcome": "fail",
+    "retry": null,
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.818628513Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.825484448Z",
+    "count": 1,
+    "detail": null,
+    "event": "wait",
+    "first": "2026-11-04T14:21:58.823464743Z",
+    "last": "2026-11-04T14:21:58.823464743Z",
+    "node": "work",
+    "outcome": "fail",
+    "recheck_at": null,
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.825484448Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.825484448Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+}
+
+#[test]
+fn horizontal_canceled_live_check_marks_the_stopping_node() {
+    // Cancel a shell check while its command is still running.
+    canceled_horizontal(
+        r#"[checks.work]
+shell='touch "$RIMZ_WORKFLOW_DIR/ready"; sleep 30'
+on.pass='@done'
+on.fail='@failed'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.836089083Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.836089083Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpBYyJ2n/ws/tmpBYyJ2n-79e7/owned/workflows/wf_01a1a6f026ac767c94bd8957b5f30a4d/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.832228802Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.852502271Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.852502271Z",
+    "event": "evaluation",
+    "node": "work",
+    "object": null,
+    "origin": "engine",
+    "outcome": "canceled",
+    "retry": null,
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.838869411Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.852502271Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.852502271Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+}
+
+#[test]
+fn horizontal_canceled_command_step_marks_the_stopping_node() {
+    // Cancel a command step while its shell command is still running.
+    canceled_horizontal(
+        r#"[steps.work]
+shell='touch "$RIMZ_WORKFLOW_DIR/ready"; sleep 30'
+timeout='1h'
+then='after'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.872297509Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.872297509Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpYYLr3X/ws/tmpYYLr3X-3956/owned/workflows/wf_01a1a6f026d074c1b9ddd53a7cae67b2/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.868196865Z"
+  },
+  {
+    "asked": null,
+    "at": "2026-11-04T14:21:58.888306566Z",
+    "children": null,
+    "code": null,
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.888306566Z",
+    "event": "attempt",
+    "handle": null,
+    "head_end": null,
+    "head_start": null,
+    "key": null,
+    "limited": null,
+    "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpYYLr3X/ws/tmpYYLr3X-3956/owned/workflows/wf_01a1a6f026d074c1b9ddd53a7cae67b2/work/2.step.log",
+    "node": "work",
+    "outcome": "canceled",
+    "reason": null,
+    "routed_by": "pass",
+    "run_id": null,
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.875708234Z",
+    "visit": 1
+  },
+  {
+    "at": "2026-11-04T14:21:58.888306566Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.888306566Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+}
+
+#[test]
+fn horizontal_canceled_agent_turn_leaves_its_then_check_unreached() {
+    // Cancel an agent turn before it reaches its then check.
+    let text = canceled_horizontal(
+        r#"[steps.work]
+agent='claude'
+prompt-file='prompt.md'
+then='after'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.91100852Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.91100852Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpC3D9TY/ws/tmpC3D9TY-b2dc/owned/workflows/wf_01a1a6f026f6745599bb3c21211484cc/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.906727826Z"
+  },
+  {
+    "asked": null,
+    "at": "2026-11-04T14:21:58.921845904Z",
+    "children": {
+      "live": [],
+      "stopped": []
+    },
+    "code": null,
+    "cost_usd": 0.25,
+    "digests": {
+      "prompt": "84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f",
+      "prompt.md": "5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"
+    },
+    "ended_at": "2026-11-04T14:21:58.921845904Z",
+    "event": "attempt",
+    "handle": "@builder",
+    "head_end": null,
+    "head_start": null,
+    "key": null,
+    "limited": null,
+    "log": null,
+    "node": "work",
+    "outcome": "canceled",
+    "reason": null,
+    "routed_by": "pass",
+    "run_id": "run_01a1a6f0270572cf930fde00db983047",
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.914426097Z",
+    "visit": 1
+  },
+  {
+    "at": "2026-11-04T14:21:58.921845904Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.921845904Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+    assert!(
+        text.contains(&format!(
+            "{} {}",
+            render::paint(render::palette::muted(), "◇"),
+            render::paint(render::palette::muted(), "after")
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn horizontal_canceled_held_session_marks_the_step_not_the_check() {
+    // Cancel an until session while its held shell check is still running.
+    let text = canceled_horizontal(
+        r#"[steps.work]
+agent='claude'
+prompt-file='prompt.md'
+lifecycle='until'
+then='after'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.934775359Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.934775359Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpeNny6t/ws/tmpeNny6t-81ee/owned/workflows/wf_01a1a6f0270d73cf894522b647026452/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.930000785Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.952775065Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.952775065Z",
+    "event": "evaluation",
+    "node": "after",
+    "object": null,
+    "origin": "engine",
+    "outcome": "canceled",
+    "retry": null,
+    "seq": 3,
+    "started_at": "2026-11-04T14:21:58.94404983Z"
+  },
+  {
+    "action": "interrupted",
+    "at": "2026-11-04T14:21:58.952775065Z",
+    "check": "after",
+    "event": "turn_end",
+    "node": "work",
+    "reason": "cancel",
+    "seq": 2,
+    "turn": {
+      "agent_id": "leader",
+      "ended_at": "1970-01-01T00:00:01Z",
+      "started_at": "1970-01-01T00:00:00Z"
+    }
+  },
+  {
+    "asked": null,
+    "at": "2026-11-04T14:21:58.955931461Z",
+    "children": {
+      "live": [],
+      "stopped": []
+    },
+    "code": null,
+    "cost_usd": 0.25,
+    "digests": {
+      "prompt": "84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f",
+      "prompt.md": "5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"
+    },
+    "ended_at": "2026-11-04T14:21:58.955931461Z",
+    "event": "attempt",
+    "handle": "@builder",
+    "head_end": null,
+    "head_start": null,
+    "key": null,
+    "limited": null,
+    "log": null,
+    "node": "work",
+    "outcome": "canceled",
+    "reason": null,
+    "routed_by": "pass",
+    "run_id": "run_01a1a6f0271d716ab6de92cce312c1d1",
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.938355343Z",
+    "visit": 1
+  },
+  {
+    "at": "2026-11-04T14:21:58.955931461Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.955931461Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+    assert_eq!(
+        text.matches(&render::paint(render::palette::body(), "after"))
+            .count(),
+        1,
+        "{text}"
+    );
+}
+
+#[test]
+fn horizontal_canceled_start_marks_an_ending_without_a_route() {
+    // Cancel the start node before the engine takes any route.
+    let text = canceled_horizontal(
+        r#"[checks.work]
+shell='false'
+timeout='1h'
+on.pass='@done'
+on.fail='@wait'
+"#,
+        "begin",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.973153462Z",
+    "event": "cancel",
+    "node": "begin",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.973153462Z",
+    "event": "terminal",
+    "node": "begin",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+    assert_eq!(
+        text.matches(&render::paint(render::palette::muted(), "work"))
+            .count(),
+        1,
+        "{text}"
+    );
+}
+
+#[test]
+fn horizontal_canceled_parked_run_keeps_the_stopping_node_ending() {
+    // Cancel a run already parked by a check routing to @user.
+    canceled_horizontal(
+        r#"[checks.work]
+shell='true'
+on.pass='@user'
+on.fail='@failed'
+"#,
+        "work",
+        r#"[
+  {
+    "at": "2026-11-04T14:21:58.983609839Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.983609839Z",
+    "event": "evaluation",
+    "node": "begin",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpFoUgj5/ws/tmpFoUgj5-2000/owned/workflows/wf_01a1a6f02740702d8743c7aa8bc87c21/work/1.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 1,
+    "started_at": "2026-11-04T14:21:58.979762993Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.989624128Z",
+    "cost_usd": null,
+    "digests": {},
+    "ended_at": "2026-11-04T14:21:58.989624128Z",
+    "event": "evaluation",
+    "node": "work",
+    "object": {
+      "code": 0,
+      "log": "/tmp/rimz-sandbox-LAxPrN/tmp/.tmpFoUgj5/ws/tmpFoUgj5-2000/owned/workflows/wf_01a1a6f02740702d8743c7aa8bc87c21/work/2.check.log",
+      "outcome": "pass"
+    },
+    "origin": "check",
+    "outcome": "pass",
+    "retry": null,
+    "seq": 2,
+    "started_at": "2026-11-04T14:21:58.985839259Z"
+  },
+  {
+    "at": "2026-11-04T14:21:58.989624128Z",
+    "event": "park",
+    "node": "work",
+    "reason": "user",
+    "seq": null,
+    "text": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.992042223Z",
+    "event": "cancel",
+    "node": "work",
+    "seq": null
+  },
+  {
+    "at": "2026-11-04T14:21:58.992042223Z",
+    "event": "terminal",
+    "node": "work",
+    "seq": null,
+    "state": "canceled"
+  }
+]"#,
+    );
+}
+
 #[test]
 fn limit_routes_use_the_same_direction_marks_as_other_edges() {
     let spec: WorkflowSpec = toml::from_str(

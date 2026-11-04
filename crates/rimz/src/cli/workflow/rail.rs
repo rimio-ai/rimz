@@ -140,16 +140,6 @@ pub(super) fn horizontal(
     indent: usize,
 ) -> std::io::Result<()> {
     let counts = reached(hops, journal);
-    let ending = hops
-        .iter()
-        .rposition(|hop| matches!(hop.kind, HopKind::Terminal { .. }))
-        .and_then(|index| {
-            hops[..index]
-                .iter()
-                .rev()
-                .find(|hop| hop.kind == HopKind::Route)
-        })
-        .map(|hop| hop.node.as_str());
     let role = super::workflow_view::glyph_role(record);
     let machine = super::super::machine_config();
     let glyph = rimz::theme::theme_glyphs(&machine.theme);
@@ -171,7 +161,7 @@ pub(super) fn horizontal(
                         .is_some_and(|held| held.attempt.node == node.node));
             let reached = counts.contains_key(node.node.as_str());
             let check = spec.checks.contains_key(&node.node);
-            let terminal = record.state.is_terminal() && ending == Some(node.node.as_str());
+            let terminal = record.state.is_terminal() && node.node == record.node;
             let state_style =
                 render::status::workflow(record.state, role == GlyphRole::StatusWaiting);
             let (glyph_style, name_style) = if current {
