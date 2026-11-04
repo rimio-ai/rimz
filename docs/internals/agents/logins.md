@@ -105,8 +105,8 @@ A name is unshared when it equals an adapter's `private_home_entries` entry or s
 
 | Kind | `shared_home_entries` | `private_home_entries` | `history_home_entries` |
 | --- | --- | --- | --- |
-| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json` | `projects/` |
-| Codex | `config.toml`, `AGENTS.md`, `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json` | `sessions/`, `archived_sessions/` |
+| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json`, `policy-limits.json`, `remote-settings.json` | `projects/` |
+| Codex | `config.toml`, `AGENTS.md`, `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json`, `mention_usage.json` | `sessions/`, `archived_sessions/` |
 | Pi | `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `trust.json`, `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `extensions/`, `skills/`, `prompts/`, `themes/`, `npm/`, `git/` | `auth.json`, `models-store.json`, `mcp-auth.json`, `oauth.json`, `mcp.log`, `crashes.json`, `pi-debug.log`, `pi-tui-debug.log`, `pi-tui-crash.log` | `sessions/` |
 
 ### What happens to each entry

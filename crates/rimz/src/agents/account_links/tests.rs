@@ -251,6 +251,7 @@ fn private_names_and_their_dotted_siblings_stay_real() {
                 "packages",
                 "models_cache.json",
                 "models_cache.json.bak",
+                "mention_usage.json",
             ][..],
         ),
         (
@@ -261,6 +262,10 @@ fn private_names_and_their_dotted_siblings_stay_real() {
                 ".claude.json.backup",
                 ".oauth_refresh.lock",
                 ".last-update-result.json",
+                "policy-limits.json",
+                "policy-limits.json.stamp.json",
+                "remote-settings.json",
+                "remote-settings.json.synced-at",
             ][..],
         ),
     ] {
@@ -1034,8 +1039,16 @@ fn only_dotted_lock_and_tmp_components_are_unshared() {
         assert!(is_unshared(codex, name), "{name}");
         assert!(is_unshared(claude, name), "{name}");
     }
-    assert!(is_unshared(claude, ".last-update-result.json"));
-    assert!(!is_unshared(codex, ".last-update-result.json"));
+    for name in [
+        ".last-update-result.json",
+        "policy-limits.json",
+        "remote-settings.json",
+    ] {
+        assert!(is_unshared(claude, name), "{name}");
+        assert!(!is_unshared(codex, name), "{name}");
+    }
+    assert!(is_unshared(codex, "mention_usage.json"));
+    assert!(!is_unshared(claude, "mention_usage.json"));
     for name in [
         ".tmp",
         "tmp",
@@ -1125,16 +1138,19 @@ fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
         ("codex", false, None),
     ] {
         let home = Fixture::new(kind);
-        let private_name = if kind == "codex" {
-            "models_cache.json"
+        let private_names = if kind == "codex" {
+            ["models_cache.json", "mention_usage.json"]
         } else {
-            ".last-update-result.json"
+            [".last-update-result.json", "policy-limits.json.stamp.json"]
         };
         fs::create_dir_all(home.native.join(".oauth_refresh.lock")).unwrap();
-        fs::write(home.native.join(private_name), "update").unwrap();
+        for private_name in private_names {
+            fs::write(home.native.join(private_name), "update").unwrap();
+        }
         let links = [
             (".oauth_refresh.lock", true),
-            (private_name, false),
+            (private_names[0], false),
+            (private_names[1], false),
             (".oauth_refresh.lock.owner", true),
             ("settings.json.tmp.123.ab", false),
         ];
@@ -1169,10 +1185,12 @@ fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
         }
         assert!(report.unlinked.is_empty(), "{:?}", report.unlinked);
         assert!(home.native.join(".oauth_refresh.lock").is_dir());
-        assert_eq!(
-            fs::read_to_string(home.native.join(private_name)).unwrap(),
-            "update"
-        );
+        for private_name in private_names {
+            assert_eq!(
+                fs::read_to_string(home.native.join(private_name)).unwrap(),
+                "update"
+            );
+        }
 
         let before = names(&home.named);
         let again = home.run_with(shared, agents).unwrap();

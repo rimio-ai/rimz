@@ -71,8 +71,8 @@ A `standalone` account links the settings entries; a `shared` account links thos
 
 | Provider | Settings files | Settings directories | Private names |
 | --- | --- | --- | --- |
-| Codex | `config.toml`, `AGENTS.md` | `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json` |
-| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json` |
+| Codex | `config.toml`, `AGENTS.md` | `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json`, `mention_usage.json` |
+| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json`, `policy-limits.json`, `remote-settings.json` |
 | Pi | `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `trust.json`, `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` | `extensions/`, `skills/`, `prompts/`, `themes/`, `npm/`, `git/` | `auth.json`, `models-store.json`, `mcp-auth.json`, `oauth.json`, `mcp.log`, `crashes.json`, `pi-debug.log`, `pi-tui-debug.log`, `pi-tui-crash.log` |
 
 Each entry takes one of five paths, and nothing but a link is ever removed:

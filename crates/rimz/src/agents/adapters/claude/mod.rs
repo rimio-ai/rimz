@@ -820,6 +820,8 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             ".claude.json",
             ".oauth_refresh.lock",
             ".last-update-result.json",
+            "policy-limits.json",
+            "remote-settings.json",
         ]
     }
 
