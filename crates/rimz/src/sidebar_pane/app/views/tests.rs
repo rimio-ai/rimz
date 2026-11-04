@@ -385,6 +385,8 @@ fn evidence_does_not_take_the_sole_resolved_clients_painting_view() {
     let mut views = Views::default();
     sample(&mut views, &clock, &[(1, 10)]);
     views.input(&pane(10), clock.now()).scroll_offset = 11;
+    // On Zellij this input may come from a second client no sample lists yet, so the sole
+    // resolved client's view must not follow it.
     views.input(&pane(20), clock.now()).scroll_offset = 22;
     assert_eq!(views.paint(&pane(10), clock.now()).scroll_offset, 11);
     assert_eq!(views.clients[&MuxClientId::Zellij(1)].pane, Some(pane(10)));
