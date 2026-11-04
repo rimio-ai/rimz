@@ -9,6 +9,8 @@ use super::{AgentState, FolderTrust, FolderTrustRow, RoomLoginSet};
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
+const CODEX_SANDBOX_STUBS: [&str; 4] = [".agents", ".aws", ".codex", ".git"];
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     Applies,
@@ -209,7 +211,8 @@ fn resolved_root(root: &Path) -> PathBuf {
         .unwrap_or_else(|| root.into())
 }
 
-/// Check both instruction-bearing parent levels; the agent's own contents are its own.
+/// Check both instruction-bearing parent levels, exempting empty Codex sandbox stubs.
+/// The agent's own contents are its own.
 pub fn check(paths: &StatePaths) -> Result<(), EmptyDirErr> {
     check_level(&paths.empty_dir_root())?;
     check_level(&paths.empty_room_dir())
@@ -247,11 +250,34 @@ fn check_level(path: &Path) -> Result<(), EmptyDirErr> {
             path: entry_path.clone(),
             source,
         })?;
-        if !kind.is_dir() || entry.file_name().as_encoded_bytes().starts_with(b".") {
+        if !kind.is_dir()
+            || (entry.file_name().as_encoded_bytes().starts_with(b".")
+                && !is_empty_codex_stub(&entry)?)
+        {
             return Err(EmptyDirErr::Dirty(entry_path));
         }
     }
     Ok(())
+}
+
+fn is_empty_codex_stub(entry: &fs::DirEntry) -> Result<bool, EmptyDirErr> {
+    if !entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| CODEX_SANDBOX_STUBS.contains(&name))
+    {
+        return Ok(false);
+    }
+    let path = entry.path();
+    let io_err = |source| EmptyDirErr::Io {
+        path: path.clone(),
+        source,
+    };
+    if !entry.file_type().map_err(io_err)?.is_dir() {
+        return Ok(false);
+    }
+    let mut contents = fs::read_dir(&path).map_err(io_err)?;
+    Ok(contents.next().transpose().map_err(io_err)?.is_none())
 }
 
 /// Prepare a fresh cwd from retained room rows. Use a requested name as explicit at the mint, otherwise use the returned candidate as soft.
@@ -309,7 +335,8 @@ fn prepare(
     Ok(Prepared { cwd, name })
 }
 
-/// An explicit name's retry may take over the empty directory its failed launch left behind.
+/// An explicit name's retry may reuse an empty directory or one holding only empty Codex
+/// sandbox stubs.
 fn reusable(cwd: &Path) -> Result<bool, EmptyDirErr> {
     let io_err = |source| EmptyDirErr::Io {
         path: cwd.to_path_buf(),
@@ -318,7 +345,16 @@ fn reusable(cwd: &Path) -> Result<bool, EmptyDirErr> {
     if !fs::symlink_metadata(cwd).map_err(io_err)?.is_dir() {
         return Ok(false);
     }
-    Ok(fs::read_dir(cwd).map_err(io_err)?.next().is_none())
+    for entry in fs::read_dir(cwd).map_err(io_err)? {
+        // An unreadable entry keeps the existing leftover refusal.
+        let Ok(entry) = entry else {
+            return Ok(false);
+        };
+        if !is_empty_codex_stub(&entry)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Recreate a recorded cwd at the same path without clearing any surviving agent files.

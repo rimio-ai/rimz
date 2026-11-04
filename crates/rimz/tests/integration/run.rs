@@ -1506,6 +1506,12 @@ fn subagent_empty_dir_explicit_cwd_wins_silently() {
 
 #[cfg(unix)]
 #[test]
+fn subagent_empty_dir_accepts_empty_codex_stubs() {
+    assert_subagent_checkout_case(false, false, None, None, Some("stubs"));
+}
+
+#[cfg(unix)]
+#[test]
 fn subagent_empty_dir_dirty_root_refuses_even_without_grant() {
     assert_subagent_checkout_case(false, false, None, None, Some("dirty"));
 }
@@ -1609,7 +1615,7 @@ fn assert_subagent_checkout_case(
     empty: Option<&str>,
 ) {
     let env = Env::new();
-    let checkout = if matches!(empty, Some("root" | "revoked")) {
+    let checkout = if matches!(empty, Some("root" | "revoked" | "stubs")) {
         env.project_root.clone()
     } else if repo_subdir {
         let git = Command::new("git")
@@ -1668,6 +1674,13 @@ fn assert_subagent_checkout_case(
     if empty == Some("dirty") {
         std::fs::create_dir_all(&empty_root).unwrap();
         std::fs::write(empty_root.join("CLAUDE.md"), "must not load").unwrap();
+    }
+    if empty == Some("stubs") {
+        for parent in [&empty_root, &env.store().paths().empty_room_dir()] {
+            for name in [".agents", ".aws", ".codex", ".git"] {
+                std::fs::create_dir_all(parent.join(name)).unwrap();
+            }
+        }
     }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
@@ -1867,8 +1880,8 @@ fn assert_subagent_checkout_case(
             crate::common::room::MATERIALIZED_ROOM_PANES,
         );
     let launched = std::sync::atomic::AtomicBool::new(false);
-    let (output, second_output) = std::thread::scope(|scope| {
-        scope.spawn(|| {
+    let (output, second_output, binding) = std::thread::scope(|scope| {
+        let binding = scope.spawn(|| {
             if cwd == Some("missing") || matches!(empty, Some("dirty" | "malformed" | "refused")) {
                 return; // Each of these refuses before opening a child pane.
             }
@@ -1886,7 +1899,7 @@ fn assert_subagent_checkout_case(
         let output = command.bounded_output();
         let second_output = second.map(|second| second.join().unwrap().unwrap());
         launched.store(true, std::sync::atomic::Ordering::Relaxed);
-        (output.unwrap(), second_output)
+        (output.unwrap(), second_output, binding.join())
     });
     if let Some((path, bytes)) = &unchanged {
         assert_eq!(std::fs::read(path).unwrap(), *bytes);
@@ -1944,6 +1957,7 @@ fn assert_subagent_checkout_case(
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    binding.unwrap();
     if empty.is_some() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
@@ -2051,7 +2065,10 @@ fn assert_subagent_checkout_case(
         checkout.to_str()
     );
     let lane_path = if cwd.is_some() { foreign } else { checkout };
-    let applied = matches!(empty, Some("root" | "named" | "revoked" | "grant"));
+    let applied = matches!(
+        empty,
+        Some("root" | "named" | "revoked" | "grant" | "stubs")
+    );
     let checkout = if applied {
         let child = agents
             .iter()
@@ -2063,7 +2080,10 @@ fn assert_subagent_checkout_case(
             path.parent(),
             Some(store.paths().empty_room_dir().as_path())
         );
-        assert_eq!(child.root_lane, matches!(empty, Some("root" | "revoked")));
+        assert_eq!(
+            child.root_lane,
+            matches!(empty, Some("root" | "revoked" | "stubs"))
+        );
         assert_eq!(
             child.channel.as_deref(),
             matches!(empty, Some("named" | "grant")).then_some("parent-checkout")
