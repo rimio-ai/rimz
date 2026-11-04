@@ -294,6 +294,31 @@ fn non_grantable_falls_back_without_calling_the_writer() {
 }
 
 #[test]
+fn parent_checks_allow_only_empty_codex_stubs() {
+    let mut results = Vec::new();
+    let mut expected = Vec::new();
+    for room_level in [false, true] {
+        for name in [".agents", ".aws", ".codex", ".git"] {
+            let temp = tempfile::tempdir().unwrap();
+            let paths = paths(temp.path());
+            let parent = if room_level {
+                paths.empty_room_dir()
+            } else {
+                paths.empty_dir_root()
+            };
+            let stub = parent.join(name);
+            fs::create_dir_all(&stub).unwrap();
+            let empty = check(&paths).map_err(|error| error.to_string());
+            fs::write(stub.join("file"), "not empty").unwrap();
+            let dirty = matches!(check(&paths), Err(EmptyDirErr::Dirty(path)) if path == stub);
+            results.push((room_level, name, empty, dirty));
+            expected.push((room_level, name, Ok(()), true));
+        }
+    }
+    assert_eq!(results, expected);
+}
+
+#[test]
 fn parent_checks_reject_instructions_files_and_hidden_directories() {
     for room_level in [false, true] {
         for name in ["CLAUDE.md", "AGENTS.md", "plain", ".git", ".claude"] {
@@ -311,7 +336,7 @@ fn parent_checks_reject_instructions_files_and_hidden_directories() {
             };
             fs::create_dir_all(&expected_parent).unwrap();
             let offending = expected_parent.join(name);
-            if name.starts_with('.') {
+            if name == ".claude" {
                 fs::create_dir(&offending).unwrap();
             } else {
                 fs::write(&offending, "instructions").unwrap();
@@ -320,6 +345,16 @@ fn parent_checks_reject_instructions_files_and_hidden_directories() {
                 matches!(check(&paths), Err(EmptyDirErr::Dirty(path)) if path == offending),
                 "{parent:?}: {offending:?}"
             );
+            if name == ".git" {
+                fs::remove_file(&offending).unwrap();
+                let target = temp.path().join("target");
+                fs::create_dir(&target).unwrap();
+                std::os::unix::fs::symlink(target, &offending).unwrap();
+                assert!(
+                    matches!(check(&paths), Err(EmptyDirErr::Dirty(path)) if path == offending),
+                    "symlink {offending:?}"
+                );
+            }
         }
     }
 }
@@ -368,6 +403,20 @@ fn preparation_owns_a_private_cwd_and_reuses_only_unrecorded_directories() {
     assert!(
         matches!(&retry, Ok(retried) if retried.cwd == prepared.cwd),
         "an explicit name retries over its own empty leftover: {retry:?}"
+    );
+    for name in [".agents", ".aws", ".codex", ".git"] {
+        fs::create_dir(prepared.cwd.join(name)).unwrap();
+    }
+    let retry = prepare(&paths, &[], Some("searcher"));
+    assert!(
+        matches!(&retry, Ok(retried) if retried.cwd == prepared.cwd),
+        "an explicit name retries over empty Codex stubs: {retry:?}"
+    );
+    fs::write(prepared.cwd.join(".git/HEAD"), "not empty").unwrap();
+    let retry = prepare(&paths, &[], Some("searcher"));
+    assert!(
+        matches!(&retry, Err(EmptyDirErr::Leftover(path)) if path == &prepared.cwd),
+        "an explicit name must not reuse a non-empty stub: {retry:?}"
     );
     fs::remove_dir_all(&prepared.cwd).unwrap();
     prepare_reentry(&paths, &prepared.cwd).unwrap();

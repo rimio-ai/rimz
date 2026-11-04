@@ -362,6 +362,28 @@ fn doctor_empty_dir_merges_manual_accounts_but_keeps_json_per_account() {
 }
 
 #[test]
+fn doctor_empty_dir_accepts_empty_codex_stubs() {
+    let env = Env::new();
+    let paths = env.store().paths().clone();
+    for parent in [paths.empty_dir_root(), paths.empty_room_dir()] {
+        for name in [".agents", ".aws", ".codex", ".git"] {
+            std::fs::create_dir_all(parent.join(name)).unwrap();
+        }
+    }
+    let checks = [&env.home_root, &env.project_root].map(|cwd| {
+        let report = doctor_json(
+            &env.rimz()
+                .current_dir(cwd)
+                .args(["doctor", "--json"])
+                .output()
+                .unwrap(),
+        );
+        report["empty_dir"]["check"].clone()
+    });
+    assert_eq!(checks, [json!({"ready": null}), json!({"ready": null})]);
+}
+
+#[test]
 fn doctor_empty_dir_reports_dirty_root_without_workspace() {
     let env = Env::new();
     let root = env.rimz_home().join("empty");
