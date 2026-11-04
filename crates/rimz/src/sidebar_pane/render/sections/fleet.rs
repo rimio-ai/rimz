@@ -62,10 +62,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let status_filter = match lens.filter {
         Some(BodyFilter::Status(status)) => Some(status),
-        Some(
-            BodyFilter::Unread | BodyFilter::OpenPr | BodyFilter::Inactive | BodyFilter::Unlanded,
-        )
-        | None => None,
+        Some(BodyFilter::Unread | BodyFilter::OpenPr) | None => None,
     };
     let buckets = [
         (AgentStatus::Waiting, BucketCluster::Left),

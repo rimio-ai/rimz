@@ -547,7 +547,7 @@ Unless marked, these live in the workspace runtime directory.
 
 `snapshots/latest.json` and `snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the runtime room's `snapshots` class ([store.md → the read path](../store.md#the-read-path)).
 
-The body lens codec is `BodyLens` in [`body_filter.rs`](../../../crates/rimz/src/sidebar/body_filter.rs), for example `{"filter":{"kind":"status","status":"waiting"},"query":"auth"}`. Both fields are optional, and writing an empty lens removes the file. An absent or malformed file, including the older single-filter shape, loads as an empty lens. A typing draft belongs to its client view and is never written here.
+The body lens codec is `BodyLens` in [`body_filter.rs`](../../../crates/rimz/src/sidebar/body_filter.rs), for example `{"filter":{"kind":"status","status":"waiting"},"query":"auth"}`. Both fields are optional, and writing an empty lens removes the file. A `filter` this reader cannot decode, such as an unknown `kind` (including the retired `inactive` and `unlanded` picks) or an invalid `status`, loads as no pick while preserving a valid query. Loading never rewrites the file; the next lens write replaces it. An absent or malformed file, including the older single-filter shape, loads as an empty lens. A typing draft belongs to its client view and is never written here.
 
 Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a birth that has proven the session absent deletes heartbeat files before creating the replacement session.
 

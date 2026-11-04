@@ -1013,35 +1013,63 @@ fn inactive_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
 }
 
 #[test]
-fn inactive_chip_counts_remain_clickable_to_switch_and_clear_their_lenses() {
-    use crate::sidebar::body_filter::BodyFilter;
-    let (mut snapshot, _) = inactive_click_snapshot(0);
+fn inactive_chip_count_breakdown_and_glyph_toggle_without_hiding_active_cards() {
+    let (mut snapshot, _) = inactive_click_snapshot(2);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .last_mut()
         .unwrap()
         .inactive = Some(crate::store::snapshot::SidebarInactive::Unlanded);
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            row.name = row.id.clone();
+        }
+    }
     let mut view = ViewState::default();
     let mut ui = UiState::default();
-    for (filter, expected) in [
-        (BodyFilter::Inactive, Some(BodyFilter::Inactive)),
-        (BodyFilter::Unlanded, Some(BodyFilter::Unlanded)),
-        (BodyFilter::Unlanded, None),
-        (BodyFilter::Inactive, Some(BodyFilter::Inactive)),
-        (BodyFilter::Inactive, None),
-    ] {
-        paint(&mut view, &mut ui, &snapshot, 64);
-        let (column, line) = (0..64)
-            .find_map(|line| {
-                (0..128)
-                    .find(|column| {
-                        ui.interactions.target_at(*column, line)
-                            == Some(HitTarget::BodyFilter(filter))
-                    })
-                    .map(|column| (column, line))
-            })
-            .expect("each count remains clickable under its own lenses");
-        handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
-        assert_eq!(view.make_up_filter.filter, expected);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 100)).unwrap();
+    let mut frame = |view: &mut ViewState, ui: &mut UiState| {
+        render::draw_to_terminal(&mut terminal, &snapshot, None, view, ui).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(54)
+            .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+    };
+    let mut lines = frame(&mut view, &mut ui);
+    for (token, open) in [("1 inactive", true), ("1 unlanded", false), ("▸", true)] {
+        let line = lines
+            .iter()
+            .position(|line| line.contains("1 inactive"))
+            .unwrap();
+        let byte = lines[line].find(token).unwrap();
+        let column = unicode_width::UnicodeWidthStr::width(&lines[line][..byte]);
+        let outcome = handle_mouse_click(column as u16, line as u16, &mut view, &mut ui, &snapshot);
+        assert!(outcome.effects.is_empty());
+        lines = frame(&mut view, &mut ui);
+        let text = lines.join("\n");
+        for group in snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| group.inactive.is_none())
+        {
+            for row in group.rows.iter() {
+                assert!(ui.painted_roster.contains(&row.id), "{text}");
+                assert!(text.contains(&row.name), "{text}");
+            }
+            assert!(text.contains(&group.label), "{text}");
+        }
+        assert!(
+            text.contains(if open {
+                "[ ▾ 1 inactive"
+            } else {
+                "[ ▸ 1 inactive"
+            }),
+            "{text}"
+        );
+        assert_eq!(text.contains("done"), open, "{text}");
+        assert!(view.make_up_filter.is_empty());
     }
 }
 

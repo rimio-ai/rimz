@@ -1,6 +1,5 @@
 use super::*;
 use crate::sidebar_pane::render::compose::scroll_lines;
-use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::{SidebarInactive, SidebarWorktreeKind, WorktreePrState};
 use std::collections::BTreeSet;
 
@@ -278,15 +277,13 @@ fn inactive_chip_drops_breakdown_then_label_but_keeps_the_count() {
                 Some(SidebarInactive::Unlanded);
         }
         for inner in [6, 7, 8, 15, 16, 17, 28, 29, 30] {
-            let texts = line_texts(
-                &body(
-                    &snapshot,
-                    &ViewState::default(),
-                    &UiState::default(),
-                    inner + 2,
-                )
-                .lines,
+            let block = body(
+                &snapshot,
+                &ViewState::default(),
+                &UiState::default(),
+                inner + 2,
             );
+            let texts = line_texts(&block.lines);
             let expected = if inner >= 29 && unlanded {
                 "[ ▸ 3 inactive · 1 unlanded ]"
             } else if inner >= 16 {
@@ -300,6 +297,18 @@ fn inactive_chip_drops_breakdown_then_label_but_keeps_the_count() {
                 texts.iter().any(|line| line.contains(expected)),
                 "{inner}: {texts:?}"
             );
+            let (_, line) = block
+                .interactions
+                .line_for_target(&HitTarget::ToggleInactive)
+                .unwrap();
+            for column in 0..inner + 2 {
+                assert_eq!(
+                    block.interactions.target_at(column as u16, line),
+                    Some(HitTarget::ToggleInactive),
+                    "width {}, column {column}",
+                    inner + 2
+                );
+            }
         }
     }
 }
@@ -334,91 +343,17 @@ fn inactive_chip_hit_columns_follow_a_wide_dotted_glyph() {
         .iter()
         .position(|line| line.contains("3 inactive"))
         .unwrap();
-    for (label, filter) in [
-        ("3 inactive", BodyFilter::Inactive),
-        ("1 unlanded", BodyFilter::Unlanded),
-    ] {
-        let byte = texts[line].find(label).unwrap();
-        let start = super::super::layout::text_width(&texts[line][..byte]);
-        for column in start..start + super::super::layout::text_width(label) {
-            assert_eq!(
-                block.interactions.target_at(column as u16, line as u16),
-                Some(HitTarget::BodyFilter(filter)),
-                "{label} at column {column}"
-            );
-        }
-    }
-}
-
-#[test]
-fn inactive_chip_keeps_and_marks_its_own_filter_picks() {
-    let mut snapshot = inactive_snapshot();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[2].inactive =
-        Some(SidebarInactive::Unlanded);
-    for (filter, label, frame) in [
-        (BodyFilter::Inactive, "3 inactive", "inactive_picked"),
-        (BodyFilter::Unlanded, "1 unlanded", "unlanded_picked"),
-    ] {
-        let view = ViewState {
-            make_up_filter: filter.into(),
-            ..Default::default()
-        };
-        let block = body(&snapshot, &view, &UiState::default(), 54);
-        let texts = line_texts(&block.lines);
-        let line = texts
-            .iter()
-            .position(|line| line.contains("3 inactive · 1 unlanded"))
-            .expect("the chip stays drawn under its own lens");
-        let picked = block.lines[line]
-            .spans
-            .iter()
-            .find(|span| span.content == label)
-            .expect("the picked count has its own style");
-        let theme = Theme::fixed(true);
+    for column in 0..54 {
         assert_eq!(
-            picked.style,
-            theme.picked_chip(theme.component(Component::InactiveChip), Modifier::BOLD)
-        );
-        assert_snapshot(
-            frame,
-            snapshot_to_screen_with_alert_and_ui(
-                &snapshot,
-                None,
-                &view,
-                &UiState::default(),
-                54,
-                42,
-            ),
-        );
-    }
-    for view in [
-        ViewState {
-            make_up_filter: BodyFilter::Unread.into(),
-            ..Default::default()
-        },
-        ViewState {
-            make_up_filter: BodyLens {
-                filter: Some(BodyFilter::Inactive),
-                query: Some("inactive-a".into()),
-            },
-            ..Default::default()
-        },
-        ViewState {
-            search_draft: Some("inactive-a".into()),
-            ..Default::default()
-        },
-    ] {
-        assert!(
-            body(&snapshot, &view, &UiState::default(), 54)
-                .interactions
-                .line_for_target(&HitTarget::ToggleInactive)
-                .is_none()
+            block.interactions.target_at(column, line as u16),
+            Some(HitTarget::ToggleInactive),
+            "column {column}"
         );
     }
 }
 
 #[test]
-fn inactive_chip_routes_its_glyph_and_each_count_separately() {
+fn inactive_chip_is_one_target_in_both_states() {
     let mut snapshot = inactive_snapshot();
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[2].inactive =
         Some(SidebarInactive::Unlanded);
@@ -439,18 +374,10 @@ fn inactive_chip_routes_its_glyph_and_each_count_separately() {
             .iter()
             .position(|line| line.contains("3 inactive"))
             .unwrap();
-        for (token, target) in [
-            (if open { "▾" } else { "▸" }, HitTarget::ToggleInactive),
-            ("[", HitTarget::ToggleInactive),
-            ("]", HitTarget::ToggleInactive),
-            ("3 inactive", HitTarget::BodyFilter(BodyFilter::Inactive)),
-            ("1 unlanded", HitTarget::BodyFilter(BodyFilter::Unlanded)),
-        ] {
-            let byte = texts[line].find(token).unwrap();
-            let column = super::super::layout::text_width(&texts[line][..byte]);
+        for column in 0..54 {
             assert_eq!(
-                block.interactions.target_at(column as u16, line as u16),
-                Some(target)
+                block.interactions.target_at(column, line as u16),
+                Some(HitTarget::ToggleInactive)
             );
         }
         assert_snapshot(
