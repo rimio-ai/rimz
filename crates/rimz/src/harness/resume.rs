@@ -1937,7 +1937,6 @@ fn materialize_team_restore_tab(
             super::team_notes::Launch::Resume,
         )?;
     }
-    let team_roles = team.map(|team| team.roles.as_slice());
     let mut resume_ancestries = planned.cohort.seeds.iter().filter_map(|seed| {
         let CohortSeed::Resume(agent) = seed else {
             return None;
@@ -1958,7 +1957,6 @@ fn materialize_team_restore_tab(
         None,
         None,
         Some(&planned.team),
-        team_roles,
         planned.channel.as_deref(),
         None,
         Some(&planned.cohort),

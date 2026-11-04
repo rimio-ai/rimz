@@ -303,7 +303,7 @@ rimz teams stop forge -w feat-rate-limits
 | --- | --- | --- |
 | `focus` | Jumps to the member that most needs attention, else the declared `leader`, else the first member. | Nothing on success. |
 | `stop` | Closes every live member, stopping each member's own subagents first, then waits up to 3 seconds total for their processes to exit. | `stopped TEAM#LANE (N members)`, then `stopped @<handle>` per member it stopped, `error @<handle>: <reason>` per failure, and an address-and-pid line for each closed agent whose process is still running. |
-| `restart` | Relaunches every live member in declared role order, resuming each provider session where supported. | `restarted TEAM#LANE (N members)`, then one restart line per member, `error @<handle>: <reason>` per failure. |
+| `restart` | Relaunches every live member in launch layout order (stored older cohorts retain role order), resuming each provider session where supported. | `restarted TEAM#LANE (N members)`, then one restart line per member, `error @<handle>: <reason>` per failure. |
 
 `stop` and `restart` continue past a failed member and exit `1` when any member failed. A member whose account fails the [account check](./agents.md#the-account-check-at-launch), or whose declared team prompt layer cannot be composed because the team has no stages or its role has no base prompt, is one such `restart` failure; a team launch and `rimz teams resume` refuse whole on these errors.
 

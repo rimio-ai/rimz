@@ -661,10 +661,11 @@ impl Store {
                 crate::agents::RoomAccounts::default()
             };
             let identities = allocate_agent_launch_identities(requests, &base_agents, &accounts)?;
+            let launched_at = jiff::Timestamp::now();
             let events = identities
                 .iter()
                 .map(|identity| {
-                    self.agent_launch_event(
+                    let mut event = self.agent_launch_event(
                         identity,
                         AgentLaunchState::Starting,
                         &scope.session_name,
@@ -673,7 +674,9 @@ impl Store {
                         scope.description.as_deref(),
                         None,
                         None,
-                    )
+                    );
+                    event.timestamp = launched_at;
+                    event
                 })
                 .collect::<Vec<_>>();
             for event in &events {
