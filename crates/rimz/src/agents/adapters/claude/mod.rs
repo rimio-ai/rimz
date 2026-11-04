@@ -1140,7 +1140,35 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let hook = ClaudeHook::parse(event_name, payload);
-        let signal = map_claude_lifecycle_signal(self.spec(), payload, &hook);
+        let terminal_tail = matches!(hook, ClaudeHook::Stop(_))
+            .then(|| transcript_tail_from_payload(payload))
+            .flatten();
+        let turn_error = match &hook {
+            ClaudeHook::StopFailure(parsed) => Some(parsed),
+            _ => None,
+        }
+        .and_then(|parsed| {
+            let error = parsed.error.as_deref()?.trim();
+            if error.is_empty() {
+                return None;
+            }
+            let label = parsed
+                .last_assistant_message
+                .as_deref()
+                .and_then(crate::agents::context::cap_turn_error_label);
+            Some(AgentTurnError {
+                ended_turn: false,
+                class: statusline::classify_api_error(Some(error), None, label.as_deref()),
+                at: Timestamp::now(),
+                label,
+            })
+        })
+        .or_else(|| {
+            terminal_tail
+                .as_deref()
+                .and_then(statusline::detect_turn_error)
+        });
+        let signal = map_claude_lifecycle_signal(self.spec(), payload, &hook, turn_error.as_ref());
         let ask_kind = match &signal {
             Some(LifecycleSignal::AwaitingInput { kind, .. }) => Some(*kind),
             _ => None,
@@ -1191,34 +1219,6 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 .and_then(|(name, response)| ask::answer_detail(name, response)),
             _ => None,
         });
-        let terminal_tail = matches!(hook, ClaudeHook::Stop(_))
-            .then(|| transcript_tail_from_payload(payload))
-            .flatten();
-        let turn_error = match &hook {
-            ClaudeHook::StopFailure(parsed) => Some(parsed),
-            _ => None,
-        }
-        .and_then(|parsed| {
-            let error = parsed.error.as_deref()?.trim();
-            if error.is_empty() {
-                return None;
-            }
-            let label = parsed
-                .last_assistant_message
-                .as_deref()
-                .and_then(crate::agents::context::cap_turn_error_label);
-            Some(AgentTurnError {
-                ended_turn: false,
-                class: statusline::classify_api_error(Some(error), None, label.as_deref()),
-                at: Timestamp::now(),
-                label,
-            })
-        })
-        .or_else(|| {
-            terminal_tail
-                .as_deref()
-                .and_then(statusline::detect_turn_error)
-        });
         decoded.set_turn_error(turn_error);
 
         if let Some(signal) = signal
@@ -1232,11 +1232,14 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             });
             decoded.attach_lifecycle(observation);
         }
-        let final_message = decoded.lifecycle().and_then(|observation| {
-            final_message_for_lifecycle(payload, observation, |path| {
-                terminal_tail.or_else(|| read_transcript_tail(path))
-            })
-        });
+        let final_message = decoded
+            .lifecycle()
+            .filter(|_| !matches!(hook, ClaudeHook::StopFailure(_)))
+            .and_then(|observation| {
+                final_message_for_lifecycle(payload, observation, |path| {
+                    terminal_tail.or_else(|| read_transcript_tail(path))
+                })
+            });
         decoded.set_final_message(final_message);
         if payload_has_context_observation(payload) {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
@@ -1634,6 +1637,7 @@ fn map_claude_lifecycle_signal(
     spec: &AgentSpec,
     payload: &Value,
     hook: &ClaudeHook,
+    turn_error: Option<&AgentTurnError>,
 ) -> Option<LifecycleSignal> {
     // Claude stamps the same `tool_use_id` on a call's `PreToolUse` and
     // `PostToolUse`, and a distinct one per parallel call, so it is the native
@@ -1658,6 +1662,13 @@ fn map_claude_lifecycle_signal(
             ),
             turn_id: None,
         }),
+        ClaudeHook::StopFailure(_) => turn_error
+            .filter(|error| !crate::agents::state::effective_turn_error_class(error).pauses_turn())
+            .map(|_| LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            }),
         ClaudeHook::PermissionRequest(request) => spec
             .blocking_tool_kind(request.tool_name.as_deref())
             .is_none()
@@ -1697,7 +1708,7 @@ fn map_claude_lifecycle_signal(
             failed: false,
         }),
         ClaudeHook::SessionEnd => Some(LifecycleSignal::Ended),
-        ClaudeHook::StopFailure(_) | ClaudeHook::Other => None,
+        ClaudeHook::Other => None,
     }
 }
 

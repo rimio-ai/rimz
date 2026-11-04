@@ -30,7 +30,7 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | `SessionStart` | lifecycle | `Registered`, or `CompactionEnded { auto: None }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload |
 | `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized text as `task` and `prompt` (below); a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` |
 | `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells) |
-| `StopFailure` | lifecycle | none | writes `AgentContext.turn_error` ([turn endings](#turn-endings)) |
+| `StopFailure` | lifecycle | `TurnEnded { errored: true }` for non-pausing errors; otherwise none | writes `AgentContext.turn_error`, never a final assistant message ([turn endings](#turn-endings)) |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
 | `Notification` | lifecycle | none | |
 | `PreToolUse` | lifecycle | `ToolUsed { mutates: false, edits: false, name: None }` | proof of work only, keyed by `tool_use_id` |
@@ -69,7 +69,9 @@ A broad `PreToolUse` is unnamed proof of work. Store appends it only under the r
 
 `Stop` carries two bits. `errored` comes from the shared `stop_payload_errored`. `parked_on_background` is set when the payload's `background_tasks` holds a task whose status is neither `completed` nor `failed`, or when `session_crons` is non-empty (both fields exist from Claude Code 2.1.145). [model.md](./model.md#turn-endings-and-parked-turns) turns those bits into the final status: a clean parked stop stays `running` with a `⋯ bg` marker, and an error always wins.
 
-`StopFailure` is Claude's provider-error certificate. It appends no `agent.lifecycle` envelope, so the rollup stays `running`. It writes a turn-error marker instead, classified from `error` and the capped `last_assistant_message` label by the same `classify_api_error` the [turn-death marker](#turn-death-marker) uses. On `Stop`, when no `StopFailure` certificate applies, `decode_hook` runs the turn-death scan over the transcript tail. That scan covers Claude builds without `StopFailure` and sessions whose hooks were installed late.
+`StopFailure` is Claude's provider-error certificate. A non-empty `error` writes a turn-error marker, classified from `error` and the capped `last_assistant_message` label by the same `classify_api_error` the [turn-death marker](#turn-death-marker) uses. If the marker's effective class does not pause the turn (`Failed`, `Unknown`, or `NotEntitled`), it also appends an `agent.lifecycle` envelope with `TurnEnded { errored: true, parked_on_background: false }`. The rollup becomes `failed` at that hook. A root observation also fails its supervised run unless the run belongs to a team or spans the session. Rate-limit, spend-limit, and overload pauses emit no lifecycle and leave the rollup and run `running`. A blank or missing `error` writes neither a marker nor a lifecycle envelope. The error label remains an `Error` transcript entry, never an assistant entry or the run's `last_message`.
+
+On `Stop`, when no `StopFailure` certificate applies, `decode_hook` runs the turn-death scan over the transcript tail. That scan covers Claude builds without `StopFailure` and sessions whose hooks were installed late.
 
 ### Background shells
 
@@ -281,7 +283,7 @@ Every statusline push re-derives the marker, so `StopFailure` shares the classif
 | `unknown`/`invalid_request` or a label-only error matching the shared `classify_label` rule for `reached your specified[\w\s-]*?usage limits`, case-insensitive ([native error bodies](../../externals/agent-adapter/claude-reference.md#transcript-death-certificate)) | `failed`: an actionable turn, never a resumable park or a plan lapse |
 | anything else | `classify_label` over the label: rate-limit text or HTTP 429 pauses on the rate limit, transient server or connection text or HTTP 5xx pauses on backoff, and anything else fails |
 
-The marker changes display only: [model.md](./model.md#displayed-status) pauses or fails the row, and the rollup does not change ([upstream shape](../../externals/agent-adapter/claude-reference.md#transcript-death-certificate)).
+The tail-scan marker changes display only: [model.md](./model.md#displayed-status) pauses or fails the row, and the rollup does not change. A `StopFailure` classed by this table also ends the turn when its class does not pause ([turn endings](#turn-endings)) ([upstream shape](../../externals/agent-adapter/claude-reference.md#transcript-death-certificate)).
 
 When the hook lifecycle merges a changed `not_entitled` marker, it marks the recorded agent login's [entitlement](./providers.md#entitlement) lapsed at first observation and makes its direct usage read due. An unmetered API-key, key-helper, or Console login still records that lapse, but neither the sidebar nor `rimz accounts` projects it; its failed turn keeps Claude's own error message. Replayed drains skip this side effect, and a missing agent row warns instead of guessing a login. The statusline remains a reader. The transcript backstop reaches this producer through the ordinary hook merge.
 
