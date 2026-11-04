@@ -108,15 +108,15 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | slot | what it paints |
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
-| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the parked-workflow notice, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
+| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the parked-workflow notice, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot or costly" amber: the gauge mid-band and the age-heat midpoint |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph and the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
-| `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, and the context meter's `┤` compaction wall and matching point label |
-| `body` | body text: stat figures, subagent lines, worktree headers |
-| `muted` | chrome: labels, ages, subordinate values, and the compacted-context meter's empty track while it has no size estimate |
-| `faint` | faintest chrome: measured bar tracks, `·` separators, dotted dividers |
+| `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
+| `body` | body text: stat figures, subagent lines, worktree headers, workflow state words |
+| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, and the compacted-context meter's empty track while it has no size estimate |
+| `faint` | faintest chrome: measured bar tracks, `·` separators, dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |

@@ -48,6 +48,18 @@ pub(crate) enum Component {
     PipelinePassed,
     /// A hollow future dot for a stage this run already entered: shape says not done, tone says been there.
     PipelineRevisited,
+    /// The workflow name leading a workflow strip or its folded receipt (`meta`).
+    WorkflowBadge,
+    /// The `╰─` connector from a detour's parent to the current detour node (`faint`).
+    WorkflowDetour,
+    /// A workflow node's `×N` visit count while its cap still has room (`muted`).
+    WorkflowVisits,
+    /// A `×N` visit count whose cap is used up (`warn`).
+    WorkflowVisitsCapped,
+    /// The no-card state word on an active workflow strip (`body`).
+    WorkflowState,
+    /// The `parked` word on a parked workflow strip, kept after notice dismissal (`warn`).
+    WorkflowParked,
     /// The `#N` linked-PR badge after a worktree name — steady cool link tone;
     /// state stays on the right marker.
     WorktreePrBadge,
@@ -149,6 +161,12 @@ impl Component {
         Component::TeamLabel,
         Component::PipelinePassed,
         Component::PipelineRevisited,
+        Component::WorkflowBadge,
+        Component::WorkflowDetour,
+        Component::WorkflowVisits,
+        Component::WorkflowVisitsCapped,
+        Component::WorkflowState,
+        Component::WorkflowParked,
         Component::WorktreePrBadge,
         Component::BranchDelta,
         Component::WorktreePristine,
@@ -196,25 +214,24 @@ impl Component {
         tone_color(match self {
             Sessions | Output | HelpKey | WindowHuge => palette.accent,
             LaneSpine | EntrySpine => palette.selection,
-            WorktreeHeader | BranchDelta => palette.body,
-            WorktreePristine | WindowSmall => palette.faint,
+            WorktreeHeader | BranchDelta | WorkflowState => palette.body,
+            WorktreePristine | WindowSmall | WorkflowDetour => palette.faint,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
-            | ThrottleNotice | ParkNotice => palette.warn,
+            | ThrottleNotice | ParkNotice | WorkflowVisitsCapped | WorkflowParked => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
-            TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite | CompactionPoint => {
-                palette.meta
-            }
+            TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite | CompactionPoint
+            | WorkflowBadge => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
-            | ContextCompacted => palette.muted,
+            | ContextCompacted | WorkflowVisits => palette.muted,
         })
     }
 }

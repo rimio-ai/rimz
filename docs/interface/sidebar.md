@@ -178,7 +178,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⌘ name` | the workspace |
 | `◎ N` | sessions that ran in the spend window |
 | `¤ N` | agents alive right now |
-| `⑃ N` | open pull requests on the agents' branches, stacked pull requests included |
+| `⑃ N` | open pull requests on the room's worktree groups, including groups kept by live workflows and stacked pull requests |
 | `↑ 2 need you` / `↓ 2 need you` | the card that most needs you is above / below the view |
 | `▌` ... `▐` | the selected card's left and right spines |
 | `▏` inside an entry's indent | the selected child entry or `+K older`; held when the sidebar takes focus |
@@ -625,7 +625,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
  ○ zsh
 ```
 
-A group with one staged team and a readable worktree `.rimz/team/blackboard.md` containing a `Stage:` line gets a pipeline line directly below its header, above the first card. The team's members must identify one worktree:
+A group with one staged team and a readable worktree `.rimz/team/blackboard.md` containing a `Stage:` line gets a pipeline line heading the team's own section. It follows the workflow section, when present, and precedes the team's cards; other rows follow the team section. Ranked order is preserved within each section, before the six-row cap. The team's members must identify one worktree:
 
 ```
 ▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
@@ -640,6 +640,25 @@ Without color there is no revisit cue; a forward re-entry warms nothing to its r
 The optional [`harness.stall_nudge`](../guide/configuration.md#stalled-team-nudge) adds no visual state: after the existing `!`, it queues one notice to the last-active teammate at 55 minutes of quiet per unfinished stage visit, only with no pending wait or real message. A turn the notice starts restarts the `!` window as any real turn does; keep-warm pings do not.
 
 The stage duration sits immediately after the stage name, such as `Implement 4h12m`; the run total alone is pinned right, such as `4h51m`. Both are muted, without a clock face or slash. Below an hour a duration uses one whole unit (`45s`, `18m`); from an hour it uses two scaled units (`1h00m`, `4h12m`, `1d02h`). An unknown stage time leaves just the name; an unknown total leaves the right side empty. At `Done`, only the frozen total appears. The stage clock sums every visit to the current stage since the run started, counted from parseable entries in the board's `## Progress` (or `## Progress log`) ledger, including an `opened` entry. A backward flip resumes the stage's accumulated time; a same-stage re-flip changes nothing. The total starts at the first parseable ledger entry (or the latest flip out of `Done`, which also clears earlier visits) and runs until now, or until the last `-> Done` entry at `Done`; a `Done -> Done` re-flip does not move the stop. On a RimZ-written board the stage time never exceeds the total. A missing or future start omits that duration, and `Done` without a valid stop omits the clock. If a hand-edited `Stage:` disagrees with the ledger's open stage, the stage clock is absent. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
+
+### Workflow strips
+
+An Active or Parked workflow keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, then other rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it. If several workflows share a checkout, the newest run supplies the strip.
+
+```text
+ ⑂ merge-lane ✓ #91                            ⇉ main
+   land ● ◉ watch queued 23m ○ ◇ ○ ◇              25m
+```
+
+The workflow badge leads the main rail in walk order: reached steps and checks are `●` and `◆`, future ones `○` and `◇`. Only the current node is named, in bold after `◉`. A current detour keeps its parent named (`◆ watch ╰─ ◉ fix ×2`); past detours do not draw. `×N` appears from the second visit, yellow when a visit cap is used up. Reached means earlier in the rail, not journal-confirmed, so resuming past a node can mark it reached without visiting it. An unreadable sealed definition draws the current node without a track.
+
+With a current step card, the mark and name use its status tone and animation phase and omit the state word. Otherwise Active uses a static running tone, Parked a waiting tone, followed by the check outcome, `held`, `takeover`, `running` for a step, `checking`, or `parked`. The parked word is yellow. A hold reads `holding <outcome> <age>/<limit>`, using `?` for an unreadable limit. The duration is the outcome's age at a check, node-entry age at a step, or time since parking; the whole run's age pins right. A held session names its step, not the check holding it.
+
+The strip adds neither a selectable row nor attention. Clicking it focuses the current step card when one is shown; otherwise it does nothing. A group with no rows has no lane selection, row ordinal, header jump, or unread reminder, and keyboard row navigation skips it. Its header drops churn before shortening its name. Its open PR still contributes to `⑃ N`, and that lens shows the group, counting it once; status and unread lenses exclude it. An inactive rowless run counts once on the inactive chip and occupies one place in its paged peek, drawing an inert workflow receipt. It stays hidden while the peek is closed. Search matches its label, qualifier, team, PR number (`#91`), or workflow name, and counts a rowless match once.
+
+On narrow panes, the first fitting shape drops the run total, then the track while keeping a detour's parent, then the parent, badge, and duration, then ellipsizes the state word. The current mark and node name never shorten. The detour connector follows `chrome.box_bottom_left` and `chrome.hairline`, including ASCII overrides, in either glyph set.
+
+A live workflow blocks folding while its checkout is unlanded. Once landed, the latest node entry joins the group's quiet maximum and uses the landed window. A folded group with a live run replaces the team/member roster line with `▸ <workflow> · <node> <word>`, always drawing the strip's word, since the fold hides the cards. Member totals still draw when available; a rowless group has no totals and its receipt is inert. A closed inactive chip hides a rowless group like any other folded group.
 
 ### Row cap and inactive groups
 
@@ -666,7 +685,7 @@ A group becomes inactive once its latest agent launch or non-keepalive prompt is
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with time since the latest agent activity pinned right. This compact age is always present, plain and muted without a glyph, even under five minutes (`30s`, `12m`, `2h`). Cache pings do not move it, and process activity counts only in groups without agents. Cost and tokens cover every session the team ran in this worktree, resumed sessions and subagents included; the sidebar shows no work-time figure. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
+Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
 Inactive groups follow all active project work and precede `external`. At 54 columns, the closed inactive chip replaces their headers and receipts:
 
@@ -733,7 +752,7 @@ A folded inactive group hides its pipeline line and puts the stage after the tea
                                                    0s
 ```
 
-Expanding the group restores the pipeline line. Asks and failures lead each group, newest attention first. Calm and parked cards follow in hot, cooling, and archived bands, newest birth or recovery first within each. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Inactive groups sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Within each section, asks and failures lead, newest attention first. Calm and parked cards follow in hot, cooling, and archived bands, newest birth or recovery first within each. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 
@@ -910,7 +929,7 @@ At 46 columns, the label clips first:
                                    ? for help
 ```
 
-Press `x` to dismiss the parks the notice shows on screen; a park the pane has not drawn yet stays undismissed. Another run parking, or the same run parking again, raises it again with the full parked count, including dismissed runs. Resuming or canceling a run reduces that count; no parked runs means no notice. Dismissal is shared by co-viewers, lasts until the sidebar host restarts, and leaves no sidebar reminder until another park. `rimz workflow list` still shows every parked run.
+Press `x` to dismiss the parks the notice shows on screen; a park the pane has not drawn yet stays undismissed. Another run parking, or the same run parking again, raises it again with the full parked count, including dismissed runs. Resuming or canceling a run reduces that count; no parked runs means no notice. Dismissal is shared by co-viewers and lasts until the sidebar host restarts. The per-worktree strip keeps its `parked` word after dismissal, and `rimz workflow list` still shows every parked run.
 
 Narrow panes clip the address or count first. When the full suffix would leave less than the warning glyph, a space, and one cell of leading text, `· x dismiss` drops and `· rimz workflow list` stays; `x` still works. Below that, the line clips at the right edge.
 
@@ -1061,6 +1080,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 |-------|--------|
 | click a card or process row | select the card immediately and focus its pane |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
+| click a workflow strip | focus its current step's visible card, otherwise do nothing |
 | click a make-up bucket or `⑃ N` | filter the cards |
 | click `↑ N need you` / `↓ N need you` | reveal the lead card where it sits, or scroll to the top if the filter hides it |
 | click `↑ <name>` / `↓ <name>` | reveal the focused card without changing selection |

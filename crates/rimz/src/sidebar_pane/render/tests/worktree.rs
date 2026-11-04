@@ -86,7 +86,7 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
     assert_eq!(card_lines(block), card_lines(unfiltered));
 }
 
-fn pipeline_snapshot() -> SidebarSnapshot {
+pub(super) fn pipeline_snapshot() -> SidebarSnapshot {
     let agents = ["planner", "coder"].map(|role| {
         let mut member = agent(
             role,

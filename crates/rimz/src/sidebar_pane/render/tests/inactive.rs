@@ -436,6 +436,89 @@ fn expanded_frame_opens_inactive_and_every_card() {
 }
 
 #[test]
+fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
+    let mut snapshot = paged_snapshot();
+    let workflow = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO)
+        .worktree_groups[0]
+        .workflow
+        .clone();
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .filter(|group| group.inactive.is_some())
+    {
+        group.rows = Default::default();
+        group.status_counts.clear();
+        group.workflow = workflow.clone();
+    }
+    let mut view = ViewState::default();
+    let rows = view
+        .visible_roster(&snapshot)
+        .rows()
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    for pages in [0, 1, 2, 3] {
+        view.inactive_peek = (pages > 0).then(|| super::super::ui_state::InactivePeek {
+            pages: pages.try_into().unwrap(),
+            ..Default::default()
+        });
+        let block = body(&snapshot, &view, &UiState::default(), 54);
+        let texts = line_texts(&block.lines);
+        let text = texts.join("\n");
+        assert!(text.contains("25 inactive"), "{text}");
+        let shown = (pages * 10).min(25);
+        for index in 1..=25 {
+            assert_eq!(
+                text.contains(&format!("old-{index:02}")),
+                index <= shown,
+                "page {pages}: {text}"
+            );
+        }
+        assert_eq!(text.matches("▸ land · watch queued").count(), shown);
+        for (line, receipt) in texts.iter().enumerate() {
+            if receipt.contains("▸ land · watch queued") {
+                assert_eq!(block.interactions.row_at_line(line), None);
+                assert_eq!(block.interactions.target_at(3, line as u16), None);
+            }
+        }
+        if pages > 0 && shown < 25 {
+            let tail = texts
+                .iter()
+                .position(|line| line.contains(&format!("+{} older", 25 - shown)))
+                .unwrap();
+            assert_eq!(
+                block.interactions.target_at(1, tail as u16),
+                Some(HitTarget::MoreInactive)
+            );
+            assert!(
+                texts[tail + 1..]
+                    .iter()
+                    .any(|line| line.contains("external"))
+            );
+        } else {
+            assert!(!text.contains(" older"), "{text}");
+        }
+        assert_eq!(
+            view.visible_roster(&snapshot)
+                .rows()
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
+    }
+    let mut ansi = Vec::new();
+    render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
+    let text = String::from_utf8(ansi).unwrap();
+    for index in 1..=25 {
+        assert!(text.contains(&format!("old-{index:02}")), "{text}");
+    }
+    assert!(!text.contains(" older"), "{text}");
+}
+
+#[test]
 fn inactive_first_page_is_newest_first_with_a_muted_older_tail() {
     let snapshot = paged_snapshot();
     let view = ViewState {

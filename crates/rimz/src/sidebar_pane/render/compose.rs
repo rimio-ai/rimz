@@ -1230,7 +1230,7 @@ fn scroll_lines_windowed(
             walk.window = 0..usize::MAX;
         }
     }
-    if roster.len() == 0
+    if !roster.groups().iter().any(|group| group.shown())
         && view
             .search_draft
             .as_deref()
@@ -1267,6 +1267,9 @@ fn scroll_lines_windowed(
         let mut older = 0;
         let mut emitted = false;
         for group in roster.groups() {
+            if !group.shown() {
+                continue;
+            }
             if group.source().inactive.is_none() && older > 0 {
                 block.append(inactive_older_line(theme, older));
                 older = 0;
@@ -1295,9 +1298,6 @@ fn scroll_lines_windowed(
                     }
                     continue;
                 }
-            }
-            if group.is_empty() && group.hidden_count() == 0 {
-                continue;
             }
             if emitted {
                 block.push_inert(Line::from(""));

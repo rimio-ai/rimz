@@ -80,6 +80,13 @@ impl<'a> GroupFacts<'a> {
 }
 
 impl BodyFilter {
+    pub(crate) fn shows_group(self, group: &SidebarWorktreeGroup) -> bool {
+        match self {
+            Self::OpenPr => group.pr_state == Some(WorktreePrState::Open),
+            Self::Status(_) | Self::Unread => false,
+        }
+    }
+
     /// Status lenses show a matching unit whole; other lenses keep row membership.
     pub(crate) fn shown(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
         match self {
@@ -91,7 +98,7 @@ impl BodyFilter {
                         .is_some_and(|unit| unit.buckets().contains(&status))
             }
             Self::Unread => row.unread,
-            Self::OpenPr => facts.group.pr_state == Some(WorktreePrState::Open),
+            Self::OpenPr => self.shows_group(facts.group),
         }
     }
 
@@ -107,7 +114,7 @@ impl BodyFilter {
             }
     }
 
-    /// Full-roster matching units for status lenses, or matching rows for other lenses.
+    /// Matching units for status lenses; otherwise rows, with rowless runs counting once.
     pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
         match self {
             Self::Status(_) => groups
@@ -130,8 +137,8 @@ impl BodyFilter {
                 .count(),
             Self::OpenPr => groups
                 .iter()
-                .filter(|group| group.pr_state == Some(WorktreePrState::Open))
-                .map(|group| group.rows.len())
+                .filter(|group| self.shows_group(group))
+                .map(|group| group.rows.len().max(usize::from(group.workflow.is_some())))
                 .sum(),
         }
     }

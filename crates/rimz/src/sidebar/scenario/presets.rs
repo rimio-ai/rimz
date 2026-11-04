@@ -77,6 +77,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         Preset::Cockpit => add_cockpit_fixture(&mut snapshot, now),
         Preset::Focus => add_focus_fixture(&mut snapshot, now),
         Preset::Economy => add_economy_fixture(&mut snapshot, now),
+        Preset::Workflow => add_workflow_fixture(&mut snapshot, now),
         Preset::Reach => add_reach_fixture(&mut snapshot, now),
         Preset::Clocks | Preset::ClocksDone => {
             add_clock_fixture(&mut snapshot, now, state);
@@ -98,6 +99,53 @@ pub(super) fn epoch() -> jiff::Timestamp {
     "2026-06-09T12:00:00Z"
         .parse()
         .expect("constant scenario epoch is valid")
+}
+
+fn add_workflow_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
+    use crate::store::snapshot::{SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind};
+
+    let mut group = worktree_group(WorktreeGroupSpec {
+        key: "/srv/code/query-engine/.rimz/worktrees/merge-lane",
+        label: "merge-lane",
+        pr_state: Some(WorktreePrState::Open),
+        ci: Some(WorktreeCi::Passing),
+        pr_number: Some(91),
+        trunk_sync: Some(WorktreeTrunkSync::Diverged),
+        ..WorktreeGroupSpec::default()
+    });
+    group.pr_queue = Some(crate::store::snapshot::WorktreePrQueue::Queued);
+    let track = [
+        ("sweep", WorkflowNodeKind::Step),
+        ("watch", WorkflowNodeKind::Check),
+        ("clean", WorkflowNodeKind::Step),
+        ("notes", WorkflowNodeKind::Check),
+        ("triage", WorkflowNodeKind::Step),
+        ("ruled", WorkflowNodeKind::Check),
+    ]
+    .map(|(name, kind)| SidebarWorkflowNode {
+        name: name.to_owned(),
+        kind,
+    });
+    group.workflow = Some(SidebarWorkflow {
+        run: "wf_0123456789abcdef0123456789abcdef"
+            .parse()
+            .expect("constant run id"),
+        workflow: "land".to_owned(),
+        scope_path: group.key.clone(),
+        state: crate::store::workflow::RunState::Active,
+        current: track[1].clone(),
+        track: track.into(),
+        detour_parent: None,
+        visits: 1,
+        capped: false,
+        word: "queued".to_owned(),
+        since: now - std::time::Duration::from_secs(23 * 60),
+        hold_limit: None,
+        entered_at: now - std::time::Duration::from_secs(24 * 60),
+        created_at: now - std::time::Duration::from_secs(25 * 60),
+        agent: None,
+    });
+    snapshot.worktree_groups = vec![group].into();
 }
 
 fn add_clock_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp, state: Preset) {

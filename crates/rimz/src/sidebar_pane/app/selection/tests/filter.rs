@@ -1255,6 +1255,42 @@ fn pr_count_click_toggles_the_open_pr_lens() {
     );
 }
 
+#[test]
+fn pr_count_click_keeps_a_rowless_workflow_lens_open() {
+    let snapshot = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
+    let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
+    let hit = frame
+        .interactions
+        .regions()
+        .iter()
+        .find(|hit| hit.target == HitTarget::BodyFilter(BodyFilter::OpenPr))
+        .unwrap()
+        .clone();
+    pane_ui.interactions = frame.interactions;
+    handle_mouse_click(
+        hit.columns.start,
+        hit.rows.start as u16,
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+    );
+    assert_eq!(ui.make_up_filter, BodyFilter::OpenPr.into());
+    let theme = pane_ui.theme(&snapshot.theme);
+    let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
+    assert!(
+        frame
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("watch queued"))
+    );
+    assert!(ui.visible_roster(&snapshot).rows().is_empty());
+}
+
 fn text_cell_range(text: &str, start: u16, end: u16) -> String {
     let start = byte_index_at_cell(text, usize::from(start));
     let end = byte_index_at_cell(text, usize::from(end));

@@ -688,6 +688,13 @@ impl SidebarWorktreeGroup {
         })
     }
 
+    pub(crate) fn workflow_owner(&self) -> Option<&SidebarRow> {
+        let (kind, session) = self.workflow.as_ref()?.agent.as_ref()?;
+        self.rows
+            .iter()
+            .find(|row| row.is_agent() && row.name == kind.as_str() && row.id == session.as_str())
+    }
+
     pub(crate) fn unit_key<'a>(&self, row: &'a SidebarRow) -> SidebarUnitKey<'a> {
         if self.kind != SidebarWorktreeKind::External
             && let Some(team) = row.team()
