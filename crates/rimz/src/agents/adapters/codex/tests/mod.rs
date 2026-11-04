@@ -1083,6 +1083,37 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
 }
 
 #[test]
+fn permission_layers_skip_a_git_folder_without_head_as_the_main_root() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    let cwd = project.join("nested");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::create_dir_all(cwd.join(".codex")).unwrap();
+    std::fs::write(
+        cwd.join(".codex/config.toml"),
+        "sandbox_mode = 'danger-full-access'",
+    )
+    .unwrap();
+    let key = toml::Value::String(project.display().to_string());
+    let base: toml::Table = format!("[projects.{key}]\ntrust_level = 'trusted'\n")
+        .parse()
+        .unwrap();
+    let profile = toml::Table::new();
+
+    let nested_layer = |layers: &[toml::Table]| {
+        layers
+            .iter()
+            .any(|layer| layer.contains_key("sandbox_mode"))
+    };
+    let layers = project_permission_layers(&cwd, None, None, &base, &profile, None);
+    assert!(!nested_layer(&layers), "{layers:?}");
+
+    std::fs::write(project.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let layers = project_permission_layers(&cwd, None, None, &base, &profile, None);
+    assert!(nested_layer(&layers), "{layers:?}");
+}
+
+#[test]
 fn scoped_isolation_preserves_codex_sandbox_overrides() {
     let mut args = [
         "--sandbox",

@@ -553,7 +553,14 @@ fn project_permission_layers(
                 })
         })
         .unwrap_or(cwd);
-    let main_root = main_root.or_else(|| cwd.ancestors().find(|dir| dir.join(".git").exists()));
+    // Codex skips a `.git` folder without `HEAD` here too, such as the empty stub a killed Codex
+    // sandbox leaves behind; a `.git` file (a linked worktree) still counts.
+    let main_root = main_root.or_else(|| {
+        cwd.ancestors().find(|dir| {
+            let git = dir.join(".git");
+            git.exists() && (!git.is_dir() || git.join("HEAD").exists())
+        })
+    });
     let mut dirs = cwd
         .ancestors()
         .take_while(|dir| dir.starts_with(root))
