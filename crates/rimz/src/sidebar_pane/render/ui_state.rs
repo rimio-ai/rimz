@@ -157,8 +157,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
-    /// Armed by either edge of the inactive toggle. The next draw reveals the
-    /// chip and its first newly shown receipt, if any, then consumes it.
+    /// Armed when the inactive peek opens or closes. The next draw reveals the
+    /// chip and its first newly shown receipt, if any, then consumes it. A passive
+    /// close yields to a pending shared focus placement.
     pub(in crate::sidebar_pane) inactive_reveal: bool,
     /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
@@ -229,12 +230,14 @@ pub(in crate::sidebar_pane) struct ViewState {
 #[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct InactivePeek {
     pub(in crate::sidebar_pane) pages: NonZeroUsize,
+    pub(in crate::sidebar_pane) parked_seen: bool,
 }
 
 impl Default for InactivePeek {
     fn default() -> Self {
         Self {
             pages: NonZeroUsize::MIN,
+            parked_seen: false,
         }
     }
 }

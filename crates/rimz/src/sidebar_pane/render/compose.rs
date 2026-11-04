@@ -765,7 +765,7 @@ fn resolve_scroll_offset(
         clamped: false,
         snap: false,
     };
-    if view.offset_authoritative {
+    if view.offset_authoritative || (view.inactive_reveal && view.focus_placement.is_none()) {
         if let Some(index) = view
             .reveal_row
             .as_deref()

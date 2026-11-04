@@ -1,6 +1,6 @@
 //! `ViewAccess` lends explicit client views to `PaneState` with a pre-lock overlay cut.
 
-use super::super::selection::unseat_selection;
+use super::super::selection::{close_inactive, unseat_selection};
 use super::super::views::{ViewId, ViewsHandle, ViewsRecord};
 use super::*;
 use std::cell::{Ref, RefCell};
@@ -285,6 +285,14 @@ impl ViewAccess {
             }
             let mut arrival_until = None;
             if route.advancing && (entry.unpainted || entry.last_pane.as_ref() != Some(&own_pane)) {
+                if entry
+                    .last_pane
+                    .as_ref()
+                    .is_some_and(|last| last != &own_pane)
+                    && entry.state.inactive_peek.is_some()
+                {
+                    close_inactive(&mut entry.state, &context.current);
+                }
                 // A pick arriving from another pane belongs there until topology lists this pane.
                 if own_pane_unlisted && entry.last_pane.as_ref() != Some(&own_pane) {
                     context.set_own_view(None);
