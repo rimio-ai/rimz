@@ -1240,10 +1240,8 @@ fn scroll_lines_windowed(
         return (block, None);
     }
     if !snapshot.worktree_groups.is_empty() {
-        let hide_inactive_chip =
-            view.make_up_filter.filter.is_some_and(|filter| {
-                !matches!(filter, BodyFilter::Inactive | BodyFilter::Unlanded)
-            }) || view
+        let hide_inactive_chip = view.make_up_filter.filter.is_some()
+            || view
                 .search_draft
                 .as_ref()
                 .map_or(view.make_up_filter.query.is_some(), |draft| {
@@ -1274,7 +1272,6 @@ fn scroll_lines_windowed(
                         inactive_count,
                         unlanded_count,
                         view.inactive_open,
-                        view.make_up_filter.filter,
                     );
                     chip.tag("chrome");
                     block.append(chip);
@@ -1320,7 +1317,6 @@ fn inactive_line(
     count: usize,
     unlanded: usize,
     open: bool,
-    picked: Option<BodyFilter>,
 ) -> RenderedBlock {
     let glyph = theme.glyph(if open {
         GlyphRole::WorktreeInactiveOpen
@@ -1362,63 +1358,19 @@ fn inactive_line(
             theme.faint(),
         ));
     }
-    let label_start = super::layout::spans_width(&spans);
     let tone = theme.component(Component::InactiveChip);
     let style = theme.picked_chip(tone, Modifier::empty());
-    let picked_style = theme.picked_chip(tone, Modifier::BOLD);
-    if picked.is_none() {
-        spans.push(Span::styled(label, style));
-    } else {
-        if framed {
-            spans.push(Span::styled(prefix.clone(), style));
-        }
-        spans.push(Span::styled(
-            name.clone(),
-            if picked == Some(BodyFilter::Inactive) {
-                picked_style
-            } else {
-                style
-            },
-        ));
-        if let Some(text) = &breakdown {
-            spans.push(Span::styled(separator.clone(), style));
-            spans.push(Span::styled(
-                text.clone(),
-                if picked == Some(BodyFilter::Unlanded) {
-                    picked_style
-                } else {
-                    style
-                },
-            ));
-        }
-        if framed {
-            spans.push(Span::styled(" ]", style));
-        }
-    }
+    spans.push(Span::styled(label, style));
     if right > 0 {
         spans.push(Span::styled(
             format!(" {}", dotted.repeat(right - 1)),
             theme.faint(),
         ));
     }
-    let start = (label_start + if framed { text_width(&prefix) } else { 0 } + 1) as u16;
-    let end = start + text_width(&name) as u16;
-    let mut hits = vec![
-        (0..u16::MAX, HitTarget::ToggleInactive),
-        (start..end, HitTarget::BodyFilter(BodyFilter::Inactive)),
-    ];
-    if let Some(text) = breakdown {
-        let start = end + separator_width as u16;
-        hits.push((
-            start..start + text_width(&text) as u16,
-            HitTarget::BodyFilter(BodyFilter::Unlanded),
-        ));
-    }
     let mut block = RenderedBlock::default();
-    block.push_with_regions(
+    block.push_target(
         pad_chrome(Line::from(trim_spans_to_width(spans, width))),
-        None,
-        hits,
+        HitTarget::ToggleInactive,
     );
     block
 }

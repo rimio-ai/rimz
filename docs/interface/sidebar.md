@@ -674,7 +674,7 @@ Inactive groups follow all active project work and precede `external`. At 54 col
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-Click the chip's glyph or brackets, or press `i`, to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice follows the client view between tabs and starts closed after a host restart. Open groups remain collapsed to receipts until revealed:
+Click anywhere on the chip, or press `i`, to open it without hiding active work. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice follows the client view between tabs and starts closed after a host restart. Open groups remain collapsed to receipts until revealed:
 
 ```
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -692,7 +692,7 @@ Click the chip's glyph or brackets, or press `i`, to open it. If the receipts it
                                                    0s
 ```
 
-The counts are groups, not agents. Click `N inactive` to filter to every row in inactive groups, or `M unlanded` to show the unlanded groups among them. The breakdown is omitted when M is zero. These body filters persist, broadcast and clear like the cockpit's picks. The chip stays visible under these two picks and marks the chosen count; click it again to clear, or the other count to switch. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any other filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
+The counts are groups, not agents. `M unlanded` is information, not a filter, and is omitted when M is zero. Every cell of the line toggles the same fold. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
 
 A folded inactive group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -1039,8 +1039,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click `+K more`, `− less` | expand or cap the group without moving focus |
 | click a folded inactive group's header or either receipt line | show its cards and focus the first receipt member's live pane, revealing its card |
 | click an expanded inactive group's header | collapse its cards without moving focus |
-| click the inactive chip's glyph or brackets, or press `i` | show or hide inactive receipts in this client view; opening scrolls to the first receipt it reveals |
-| click `N inactive` / `M unlanded` | filter to all inactive groups / their unlanded subset; the picked count stays marked, clicking it again clears, and the other count switches |
+| click anywhere on the inactive chip, or press `i` | show or hide inactive receipts in this client view without filtering; opening scrolls to the first receipt it reveals |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |

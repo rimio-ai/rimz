@@ -489,43 +489,6 @@ fn search_draft_composes_with_an_active_status_pick() {
 }
 
 #[test]
-fn inactive_count_picks_broadcast_and_clear_like_other_lenses() {
-    let mut snapshot = filterable_snapshot(&workspace());
-    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-    group.inactive = Some(crate::store::snapshot::SidebarInactive::Unlanded);
-    std::sync::Arc::make_mut(&mut group.rows)[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Success;
-    for filter in [BodyFilter::Inactive, BodyFilter::Unlanded] {
-        let mut view = ViewState::default();
-        let mut ui = UiState {
-            interactions: render::FrameInteractions::from_parts(
-                vec![None],
-                vec![render::HitRegion::line(
-                    0,
-                    0..3,
-                    HitTarget::BodyFilter(filter),
-                )],
-            ),
-            ..Default::default()
-        };
-        let outcome = handle_mouse_click(1, 0, &mut view, &mut ui, &snapshot);
-        assert_eq!(
-            outcome.effects,
-            vec![InputEffect::SyncFilter(filter.into())]
-        );
-        assert_eq!(view.visible_roster(&snapshot).len(), 2);
-        let outcome = handle_mouse_click(1, 0, &mut view, &mut ui, &snapshot);
-        assert_eq!(
-            outcome.effects,
-            vec![InputEffect::SyncFilter(BodyLens::default())]
-        );
-        assert!(view.make_up_filter.is_empty());
-    }
-}
-
-#[test]
 fn pick_click_toggle_preserves_committed_query() {
     use crate::agents::AgentStatus;
     let snapshot = filterable_snapshot(&workspace());

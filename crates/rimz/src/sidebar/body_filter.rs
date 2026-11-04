@@ -9,7 +9,7 @@ use tracing::debug;
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::store::snapshot::{
-    SidebarInactive, SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, UnitStatus, WorktreePrState,
+    SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, UnitStatus, WorktreePrState,
 };
 
 #[cfg(test)]
@@ -28,17 +28,26 @@ pub(crate) enum BodyFilter {
     Status(AgentStatus),
     Unread,
     OpenPr,
-    Inactive,
-    Unlanded,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BodyLens {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_filter",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) filter: Option<BodyFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) query: Option<String>,
+}
+
+fn deserialize_filter<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BodyFilter>, D::Error> {
+    let saved = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(saved.and_then(|value| BodyFilter::deserialize(value).ok()))
 }
 
 impl BodyLens {
@@ -83,8 +92,6 @@ impl BodyFilter {
             }
             Self::Unread => row.unread,
             Self::OpenPr => facts.group.pr_state == Some(WorktreePrState::Open),
-            Self::Inactive => facts.group.inactive.is_some(),
-            Self::Unlanded => facts.group.inactive == Some(SidebarInactive::Unlanded),
         }
     }
 
@@ -96,7 +103,7 @@ impl BodyFilter {
                     .units
                     .get(&facts.group.unit_key(row))
                     .is_some_and(|unit| unit.carries(row, status)),
-                Self::Unread | Self::OpenPr | Self::Inactive | Self::Unlanded => true,
+                Self::Unread | Self::OpenPr => true,
             }
     }
 
@@ -124,16 +131,6 @@ impl BodyFilter {
             Self::OpenPr => groups
                 .iter()
                 .filter(|group| group.pr_state == Some(WorktreePrState::Open))
-                .map(|group| group.rows.len())
-                .sum(),
-            Self::Inactive => groups
-                .iter()
-                .filter(|group| group.inactive.is_some())
-                .map(|group| group.rows.len())
-                .sum(),
-            Self::Unlanded => groups
-                .iter()
-                .filter(|group| group.inactive == Some(SidebarInactive::Unlanded))
                 .map(|group| group.rows.len())
                 .sum(),
         }
@@ -448,34 +445,32 @@ mod tests {
     }
 
     #[test]
-    fn inactive_lenses_show_every_row_of_the_matching_groups() {
-        use crate::store::snapshot::{RowCard, SidebarInactive};
-        let mut landed = team_group(&[AgentStatus::Success, AgentStatus::Idle]);
-        landed.inactive = Some(SidebarInactive::Landed);
-        let mut unlanded = landed.clone();
-        unlanded.inactive = Some(SidebarInactive::Unlanded);
-        std::sync::Arc::make_mut(&mut unlanded.rows)[1].card = RowCard::Process(Default::default());
-        let groups = [landed, unlanded, team_group(&[AgentStatus::Idle])];
-        for (filter, expected) in [
-            (BodyFilter::Inactive, vec![(0, 0), (0, 1), (1, 0), (1, 1)]),
-            (BodyFilter::Unlanded, vec![(1, 0), (1, 1)]),
+    fn unknown_filter_kinds_load_without_a_pick_and_keep_the_query() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        fs::create_dir_all(runtime.sidebar_filter_path().parent().unwrap()).unwrap();
+        for (json, query) in [
+            (r#"{"filter":{"kind":"inactive"}}"#, None),
+            (r#"{"filter":{"kind":"unlanded"},"query":"x"}"#, Some("x")),
+            (r#"{"filter":{"kind":"future"},"query":"x"}"#, Some("x")),
+            (
+                r#"{"filter":{"kind":"status","status":"bogus"},"query":"x"}"#,
+                Some("x"),
+            ),
         ] {
-            let shown = groups
-                .iter()
-                .enumerate()
-                .flat_map(|(group_index, group)| {
-                    let facts = GroupFacts::new(group);
-                    group
-                        .rows
-                        .iter()
-                        .enumerate()
-                        .filter_map(move |(index, row)| {
-                            filter.shown(row, &facts).then_some((group_index, index))
-                        })
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(shown, expected, "{filter:?}");
-            assert_eq!(filter.total(&groups), shown.len());
+            fs::write(runtime.sidebar_filter_path(), json).unwrap();
+            assert_eq!(
+                load(&runtime),
+                BodyLens {
+                    filter: None,
+                    query: query.map(str::to_owned),
+                },
+                "{json}"
+            );
+            assert_eq!(
+                fs::read_to_string(runtime.sidebar_filter_path()).unwrap(),
+                json
+            );
         }
     }
 
@@ -487,8 +482,8 @@ mod tests {
 
         for filter in [
             BodyFilter::Status(AgentStatus::Waiting),
-            BodyFilter::Inactive,
-            BodyFilter::Unlanded,
+            BodyFilter::Unread,
+            BodyFilter::OpenPr,
         ] {
             let lens = BodyLens::from(filter);
             write(&runtime, &lens).expect("write filter");
