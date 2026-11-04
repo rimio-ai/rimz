@@ -9,6 +9,10 @@ use super::{AgentState, FolderTrust, FolderTrustRow, RoomLoginSet};
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
+/// Codex 0.166.0's `PROTECTED_METADATA_PATH_NAMES` (`codex-rs/protocol/src/permissions.rs`).
+/// Its Linux sandbox mounts an empty read-only tmpfs on each name in every writable root and
+/// removes the folder after the command, so only a killed supervisor leaves one behind. A Codex
+/// upgrade that adds a name extends this list.
 const CODEX_SANDBOX_STUBS: [&str; 4] = [".agents", ".aws", ".codex", ".git"];
 
 #[derive(Debug, PartialEq, Eq)]
