@@ -356,7 +356,9 @@ pub(super) struct Entry {
     pub(super) last_pane: Option<PaneId>,
     pub(super) unpainted: bool,
     pub(super) activity: u64,
-    /// Retention starts when the last client and painter leave.
+    input_seen: bool,
+    /// Retention starts when the last client and painter leave. A sampled view whose clients
+    /// all moved to other views is dropped instead if no client or painter still holds it.
     unbound_since: Option<Instant>,
 }
 
@@ -560,6 +562,7 @@ impl Views {
         let id = self.route(pane, now);
         if input {
             self.touch(id, now);
+            self.entry_mut(id).input_seen = true;
         }
         // IDs originate in `fork`; expiry removes their routing references in the same transition.
         let entry = self.entries.get_mut(&id).expect("routed view exists");
@@ -731,6 +734,7 @@ impl Views {
         }
 
         let old_clients = self.clients.clone();
+        let old_views: HashSet<_> = old_clients.values().map(|client| client.view).collect();
         let activity: BTreeMap<_, _> = self
             .entries
             .iter()
@@ -874,6 +878,11 @@ impl Views {
             next_clients.insert(id, client);
         }
         self.clients = next_clients;
+        self.entries.retain(|id, _| {
+            !old_views.contains(id)
+                || self.clients.values().any(|client| client.view == *id)
+                || panes.values().any(|painted| painted == id)
+        });
         for (id, entry) in &mut self.entries {
             if !panes.values().any(|painted| painted == id) {
                 if self.panes.values().any(|painted| painted == id)
@@ -903,6 +912,7 @@ impl Views {
     pub(super) fn input(&mut self, pane: &PaneId, now: Instant) -> &mut ViewState {
         let id = self.route(pane, now);
         self.touch(id, now);
+        self.entry_mut(id).input_seen = true;
         &mut self.entry_mut(id).state
     }
 
@@ -950,9 +960,16 @@ impl Views {
             // `attached` was collected from this unchanged client map above.
             self.clients.get_mut(client).expect("attached client").pane = Some(pane.clone());
             view
-        } else if let Some(view) =
-            self.most_recent(|id| !self.panes.values().any(|held| *held == id))
-        {
+        } else if let Some(view) = self.most_recent(|id| {
+            let departed = self
+                .clients
+                .values()
+                .any(|client| client.view == id && client.departed.is_some());
+            !self.panes.values().any(|held| *held == id)
+                && !(departed && !attached.is_empty())
+                && (self.entries[&id].input_seen
+                    || self.clients.values().any(|client| client.view == id))
+        }) {
             if self
                 .clients
                 .values()
@@ -963,7 +980,18 @@ impl Views {
                 view
             }
         } else {
-            self.fork(self.most_recent(|_| true), now)
+            let painting = |id| self.panes.values().any(|held| *held == id);
+            let source = self
+                .most_recent(|id| {
+                    painting(id)
+                        && self
+                            .clients
+                            .values()
+                            .any(|client| client.view == id && client.departed.is_none())
+                })
+                .or_else(|| self.most_recent(painting))
+                .or_else(|| self.most_recent(|_| true));
+            self.fork(source, now)
         };
         self.touch(view, now);
         self.panes.insert(pane.clone(), view);
@@ -1003,6 +1031,8 @@ impl Views {
                 last_pane,
                 unpainted,
                 activity,
+                // Input on the source does not establish an anonymous viewer of this copy.
+                input_seen: false,
                 unbound_since: Some(now),
             },
         );
