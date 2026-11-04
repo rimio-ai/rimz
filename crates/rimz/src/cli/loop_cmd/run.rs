@@ -408,7 +408,8 @@ fn take_over_checkout(
     cwd: &Path,
 ) -> Result<ControlFlow<rimz::harness::schedule::runner::TaskFireEffect, Vec<String>>> {
     let snapshot = ctx.alive_snapshot()?;
-    let takeover = takeover::read(&snapshot.agents, cwd, root)?;
+    let card_status = rimz::harness::CardStatus::new(&ctx.store);
+    let takeover = takeover::read(&snapshot, &card_status, cwd, root)?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let handle =
         |agent: &rimz::agents::AgentState| rimz::address::agent_handle(agent, &peers, true);

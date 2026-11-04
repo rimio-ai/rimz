@@ -52,7 +52,7 @@ pub(super) fn check(
     };
     let alive = alive_snapshot(store, &workspace.session_name)?;
     let repo_root = workspace.launch_repo_root();
-    if crate::harness::worktree_entry::occupied(&path, repo_root, &alive.agents)? {
+    if crate::harness::worktree_entry::occupied(&path, repo_root, &alive)? {
         return Ok(());
     }
     let subject = cohort_subject(spec, team);

@@ -113,7 +113,8 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let snapshot = ctx.alive_snapshot()?;
-            let takeover = takeover::read(&snapshot.agents, scope, root)?;
+            let card_status = rimz::harness::CardStatus::new(&ctx.store);
+            let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);
             let handle = |agent: &AgentState| rimz::address::agent_handle(agent, &peers, true);
             Ok(match takeover {
@@ -136,7 +137,9 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let snapshot = ctx.alive_snapshot()?;
-            let Takeover::Stop(agents) = takeover::read(&snapshot.agents, scope, root)? else {
+            let card_status = rimz::harness::CardStatus::new(&ctx.store);
+            let Takeover::Stop(agents) = takeover::read(&snapshot, &card_status, scope, root)?
+            else {
                 bail!("checkout acquired an open turn before takeover");
             };
             let peers = rimz::address::addressable_agents(&snapshot);
