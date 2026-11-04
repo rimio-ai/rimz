@@ -55,7 +55,7 @@ Render tests golden a full screen through the `assert_snapshot` helper in [`rend
 
 A renderer rule that compares with the previously presented snapshot (`SelectionFold::previous` in [`app/view_state.rs`](./app/view_state.rs)) states and tests the first fetch, where that snapshot is the empty initial one and the initial selection arms the layout freeze.
 
-A change to the order of groups or rows runs `cargo xtask test --profile journey` before hand-off: journey tests drive keys over the rendered order, and `gate` runs none of them.
+A change to the order of groups or rows runs `cargo xtask test --profile journey` and `cargo xtask test -P live` before hand-off: journey tests drive keys over the rendered order, `journey::deep` in the live profile drives scroll and focus over it, and `gate` runs none of them.
 
 A change to what an agent card's identity line or context meter shows also runs `cargo xtask test 'sidebar::scenario'`, whose fixture frames (`sidebar::scenario::tests::coverage`) render every provider's card from the contributor stories.
 
