@@ -118,7 +118,13 @@ fn open_delivery(
         return Ok(None);
     };
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
-    let mut check = deliver::explain(record, live_messages, &snapshot, now);
+    let mut check = deliver::explain(
+        record,
+        live_messages,
+        &snapshot,
+        now,
+        &rimz::harness::CardStatus::new(&ctx.store),
+    );
     let agents = rimz::address::addressable_agents(&snapshot);
     let root_channel = rimz::address::root_lane_channel(&ctx.workspace.project_root);
     let target = message_target(message, &agents, root_channel.as_deref());

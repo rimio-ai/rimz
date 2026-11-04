@@ -55,7 +55,7 @@ A parked message delivers once all of these hold, checked in this order:
 
 1. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
 2. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
-3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A turn parked on a provider limit or overload reads [`paused`](./agents.md), which opens neither gate.
+3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A recoverable provider limit or overload reads [`paused`](./agents.md), which opens neither gate. The card shows a provider pause as `failed` once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset, even if auto-continue is about to resume it; that status opens only `any`. A RimZ budget park stays `paused`.
 4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
 5. A live pane can receive the text.
 
@@ -95,7 +95,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 
 `--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
 
-**`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn keeps it waiting under `--on done` and releases it under `--on any`; a `paused` agent keeps it waiting under both.
+**`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn, including a provider pause the card shows as `failed`, keeps it waiting under `--on done` and releases it under `--on any`, so under `--on any` the condition can be met between a limit's reset and auto-continue resuming that agent; a recoverable provider pause or a RimZ budget park keeps it waiting under both.
 
 | Rule | Behaviour |
 | --- | --- |
@@ -194,7 +194,7 @@ If the prompt starts a fresh turn, that turn is the reply for `--interrupt --wai
 | `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait`. |
 | `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
 
-At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting`, or paused but can still recover, is still in progress; a provider pause the card counts as spent (`failed`) ends the wait as failed. A script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
+At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting`, or paused but can still recover, is still in progress; a provider pause the card shows as `failed` ends the wait as failed. A script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
 
 A parent's message to its ended child queues before opening the resume pane; steer and interrupt also become the next prompt. `--wait` continues through registration and delivery, exits 1 with the message's failure reason if delivery fails, and still exits 124 on its own wait budget. Registration expiry needs the room's sidebar sweep or an explicit message sweep/gc; without one the queued record remains pending.
 

@@ -1613,6 +1613,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             std::slice::from_ref(&message),
             &snapshot,
             jiff::Timestamp::now(),
+            &rimz::harness::CardStatus::from_demotion(rimz::agents::ParkDemotion::default()),
         )
         .verdict(),
         rimz::message::deliver::DeliveryVerdict::Ready,

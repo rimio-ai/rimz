@@ -6,6 +6,23 @@ use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
+fn dispatch_decision(
+    snapshot: &SidebarSnapshot,
+    pending: &[MessageRecord],
+    target: &ResolvedTarget,
+    mode: &PreparedMode,
+    now: Timestamp,
+) -> DispatchDecision {
+    super::dispatch_decision(
+        snapshot,
+        pending,
+        target,
+        mode,
+        now,
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    )
+}
+
 #[test]
 fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
     let mut receiver = agent("session", AgentStatus::Waiting);
@@ -63,7 +80,9 @@ fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
                 targets[0].agent.as_ref().unwrap(),
                 DeliveryGate::Any,
                 false,
-                now()
+                now(),
+                &snapshot,
+                &view.card_status,
             )
             .waiting
         );
@@ -747,6 +766,7 @@ fn resolution<'a>(
 ) -> ResolutionView<'a> {
     ResolutionView {
         snapshot,
+        card_status: CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         durable_agents,
         scope: None,
         channel,

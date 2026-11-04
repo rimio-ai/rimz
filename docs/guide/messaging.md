@@ -57,7 +57,7 @@ A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and work
 
 ## Park, steer, interrupt, or schedule
 
-**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too. A turn parked on a provider rate limit, spend limit, or overload is `paused`, not failed, so both gates hold the text until the agent resumes.
+**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too. A recoverable provider rate limit, spend limit, or overload is `paused`, so both gates hold the text. Once that pause can no longer resume, the card shows `failed` and `--on any` releases the text; `--on done` still waits. A RimZ budget park keeps both gates closed.
 
 ```sh
 rimz message @coder "open a PR summary once tests pass"   # waits for the turn to end, then delivers
@@ -201,7 +201,7 @@ A deadline does not withdraw queued text: it will still deliver unless you cance
 
 Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require it.
 
-A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause the card counts as spent (`failed`) ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--wait=<duration>` when a script needs its own bound.
+A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause that can no longer resume, which the card shows as `failed`, ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--wait=<duration>` when a script needs its own bound.
 
 Agents wait on each other too, and RimZ catches the deadlock instead of hanging: a send whose target is already waiting on the caller's own reply is refused before anything is queued, and a cycle that forms inside a running fan-out fails that one target, each naming the handle and message that blocks it. Text already queued stays queued and delivers at the next boundary. An agent's own `@all --wait` gathers peer replies only, never its own.
 

@@ -14,6 +14,22 @@ use crate::store::message::tests::{
 };
 use crate::store::snapshot::PaneAgent;
 
+fn gate_open_for_agent(
+    gate: DeliveryGate,
+    agent: &AgentState,
+    force: bool,
+    now: Timestamp,
+) -> bool {
+    super::gate_open_for_agent(
+        gate,
+        agent,
+        force,
+        now,
+        &condition_snapshot(vec![agent.clone()]),
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    )
+}
+
 #[test]
 fn command_segments_separate_arguments_from_the_slash_token() {
     assert_eq!(command_segments("/compact", "/compact"), ("/compact", None));
@@ -252,6 +268,63 @@ fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
 }
 
 #[test]
+fn spent_provider_pauses_open_any_but_keep_done_closed_and_resume_raw() {
+    let now = Timestamp::from_second(1_100).unwrap();
+    let observed = [
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedOverloaded,
+    ]
+    .map(|class| {
+        let mut paused = agent("sess-paused", None);
+        paused.status = AgentStatus::Running;
+        paused.last_activity = now - Duration::from_secs(1);
+        paused.context = Some(AgentContext {
+            turn_error: Some(AgentTurnError {
+                ended_turn: false,
+                class,
+                at: now,
+                label: None,
+            }),
+            ..AgentContext::new("claude", now)
+        });
+        [
+            (true, false, DeliveryGate::Any),
+            (true, false, DeliveryGate::Done),
+            (true, false, DeliveryGate::Resume),
+            (false, false, DeliveryGate::Any),
+            (true, true, DeliveryGate::Any),
+        ]
+        .map(|(spent, budget, gate)| {
+            let mut row = paused.clone();
+            row.budget_park = budget.then_some(crate::agents::BudgetPark {
+                cap_usd: 1.0,
+                spend_usd: 2.0,
+                window: crate::agents::BudgetWindow::Day,
+                at: now,
+                scope: crate::agents::BudgetScope::Turn,
+                account_kind: None,
+                resets_at: None,
+                reset_window: None,
+            });
+            let exhausted = if spent {
+                [(row.kind.clone(), row.agent_id.clone())].into()
+            } else {
+                Default::default()
+            };
+            let reader = CardStatus::from_demotion(crate::agents::ParkDemotion::new(
+                &Default::default(),
+                exhausted,
+                now,
+            ));
+            let snapshot = condition_snapshot(vec![row.clone()]);
+            super::gate_open_for_agent(gate, &row, false, now, &snapshot, &reader)
+        })
+    });
+    assert_eq!(observed, [[true, false, true, false, false]; 3]);
+}
+
+#[test]
 fn delivery_gates_admit_a_fatal_provider_error_only_on_any() {
     let now = Timestamp::from_second(1_100).unwrap();
     let mut running = agent("sess-running", None);
@@ -418,6 +491,7 @@ fn after_condition_with_a_stamp_stays_met_without_restamping() {
         &[],
         &condition_snapshot(vec![upstream]),
         now,
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
     );
     assert!(latched.check.met);
     assert!(!latched.stamp_needed);
@@ -437,7 +511,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
                 DeliveryGate::Done,
                 &[],
                 &condition_snapshot(vec![upstream.clone()]),
-                now
+                now,
+                &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
             )
             .check
             .met
@@ -451,7 +526,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Done,
             &[],
             &condition_snapshot(vec![upstream.clone()]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met
@@ -462,7 +538,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Any,
             &[],
             &condition_snapshot(vec![upstream.clone()]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met
@@ -481,7 +558,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Done,
             std::slice::from_ref(&ready),
             &condition_snapshot(vec![upstream.clone()]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met
@@ -496,7 +574,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Done,
             std::slice::from_ref(&sent),
             &condition_snapshot(vec![upstream.clone()]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met
@@ -508,7 +587,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Done,
             std::slice::from_ref(&scheduled),
             &condition_snapshot(vec![upstream.clone()]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met
@@ -519,7 +599,8 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
             DeliveryGate::Done,
             &[],
             &condition_snapshot(vec![upstream]),
-            now
+            now,
+            &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
         )
         .check
         .met

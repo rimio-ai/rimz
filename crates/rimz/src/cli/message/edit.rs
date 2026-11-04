@@ -130,7 +130,13 @@ pub(super) fn push_queued_message(
     else {
         bail!("message {message_id} is no longer queued");
     };
-    let check = deliver::explain(record, &messages, &snapshot, Timestamp::now());
+    let check = deliver::explain(
+        record,
+        &messages,
+        &snapshot,
+        Timestamp::now(),
+        &rimz::harness::CardStatus::new(store),
+    );
     bail!("{}", steer_failure(&check, &label, &message_id))
 }
 
