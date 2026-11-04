@@ -128,7 +128,13 @@ fn parked_workflows_are_projected_without_agents_and_oldest_first() {
         projected["parked_workflows"][0]["run"],
         "wf_0190b8172c0070008000000000000002"
     );
-    assert_eq!(projected["parked_workflows"][0]["text"], "Which fix?");
+    assert_eq!(
+        projected["parked_workflows"][0],
+        serde_json::json!({
+            "run": "wf_0190b8172c0070008000000000000002",
+            "address": "review#repo", "since": "2026-01-01T00:00:00Z"
+        })
+    );
 }
 
 #[test]

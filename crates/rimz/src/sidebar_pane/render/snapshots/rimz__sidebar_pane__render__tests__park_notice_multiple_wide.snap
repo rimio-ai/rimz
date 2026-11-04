@@ -1,0 +1,22 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                                                      $0.00
+ ──────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
+ ⚠ 3 workflow runs parked · rimz workflow list · x dismiss
+
+                                                                     ? for help

@@ -686,14 +686,11 @@ fn project_workflow_and_throttle_state(
         .into_iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Parked)
         .filter_map(|record| {
-            let park = record.park?;
+            let park = record.park.as_ref()?;
+            let address = record.address().to_string();
             Some(crate::store::snapshot::ParkedWorkflow {
                 run: record.id,
-                workflow: record.workflow,
-                node: record.node,
-                reason: park.reason,
-                text: park.text,
-                checkout: record.scope.path,
+                address,
                 since: park.at,
             })
         })

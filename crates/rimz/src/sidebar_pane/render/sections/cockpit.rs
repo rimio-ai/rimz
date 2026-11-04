@@ -2,64 +2,17 @@
 //! the live-agent count with the animated count-up spend.
 
 use crate::SpendWindow;
-use crate::agents::AgentStatus;
-use crate::store::snapshot::{DailyBudgetView, ParkedWorkflow};
+use crate::store::snapshot::DailyBudgetView;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::TallyAnim;
-use crate::sidebar_pane::render::fmt::{age_short, compact_count, dollars_cap, dollars2};
-use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, status_glyph, status_rest_style, token_breakdown_spans,
-};
+use crate::sidebar_pane::render::fmt::{compact_count, dollars_cap, dollars2};
+use crate::sidebar_pane::render::labels::{TokenColumns, TokenDetail, token_breakdown_spans};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{metric_spans, pin_right, spans_width};
-
-/// One parked workflow run beneath the cockpit summary:
-/// `<waiting glyph> <workflow> <node> <reason>[: <text>]` in the waiting tone,
-/// its park age pinned right so truncation eats the text first. Inert.
-pub(in crate::sidebar_pane::render) fn parked_workflow_line(
-    theme: &Theme,
-    run: &ParkedWorkflow,
-    now: jiff::Timestamp,
-    width: usize,
-) -> Line<'static> {
-    let style = status_rest_style(theme, AgentStatus::Waiting);
-    let reason = match &run.text {
-        Some(text) => format!("{}: {text}", run.reason.as_str()),
-        None => run.reason.as_str().to_owned(),
-    };
-    let left = vec![Span::styled(
-        format!(
-            "{} {} {} {reason}",
-            status_glyph(theme, AgentStatus::Waiting),
-            run.workflow,
-            run.node
-        ),
-        style,
-    )];
-    let right = vec![Span::styled(age_short(run.since, now), style)];
-    pin_right(left, right, width)
-}
-
-/// `<waiting glyph> +<n> parked` closing a capped list of parked runs. Inert.
-pub(in crate::sidebar_pane::render) fn parked_overflow_line(
-    theme: &Theme,
-    more: usize,
-    width: usize,
-) -> Line<'static> {
-    let style = status_rest_style(theme, AgentStatus::Waiting);
-    let left = vec![Span::styled(
-        format!(
-            "{} +{more} parked",
-            status_glyph(theme, AgentStatus::Waiting)
-        ),
-        style,
-    )];
-    pin_right(left, Vec::new(), width)
-}
 
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run in the configured headline
