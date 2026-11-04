@@ -161,7 +161,7 @@ proptest! {
                     if !ui.expanded_groups.remove(&key) { ui.expanded_groups.insert(key); }
                 }
                 8 => width = 20 + value % 61,
-                9 => ui.inactive_open = !ui.inactive_open,
+                9 => ui.inactive_peek = ui.inactive_peek.is_none().then(Default::default),
                 10 => ui.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
                 _ => {
@@ -214,7 +214,7 @@ fn paint_scope_tracks_window_epoch_and_selection() {
             .iter()
             .map(|g| g.key.clone())
             .collect(),
-        inactive_open: true,
+        inactive_peek: Some(Default::default()),
         ..Default::default()
     };
     let mut pane_ui = UiState::default();

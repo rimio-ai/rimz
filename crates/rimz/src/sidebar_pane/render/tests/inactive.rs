@@ -49,6 +49,29 @@ fn inactive_snapshot() -> SidebarSnapshot {
     snapshot
 }
 
+fn paged_snapshot() -> SidebarSnapshot {
+    let mut snapshot = inactive_snapshot();
+    let template = snapshot.worktree_groups[2].clone();
+    let now = snapshot.now;
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    groups.retain(|group| group.inactive.is_none());
+    for index in (1..=25).rev() {
+        let name = format!("old-{index:02}");
+        let mut group = template.clone();
+        group.key = name.clone();
+        group.label = name.clone();
+        let row = &mut std::sync::Arc::make_mut(&mut group.rows)[0];
+        row.id = name.clone();
+        row.name = name.clone();
+        row.last_activity = now - Duration::from_secs(7200 + index * 60);
+        row.pane.as_mut().unwrap().pane_id =
+            PaneId::from_parts(MuxName::Zellij, format!("terminal_old_{index}"));
+        groups.push(group);
+    }
+    snapshot.sort_groups_for_presentation();
+    snapshot
+}
+
 fn body(
     snapshot: &SidebarSnapshot,
     ui: &ViewState,
@@ -111,7 +134,7 @@ fn open_inactive_line_lists_collapsed_receipts_with_group_gaps() {
     let block = body(
         &snapshot,
         &ViewState {
-            inactive_open: true,
+            inactive_peek: Some(Default::default()),
             ..Default::default()
         },
         &UiState::default(),
@@ -135,7 +158,7 @@ fn open_inactive_line_lists_collapsed_receipts_with_group_gaps() {
             &snapshot,
             None,
             &ViewState {
-                inactive_open: true,
+                inactive_peek: Some(Default::default()),
                 ..Default::default()
             },
             &UiState::default(),
@@ -242,7 +265,7 @@ fn lenses_and_queries_reach_matching_inactive_rows_without_the_fold() {
             &snapshot,
             &ViewState {
                 make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
-                inactive_open: true,
+                inactive_peek: Some(Default::default()),
                 ..Default::default()
             },
             &UiState::default(),
@@ -359,7 +382,7 @@ fn inactive_chip_is_one_target_in_both_states() {
         Some(SidebarInactive::Unlanded);
     for open in [false, true] {
         let view = ViewState {
-            inactive_open: open,
+            inactive_peek: open.then(Default::default),
             ..Default::default()
         };
         let block = body(&snapshot, &view, &UiState::default(), 54);
@@ -400,12 +423,98 @@ fn inactive_chip_is_one_target_in_both_states() {
 
 #[test]
 fn expanded_frame_opens_inactive_and_every_card() {
-    let snapshot = inactive_snapshot();
+    let snapshot = paged_snapshot();
     let mut ansi = Vec::new();
     render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
     let text = String::from_utf8(ansi).unwrap();
-    assert!(text.contains("[ ▾ 3 inactive ]"), "{text}");
-    for name in ["inactive-a", "inactive-b", "inactive-c"] {
-        assert!(text.contains(&format!("task-{name}")));
+    assert!(text.contains("[ ▾ 25 inactive ]"), "{text}");
+    for index in 1..=25 {
+        assert!(text.contains(&format!("old-{index:02}")), "{text}");
+    }
+    assert_eq!(text.matches("task-inactive-a").count(), 25, "{text}");
+    assert!(!text.contains(" older"), "{text}");
+}
+
+#[test]
+fn inactive_first_page_is_newest_first_with_a_muted_older_tail() {
+    let snapshot = paged_snapshot();
+    let view = ViewState {
+        inactive_peek: Some(Default::default()),
+        ..Default::default()
+    };
+    let block = body(&snapshot, &view, &UiState::default(), 54);
+    let texts = line_texts(&block.lines);
+    let drawn = texts
+        .iter()
+        .filter_map(|line| line.strip_prefix(" ↩ old-").map(str::trim_end))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        drawn,
+        (1..=10)
+            .map(|index| format!("{index:02}"))
+            .collect::<Vec<_>>()
+    );
+    let tail = texts
+        .iter()
+        .position(|line| line.contains("+15 older"))
+        .unwrap();
+    assert!(
+        texts[tail + 1..]
+            .iter()
+            .any(|line| line.contains("external"))
+    );
+    assert_eq!(block.lines[tail].spans[1].style, Theme::fixed(true).muted());
+    assert_snapshot(
+        "inactive_paged",
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &view, &UiState::default(), 54, 80),
+    );
+}
+
+#[test]
+fn inactive_page_keeps_focused_held_and_expanded_groups_beyond_its_cut() {
+    for reveal in ["focused", "held", "expanded"] {
+        let mut snapshot = paged_snapshot();
+        let old = snapshot
+            .worktree_groups
+            .iter()
+            .find(|group| group.label == "old-25")
+            .unwrap();
+        let key = old.key.clone();
+        let row = old.rows[0].id.clone();
+        if reveal == "focused" {
+            snapshot.focused_pane = Some(old.rows[0].pane.as_ref().unwrap().pane_id.clone());
+        }
+        let view = ViewState {
+            inactive_peek: Some(Default::default()),
+            expanded_groups: if reveal == "expanded" {
+                BTreeSet::from([key])
+            } else {
+                BTreeSet::new()
+            },
+            ..Default::default()
+        };
+        let held = (reveal == "held").then(|| std::collections::HashSet::from([row.clone()]));
+        let roster = VisibleRoster::new(
+            &snapshot,
+            &BodyLens::default(),
+            &view.expanded_groups,
+            held.as_ref(),
+        );
+        assert!(roster.ordinal_of_id(&row).is_some(), "{reveal}");
+        let block = scroll_lines(
+            &snapshot,
+            &view,
+            &UiState::default(),
+            &roster,
+            &BTreeSet::new(),
+            54,
+            &Theme::fixed(true),
+            None,
+        )
+        .0;
+        let text = line_texts(&block.lines).join("\n");
+        assert!(text.contains("old-25"), "{reveal}: {text}");
+        assert!(!text.contains("old-24"), "{reveal}: {text}");
+        assert!(text.contains("+14 older"), "{reveal}: {text}");
     }
 }

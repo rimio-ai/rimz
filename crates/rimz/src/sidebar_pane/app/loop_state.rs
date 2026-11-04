@@ -2208,6 +2208,9 @@ impl LoopState {
         source.view.reveal_row = None;
         source.view.focus_placement = None;
         source.view.own_input_reveal = false;
+        if source.view.inactive_peek.is_some() {
+            super::selection::toggle_inactive(&mut source.view, &source.snapshot);
+        }
         self.pane.paint.refresh_view(
             &mut self.pane.ui,
             &source.view,

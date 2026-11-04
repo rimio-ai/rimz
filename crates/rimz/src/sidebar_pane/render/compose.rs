@@ -29,6 +29,8 @@ use super::{
     dashboard_present, labels, selected_sub_provider,
 };
 
+const INACTIVE_PAGE_SIZE: usize = 10;
+
 #[cfg(test)]
 pub(in crate::sidebar_pane) fn compose_lines(
     snapshot: &SidebarSnapshot,
@@ -1258,8 +1260,17 @@ fn scroll_lines_windowed(
             .filter(|group| group.inactive == Some(SidebarInactive::Unlanded))
             .count();
         let mut inactive_chip = None;
+        let page_limit = view.inactive_peek.as_ref().map_or(0, |peek| {
+            peek.pages.get().saturating_mul(INACTIVE_PAGE_SIZE)
+        });
+        let mut inactive_seen = 0;
+        let mut older = 0;
         let mut emitted = false;
         for group in roster.groups() {
+            if group.source().inactive.is_none() && older > 0 {
+                block.append(inactive_older_line(theme, older));
+                older = 0;
+            }
             if group.source().inactive.is_some() && !hide_inactive_chip {
                 if inactive_chip.is_none() {
                     if emitted {
@@ -1271,13 +1282,17 @@ fn scroll_lines_windowed(
                         width,
                         inactive_count,
                         unlanded_count,
-                        view.inactive_open,
+                        view.inactive_peek.is_some(),
                     );
                     chip.tag("chrome");
                     block.append(chip);
                     emitted = true;
                 }
-                if !view.inactive_open && group.is_empty() {
+                inactive_seen += 1;
+                if inactive_seen > page_limit && group.is_empty() {
+                    if view.inactive_peek.is_some() {
+                        older += 1;
+                    }
                     continue;
                 }
             }
@@ -1306,9 +1321,23 @@ fn scroll_lines_windowed(
                 inactive_span = Some((chip, block.lines.len() - 1));
             }
         }
+        if older > 0 {
+            block.append(inactive_older_line(theme, older));
+        }
+        inactive_span = inactive_span.or(inactive_chip.map(|chip| (chip, chip)));
     }
 
     (block, inactive_span)
+}
+
+fn inactive_older_line(theme: &Theme, count: usize) -> RenderedBlock {
+    let mut block = RenderedBlock::default();
+    block.push_target(
+        pad_chrome(Line::styled(format!("  +{count} older"), theme.muted())),
+        HitTarget::MoreInactive,
+    );
+    block.tag("chrome");
+    block
 }
 
 fn inactive_line(

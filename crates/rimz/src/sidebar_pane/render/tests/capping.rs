@@ -431,7 +431,7 @@ fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
         &snapshot,
         None,
         &ViewState {
-            inactive_open: true,
+            inactive_peek: Some(Default::default()),
             ..Default::default()
         },
         &UiState::default(),

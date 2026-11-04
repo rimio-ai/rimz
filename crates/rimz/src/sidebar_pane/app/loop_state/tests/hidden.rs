@@ -44,6 +44,54 @@ fn repaint_source(pair: &mut super::scroll::SharedPanes) {
 }
 
 #[test]
+fn hidden_mirror_draws_an_open_inactive_peek_closed_without_changing_its_source() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            Arc::make_mut(&mut Arc::make_mut(&mut v.context.current.worktree_groups)[0].rows)
+                .truncate(1);
+            let mut old = v.context.current.worktree_groups[0].clone();
+            old.key = "inactive-work".into();
+            old.label = old.key.clone();
+            old.inactive = Some(crate::store::snapshot::SidebarInactive::Unlanded);
+            let rows = Arc::make_mut(&mut old.rows);
+            rows.truncate(1);
+            rows[0].id = "old-agent".into();
+            rows[0].pane = None;
+            Arc::make_mut(&mut v.context.current.worktree_groups).push(old);
+            v.state.inactive_peek = Some(Default::default());
+            v.state.scroll_offset = 0;
+        });
+        repaint_source(&mut pair);
+        let output = FrameOutput::default();
+        let hidden = &mut pair.panes[1];
+        hidden.terminal = Terminal::with_options(
+            PaneBackend::headless(output.clone()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 40)),
+            },
+        )
+        .unwrap();
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+        assert!(painted, "{mux:?}");
+        let mut screen = vt100::Parser::new(40.try_into().unwrap(), 80.try_into().unwrap(), 0);
+        screen.process(&output.0.lock().unwrap());
+        let text = screen.screen().contents();
+        assert!(text.contains("1 inactive"), "{mux:?}: {text}");
+        assert!(
+            text.contains("[ ▸ 1 inactive · 1 unlanded ]"),
+            "{mux:?}: {text}"
+        );
+        assert!(
+            !text.contains("inactive-work") && !text.contains(" older"),
+            "{mux:?}: {text}"
+        );
+        assert!(pair.view(0).inactive_peek.is_some());
+    }
+}
+
+#[test]
 fn wheel_gestures_paint_no_hidden_mirrors_until_one_sweep_at_rest() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = mirror_pair(mux);
@@ -143,7 +191,7 @@ fn structural_publications_are_prompt_at_rest_but_wait_during_input() {
             }
             let before = pair.plane.views.read().mirror_target;
             pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                v.state.inactive_open = !v.state.inactive_open;
+                v.state.expanded_groups.clear();
             });
             repaint_source(&mut pair);
             assert_ne!(pair.plane.views.read().mirror_target, before);
@@ -495,7 +543,7 @@ fn the_mirror_driver_offers_only_unmapped_subscribers() {
             receivers.push(receive);
         }
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.inactive_open = !v.state.inactive_open;
+            v.state.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         assert!(
@@ -722,7 +770,7 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
         rig.terminal.backend_mut().play_output(output.clone());
         pair.sample(&[(1, 0)]);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.inactive_open = !v.state.inactive_open;
+            v.state.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));
@@ -875,7 +923,7 @@ fn hidden_mirror_retries_after_the_jump_fence_releases() {
                 pair.clock.now(),
             );
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.inactive_open = !v.state.inactive_open;
+            v.state.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));

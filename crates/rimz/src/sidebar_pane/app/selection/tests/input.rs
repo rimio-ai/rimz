@@ -1,5 +1,6 @@
 use super::*;
 use crate::mux::WidthAdjust;
+use std::time::Duration;
 
 fn assert_no_selection_move(action: KeyAction, target: usize) {
     let snapshot = clickable_block_snapshot(&workspace());
@@ -1093,8 +1094,8 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
     );
     for open in [true, false] {
         handle_key(action, &mut view, &mut ui, &snapshot);
-        assert_eq!(view.inactive_open, open);
-        assert_eq!(view.inactive_reveal, open);
+        assert_eq!(view.inactive_peek.is_some(), open);
+        assert!(view.inactive_reveal);
         paint(&mut view, &mut ui, &snapshot, 24);
         if open {
             assert!(view.scroll_offset > offset);
@@ -1159,7 +1160,7 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
             handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome::redraw()
         );
-        assert_eq!(ui.inactive_open, open);
+        assert_eq!(ui.inactive_peek.is_some(), open);
         paint(&mut ui, &mut pane_ui, &snapshot, 24);
         assert_eq!(ui.scroll_offset, offset + if open { 4 } else { 0 });
         assert_eq!(Some(ui.scroll_offset), pane_ui.drawn_scroll_max);
@@ -1181,7 +1182,7 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
             row_ids
         );
     }
-    ui.inactive_open = true;
+    ui.inactive_peek = Some(Default::default());
     ui.scroll_offset = usize::MAX;
     ui.offset_authoritative = true;
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
@@ -1229,13 +1230,124 @@ fn inactive_expansion_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) 
     (snapshot, selected)
 }
 
+fn inactive_pages_snapshot() -> (SidebarSnapshot, PaneId) {
+    let (mut snapshot, selected) = inactive_click_snapshot(0);
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    let template = groups.pop().unwrap();
+    for index in 1..=25 {
+        let mut group = template.clone();
+        group.key = format!("old-{index:02}");
+        group.label = group.key.clone();
+        let row = &mut std::sync::Arc::make_mut(&mut group.rows)[0];
+        row.id = group.key.clone();
+        row.name = group.key.clone();
+        row.last_activity = snapshot.now - Duration::from_secs(7200 + index * 60);
+        row.pane.as_mut().unwrap().pane_id =
+            PaneId::from_parts(MuxName::Zellij, format!("terminal_old_{index}"));
+        groups.push(group);
+    }
+    (snapshot, selected)
+}
+
+fn inactive_frame(
+    view: &ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    height: u16,
+) -> Vec<String> {
+    let theme = ui.theme(&snapshot.theme);
+    render::compose_lines(snapshot, None, view, ui, theme.as_ref(), 54, height)
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn inactive_pages_keep_the_viewport_and_reset_on_close() {
+    let (snapshot, selected) = inactive_pages_snapshot();
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(selected.clone()));
+    handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
+    paint(&mut view, &mut ui, &snapshot, 40);
+    for shown in [10, 20, 25] {
+        let lines = inactive_frame(&view, &mut ui, &snapshot, 300);
+        let text = lines.join("\n");
+        for index in 1..=25 {
+            assert_eq!(
+                text.contains(&format!("old-{index:02}")),
+                index <= shown,
+                "{text}"
+            );
+        }
+        assert_eq!(text.contains(" older"), shown < 25, "{text}");
+        if shown == 25 {
+            break;
+        }
+        let label = format!("+{} older", 25 - shown);
+        view.scroll_offset = usize::MAX;
+        view.offset_authoritative = true;
+        paint(&mut view, &mut ui, &snapshot, 40);
+        let offset = view.scroll_offset;
+        let roster = ui.painted_roster.clone();
+        let lines = inactive_frame(&view, &mut ui, &snapshot, 40);
+        let line = lines.iter().position(|line| line.contains(&label)).unwrap();
+        let outcome = handle_mouse_click(1, line as u16, &mut view, &mut ui, &snapshot);
+        assert!(outcome.effects.is_empty());
+        paint(&mut view, &mut ui, &snapshot, 40);
+        assert_eq!(view.scroll_offset, offset);
+        assert_eq!(view.selected_pane.as_ref(), Some(&selected));
+        assert_eq!(ui.painted_roster, roster);
+    }
+    for _ in 0..2 {
+        handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
+        paint(&mut view, &mut ui, &snapshot, 40);
+    }
+    let text = inactive_frame(&view, &mut ui, &snapshot, 300).join("\n");
+    assert!(
+        text.contains("+15 older") && !text.contains("old-11"),
+        "{text}"
+    );
+}
+
+#[test]
+fn closing_inactive_from_the_bottom_drops_its_expansions_and_reveals_the_chip() {
+    let (snapshot, selected) = inactive_pages_snapshot();
+    let mut view = ViewState {
+        expanded_groups: std::collections::BTreeSet::from(["old-25".into()]),
+        ..Default::default()
+    };
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(selected.clone()));
+    handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
+    paint(&mut view, &mut ui, &snapshot, 24);
+    view.scroll_offset = usize::MAX;
+    view.offset_authoritative = true;
+    paint(&mut view, &mut ui, &snapshot, 24);
+    assert!(
+        ui.interactions
+            .line_for_target(&HitTarget::ToggleInactive)
+            .is_none()
+    );
+    handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
+    paint(&mut view, &mut ui, &snapshot, 24);
+    assert!(
+        ui.interactions
+            .line_for_target(&HitTarget::ToggleInactive)
+            .is_some()
+    );
+    assert!(!view.expanded_groups.contains("old-25"));
+    assert_eq!(view.selected_pane, Some(selected));
+    assert!(view.scroll_offset <= ui.drawn_scroll_max.unwrap());
+}
 #[test]
 fn folded_inactive_header_and_receipt_lines_expand_and_focus_first_member() {
     let (snapshot, selected) = inactive_expansion_snapshot(0);
     let mut results = Vec::new();
     for line_offset in 0..3 {
         let mut ui = render::ViewState {
-            inactive_open: true,
+            inactive_peek: Some(Default::default()),
             ..Default::default()
         };
         let mut pane_ui = UiState::default();
@@ -1293,7 +1405,7 @@ fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
     )[0]
     .pane = None;
     let mut ui = render::ViewState {
-        inactive_open: true,
+        inactive_peek: Some(Default::default()),
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1354,7 +1466,7 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let (snapshot, selected) = inactive_expansion_snapshot(6);
     let mut ui = render::ViewState {
-        inactive_open: true,
+        inactive_peek: Some(Default::default()),
         offset_authoritative: true,
         ..Default::default()
     };
