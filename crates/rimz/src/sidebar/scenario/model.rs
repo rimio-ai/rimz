@@ -7,7 +7,9 @@ use jiff::Timestamp;
 
 use super::{AgentSpec, Preset, Verb, presets};
 use crate::ids::AgentKind;
-use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeKind};
+use crate::store::snapshot::{
+    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 
 #[derive(Clone)]
 pub(super) struct Room {
@@ -187,7 +189,7 @@ impl Room {
             Arc::make_mut(&mut group.rows).push(agent.row);
         }
         Arc::make_mut(&mut self.snapshot.worktree_groups)
-            .retain(|group| !group.rows.is_empty() || group.pipeline.is_some());
+            .retain(SidebarWorktreeGroup::has_rows_or_workflow);
         self.snapshot.score_scenario_rows();
         for group in Arc::make_mut(&mut self.snapshot.worktree_groups) {
             group.status_counts = presets::status_counts_from_rows(&group.rows);

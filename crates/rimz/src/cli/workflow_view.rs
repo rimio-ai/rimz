@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::WorkflowSpec;
-use rimz::store::workflow::{Asking, AttemptKind, LiveAttempt, ParkReason, RunRecord, RunState};
+use rimz::store::workflow::{Asking, ParkReason, RunRecord, RunState};
 
 use super::render;
 
@@ -22,18 +22,10 @@ pub(super) fn sealed_specs(
         .collect()
 }
 
-pub(super) fn session_attempt(record: &RunRecord) -> Option<&LiveAttempt> {
-    record
-        .held
-        .as_ref()
-        .map(|held| &held.attempt)
-        .or(record.attempt.as_ref())
-        .filter(|attempt| attempt.kind == AttemptKind::Agent)
-}
-
 pub(super) fn with_you(record: &RunRecord) -> bool {
     record.state == RunState::Active
-        && session_attempt(record)
+        && record
+            .session_attempt()
             .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
 }
 
@@ -41,7 +33,7 @@ pub(super) fn asking(record: &RunRecord) -> Option<&Asking> {
     if record.state != RunState::Active {
         return None;
     }
-    session_attempt(record)?.asking.as_ref()
+    record.session_attempt()?.asking.as_ref()
 }
 
 pub(super) fn since(record: &RunRecord) -> Timestamp {

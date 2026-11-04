@@ -519,6 +519,39 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
+    /// The agent session still owned by this run, including an until session under a check.
+    pub fn session_attempt(&self) -> Option<&LiveAttempt> {
+        self.held
+            .as_ref()
+            .map(|held| &held.attempt)
+            .or(self.attempt.as_ref())
+            .filter(|attempt| attempt.kind == AttemptKind::Agent)
+    }
+
+    /// Resolve the current step's root among the caller's addressable sessions.
+    pub fn step_agent<'a>(
+        &self,
+        agents: &[&'a crate::agents::AgentState],
+    ) -> Option<&'a crate::agents::AgentState> {
+        let attempt = self.session_attempt()?;
+        let leader = attempt
+            .run
+            .as_ref()
+            .and_then(|run| run.handle.strip_prefix('@'));
+        agents
+            .iter()
+            .copied()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| {
+                agent.workflow.as_ref().is_some_and(|pin| {
+                    pin.run == self.id
+                        && pin.seq == attempt.seq
+                        && pin.role == crate::agents::WorkflowAttemptRole::Step
+                })
+            })
+            .min_by_key(|agent| leader.is_none_or(|name| agent.name.as_deref() != Some(name)))
+    }
+
     /// The routed outcome and key, preserving a capped node's bucket across resume.
     pub fn visit_bucket(&self) -> (Option<&str>, Option<&Key>) {
         (

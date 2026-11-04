@@ -1,0 +1,339 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use crate::StatePaths;
+use crate::disk::parse_cache::KeyedParseCache;
+use crate::harness::workflow::WorkflowSpec;
+use crate::store::snapshot::{
+    SidebarSnapshot, SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind,
+};
+use crate::store::workflow::{RunRecord, RunState};
+
+thread_local! {
+    // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
+    static SPECS: KeyedParseCache<WorkflowSpec> = KeyedParseCache::default();
+}
+
+pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWorkflow> {
+    records
+        .iter()
+        .filter(|record| !record.state.is_terminal())
+        .filter_map(|record| {
+            let path = state.workflow(&record.id).spec;
+            let spec = SPECS.with(|cache| {
+                cache
+                    .read_with(&path, |bytes| {
+                        crate::harness::workflow::parse(std::str::from_utf8(bytes).ok()?).ok()
+                    })
+                    .ok()
+                    .flatten()
+            });
+            project(record, spec.as_deref())
+        })
+        .collect()
+}
+
+pub(super) fn bind_agents(snapshot: &mut SidebarSnapshot, records: &[RunRecord]) {
+    let peers = crate::address::addressable_agents(snapshot);
+    let identities = records
+        .iter()
+        .filter_map(|record| {
+            let agent = record.step_agent(&peers)?;
+            Some((
+                record.id.clone(),
+                (agent.kind.clone(), agent.agent_id.clone()),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if snapshot
+        .worktree_groups
+        .iter()
+        .filter_map(|group| group.workflow.as_ref())
+        .all(|run| run.agent.as_ref() == identities.get(&run.run))
+    {
+        return;
+    }
+    for run in Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .filter_map(|group| group.workflow.as_mut())
+    {
+        run.agent = identities.get(&run.run).cloned();
+    }
+}
+
+fn project(record: &RunRecord, spec: Option<&WorkflowSpec>) -> Option<SidebarWorkflow> {
+    if record.state.is_terminal() {
+        return None;
+    }
+    let held = record.held.as_ref();
+    let name = held.map_or(record.node.as_str(), |held| held.attempt.node.as_str());
+    let entered_at = held.map_or(record.entered_at, |held| held.entered_at);
+    let kind = if spec.is_some_and(|spec| spec.steps.contains_key(name))
+        || (spec.is_none()
+            && (record.session_attempt().is_some() || record.visits.contains_key(name)))
+    {
+        WorkflowNodeKind::Step
+    } else {
+        WorkflowNodeKind::Check
+    };
+    let walk = spec.map(WorkflowSpec::walk).unwrap_or_default();
+    let current = walk.nodes.iter().find(|node| node.node == name);
+    let detour_parent = current.and_then(|node| node.hangs_under.clone());
+    let track = if current.is_some() {
+        walk.nodes
+            .iter()
+            .filter(|node| node.hangs_under.is_none())
+            .map(|node| SidebarWorkflowNode {
+                name: node.node.clone(),
+                kind: if spec.is_some_and(|spec| spec.steps.contains_key(&node.node)) {
+                    WorkflowNodeKind::Step
+                } else {
+                    WorkflowNodeKind::Check
+                },
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let capped = spec
+        .and_then(|spec| spec.steps.get(name))
+        .is_some_and(|step| {
+            step.visit_bounds(
+                record.visits.get(name),
+                record.visit_bucket(),
+                record.visit_grant,
+            )
+            .any(|(_, used, max)| used >= max)
+        });
+    let hold_limit = record
+        .wait
+        .as_ref()
+        .filter(|wait| wait.outcome == "hold")
+        .map(|wait| {
+            spec.and_then(|spec| spec.checks.get(&wait.node))
+                .and_then(|check| check.cases.get(wait.case? as usize)?.hold.clone())
+                .unwrap_or_else(|| "?".into())
+        });
+    let word = if record.state == RunState::Parked {
+        "parked".into()
+    } else if let Some(wait) = &record.wait {
+        match wait.outcome.as_str() {
+            "capacity" => "held".into(),
+            "hold" => wait
+                .detail
+                .as_ref()
+                .map_or_else(|| "holding".into(), |detail| format!("holding {detail}")),
+            _ => wait.outcome.clone(),
+        }
+    } else if kind == WorkflowNodeKind::Step {
+        "running".into()
+    } else {
+        "checking".into()
+    };
+    let since = if record.state == RunState::Parked {
+        record.park.as_ref().map_or(entered_at, |park| park.at)
+    } else if kind == WorkflowNodeKind::Check {
+        record.wait.as_ref().map_or(entered_at, |wait| wait.first)
+    } else {
+        entered_at
+    };
+    Some(SidebarWorkflow {
+        run: record.id.clone(),
+        workflow: record.workflow.clone(),
+        scope_path: record.scope.path.to_string_lossy().into_owned(),
+        state: record.state,
+        track,
+        current: SidebarWorkflowNode {
+            name: name.to_owned(),
+            kind,
+        },
+        detour_parent,
+        visits: record.visits.get(name).map_or(0, |visits| visits.total),
+        capped,
+        word,
+        since,
+        hold_limit,
+        entered_at,
+        created_at: record.created_at,
+        agent: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::workflow::RunState;
+    use jiff::Timestamp;
+    use serde_json::json;
+
+    fn record() -> RunRecord {
+        serde_json::from_value(json!({
+            "version": 1, "id": crate::ids::WorkflowRunId::new(), "workflow": "land",
+            "spec_dir": "/spec", "spec_digest": "digest", "project_root": "/repo",
+            "scope": {"kind": "worktree", "path": "/trees/lane"},
+            "created_at": Timestamp::UNIX_EPOCH, "entered_at": "2026-01-01T00:00:00Z",
+            "state": "active", "node": "watch", "visits": {}, "visit_grant": 0,
+            "deadline_fired": false, "next_seq": 2
+        }))
+        .unwrap()
+    }
+
+    fn spec() -> WorkflowSpec {
+        toml::from_str(
+            r#"
+            [workflow]
+            scope = "worktree"
+            start = "sweep"
+            [steps.sweep]
+            agent = "coder"
+            then = "watch"
+            [checks.watch]
+            else = "queued"
+            [checks.watch.on]
+            queued = "@wait"
+            fix = "fix"
+            merged = "clean"
+            [[checks.watch.cases]]
+            when = ["pr.open"]
+            for = "30m"
+            outcome = "queued"
+            [steps.fix]
+            agent = "coder"
+            max-visits = 2
+            then = "watch"
+            [steps.clean]
+            run = "clean"
+            then = "triage"
+            [steps.triage]
+            agent = "coder"
+            lifecycle = "until"
+            then = "@done"
+        "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn projection_tracks_main_rail_current_detour_caps_and_held_agent() {
+        let mut record = record();
+        let spec = spec();
+        record.node = "fix".into();
+        record.visits.insert(
+            "fix".into(),
+            serde_json::from_value(json!({"total":2, "outcomes":[]})).unwrap(),
+        );
+        let projected = project(&record, Some(&spec));
+        assert!(projected.is_some(), "active run projects");
+        let projected = projected.unwrap();
+        assert_eq!(
+            projected
+                .track
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            ["sweep", "watch", "clean", "triage"]
+        );
+        assert_eq!(projected.current.name, "fix");
+        assert_eq!(projected.detour_parent.as_deref(), Some("watch"));
+        assert_eq!(projected.visits, 2);
+        assert!(projected.capped);
+        assert_eq!(projected.word, "running");
+
+        record.node = "ruled".into();
+        record.held = Some(
+            serde_json::from_value(json!({
+                "attempt": {"kind":"agent", "lifecycle":"until", "seq":1, "node":"triage",
+                    "started_at":record.created_at, "host":{"pid":1,"start":null}},
+                "entered_at":record.created_at
+            }))
+            .unwrap(),
+        );
+        let mut agent = crate::testkit::agent_state("codex", "triage-session", record.created_at);
+        agent.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: record.id.clone(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        });
+        let projected = project(&record, Some(&spec)).unwrap();
+        assert_eq!(projected.current.name, "triage");
+        assert!(
+            projected.agent.is_none(),
+            "identity binds after the pane fold"
+        );
+        assert_eq!(
+            record.step_agent(&[&agent]).map(|bound| &bound.agent_id),
+            Some(&agent.agent_id)
+        );
+        assert_eq!(projected.entered_at, record.created_at);
+        assert_eq!(projected.since, record.created_at);
+    }
+
+    #[test]
+    fn projection_words_and_clocks_come_from_wait_node_or_park() {
+        let mut record = record();
+        let spec = spec();
+        for (outcome, expected) in [
+            ("queued", "queued"),
+            ("capacity", "held"),
+            ("takeover", "takeover"),
+            ("hold", "holding checks"),
+        ] {
+            record.wait = Some(
+                serde_json::from_value(json!({
+                    "node":"watch", "outcome":outcome, "detail":"checks", "case":0,
+                    "first":record.created_at, "last":record.entered_at, "count":1
+                }))
+                .unwrap(),
+            );
+            let projected = project(&record, Some(&spec));
+            assert!(projected.is_some(), "live outcome {outcome} projects");
+            let projected = projected.unwrap();
+            assert_eq!(projected.word, expected);
+            assert_eq!(projected.since, record.created_at);
+            assert_eq!(
+                projected.hold_limit.as_deref(),
+                (outcome == "hold").then_some("30m")
+            );
+        }
+        let projected = project(&record, None);
+        assert_eq!(
+            projected.and_then(|run| run.hold_limit).as_deref(),
+            Some("?")
+        );
+        record.wait = None;
+        assert_eq!(project(&record, Some(&spec)).unwrap().word, "checking");
+        record.node = "clean".into();
+        let projected = project(&record, Some(&spec)).unwrap();
+        assert_eq!(projected.word, "running");
+        assert_eq!(projected.since, record.entered_at);
+        record.state = RunState::Parked;
+        record.park = Some(
+            serde_json::from_value(json!({"reason":"user", "at":record.created_at, "text":null}))
+                .unwrap(),
+        );
+        let projected = project(&record, Some(&spec)).unwrap();
+        assert_eq!(projected.word, "parked");
+        assert_eq!(projected.since, record.created_at);
+    }
+
+    #[test]
+    fn unreadable_or_unreachable_spec_is_trackless_and_terminal_run_is_absent() {
+        let mut record = record();
+        let spec = spec();
+        record.node = "gone".into();
+        for spec in [None, Some(&spec)] {
+            let projected = project(&record, spec);
+            assert!(
+                projected.is_some(),
+                "a missing track still projects its current node"
+            );
+            let projected = projected.unwrap();
+            assert!(projected.track.is_empty());
+            assert_eq!(projected.current.name, "gone");
+        }
+        for state in [RunState::Done, RunState::Failed, RunState::Canceled] {
+            record.state = state;
+            assert!(project(&record, Some(&spec)).is_none());
+        }
+    }
+}

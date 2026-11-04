@@ -23,6 +23,7 @@ mod git;
 mod held;
 mod labels;
 mod spend;
+mod workflows;
 
 #[test]
 fn hook_drainer_outages_are_projected_on_producer_and_consumer_folds() {

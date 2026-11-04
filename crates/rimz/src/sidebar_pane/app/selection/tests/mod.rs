@@ -238,6 +238,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: vec![crate::store::snapshot::SidebarStatusCount {
             status: crate::agents::AgentStatus::Running,
             count: 1,
@@ -391,6 +392,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             team: None,
             cohort_effort: None,
             pipeline: None,
+            workflow: None,
             status_counts: vec![crate::store::snapshot::SidebarStatusCount {
                 status: AgentStatus::Running,
                 count: 1,
@@ -434,6 +436,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             team: None,
             cohort_effort: None,
             pipeline: None,
+            workflow: None,
             status_counts: vec![crate::store::snapshot::SidebarStatusCount {
                 status: AgentStatus::Failed,
                 count: 1,

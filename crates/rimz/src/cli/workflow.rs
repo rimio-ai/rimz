@@ -28,22 +28,8 @@ fn workflow_agent(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     include_channel: bool,
 ) -> Option<String> {
-    let attempt = workflow_view::session_attempt(record)?;
-    let leader_name = attempt
-        .run
-        .as_ref()
-        .and_then(|run| run.handle.strip_prefix('@'));
     let peers = rimz::address::addressable_agents(snapshot);
-    let agent = peers
-        .iter()
-        .filter(|agent| {
-            agent.workflow.as_ref().is_some_and(|pin| {
-                pin.run == record.id
-                    && pin.seq == attempt.seq
-                    && pin.role == rimz::agents::WorkflowAttemptRole::Step
-            })
-        })
-        .min_by_key(|agent| leader_name.is_none_or(|name| agent.name.as_deref() != Some(name)))?;
+    let agent = record.step_agent(&peers)?;
     Some(rimz::address::agent_handle(agent, &peers, include_channel))
 }
 
@@ -76,7 +62,7 @@ impl RoomView {
         record: &RunRecord,
         include_channel: bool,
     ) -> Option<String> {
-        let run = workflow_view::session_attempt(record)?.run.as_ref()?;
+        let run = record.session_attempt()?.run.as_ref()?;
         let snapshot = self.snapshot.get_or_init(|| {
             let runtime = self.runtime.as_ref()?;
             let workspace = rimz::workspace::record::read(&state.workspace_record).ok()?;

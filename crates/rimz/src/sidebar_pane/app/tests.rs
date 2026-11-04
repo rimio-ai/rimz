@@ -1060,6 +1060,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             team: None,
             cohort_effort: None,
             pipeline: None,
+            workflow: None,
             status_counts: Vec::new(),
             rows: vec![crate::store::snapshot::SidebarRow {
                 checkout: None,

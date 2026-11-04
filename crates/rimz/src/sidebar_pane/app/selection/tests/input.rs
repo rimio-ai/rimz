@@ -2407,6 +2407,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: rows.into(),
         diff_added: None,

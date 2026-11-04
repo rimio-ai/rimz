@@ -472,7 +472,7 @@ pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
     parse(&text)
 }
 
-pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,

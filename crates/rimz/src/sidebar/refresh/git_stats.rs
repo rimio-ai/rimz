@@ -291,10 +291,11 @@ pub(super) fn refresh_diff_stats_for(
 /// carry a `\n<branch>` suffix when one path holds two branches), which is
 /// stabler than any one row's cwd: a root-keyed pod's rows can sit in
 /// different subdirs of one checkout. A non-path key (`branch:…`, the
-/// `external` catch-all) falls back to the rows' shared path.
+/// `external` catch-all) falls back to a row's path, then the live run's scope.
 pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
     key: &'a str,
     rows: &'a [crate::store::snapshot::SidebarRow],
+    workflow: Option<&'a crate::store::snapshot::SidebarWorkflow>,
 ) -> Option<&'a str> {
     key.split('\n')
         .next()
@@ -304,6 +305,7 @@ pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
                 .find_map(|row| row.lane_path())
                 .filter(|path| !path.is_empty())
         })
+        .or_else(|| workflow.map(|run| run.scope_path.as_str()))
 }
 
 /// The live worktree paths this snapshot needs git facts for: a git-backed
@@ -330,7 +332,7 @@ pub(super) fn needed_worktree_paths(
 /// worktree marker whose name matches the lane label before they inherit that
 /// checkout's git story.
 fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
-    let path = worktree_group_path_fields(&group.key, &group.rows)?;
+    let path = worktree_group_path_fields(&group.key, &group.rows, group.workflow.as_ref())?;
     if !Path::new(path).is_dir() {
         return None;
     }

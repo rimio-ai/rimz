@@ -27,6 +27,7 @@ pub use inspect::{
     timeout_at,
 };
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
+pub(crate) use spec::parse;
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, ScopeKind, SpecErr,
     Step, StepEdges, StepKind, WorkflowSpec, load, schema,

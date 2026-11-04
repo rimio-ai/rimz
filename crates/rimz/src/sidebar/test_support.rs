@@ -185,6 +185,7 @@ pub(crate) fn worktree_group(
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: status_counts_from_rows(&rows),
         rows: rows.into(),
         diff_added: None,

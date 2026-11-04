@@ -108,6 +108,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::<SidebarStatusCount>::new(),
         rows: rows.into(),
         diff_added: None,

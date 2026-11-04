@@ -538,14 +538,15 @@ pub(super) fn compare_groups(
 
 fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
     // External stays last; inactive groups follow active project work. Only
-    // actionable groups use urgency. Other active groups rank by their newest
-    // agent registration, and inactive groups by their latest agent activity.
+    // actionable groups use urgency. Member groups lead rowless runs within each
+    // tier; rowless runs rank by node entry rather than agent clocks.
     group_sort_key(
         group.rows.iter().map(row_rank_facts),
         group.kind,
         group.inactive.is_some(),
         group.root_lane,
         &group.label,
+        group.workflow.as_ref().map(|run| run.entered_at),
     )
 }
 
@@ -555,6 +556,7 @@ struct GroupRankKey {
     inactive: bool,
     tier: u8,
     urgency: Reverse<u32>,
+    rowless: bool,
     newest: StartKey<Reverse<jiff::Timestamp>>,
     ordinal: StartKey<Reverse<u64>>,
     label: String,
@@ -566,6 +568,7 @@ fn group_sort_key<'a>(
     inactive: bool,
     root_lane: bool,
     label: &str,
+    run_entered_at: Option<jiff::Timestamp>,
 ) -> GroupRankKey {
     let mut urgency = 0;
     let mut newest_registration = None;
@@ -573,7 +576,9 @@ fn group_sort_key<'a>(
     let mut process_activity = None;
     let mut highest_ordinal = None;
     let mut actionable = false;
+    let mut rowless = true;
     for facts in facts {
+        rowless = false;
         actionable |= facts.status.is_some_and(AgentStatus::is_actionable);
         urgency = urgency.max(group_member_urgency(&facts));
         if facts.is_process {
@@ -595,8 +600,11 @@ fn group_sort_key<'a>(
             2
         },
         urgency: Reverse(if actionable { urgency } else { 0 }),
+        rowless,
         newest: StartKey::from(
-            if inactive {
+            if rowless {
+                run_entered_at
+            } else if inactive {
                 agent_activity.or(process_activity)
             } else {
                 newest_registration
@@ -636,7 +644,7 @@ fn group_inactive(
         return None;
     }
     let landed = group_git_rung(group) == GitRung::Done;
-    if !landed && group.rows.iter().any(|row| row.unread) {
+    if !landed && (group.workflow.is_some() || group.rows.iter().any(|row| row.unread)) {
         return None;
     }
     let quiet = group
@@ -647,7 +655,8 @@ fn group_inactive(
                 .map(|agent| agent.engaged_at.unwrap_or(row.last_activity))
         })
         .max()
-        .or_else(|| group.rows.iter().map(|row| row.last_activity).max())?;
+        .or_else(|| group.rows.iter().map(|row| row.last_activity).max())
+        .max(group.workflow.as_ref().map(|run| run.entered_at))?;
     let window = if landed {
         windows.inactive_after_secs
     } else {
@@ -778,6 +787,7 @@ pub fn group_live_agents_by_worktree<'a>(
             false,
             *root_lane,
             &group.label,
+            None,
         )
     });
     groups.into_iter().map(|(_, group)| group).collect()

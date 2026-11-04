@@ -69,7 +69,9 @@ impl View<'_> {
                 .get(&row.name)
                 .and_then(|step| {
                     let bucket = if is_current
-                        || workflow_view::session_attempt(self.record)
+                        || self
+                            .record
+                            .session_attempt()
                             .is_some_and(|attempt| attempt.node == row.name)
                     {
                         self.record.visit_bucket()

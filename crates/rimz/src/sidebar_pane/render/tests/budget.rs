@@ -219,6 +219,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 team: None,
                 cohort_effort: None,
                 pipeline: None,
+                workflow: None,
                 status_counts: vec![SidebarStatusCount {
                     status: crate::agents::AgentStatus::Running,
                     count: per_group,

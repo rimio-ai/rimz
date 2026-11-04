@@ -16,6 +16,49 @@ fn record() -> RunRecord {
     })).unwrap()
 }
 
+#[test]
+fn session_agent_join_uses_the_held_attempt_and_prefers_its_root_leader() {
+    use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
+    let mut record = record();
+    let mut attempt = record.attempt.clone().unwrap();
+    attempt.kind = AttemptKind::Agent;
+    attempt.node = "triage".into();
+    attempt.run = Some(AttemptRun {
+        run_id: crate::ids::RunId::new(),
+        handle: "@leader".into(),
+    });
+    let mut leader = crate::testkit::agent_state("codex", "leader-id", record.created_at);
+    leader.name = Some("leader".into());
+    leader.workflow = Some(WorkflowAttemptRef {
+        run: record.id.clone(),
+        seq: attempt.seq,
+        role: WorkflowAttemptRole::Step,
+    });
+    let mut companion = leader.clone();
+    companion.agent_id = "companion".into();
+    companion.name = Some("companion".into());
+    let mut child = leader.clone();
+    child.parent_agent_id = Some(leader.agent_id.clone());
+    for held in [false, true] {
+        record.held = held.then(|| HeldSession {
+            attempt: attempt.clone(),
+            entered_at: record.created_at,
+            verdict: None,
+        });
+        record.attempt = (!held).then(|| attempt.clone());
+        assert_eq!(record.session_attempt(), Some(&attempt), "held={held}");
+        assert_eq!(
+            record
+                .step_agent(&[&companion, &child, &leader])
+                .map(|agent| &agent.agent_id),
+            Some(&leader.agent_id)
+        );
+        companion.workflow.as_mut().unwrap().seq += 1;
+        assert!(record.step_agent(&[&companion, &child]).is_none());
+        companion.workflow.as_mut().unwrap().seq -= 1;
+    }
+}
+
 fn pin_record(
     home: &std::path::Path,
     project: &str,
