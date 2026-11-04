@@ -489,6 +489,8 @@ The `probe` group should report `clean: true` and `trunk_sync: "merged"`. The fi
 
 With more than 10 inactive groups, the peek ends in `+K older` before `external`. Click it to reveal the next 10 with the viewport held. Close from deep in the receipts with `i`: the chip must come back into view with no blank tail, and reopening must start at 10 again. Paging is also pinned by unit tests, so creating more than 10 landed groups for this live check is optional. A hidden sidebar must mirror the closed chip, not the source view's open peek.
 
+Confirm from the mux that clicking the chip focuses the sidebar pane on both tmux and Zellij (`tmux display -p '#{pane_id}'`, `zellij action list-clients`), since `rimz pane list` reports no focus (see [Traps](#traps)). Keep reading it past the usual layout-freeze window: the peek must stay open. Click a receipt: focus must jump to its member, the peek must close, that focused group's cards must stay visible, and the chip must return into view. Reopen, then switch tabs: the destination must show the closed chip without flashing the open receipts. In a disposable room, pre-seed `lanes/sidebar-filter.json` with `{"filter":{"kind":"inactive"}}` before starting the sidebar; the first frame must keep active cards with no filter and no extra tab needed to recover.
+
 ## Native subagent replay
 
 The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.

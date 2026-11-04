@@ -1783,3 +1783,513 @@ fn focus_out_closes_help_popup() {
     assert!(!rig.view().ui().help_visible);
     assert!(rig.state.pane.optimistic_watch_until.is_none());
 }
+
+fn inactive_pair(mux: MuxName) -> super::scroll::SharedPanes {
+    let mut pair = super::scroll::SharedPanes::new(mux);
+    let now = pair.snapshot.now;
+    let groups = Arc::make_mut(&mut pair.snapshot.worktree_groups);
+    Arc::make_mut(&mut groups[0].rows).truncate(1);
+    let template = groups[0].clone();
+    for index in 1..=25 {
+        let mut group = template.clone();
+        group.key = format!("old-{index:02}");
+        group.label = group.key.clone();
+        group.root_lane = false;
+        group.kind = crate::store::snapshot::SidebarWorktreeKind::Worktree;
+        group.clean = Some(true);
+        group.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
+        group.cohort_effort = Some(Default::default());
+        let row = &mut Arc::make_mut(&mut group.rows)[0];
+        row.id = group.key.clone();
+        row.name = group.key.clone();
+        row.last_activity = now - Duration::from_secs(7200 + index * 60);
+        row.pane.as_mut().unwrap().pane_id = PaneId::from_parts(
+            mux,
+            match mux {
+                MuxName::Tmux => format!("%{}", 200 + index),
+                MuxName::Zellij => format!("terminal_old_{index}"),
+            },
+        );
+        let engaged_at = row.last_activity;
+        let card = row.as_agent_mut().unwrap();
+        card.status = crate::agents::AgentStatus::Success;
+        card.engaged_at = Some(engaged_at);
+        groups.push(group);
+    }
+    pair.sample(&[(1, 0)]);
+    pair.panes[0].state.on_snapshot();
+    pair.paint(0);
+    assert_eq!(
+        pair.panes[0]
+            .state
+            .views
+            .mirror()
+            .worktree_groups
+            .iter()
+            .filter(|group| group.inactive.is_some())
+            .count(),
+        25
+    );
+    pair
+}
+
+fn inactive_clients(pair: &mut super::scroll::SharedPanes, focused: &[PaneId]) {
+    let clients = (1..=focused.len())
+        .map(|id| (id as u32, 0))
+        .collect::<Vec<_>>();
+    pair.sample_with(&clients, |frame| {
+        for (client, pane) in frame.client_views.iter_mut().zip(focused) {
+            client.pane_id = pane.clone();
+        }
+    });
+    pair.panes[0].state.on_snapshot();
+}
+
+fn inactive_input(pair: &mut super::scroll::SharedPanes, wakeup: Wakeup) -> InputOutcome {
+    let rig = &mut pair.panes[0];
+    rig.state.prepare_action();
+    rig.state.apply_input([wakeup], &mut rig.terminal).unwrap()
+}
+
+fn inactive_frame(pair: &mut super::scroll::SharedPanes, index: usize) -> String {
+    let output = FrameOutput::default();
+    pair.panes[index].terminal = Terminal::with_options(
+        PaneBackend::headless(output.clone()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 40)),
+        },
+    )
+    .unwrap();
+    pair.paint(index);
+    let mut parser = vt100::Parser::new(40.try_into().unwrap(), 80.try_into().unwrap(), 0);
+    parser.process(&output.0.lock().unwrap());
+    parser.screen().contents()
+}
+
+fn assert_inactive_frame_closed(pair: &mut super::scroll::SharedPanes, index: usize) {
+    let text = inactive_frame(pair, index);
+    assert!(text.contains("[ ▸ 25 inactive ]"), "{text}");
+    assert!(!text.contains('▾'), "{text}");
+    assert!(!text.contains("old-"), "{text}");
+    assert!(pair.view(index).inactive_peek.is_none());
+}
+
+#[test]
+fn inactive_peek_closes_before_the_first_frame_on_a_tab_round_trip() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.inactive_peek.as_mut().unwrap().pages = 2.try_into().unwrap();
+            v.state.expanded_groups.insert("old-25".into());
+        });
+
+        pair.sample(&[(1, 1)]);
+        assert_inactive_frame_closed(&mut pair, 1);
+        assert!(!pair.view(1).expanded_groups.contains("old-25"));
+        pair.panes[1].state.on_snapshot();
+        assert_inactive_frame_closed(&mut pair, 1);
+
+        pair.sample(&[(1, 0)]);
+        assert_inactive_frame_closed(&mut pair, 0);
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 1);
+    }
+}
+
+#[test]
+fn inactive_peek_closes_on_a_parked_fold_in_another_tab() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.on_snapshot();
+        assert!(pair.view(0).inactive_peek.unwrap().parked_seen);
+
+        pair.sample(&[(1, 1)]);
+        pair.panes[1].state.on_snapshot();
+        assert!(
+            pair.view(1).inactive_peek.is_none(),
+            "{mux:?}: parked on a different sidebar is departure"
+        );
+        assert_inactive_frame_closed(&mut pair, 1);
+
+        pair.sample(&[(1, 0)]);
+        assert_inactive_frame_closed(&mut pair, 0);
+    }
+}
+
+#[test]
+fn inactive_peek_stays_with_the_home_reader_when_co_viewers_split_tabs() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        pair.sample(&[(1, 0), (2, 0)]);
+        pair.panes[0].state.on_snapshot();
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+
+        pair.sample(&[(1, 0), (2, 1)]);
+        assert_inactive_frame_closed(&mut pair, 1);
+        pair.panes[1].state.on_snapshot();
+        assert_inactive_frame_closed(&mut pair, 1);
+        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+
+        pair.sample(&[(1, 0), (2, 0)]);
+        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+    }
+}
+
+#[test]
+fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        let own = pair.panes[0].state.pane.config.own_pane.clone();
+        let work = pair.snapshot.worktree_groups[0].rows[0]
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone();
+        inactive_clients(&mut pair, std::slice::from_ref(&work));
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        for _ in 0..3 {
+            pair.clock.advance(Duration::from_secs(60));
+            inactive_clients(&mut pair, std::slice::from_ref(&work));
+            assert!(
+                pair.view(0).inactive_peek.is_some(),
+                "{mux:?}: not armed at open"
+            );
+        }
+        for _ in 0..3 {
+            pair.clock.advance(Duration::from_secs(60));
+            inactive_clients(&mut pair, std::slice::from_ref(&own));
+            assert!(pair.view(0).inactive_peek.is_some(), "{mux:?}: no timer");
+        }
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.scroll_offset = usize::MAX;
+            v.state.offset_authoritative = true;
+        });
+        pair.paint(0);
+        pair.clock.advance(crate::sidebar::timing::CLICK_GUARD);
+        let offset = pair.view(0).scroll_offset;
+        let (column, row) = pair.panes[0]
+            .state
+            .pane
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::MoreInactive)
+            .unwrap();
+        let outcome = inactive_input(&mut pair, Wakeup::MouseClick { column, row });
+        assert!(outcome.effects.is_empty());
+        assert_eq!(pair.view(0).scroll_offset, offset);
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        inactive_clients(&mut pair, std::slice::from_ref(&own));
+        assert!(pair.view(0).inactive_peek.is_some());
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.scroll_offset = usize::MAX;
+            v.state.offset_authoritative = true;
+        });
+        pair.paint(0);
+        assert!(
+            pair.panes[0]
+                .state
+                .pane
+                .ui
+                .interactions
+                .line_for_target(&render::HitTarget::ToggleInactive)
+                .is_none()
+        );
+        inactive_clients(&mut pair, std::slice::from_ref(&work));
+        assert!(
+            pair.view(0).inactive_peek.is_none(),
+            "{mux:?}: departure closes"
+        );
+        pair.paint(0);
+        let ui = &pair.panes[0].state.pane.ui;
+        assert!(
+            ui.interactions
+                .line_for_target(&render::HitTarget::ToggleInactive)
+                .is_some()
+        );
+        assert!(pair.view(0).scroll_offset <= ui.drawn_scroll_max.unwrap());
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 1);
+    }
+}
+
+#[test]
+fn inactive_peek_stays_while_another_client_reads_the_same_view() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        let own = pair.panes[0].state.pane.config.own_pane.clone();
+        let work = pair.snapshot.worktree_groups[0].rows[0]
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone();
+        inactive_clients(&mut pair, &[own.clone(), own.clone()]);
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        inactive_clients(&mut pair, &[own.clone(), own.clone()]);
+        inactive_clients(&mut pair, &[work.clone(), own]);
+        assert!(
+            pair.view(0).inactive_peek.is_some(),
+            "{mux:?}: a reader remains"
+        );
+        inactive_clients(&mut pair, &[work.clone(), work]);
+        assert!(pair.view(0).inactive_peek.is_none(), "{mux:?}: both left");
+    }
+}
+
+#[test]
+fn inactive_peek_closes_in_the_focus_overlay_fold() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        let own = pair.panes[0].state.pane.config.own_pane.clone();
+        let work = pair.snapshot.worktree_groups[0].rows[0]
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone();
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        inactive_clients(&mut pair, std::slice::from_ref(&own));
+        let current = pair.panes[0].state.views.mirror();
+        let observed = current
+            .panes_observed_at_ms
+            .or(current.panes_produced_at_ms)
+            .unwrap();
+        pair.clock.advance(Duration::from_millis(
+            observed.saturating_sub(pair.clock.now_ms()) + 1,
+        ));
+        let rig = &mut pair.panes[0];
+        let envelope = SidebarEventEnvelope::new(
+            rig.ws.clone(),
+            Some("rimz-test".into()),
+            pair.clock.now_ms(),
+            SidebarEvent::FocusChanged {
+                focused: vec![work],
+                unfocused: vec![own],
+            },
+        );
+        rig.record_event(&envelope);
+        assert!(
+            !rig.state.parked(pair.clock.now_ms()),
+            "{mux:?}: fresh overlay leaves the sidebar"
+        );
+        rig.state.on_event(&mut rig.terminal, envelope);
+        assert!(
+            pair.view(0).inactive_peek.is_none(),
+            "{mux:?}: fused departure closes"
+        );
+    }
+}
+
+#[test]
+fn inactive_arrival_close_preserves_focus_placement() {
+    let mut frames = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        for open in [false, true] {
+            frames.push((mux, open, inactive_jump_placement(mux, open, 0)));
+        }
+    }
+    assert!(
+        frames
+            .iter()
+            .all(|(_, _, (painted, expected))| *painted == Some(*expected)),
+        "(mux, peek open, (painted, expected)): {frames:?}"
+    );
+}
+
+#[test]
+fn inactive_auto_close_preserves_focus_placement() {
+    let mut frames = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        for open in [false, true] {
+            frames.push((mux, open, inactive_jump_placement(mux, open, 1)));
+        }
+    }
+    assert!(
+        frames
+            .iter()
+            .all(|(_, _, (painted, expected))| *painted == Some(*expected)),
+        "(mux, peek open, (painted, expected)): {frames:?}"
+    );
+}
+
+fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isize>, isize) {
+    use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
+
+    let mut pair = inactive_pair(mux);
+    let group = &mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0];
+    let template = group.rows[0].clone();
+    *Arc::make_mut(&mut group.rows) = (0..20)
+        .map(|index| {
+            let mut row = template.clone();
+            row.id = format!("jump-card-{index}");
+            row.name = row.id.clone();
+            row.pane.as_mut().unwrap().pane_id = PaneId::from_parts(
+                mux,
+                match mux {
+                    MuxName::Tmux => format!("%{}", 500 + index),
+                    MuxName::Zellij => format!("terminal_jump_{index}"),
+                },
+            );
+            row
+        })
+        .collect();
+    let target = group.rows[16].clone();
+    let target_pane = target.pane.as_ref().unwrap().pane_id.clone();
+    pair.sample(&[(1, home)]);
+    pair.panes[home].state.on_snapshot();
+    if open {
+        let rig = &mut pair.panes[home];
+        rig.state.prepare_action();
+        rig.state
+            .apply_input([Wakeup::Key(KeyAction::ToggleInactive)], &mut rig.terminal)
+            .unwrap();
+    }
+    pair.sample(&[(1, home)]);
+    pair.panes[home].state.on_snapshot();
+    pair.paint(home);
+    pair.panes[home]
+        .state
+        .with_view_for_test(Route::READ, |_, v| v.state.scroll_offset = 30);
+
+    pair.clock.advance(Duration::from_millis(1));
+    let stamp = pair.clock.now_ms();
+    crate::mux::focus_anchor::store(
+        &pair.panes[1].runtime,
+        &FocusAnchor {
+            nonce: crate::ids::FocusNonce::new(),
+            session_name: "rimz-test".into(),
+            pane_id: target_pane.clone(),
+            origin: FocusOrigin::User,
+            repair_generation: None,
+            issued_at_ms: stamp,
+            applied_at_ms: Some(stamp),
+            state: FocusIntentState::Applied,
+            pre_action: Vec::new(),
+            placement: Some(FocusPlacement {
+                row_id: target.id.clone(),
+                viewport_row: 8,
+                held: Default::default(),
+            }),
+            order: None,
+        },
+    )
+    .unwrap();
+    pair.sample_with(&[(1, 1)], |frame| {
+        frame.client_views[0].pane_id = target_pane.clone();
+    });
+    pair.panes[1].state.on_snapshot();
+    assert_eq!(pair.view(1).selected_pane, Some(target_pane));
+    assert!(pair.view(1).focus_placement.is_some());
+    assert!(pair.view(1).inactive_peek.is_none());
+    pair.paint(1);
+    let ui = &pair.panes[1].state.pane.ui;
+    (
+        ui.painted_rows
+            .iter()
+            .find_map(|(id, row)| (id == &target.id).then_some(*row)),
+        (ui.scroll_zone_top + 8).try_into().unwrap(),
+    )
+}
+
+#[test]
+fn inactive_receipt_jump_closes_the_peek_but_keeps_the_focused_group_and_chip() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = inactive_pair(mux);
+        let group = &mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[1];
+        let template = group.rows[0].clone();
+        for index in 1..12 {
+            let mut row = template.clone();
+            row.id = format!("old-member-{index}");
+            row.name = row.id.clone();
+            row.pane.as_mut().unwrap().pane_id = PaneId::from_parts(
+                mux,
+                match mux {
+                    MuxName::Tmux => format!("%{}", 300 + index),
+                    MuxName::Zellij => format!("terminal_member_{index}"),
+                },
+            );
+            Arc::make_mut(&mut group.rows).push(row);
+        }
+        let target = group.rows[0].pane.as_ref().unwrap().pane_id.clone();
+        let own = pair.panes[0].state.pane.config.own_pane.clone();
+        inactive_clients(&mut pair, std::slice::from_ref(&own));
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        inactive_clients(&mut pair, std::slice::from_ref(&own));
+        pair.paint(0);
+        let (column, row) = pair.panes[0]
+            .state
+            .pane
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::ExpandGroup {
+                key: "old-01".into(),
+                row: "old-01".into(),
+            })
+            .unwrap();
+        let outcome = inactive_input(&mut pair, Wakeup::MouseClick { column, row });
+        assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
+        assert!(pair.view(0).expanded_groups.contains("old-01"));
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            v.state.scroll_offset = usize::MAX;
+            v.state.offset_authoritative = true;
+        });
+        pair.paint(0);
+        assert!(
+            pair.panes[0]
+                .state
+                .pane
+                .ui
+                .interactions
+                .line_for_target(&render::HitTarget::ToggleInactive)
+                .is_none()
+        );
+        inactive_clients(&mut pair, std::slice::from_ref(&target));
+        assert!(pair.view(0).inactive_peek.is_none(), "{mux:?}: jump closes");
+        assert!(!pair.view(0).expanded_groups.contains("old-01"));
+        assert_eq!(pair.view(0).selected_pane, Some(target));
+        pair.paint(0);
+        let view = pair.view(0);
+        let rig = &mut pair.panes[0];
+        assert!(
+            rig.state
+                .pane
+                .ui
+                .interactions
+                .line_for_target(&render::HitTarget::ToggleInactive)
+                .is_some()
+        );
+        assert!(
+            view.scroll_offset < rig.state.pane.ui.drawn_scroll_max.unwrap(),
+            "the chip reveal must nudge above the bottom, not merely clamp"
+        );
+        let snapshot = rig.state.views.mirror();
+        let theme = rig.state.pane.ui.theme(&snapshot.theme);
+        let text = render::compose_lines(
+            snapshot,
+            None,
+            &view,
+            &rig.state.pane.ui,
+            theme.as_ref(),
+            80,
+            200,
+        )
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(text.contains("[ ▸ 25 inactive ]"), "{mux:?}: {text}");
+        for index in 1..12 {
+            assert!(
+                text.contains(&format!("old-member-{index}")),
+                "{mux:?}: {text}"
+            );
+        }
+    }
+}
