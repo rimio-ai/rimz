@@ -1,0 +1,20 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine         /srv/code/query-engine
+
+ ◎ 0                           ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0 ⑃ 1                                 $0.00
+ ─────────────────────────────────────────────
+
+ ⑂ merge-lane ✓ #91                     ⇉ main
+   land ● ◆ watch ╰─ ◉ fix ×2 held 23m ○ ◇ ○ ◇
+
+
+
+ ─────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                $0.00
+
+                                    ? for help

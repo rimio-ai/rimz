@@ -22,10 +22,11 @@ enum Preset {
     Reach,
     Clocks,
     ClocksDone,
+    Workflow,
 }
 
 impl Preset {
-    const NAMED: [(&str, Self); 9] = [
+    const NAMED: [(&str, Self); 10] = [
         ("empty", Self::Empty),
         ("fleet", Self::Fleet),
         ("provider", Self::Provider),
@@ -35,6 +36,7 @@ impl Preset {
         ("reach", Self::Reach),
         ("clocks", Self::Clocks),
         ("clocks-done", Self::ClocksDone),
+        ("workflow", Self::Workflow),
     ];
 
     fn named(name: &str) -> Option<Self> {

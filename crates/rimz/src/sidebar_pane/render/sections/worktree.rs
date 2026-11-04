@@ -32,6 +32,9 @@ use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use super::agent_card::{CardLine, row_lines};
 use super::{CardExpansion, Gutter, RowCtx, content_width, pin_right, with_gutter};
 
+mod workflow;
+use workflow::workflow_line;
+
 /// Inputs needed to render one projected worktree group.
 pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snapshot> {
     pub(in crate::sidebar_pane::render) row: &'render RowCtx<'snapshot>,
@@ -166,33 +169,43 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     } else {
         block.push_with_regions(Line::default(), header_target, []);
     }
-    if pipeline.is_some() && !walk.contains(block.lines.len()) {
-        block.push_inert(Line::default());
-    } else if let Some(pipeline) = pipeline {
-        let rows = visible_group.rows(roster);
-        let owner = group
-            .pipeline_owner()
-            .and_then(|owner| rows.iter().position(|row| row.id == owner.id));
-        let target = owner
-            .or_else(|| {
-                rows.iter().position(|row| {
-                    row.team() == group.team.as_deref()
-                        && row.status().is_some_and(AgentStatus::is_actionable)
-                })
-            })
-            .or((!rows.is_empty()).then_some(0))
-            .map(|index| HitTarget::Row(first_row + index));
-        let owner_status = owner.and_then(|index| rows[index].status());
-        let line = with_gutter(
-            ctx.theme,
-            pipeline_line(ctx, pipeline, owner_status, team),
-            lane,
-            None,
-            ctx.width,
-        );
-        block.push_with_regions(line, None, target.map(|target| (0..u16::MAX, target)));
+    let rows = visible_group.rows(roster);
+    let workflow_owner = group
+        .workflow_owner()
+        .and_then(|owner| rows.iter().position(|row| row.id == owner.id));
+    if let Some(run) = group.workflow.as_ref().filter(|_| !folded) {
+        if walk.contains(block.lines.len()) {
+            let line = with_gutter(
+                ctx.theme,
+                workflow_line(
+                    ctx,
+                    run,
+                    workflow_owner.and_then(|index| rows[index].status()),
+                ),
+                lane,
+                None,
+                ctx.width,
+            );
+            let target =
+                workflow_owner.map(|index| (0..u16::MAX, HitTarget::Row(first_row + index)));
+            block.push_with_regions(line, None, target);
+        } else {
+            block.push_inert(Line::default());
+        }
     }
-    for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
+    debug_assert!(
+        workflow_owner.is_none_or(|index| index == 0),
+        "project_group sorts the step card first, so the team strip follows it"
+    );
+    let pipeline_offset = usize::from(workflow_owner.is_some());
+    for offset in 0..=passing {
+        if offset == pipeline_offset && pipeline.is_some() {
+            push_pipeline(ctx, visible_group, roster, team, lane, &mut block, walk);
+        }
+        let Some(row) = rows.get(offset).copied() else {
+            break;
+        };
+        let this_row = first_row + offset;
         block.card_starts.push((this_row, block.lines.len()));
         let selected = Some(this_row) == ctx.selected_index;
         let expanded = CardExpansion::resolve(
@@ -278,17 +291,69 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         .into_iter()
         .flatten()
     {
-        block.push_target(
-            with_gutter(ctx.theme, line, lane, None, ctx.width),
-            group_target.clone(),
-        );
+        let line = with_gutter(ctx.theme, line, lane, None, ctx.width);
+        if group.rows.is_empty() {
+            block.push_inert(line);
+        } else {
+            block.push_target(line, group_target.clone());
+        }
     }
     block.tag(&format!("#{}", group.label));
     block
 }
 
+fn push_pipeline(
+    ctx: &RowCtx<'_>,
+    visible_group: &VisibleGroup<'_>,
+    roster: &VisibleRoster<'_>,
+    team: Option<&str>,
+    lane: Gutter,
+    block: &mut RenderedBlock,
+    walk: &CardWalk<'_>,
+) {
+    let group = visible_group.source();
+    let Some(pipeline) = group.pipeline.as_ref() else {
+        return;
+    };
+    if !walk.contains(block.lines.len()) {
+        block.push_inert(Line::default());
+        return;
+    }
+    let rows = visible_group.rows(roster);
+    let first_row = visible_group.range().start;
+    let owner = group
+        .pipeline_owner()
+        .and_then(|owner| rows.iter().position(|row| row.id == owner.id));
+    let target = owner
+        .or_else(|| {
+            rows.iter().position(|row| {
+                row.team() == group.team.as_deref()
+                    && row.status().is_some_and(AgentStatus::is_actionable)
+            })
+        })
+        .or((!rows.is_empty()).then_some(0))
+        .map(|index| HitTarget::Row(first_row + index));
+    let line = with_gutter(
+        ctx.theme,
+        pipeline_line(
+            ctx,
+            pipeline,
+            owner.and_then(|index| rows[index].status()),
+            team,
+        ),
+        lane,
+        None,
+        ctx.width,
+    );
+    block.push_with_regions(line, None, target.map(|target| (0..u16::MAX, target)));
+}
+
 fn inactive_folded(group: &VisibleGroup<'_>) -> bool {
-    group.hidden_count() > 0 && !group.expanded() && group.source().collapses()
+    !group.expanded()
+        && ((group.hidden_count() > 0 && group.source().collapses())
+            || (group.source().rows.is_empty()
+                && group.source().workflow.is_some()
+                && group.source().inactive.is_some()))
 }
 
 /// Whole stage track and name, with muted stage duration immediately after
@@ -307,9 +372,7 @@ fn pipeline_line(
     let name_style = if position == PipelinePosition::Done {
         passed_style
     } else {
-        owner.map_or(theme.muted(), |status| {
-            status_style_at(theme, status, ctx.animation_phase)
-        })
+        strip_owner_style(ctx, owner, theme.muted())
     };
     let mut track = Vec::new();
     let mut stage_time_index = 0;
@@ -399,6 +462,16 @@ fn pipeline_line(
     pin_right(left, right, width)
 }
 
+fn strip_owner_style(
+    ctx: &RowCtx<'_>,
+    owner: Option<AgentStatus>,
+    fallback: ratatui::style::Style,
+) -> ratatui::style::Style {
+    owner.map_or(fallback, |status| {
+        status_style_at(ctx.theme, status, ctx.animation_phase)
+    })
+}
+
 fn worktree_tail(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,
@@ -407,6 +480,12 @@ fn worktree_tail(
     let group = visible_group.source();
     let collapses = group.collapses();
     let hidden = visible_group.hidden_count();
+    if inactive_folded(visible_group) && group.workflow.is_some() {
+        return [
+            Some(inactive_roster_line(ctx, visible_group, roster)),
+            inactive_totals_line(ctx, group),
+        ];
+    }
     if hidden > 0 && !visible_group.expanded() {
         return [
             Some(if inactive_folded(visible_group) {
@@ -483,6 +562,22 @@ fn inactive_roster_line(
         ),
         Span::raw(" "),
     ];
+    if let Some(run) = &group.workflow {
+        spans.push(Span::styled(
+            run.workflow.clone(),
+            ctx.theme
+                .styled(Component::WorkflowBadge, Modifier::empty()),
+        ));
+        spans.push(Span::styled(
+            format!("{}{}", value_seam(ctx.theme), run.current.name),
+            ctx.theme.muted(),
+        ));
+        spans.push(Span::styled(
+            format!(" {}", run.word),
+            workflow::word_style(ctx.theme, run),
+        ));
+        return pin_right(spans, cost_spans, content_width(ctx.width));
+    }
     if let Some(team) = team {
         spans.push(Span::styled(
             team.to_owned(),
@@ -658,11 +753,10 @@ fn group_header(
     //
     // A non-repo room's root pod is name-only: a plain directory has no fork
     // and no git story, so it drops the `⑂` prefix and pins nothing right.
-    let right = match group.kind {
+    let mut right = match group.kind {
         SidebarWorktreeKind::Root => Vec::new(),
-        _ => group_git_spans(theme, group),
+        _ => group_git_spans(theme, group, true),
     };
-    let right_width = spans_width(&right);
     let ci = group.ci.map(|ci| {
         let (role, component) = ci_marker(ci);
         Span::styled(
@@ -714,8 +808,30 @@ fn group_header(
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    let avail = cw.saturating_sub(right_width.saturating_add(1));
     let ci_width = ci.as_ref().map_or(0, Span::width);
+    if group.rows.is_empty() && group.workflow.is_some() && group.kind != SidebarWorktreeKind::Root
+    {
+        let identity = text_width(&full_label)
+            + ci_width
+            + group
+                .pr_number
+                .map_or(0, |number| text_width(&format!(" #{number}")));
+        let budget = cw.saturating_sub(identity + 1);
+        if spans_width(&right) > budget {
+            right = group_git_spans(theme, group, false);
+        }
+        if spans_width(&right) > budget {
+            right = group
+                .trunk
+                .as_deref()
+                .zip(trunk_marker(group))
+                .map_or_else(Vec::new, |(trunk, (role, component))| {
+                    trunk_glyph_spans(theme, role, trunk, component)
+                });
+        }
+    }
+    let right_width = spans_width(&right);
+    let avail = cw.saturating_sub(right_width.saturating_add(1));
     let badge_run = |members: &[(&str, u64, Option<&String>)]| {
         let mut run = String::new();
         let mut links = Vec::new();
@@ -835,12 +951,12 @@ fn group_header(
 /// collapses to the marker. Worktree-backed channels share this cluster and lead
 /// with the same fork/merge glyph as a worktree pod. Empty when no git facts
 /// reached this group or the group is the trunk worktree itself.
-fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
+fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup, churn: bool) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
-        return plain_git_spans(theme, group);
+        return plain_git_spans(theme, group, churn);
     };
     let Some((role, component)) = trunk_marker(group) else {
-        return plain_git_spans(theme, group);
+        return plain_git_spans(theme, group, churn);
     };
     // Diverged and reconciling worktrees carry the numeric work stats before the
     // marker; pristine, merged, and PR-clean worktrees collapse to the marker.
@@ -849,7 +965,7 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
         Some(WorktreeTrunkSync::Diverged | WorktreeTrunkSync::Reconciling)
     ) && component != Component::WorktreeMerged
     {
-        let mut spans = plain_git_spans(theme, group);
+        let mut spans = plain_git_spans(theme, group, churn);
         if !spans.is_empty() {
             spans.push(Span::raw("  "));
         }
@@ -859,7 +975,7 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
     trunk_glyph_spans(theme, role, trunk, component)
 }
 
-fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
+fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup, churn: bool) -> Vec<Span<'static>> {
     let mut spans = branch_delta_spans(
         theme,
         group.commits_ahead.unwrap_or(0),
@@ -868,7 +984,7 @@ fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
     let diff = group
         .diff_added
         .zip(group.diff_removed)
-        .filter(|(added, removed)| *added + *removed > 0);
+        .filter(|(added, removed)| churn && *added + *removed > 0);
     if let Some((added, removed)) = diff {
         if !spans.is_empty() {
             spans.push(Span::raw("  "));

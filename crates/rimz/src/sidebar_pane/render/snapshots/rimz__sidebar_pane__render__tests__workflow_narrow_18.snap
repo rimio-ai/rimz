@@ -1,0 +1,20 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine …
+
+  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0 ⑃ 1    $0.00
+ ────────────────
+
+ ⑂ … ✓ #91 ⇉ main
+   ◉ fix ×2 held
+
+
+
+ ────────────────
+  W: ◎ 0  ◇ $0.00
+  M: ◎ 0  ◇ $0.00
+
+       ? for help

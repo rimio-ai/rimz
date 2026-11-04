@@ -303,9 +303,15 @@ pub(super) fn search_line(
     let total: usize = snapshot
         .worktree_groups
         .iter()
-        .map(|group| group.rows.len())
+        .map(|group| group.rows.len().max(usize::from(group.workflow.is_some())))
         .sum();
-    let count = Span::styled(format!("{}/{total}", roster.len()), theme.muted());
+    let shown = roster.len()
+        + roster
+            .groups()
+            .iter()
+            .filter(|group| group.shown() && group.source().rows.is_empty())
+            .count();
+    let count = Span::styled(format!("{shown}/{total}"), theme.muted());
     let count = (!query.is_empty()
         && layout::spans_width(&left) + usize::from(typing) + 1 + count.width() <= inner)
         .then_some(count);

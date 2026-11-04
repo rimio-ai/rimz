@@ -681,7 +681,10 @@ fn render_line_ansi<W: Write>(
     };
     let mut ui = UiState::default();
     if height.is_none() {
-        view.inactive_peek = Some(Default::default());
+        view.inactive_peek = Some(ui_state::InactivePeek {
+            pages: std::num::NonZeroUsize::MAX,
+            ..Default::default()
+        });
         view.expanded_groups = snapshot
             .worktree_groups
             .iter()

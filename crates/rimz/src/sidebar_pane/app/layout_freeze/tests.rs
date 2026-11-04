@@ -3,6 +3,24 @@ use crate::sidebar::timing::LAYOUT_FREEZE;
 use crate::sidebar_pane::render::ViewState;
 
 #[test]
+fn rowless_workflow_fold_is_not_deferred_by_another_groups_hold() {
+    let previous = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(std::time::Duration::ZERO);
+    let mut current = previous.clone();
+    std::sync::Arc::make_mut(&mut current.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
+    assert!(!defer_inactive_admission(
+        &mut current,
+        &previous,
+        None,
+        &[],
+        true
+    ));
+    assert!(current.worktree_groups[0].inactive.is_some());
+}
+
+#[test]
 fn arrivals_append_within_the_agent_and_process_partitions() {
     let mut ui = ViewState::default();
     let mut current = snapshot_with_groups(vec![group(

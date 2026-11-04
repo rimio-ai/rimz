@@ -90,6 +90,7 @@ pub(super) fn defer_inactive_admission(
         .collect();
     let defer = |group: &SidebarWorktreeGroup| {
         group.inactive.is_some()
+            && !group.rows.is_empty()
             && previous
                 .worktree_groups
                 .iter()
