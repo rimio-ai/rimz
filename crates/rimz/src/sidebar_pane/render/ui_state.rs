@@ -7,6 +7,7 @@ use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use super::theme::Theme;
@@ -156,8 +157,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
-    /// Armed only by opening the inactive chip. The next draw reveals its first
-    /// newly shown receipt while keeping the chip visible, then consumes it.
+    /// Armed by either edge of the inactive toggle. The next draw reveals the
+    /// chip and its first newly shown receipt, if any, then consumes it.
     pub(in crate::sidebar_pane) inactive_reveal: bool,
     /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
@@ -211,8 +212,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
-    /// Visibility of inactive groups' receipts in this client view.
-    pub(in crate::sidebar_pane) inactive_open: bool,
+    /// Temporary pages of inactive groups' receipts in this client view.
+    pub(in crate::sidebar_pane) inactive_peek: Option<InactivePeek>,
     /// View-owned open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
     /// (open under selection or `expanded` density) in both directions, stays
@@ -226,6 +227,19 @@ pub(in crate::sidebar_pane) struct ViewState {
 }
 
 #[derive(Clone, Debug)]
+pub(in crate::sidebar_pane) struct InactivePeek {
+    pub(in crate::sidebar_pane) pages: NonZeroUsize,
+}
+
+impl Default for InactivePeek {
+    fn default() -> Self {
+        Self {
+            pages: NonZeroUsize::MIN,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct LayoutKey {
     rows: Vec<(String, isize)>,
     top_height: usize,
@@ -233,7 +247,7 @@ pub(in crate::sidebar_pane) struct LayoutKey {
     content_height: usize,
     scroll_max: usize,
     expanded_groups: BTreeSet<String>,
-    inactive_open: bool,
+    inactive_pages: Option<NonZeroUsize>,
     delegation_overrides: BTreeMap<String, bool>,
     delegation_history: BTreeMap<String, Option<Timestamp>>,
     dashboard_tab: Option<DashboardTab>,
@@ -251,7 +265,7 @@ impl LayoutKey {
             && self.content_height == frame.content_height
             && self.scroll_max == frame.scroll_max
             && self.expanded_groups == view.expanded_groups
-            && self.inactive_open == view.inactive_open
+            && self.inactive_pages == view.inactive_peek.as_ref().map(|peek| peek.pages)
             && self.delegation_overrides == view.delegation_overrides
             && self.delegation_history == view.delegation_history
             && self.dashboard_tab == view.dashboard_tab
@@ -312,7 +326,7 @@ impl ViewState {
             content_height: frame.content_height,
             scroll_max: frame.scroll_max,
             expanded_groups: self.expanded_groups.clone(),
-            inactive_open: self.inactive_open,
+            inactive_pages: self.inactive_peek.as_ref().map(|peek| peek.pages),
             delegation_overrides: self.delegation_overrides.clone(),
             delegation_history: self.delegation_history.clone(),
             dashboard_tab: self.dashboard_tab.clone(),

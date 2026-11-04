@@ -538,6 +538,16 @@ pub(super) fn handle_mouse_click(
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleInactive) => toggle_inactive(view, snapshot),
+        Some(HitTarget::MoreInactive) => {
+            let Some(peek) = &mut view.inactive_peek else {
+                return InputOutcome::default();
+            };
+            peek.pages = peek.pages.saturating_add(1);
+            anchor_selection(view, snapshot);
+            view.offset_authoritative = true;
+            view.scroll_ease.cancel();
+            InputOutcome::redraw()
+        }
         Some(HitTarget::ToggleDelegation { row, open }) => {
             set_delegation_open(view, snapshot, row, open);
             InputOutcome::redraw()
@@ -584,6 +594,7 @@ pub(super) fn click_focus_pane(
         | HitTarget::BodyFilter(_)
         | HitTarget::ToggleGroup(_)
         | HitTarget::ToggleInactive
+        | HitTarget::MoreInactive
         | HitTarget::UnreadBanner
         | HitTarget::FocusMarker
         | HitTarget::Hyperlink(_) => None,
@@ -635,9 +646,19 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
     InputOutcome::redraw()
 }
 
-fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
-    view.inactive_open = !view.inactive_open;
-    view.inactive_reveal = view.inactive_open;
+pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
+    if view.inactive_peek.take().is_some() {
+        for group in snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| group.inactive.is_some())
+        {
+            view.expanded_groups.remove(&group.key);
+        }
+    } else {
+        view.inactive_peek = Some(Default::default());
+    }
+    view.inactive_reveal = true;
     anchor_selection(view, snapshot);
     view.offset_authoritative = true;
     view.scroll_ease.cancel();

@@ -681,7 +681,7 @@ fn render_line_ansi<W: Write>(
     };
     let mut ui = UiState::default();
     if height.is_none() {
-        view.inactive_open = true;
+        view.inactive_peek = Some(Default::default());
         view.expanded_groups = snapshot
             .worktree_groups
             .iter()

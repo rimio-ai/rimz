@@ -179,7 +179,7 @@ fn paint_scrolled(source: &mut Rig, offset: usize) {
     source.view().ui().scroll_offset = offset;
     source.view().ui().offset_authoritative = true;
     source.view().ui().scroll_ease.cancel();
-    source.view().ui().inactive_open = true;
+    source.view().ui().inactive_peek = Some(Default::default());
     source.state.pane.dirty = true;
     paint_at(source, 0);
 }

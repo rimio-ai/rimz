@@ -413,7 +413,7 @@ fn render_pipeline_folded_stage() {
         &snapshot,
         None,
         &ViewState {
-            inactive_open: true,
+            inactive_peek: Some(Default::default()),
             ..Default::default()
         },
         &UiState::default(),
