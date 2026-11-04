@@ -17,6 +17,7 @@ use crate::address::{AddressContext, TargetErr};
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::effective::SmartCompactSeat;
 use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::harness::auto_continue::CardStatus;
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
@@ -287,6 +288,7 @@ pub fn dispatch(
                 &pending,
                 request.mode.gate(),
                 request.force,
+                &CardStatus::new(store),
             )
         });
     let mut snapshot = if rollup_only {
@@ -314,6 +316,7 @@ pub fn dispatch(
     let durable_agents = durable_target_agents(store)?;
     let resolution = ResolutionView {
         snapshot: &snapshot,
+        card_status: CardStatus::new(store),
         durable_agents: &durable_agents,
         scope: request.target_scope.as_deref(),
         channel: &request.current_channel,
@@ -390,6 +393,7 @@ pub fn dispatch(
         workspace,
         store,
         snapshot: &snapshot,
+        card_status: &resolution.card_status,
         pending: &pending,
         scope_channel: request.current_channel.channel.as_deref(),
         reply_wait: reply_preparation.is_some(),
@@ -498,6 +502,10 @@ fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
         .collect())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "target resolution carries its snapshot-local status reader"
+)]
 fn targets_all_park_without_live(
     snapshot: &SidebarSnapshot,
     raw: &str,
@@ -506,6 +514,7 @@ fn targets_all_park_without_live(
     pending: &[MessageRecord],
     gate: DeliveryGate,
     force: bool,
+    card_status: &CardStatus,
 ) -> bool {
     if crate::address::is_broadcast(raw) {
         return false;
@@ -514,9 +523,9 @@ fn targets_all_park_without_live(
         return false;
     };
     let now = Timestamp::now();
-    agents
-        .iter()
-        .all(|agent| !agent_needs_live_resolution(pending, agent, gate, force, now))
+    agents.iter().all(|agent| {
+        !agent_needs_live_resolution(pending, agent, gate, force, now, snapshot, card_status)
+    })
 }
 
 fn agent_needs_live_resolution(
@@ -525,11 +534,14 @@ fn agent_needs_live_resolution(
     gate: DeliveryGate,
     force: bool,
     now: Timestamp,
+    snapshot: &SidebarSnapshot,
+    card_status: &CardStatus,
 ) -> bool {
     agent.agent_id.is_provisional()
         || crate::agents::spec_by_kind(agent.kind.as_str())
             .is_some_and(|definition| definition.capabilities.registers_lazily)
-        || (deliver::receiver_readiness(agent, gate, force, now).accepts_prompt()
+        || (deliver::receiver_readiness(agent, gate, force, now, snapshot, card_status)
+            .accepts_prompt()
             && queue_head(
                 pending.iter(),
                 &agent.kind,
@@ -548,6 +560,7 @@ struct PreparedMode {
 
 struct ResolutionView<'a> {
     snapshot: &'a SidebarSnapshot,
+    card_status: CardStatus,
     durable_agents: &'a [AgentState],
     scope: Option<&'a str>,
     channel: &'a AddressContext,
@@ -783,6 +796,7 @@ fn resolve_after(
                 pending,
                 resolution.snapshot,
                 now,
+                &resolution.card_status,
             )
             .check
             .met
@@ -870,6 +884,7 @@ struct DispatchState<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
     snapshot: &'a SidebarSnapshot,
+    card_status: &'a CardStatus,
     pending: &'a [MessageRecord],
     scope_channel: Option<&'a str>,
     reply_wait: bool,
@@ -978,7 +993,16 @@ fn dispatch_targets(
     let now = Timestamp::now();
     let decisions = targets
         .iter()
-        .map(|target| dispatch_decision(state.snapshot, state.pending, target, mode, now))
+        .map(|target| {
+            dispatch_decision(
+                state.snapshot,
+                state.pending,
+                target,
+                mode,
+                now,
+                state.card_status,
+            )
+        })
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend::new(mode.draft.force, mode.kind);
     let mut preflighted_logins = BTreeSet::new();
@@ -1024,6 +1048,7 @@ fn dispatch_decision(
     target: &ResolvedTarget,
     mode: &PreparedMode,
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> DispatchDecision {
     if mode.resuming {
         return DispatchDecision::Parked { reason: None };
@@ -1072,7 +1097,14 @@ fn dispatch_decision(
         target.agent.as_ref()
     };
     if let Some(agent) = readiness_agent {
-        let readiness = deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now);
+        let readiness = deliver::receiver_readiness(
+            agent,
+            mode.draft.gate,
+            mode.draft.force,
+            now,
+            snapshot,
+            card_status,
+        );
         if !readiness.accepts_prompt() {
             let reason = if !readiness.waiting {
                 ParkReason::Status(readiness.status)

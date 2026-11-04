@@ -6481,6 +6481,79 @@ fn message_wait_ends_on_non_pausing_provider_error() {
 }
 
 #[test]
+fn sweep_delivers_any_but_not_done_on_a_spent_provider_pause() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let agent = ReplyAgentFixture::single(&env, "sweep-spent-pause");
+    agent.start(&env, "work");
+    seed_turn_error(
+        &env,
+        &agent.session_id,
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
+    let login = rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"));
+    env.publish_rate_limits(&rimz::agents::RateLimitsCache {
+        entries: [(
+            login.into(),
+            rimz::agents::RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(jiff::Timestamp::now() - Duration::from_secs(1)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+    let store = env.store();
+    let snapshot = store.snapshot().expect("snapshot");
+    let receiver = snapshot
+        .agents
+        .iter()
+        .find(|row| row.agent_id.as_str() == agent.session_id)
+        .expect("paused receiver");
+    let messages = [
+        (DeliveryGate::Any, "retry now"),
+        (DeliveryGate::Any, "and check the result"),
+        (DeliveryGate::Done, "only after success"),
+    ]
+    .map(|(gate, text)| {
+        let message = MessageRecord::new(env.workspace_id.clone(), receiver, text.to_owned(), gate);
+        store.queue_message(&message, "rimz-test").expect("queue");
+        message
+    });
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    run_success(
+        traced_rimz(&env, "zellij-sweep-spent-pause.log")
+            .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep spent pause",
+    );
+    let queue = store.list_messages().expect("messages");
+    let statuses = messages.map(|message| {
+        queue
+            .iter()
+            .find(|row| row.message_id == message.message_id)
+            .expect("message")
+            .status
+    });
+    assert_eq!(
+        statuses,
+        [
+            MessageStatus::Sent,
+            MessageStatus::Sent,
+            MessageStatus::Queued
+        ]
+    );
+}
+
+#[test]
 fn message_wait_ends_on_spent_provider_pause() {
     let env = Env::new();
     env.record(&env.project_root);

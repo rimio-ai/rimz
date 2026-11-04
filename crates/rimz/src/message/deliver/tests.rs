@@ -1,5 +1,183 @@
 use super::*;
 
+fn explain(
+    message: &MessageRecord,
+    pending: &[MessageRecord],
+    snapshot: &SidebarSnapshot,
+    now: Timestamp,
+) -> DeliveryCheck {
+    super::explain(
+        message,
+        pending,
+        snapshot,
+        now,
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    )
+}
+
+fn delivery_candidate<'a>(
+    pending: &[MessageRecord],
+    snapshot: &'a SidebarSnapshot,
+    message_id: &MessageId,
+    policy: DeliveryPolicy,
+    now: Timestamp,
+) -> Candidacy<'a> {
+    super::delivery_candidate(
+        pending,
+        snapshot,
+        message_id,
+        policy,
+        now,
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    )
+}
+
+fn receiver_readiness(
+    agent: &AgentState,
+    gate: DeliveryGate,
+    force: bool,
+    now: Timestamp,
+) -> ReceiverReadiness {
+    super::receiver_readiness(
+        agent,
+        gate,
+        force,
+        now,
+        &snapshot(agent.clone(), false, now),
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    )
+}
+
+fn spent_receiver(now: Timestamp) -> (AgentState, CardStatus) {
+    let mut receiver = agent("spent", AgentStatus::Running);
+    receiver.last_activity = now - Duration::from_secs(1);
+    receiver.context = Some(crate::agents::AgentContext {
+        turn_error: Some(crate::agents::AgentTurnError {
+            ended_turn: false,
+            class: crate::agents::TurnErrorClass::PausedRateLimit,
+            at: now,
+            label: None,
+        }),
+        ..crate::agents::AgentContext::new("claude", now)
+    });
+    let exhausted = [(receiver.kind.clone(), receiver.agent_id.clone())].into();
+    let reader = CardStatus::from_demotion(crate::agents::ParkDemotion::new(
+        &Default::default(),
+        exhausted,
+        now,
+    ));
+    (receiver, reader)
+}
+
+#[test]
+fn explain_reports_a_spent_pause_as_failed_but_resume_as_paused() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let (receiver, reader) = spent_receiver(now);
+    let live = snapshot(receiver.clone(), true, now);
+    let observed = [DeliveryGate::Any, DeliveryGate::Done, DeliveryGate::Resume].map(|gate| {
+        let mut candidate = message(&receiver, 1, "retry");
+        candidate.gate = gate;
+        let check = super::explain(
+            &candidate,
+            std::slice::from_ref(&candidate),
+            &live,
+            now,
+            &reader,
+        );
+        (check.gate.status, check.gate.open)
+    });
+    assert_eq!(
+        observed,
+        [
+            (Some(AgentStatus::Failed), true),
+            (Some(AgentStatus::Failed), false),
+            (Some(AgentStatus::Paused), true)
+        ]
+    );
+}
+
+#[test]
+fn after_a_spent_pause_requires_any_and_an_empty_due_queue() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let (receiver, reader) = spent_receiver(now);
+    let live = snapshot(receiver.clone(), true, now);
+    let condition = AfterCondition {
+        kind: receiver.kind.clone(),
+        agent_id: receiver.agent_id.clone(),
+        agent_name: receiver.name.clone(),
+        address: "@spent".into(),
+        met_at: None,
+    };
+    let due = message(&receiver, 1, "upstream work");
+    let observed = [
+        (DeliveryGate::Any, &[][..]),
+        (DeliveryGate::Done, &[][..]),
+        (DeliveryGate::Any, std::slice::from_ref(&due)),
+    ]
+    .map(|(gate, pending)| {
+        let check = evaluate_after_condition(&condition, gate, pending, &live, now, &reader).check;
+        (check.status, check.met)
+    });
+    assert_eq!(
+        observed,
+        [
+            (Some(AgentStatus::Failed), true),
+            (Some(AgentStatus::Failed), false),
+            (Some(AgentStatus::Failed), false)
+        ]
+    );
+}
+
+#[test]
+fn spent_pause_candidate_carries_failed_into_batch_claims() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let (receiver, reader) = spent_receiver(now);
+    let live = snapshot(receiver.clone(), true, now);
+    let mut candidate = message(&receiver, 1, "retry");
+    candidate.gate = DeliveryGate::Any;
+    let status = match super::delivery_candidate(
+        std::slice::from_ref(&candidate),
+        &live,
+        &candidate.message_id,
+        DeliveryPolicy::Boundary,
+        now,
+        &reader,
+    ) {
+        Candidacy::Ready(candidate) => Some(candidate.status),
+        Candidacy::Refused(_) | Candidacy::Gone => None,
+    };
+    assert_eq!(status, Some(AgentStatus::Failed));
+}
+
+#[test]
+fn delivery_without_a_provider_pause_builds_no_evidence() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("session", AgentStatus::Idle);
+    let live = snapshot(receiver.clone(), true, now);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(
+        crate::StatePaths::under(workspace_id(), dir.path()).unwrap(),
+        RuntimePaths::under(workspace_id(), dir.path()).unwrap(),
+    )
+    .unwrap();
+    let reader = CardStatus::new(&store);
+    let candidate = message(&receiver, 1, "hello");
+    let pending = std::slice::from_ref(&candidate);
+    assert!(super::explain(&candidate, pending, &live, now, &reader).passes());
+    assert!(matches!(
+        super::delivery_candidate(
+            pending,
+            &live,
+            &candidate.message_id,
+            DeliveryPolicy::Boundary,
+            now,
+            &reader
+        ),
+        Candidacy::Ready(_)
+    ));
+    assert!(!reader.evidence_built());
+}
+
 #[test]
 fn failed_idle_compaction_check_names_its_claim_release_reason() {
     let receiver = agent("session", AgentStatus::Idle);

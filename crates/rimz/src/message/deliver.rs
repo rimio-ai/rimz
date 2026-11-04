@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::agents::{AgentState, AgentStatus};
+use crate::harness::auto_continue::CardStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
 use crate::store::message::{
@@ -82,11 +83,13 @@ pub(super) fn receiver_readiness(
     gate: DeliveryGate,
     force: bool,
     now: Timestamp,
+    snapshot: &SidebarSnapshot,
+    card_status: &CardStatus,
 ) -> ReceiverReadiness {
     ReceiverReadiness {
-        status: agent.effective_status(now),
+        status: super::gate_status(gate, agent, now, snapshot, card_status),
         compacting: agent.is_compacting(now),
-        gate_open: gate_open_for_agent(gate, agent, force, now),
+        gate_open: gate_open_for_agent(gate, agent, force, now, snapshot, card_status),
         waiting: !force && agent.is_awaiting_input(),
     }
 }
@@ -319,7 +322,15 @@ pub fn deliver_one_report(
             ),
         )?;
     }
-    attempt_delivery(workspace, store, message_id, policy, &live, &snapshot)
+    attempt_delivery(
+        workspace,
+        store,
+        message_id,
+        policy,
+        &live,
+        &snapshot,
+        &CardStatus::new(store),
+    )
 }
 
 fn attempt_delivery(
@@ -329,6 +340,7 @@ fn attempt_delivery(
     policy: DeliveryPolicy,
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
+    card_status: &CardStatus,
 ) -> Result<DeliveryReport> {
     if let Some(message) = pending
         .iter()
@@ -348,11 +360,12 @@ fn attempt_delivery(
         }
     }
     let now = Timestamp::now();
-    let candidate = match delivery_candidate(pending, snapshot, message_id, policy, now) {
-        Candidacy::Ready(candidate) => candidate,
-        Candidacy::Refused(verdict) => return Ok(DeliveryReport::Refused(verdict)),
-        Candidacy::Gone => return Ok(DeliveryReport::Stopped),
-    };
+    let candidate =
+        match delivery_candidate(pending, snapshot, message_id, policy, now, card_status) {
+            Candidacy::Ready(candidate) => candidate,
+            Candidacy::Refused(verdict) => return Ok(DeliveryReport::Refused(verdict)),
+            Candidacy::Gone => return Ok(DeliveryReport::Stopped),
+        };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
     let claimed = match policy {
@@ -694,6 +707,7 @@ pub fn sweep(
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT");
+    let card_status = CardStatus::new(store);
     if live
         .iter()
         .any(|message| message.status == MessageStatus::Queued && !message.conditions_met())
@@ -701,7 +715,7 @@ pub fn sweep(
         let snapshot = snapshot
             .as_ref()
             .expect("unmet delivery conditions require a resolution snapshot");
-        evaluate_delivery_conditions(workspace, store, snapshot, &live, now)?;
+        evaluate_delivery_conditions(workspace, store, snapshot, &live, now, &card_status)?;
     }
     let pending = store.list_pending_messages()?;
     let snapshot = snapshot.as_ref();
@@ -732,6 +746,7 @@ pub fn sweep(
                     DeliveryPolicy::Boundary,
                     &pending,
                     snapshot,
+                    &card_status,
                 )?
             };
             let verdict = match report {
@@ -816,13 +831,14 @@ fn evaluate_delivery_conditions(
     snapshot: &SidebarSnapshot,
     pending: &[MessageRecord],
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> Result<()> {
     let mut updates = Vec::new();
     for message in pending
         .iter()
         .filter(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
-        let evaluation = evaluate_delivery(message, pending, snapshot, now);
+        let evaluation = evaluate_delivery(message, pending, snapshot, now, card_status);
         updates.push(crate::store::writer::DeliverySweepUpdate {
             message_id: message.message_id.clone(),
             after_indices: evaluation.after_stamps,
@@ -1076,7 +1092,6 @@ pub(super) struct WhenEvaluation {
 
 struct DeliveryEvaluation<'a> {
     check: DeliveryCheck,
-    agent: Option<&'a crate::agents::AgentState>,
     binding: Option<crate::address::PaneBinding<'a, 'a>>,
     after_stamps: Vec<usize>,
     when_stamps: Vec<usize>,
@@ -1089,8 +1104,9 @@ pub fn explain(
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> DeliveryCheck {
-    evaluate_delivery(message, pending, snapshot, now).check
+    evaluate_delivery(message, pending, snapshot, now, card_status).check
 }
 
 fn evaluate_delivery<'a>(
@@ -1098,6 +1114,7 @@ fn evaluate_delivery<'a>(
     pending: &[MessageRecord],
     snapshot: &'a SidebarSnapshot,
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> DeliveryEvaluation<'a> {
     let delivery_window = MessageBody::Prompt.delivery_window();
     let schedule = ScheduleCheck {
@@ -1108,7 +1125,9 @@ fn evaluate_delivery<'a>(
     let after = message
         .after
         .iter()
-        .map(|condition| evaluate_after_condition(condition, message.gate, pending, snapshot, now))
+        .map(|condition| {
+            evaluate_after_condition(condition, message.gate, pending, snapshot, now, card_status)
+        })
         .collect::<Vec<_>>();
     let after_ready = after.iter().all(|condition| condition.check.met);
     let when = message
@@ -1140,7 +1159,16 @@ fn evaluate_delivery<'a>(
         .agents
         .iter()
         .find(|agent| message.same_agent_card(agent));
-    let readiness = agent.map(|agent| receiver_readiness(agent, message.gate, message.force, now));
+    let readiness = agent.map(|agent| {
+        receiver_readiness(
+            agent,
+            message.gate,
+            message.force,
+            now,
+            snapshot,
+            card_status,
+        )
+    });
     let status = readiness.map(|readiness| readiness.status);
     let compacting = readiness.is_some_and(|readiness| readiness.compacting);
     let open = readiness.is_some_and(|readiness| readiness.gate_open);
@@ -1222,7 +1250,6 @@ fn evaluate_delivery<'a>(
     };
     DeliveryEvaluation {
         check,
-        agent,
         binding,
         after_stamps,
         when_stamps,
@@ -1301,6 +1328,7 @@ pub(super) fn evaluate_after_condition(
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> AfterEvaluation {
     let agent = snapshot
         .agents
@@ -1308,7 +1336,7 @@ pub(super) fn evaluate_after_condition(
         .find(|agent| condition.card_ref().matches(agent.card_ref()));
     let met = condition.met_at.is_some()
         || agent.is_some_and(|agent| {
-            gate_open_for_agent(gate, agent, false, now)
+            gate_open_for_agent(gate, agent, false, now, snapshot, card_status)
                 && !pending.iter().any(|message| {
                     !message.status.is_terminal()
                         && message.is_ready(now)
@@ -1321,7 +1349,7 @@ pub(super) fn evaluate_after_condition(
             met,
             met_at: condition.met_at,
             agent_present: agent.is_some(),
-            status: agent.map(|agent| agent.effective_status(now)),
+            status: agent.map(|agent| super::gate_status(gate, agent, now, snapshot, card_status)),
         },
         stamp_needed: condition.met_at.is_none() && met,
     }
@@ -1339,6 +1367,7 @@ fn delivery_candidate<'a>(
     message_id: &MessageId,
     policy: DeliveryPolicy,
     now: Timestamp,
+    card_status: &CardStatus,
 ) -> Candidacy<'a> {
     let Some(message) = pending
         .iter()
@@ -1347,7 +1376,7 @@ fn delivery_candidate<'a>(
     else {
         return Candidacy::Gone;
     };
-    let evaluation = evaluate_delivery(&message, pending, snapshot, now);
+    let evaluation = evaluate_delivery(&message, pending, snapshot, now, card_status);
     let check = &evaluation.check;
     if message.expired(now)
         || (matches!(policy, DeliveryPolicy::Boundary)
@@ -1363,10 +1392,9 @@ fn delivery_candidate<'a>(
     {
         return Candidacy::Refused(check.verdict());
     }
-    let (Some(agent), Some(binding)) = (evaluation.agent, evaluation.binding) else {
+    let (Some(status), Some(binding)) = (check.gate.status, evaluation.binding) else {
         return Candidacy::Refused(check.verdict());
     };
-    let status = agent.effective_status(now);
     let target = binding.pane;
     let bound = binding.exact_agent;
     Candidacy::Ready(Box::new(DeliveryCandidate {

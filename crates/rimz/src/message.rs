@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
+use crate::harness::auto_continue::CardStatus;
+use crate::store::snapshot::SidebarSnapshot;
+
 pub mod compact;
 pub mod deliver;
 pub mod dispatch;
@@ -282,10 +285,25 @@ fn gate_open_for_agent(
     agent: &AgentState,
     force: bool,
     now: Timestamp,
+    snapshot: &SidebarSnapshot,
+    card_status: &CardStatus,
 ) -> bool {
     !agent.is_compacting(now)
-        && (gate_open(gate, agent.effective_status(now))
+        && (gate_open(gate, gate_status(gate, agent, now, snapshot, card_status))
             || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input()))
+}
+
+fn gate_status(
+    gate: DeliveryGate,
+    agent: &AgentState,
+    now: Timestamp,
+    snapshot: &SidebarSnapshot,
+    card_status: &CardStatus,
+) -> AgentStatus {
+    match gate {
+        DeliveryGate::Done | DeliveryGate::Any => card_status.status(snapshot, agent, now),
+        DeliveryGate::Resume => agent.effective_status(now),
+    }
 }
 
 pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
