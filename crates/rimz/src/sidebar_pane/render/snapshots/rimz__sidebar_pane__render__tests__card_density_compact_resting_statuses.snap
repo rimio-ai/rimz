@@ -15,14 +15,14 @@ expression: screen
    ▣ ━━━━━━━━━━━━╺━━───────────────────── 42.0%
  ! failed · opus · high · 200k
    failed task
+ ○ idlebot · opus · high
+ ⣾ runner · opus · high · 200k
+   running task
+   ▣ ━━━━━━━━━━━╺━━────────────────────── 38.0%
  ⏸︎ paused · opus · high · 200k
    paused task
  ✓ done · opus · high · 200k
    done task
- ⣾ runner · opus · high · 200k
-   running task
-   ▣ ━━━━━━━━━━━╺━━────────────────────── 38.0%
- ○ idlebot · opus · high
 
 ▎⑂ other ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌○ selector · opus · high                            ▐

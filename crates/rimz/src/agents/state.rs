@@ -396,8 +396,8 @@ impl AgentStatus {
 
     /// Attention-class: a human may want this row. `Waiting` and `Failed` are
     /// actionable; `Paused` is attention-class but parked. The
-    /// producer's ranking buckets use the full set; the renderer's
-    /// triage key and heat-breath use the actionable subset
+    /// group inactivity rule uses the full set; in-group ranking, the triage
+    /// key and heat-breath use the actionable subset
     /// ([`Self::is_actionable`]). Dispatch sites delegate to these predicates
     /// rather than re-matching the enum.
     pub fn is_attention(self) -> bool {

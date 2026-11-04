@@ -287,6 +287,7 @@ impl Column {
         if matches!(self.surface, Surface::Text) {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
         }
+        crate::sidebar::attention::reconcile_snapshot(&self.runtime, &mut snapshot);
         reconcile_snapshot(&self.runtime, &mut snapshot);
         let mut views = self.state.views.registry.lock();
         views.publish(

@@ -1008,8 +1008,9 @@ fn enrich_core(
         &logins,
     );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
-    // Git facts and late unread bits land after the pane fold's initial sort,
-    // so publish the spine once both ranking inputs are present.
+    super::attention::AttentionStamps::load(runtime).derive(&mut snapshot);
+    // Late git, unread and attention facts land after the pane fold's initial
+    // sort, so publish the spine once all presentation inputs are present.
     snapshot.sort_groups_for_presentation();
     snapshot
 }

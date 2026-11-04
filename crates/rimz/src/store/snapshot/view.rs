@@ -95,7 +95,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 73;
+pub const SNAPSHOT_VERSION: u32 = 74;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -541,9 +541,9 @@ impl SidebarSnapshot {
         self.attention = config.agents.attention;
     }
 
-    /// Re-sort the already-built worktree groups after a renderer-local
-    /// presentation flag such as `SidebarRow::unread` changes. This preserves
-    /// the producer's row cap and status counts; it only changes visible order.
+    /// Re-sort built groups after late attention stamps or group-inactivity
+    /// inputs land. Unread affects group inactivity, not row rank. This preserves
+    /// the producer's row cap and status counts.
     pub fn sort_groups_for_presentation(&mut self) {
         layout::sort_groups_for_presentation(
             &mut self.worktree_groups,

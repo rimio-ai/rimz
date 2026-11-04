@@ -1034,13 +1034,16 @@ impl FetchWorker {
         source: SnapshotSource,
         sink: &mut ResultSink,
     ) {
+        let final_snapshot = phase == FetchPhase::Final;
+        if final_snapshot {
+            crate::sidebar::attention::reconcile_snapshot(&self.runtime, &mut fold.workspace.0);
+        }
         sink.context = Some(Arc::new(FoldShared {
             observation: self.observer.as_mut().map(|observer| {
                 observer.extract(fold.workspace.snapshot(), sink.cycle[0].instance_id.clone())
             }),
             inputs: sink.inputs.clone(),
         }));
-        let final_snapshot = phase == FetchPhase::Final;
         let roster = (final_snapshot && source == SnapshotSource::Produced)
             .then(|| crate::sidebar::produce::live_roster_from_snapshot(fold.workspace.snapshot()));
         let mut deliveries = if final_snapshot {

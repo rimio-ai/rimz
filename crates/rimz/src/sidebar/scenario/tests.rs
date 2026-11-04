@@ -176,33 +176,18 @@ fn model_folds_verbs_children_countdown_and_real_attention_scoring() {
         Some("ship it?")
     );
     assert!(first.attention_score > 0);
-    assert_eq!(
-        scenario
-            .at(Duration::from_secs(9))
+    for (secs, status) in [
+        (9, AgentStatus::Running),
+        (10, AgentStatus::Failed),
+        (11, AgentStatus::Success),
+    ] {
+        let snapshot = scenario.at(Duration::from_secs(secs));
+        let coder = snapshot
             .rows()
-            .next()
-            .unwrap()
-            .status(),
-        Some(AgentStatus::Running)
-    );
-    assert_eq!(
-        scenario
-            .at(Duration::from_secs(10))
-            .rows()
-            .next()
-            .unwrap()
-            .status(),
-        Some(AgentStatus::Failed)
-    );
-    assert_eq!(
-        scenario
-            .at(Duration::from_secs(11))
-            .rows()
-            .next()
-            .unwrap()
-            .status(),
-        Some(AgentStatus::Success)
-    );
+            .find(|row| row.as_agent().unwrap().handle.as_deref() == Some("coder"))
+            .unwrap();
+        assert_eq!(coder.status(), Some(status), "at {secs}s");
+    }
     assert_eq!(scenario.at(Duration::from_secs(13)).rows().count(), 1);
     assert_eq!(scenario.at(Duration::from_secs(4)), waiting, "seek is pure");
     assert_eq!(

@@ -325,11 +325,12 @@ Unpainted views do no work. Hidden resize alone changes no view and neither gran
 
 Production and published-cache reads run one ordered spine in [`enrich.rs`](../../../crates/rimz/src/sidebar/enrich.rs), so the two paths cannot drift. It forks no subprocess and writes no cache file: it projects what is already on disk.
 
-`enrich_workspace` is the renderer-independent half. Its order matters in three places:
+`enrich_workspace` is the renderer-independent half. Its order matters in four places:
 
 - Adapter wiring is set before any pane-backed projection, because wiring gates idle-agent synthesis.
 - Activity sidecars land before the pane overlay, so row age, ranking, waiting guards, and the stall window see the per-tool timestamp instead of the coarser turn-grained event time. The same record carries the open run of identical tool-name-and-argument signatures. A different tool or any other progress event clears it, and adapters without structured tool input leave detection off.
 - The pane overlay admits the cards. Everything after it (process metrics, provider panels, git and PR facts, spend tallies, group labels, the presentation sort) enriches only panes the frame already holds.
+- Attention stamps derive after displayed-status and stuck-stage projection, before the final presentation sort. Read receipts and unread state never write that record.
 
 The same half stamps two group fields that the CLI and the sidebar both render. `SidebarWorktreeGroup.team` is the unique non-empty team among the group's rows (`cohort_team`): rows without a team are ignored, and two distinct teams leave it empty. `SidebarWorktreeGroup.label_qualifier` is set, after cached git facts finalize branch labels, only on groups whose labels collide, as the shortest trailing path suffix that tells them apart (`disambiguate_group_labels`).
 
@@ -363,6 +364,14 @@ The board's ledger becomes stage visits. The parser folds parseable ledger entri
 - `clock_running` requires either start stamp and a position outside `Done`.
 
 Every shared fast fold reads the pipeline cache, so a changed board publication reaches all panes without an adoption or skip memo.
+
+### Attention stamps
+
+`lanes/attention.json` is the sidebar-owned runtime ordering record, version `rimz.attention.v1`: `cards` maps a launch id (or the row id without a launch) to `{ "zone": "top" | "calm", "at_ms": <milliseconds> }`. The host fetch worker is its only writer, on final folds carrying a pane frame, cached or produced. Reconciliation reads displayed `attention_status()` after stall, permission-review, stuck-stage and child projections, before `observer.extract` and publication, then derives stamps and re-sorts that same fold. The observer explains order changes by zone, band and stamp, not by calm status churn.
+
+First sighting records the card's birth (`registered_at`), falling back to that snapshot's `now`. Only a top↔calm crossing restamps, at the first host reconciliation that sees it; neither unread nor read marks enter the calculation. `/clear`, linked compaction and resumed sessions keep the launch key. A fresh launch gets a fresh key. Entries absent from current rows remain until their stamp is strictly older than the shared fourteen-day retention, so a recently ended card can resume without losing its order. Frameless folds neither open, restamp nor prune entries.
+
+Enrichment reads the record on every fold and copies the stamp onto each agent card before presentation sorting. A card whose displayed zone differs from its entry, or that has no entry, gets the stamp the next reconciliation would record (the fold's `now`, or its birth) without a write, so an interim publication, a published-cache reader and the CLI roster rank it as the following final fold will (`crates/rimz/src/sidebar/attention.rs::AttentionStamps::derive`). Missing, unreadable, malformed or wrong-version records are a silent cold start at birth stamps, including after runtime teardown or reboot. Writes use the cache temp-then-rename helper. Hosts for different mux sessions may race, as for unread episodes; a lost crossing is reconciled again on the next fold. The store rollup is unchanged.
 
 ## Published lanes
 
@@ -527,6 +536,7 @@ Unless marked, these live in the workspace runtime directory.
 | `sock/host.<digest>.wake.sock` | The host's room datagram socket, named by a digest of mux and session to fit the AF_UNIX path limit. Every attachment's heartbeat names this same address. |
 | `lanes/focus-anchor.json` | The durable jump intent, optional card placement, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes and the room's locked, max-updated read marks. |
+| `lanes/attention.json` | Launch-keyed attention-zone stamps, reconciled by the host on final framed folds ([attention stamps](#attention-stamps)). |
 | `lanes/loop-fire.json` | The host's loop-task arm and fire stamps for this room. |
 | `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
 | `lanes/sidebar-width.json` | The room-runtime sidebar width the renderers settled on. |

@@ -196,7 +196,7 @@ RimZ also derives states rather than waiting for an agent to report one.
 
 **Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (30 minutes by default), including any native or [launched child](./subagents.md#deadlines-stopping-and-cleanup), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. The same stall window covers a launched child given a task whose first turn has not started. A parent quietly waiting on its subagents is exempt from the stall check while a child is still displayed as working. A stalled native child also lifts the parent card's attention because it has no pane of its own. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
 
-**Sleeping** means a resting agent awaits a timer, signal, condition, or file change, including through a child. Its card wears a static cool-toned moon and a description such as `wakes in 12m`. A [one-shot wait](./loops.md#wake-a-running-agent) for a PID, command, check, unfinished team, or working child instead keeps the card working, as does a listed background shell. After the turn ends, that card shows the waiting head, still counted as working in the cockpit. A child resting on another wait follows that chain. A settled child's report does not keep work in flight. Sleeping cards rank below running and above idle; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
+**Sleeping** means a resting agent awaits a timer, signal, condition, or file change, including through a child. Its card wears a static cool-toned moon and a description such as `wakes in 12m`. A [one-shot wait](./loops.md#wake-a-running-agent) for a PID, command, check, unfinished team, or working child instead keeps the card working, as does a listed background shell. After the turn ends, that card shows the waiting head, still counted as working in the cockpit. A child resting on another wait follows that chain. A settled child's report does not keep work in flight. Sleeping cards share the calm bands with running and idle cards; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
 
 Working, waiting, failed, paused, and waiting on live subagents all take precedence over sleep, and a standing subscription does not make an agent sleep. You can message a sleeping agent now without canceling its future wait. Its last result can still be unread, but sleeping itself needs no answer and sends no notification.
 
@@ -228,24 +228,21 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 ### What outranks what
 
-Every row carries a weight from its state, and time scales it. By weight, heaviest first:
+Inside a group, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
 
-1. Asks (`?`) and failures (`!`) are blocked on you, and together they are your work queue. Every minute an ask waits idles a loaded context, a whole team's when the asker leads one, so they carry the most weight, climb for the first hour, then hold at the top until answered or the agent stops.
-2. A parked card (`⏸`) is blocked on the provider rather than on you. There is nothing to answer until the limit recovers, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, nothing to do at all.
-3. A `done` card has delivered and waits on your verdict, so it leads the calm cards in its line of work: your review queue. That queue rots while it waits, because the trunk moves on and the group header's behind count (`⇣`) climbs, so the header tells you when a delivered branch is getting more expensive to land.
-4. A running card is in flight and healthy. It needs nothing and wants a stable position so your eyes can track it, so it keeps a flat weight and holds its place, with live cost and last-activity age as the cheap progress cues.
-5. An idle card is spare capacity, relevant only when you have work to hand out. It reads last, and a freshly launched agent appends at the bottom instead of reshuffling the list.
-6. Inactive lines of work follow the active groups. A landed group folds after an hour without a launch or prompt; an unlanded one after a day, only when it has no unread rows. Running work, asks, failures and parks keep a group out of the fold.
+Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards. They sort in hot, cooling, then archived bands, newest first inside each band. A new card lands at the top of the calm cards. Answering an ask or recovering from a failure puts that card at the top of the calm cards too.
 
-Within one group these are weights rather than fixed tiers, and time scales them, so an hour-old park can outrank an ask from a minute ago. Between groups, any project group holding an ask or failure leads, ranked by urgency. The main checkout's group stays directly below those groups, including when it holds only a shell. With its own ask or failure it ranks among the actionable groups instead. A named channel merely called `main` gets no pin. The remaining active groups sort by their newest agent's launch, newest first, whether working, idle or parked.
+Within a band, prompts, clean finishes, entering or leaving a provider pause, and read receipts do not reshuffle calm cards. A second ask, or a question becoming a failure, keeps its place among the attention cards. Read state affects emphasis and the jump inbox, not this order.
+
+Between groups, any project group holding an ask or failure leads, ranked by urgency. The main checkout's group stays directly below those groups, including when it holds only a shell. With its own ask or failure it ranks among the actionable groups instead. A named channel merely called `main` gets no pin. The remaining active groups sort by their newest agent's launch, newest first, whether working, idle or parked.
 
 ### Time reshapes the order
 
 Within a group, time is measured from each card's last activity, in three windows. These bands do not order groups.
 
-1. **Inside the first hour, blocked work climbs.** An ask, failure, or park grows more urgent the longer it waits, so blocked work reads roughly oldest-first, the cheapest order to clear, and a failure overdue fifty minutes outranks an ask from two minutes ago. Calm work keeps a flat weight, so live agents hold their place while they run. The hour is the default because a prompt after that much quiet usually re-reads the whole context uncached: answer inside it and the agent resumes warm.
-2. **Between one hour and twenty-four, calm and parked cards cool.** Their weight decays with age instead of climbing, and the whole window sinks beneath anything currently hot. Recency starts to matter more than state here.
-3. **Past twenty-four hours, a calm or parked card archives.** It parks at the back, keeping only its state order. This band is about age; it is unrelated to an agent sleeping on a wait.
+1. **Inside the first hour, calm and parked cards stay hot.** Their order stays newest first; time alone does not reshuffle them inside the band.
+2. **Between one hour and twenty-four, calm and parked cards cool.** They sink below hot calm cards, still newest first within the cooling band.
+3. **Past twenty-four hours, a calm or parked card archives.** It parks at the back, still newest first within that band. This band is about age; it is unrelated to an agent sleeping on a wait.
 
 Asks and failures are exempt from cooling and archiving while the agent is alive: an unanswered question still leads fresh running or idle work tomorrow.
 
@@ -253,7 +250,7 @@ A group's fold clock instead measures launches and prompts, including delivered 
 
 ### Teams read as one
 
-A co-launched team is one line of work, so it holds one contiguous block. The block takes its state from its members, first match winning: any member asking or failed makes it **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it ranks with **idle**. Sleeping members count as calm rest here. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing. The block ranks on its heaviest blocked member and stays contiguous, so teammates sit side by side in their declared role order. The [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) tells **sleeping** apart from working and idle, and a pending one-shot wait keeps a team from emitting `team.idle`.
+A co-launched team's cards share one birth instant and start in launch layout order, including roleless cells. Each card then follows its own attention history: a teammate asking or failing moves only that card into the attention zone, not the whole team. Existing cohorts keep their stored role-order ties until relaunched. The make-up line still counts a team as one unit, and the [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) still reports the team's combined state. A pending one-shot wait keeps a team from emitting `team.idle`.
 
 ### Newest groups first
 

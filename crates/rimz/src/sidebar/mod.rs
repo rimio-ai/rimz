@@ -5,6 +5,7 @@
 //! One room host owns the data plane and paints every subscribed pane.
 //!
 pub mod agent_projection;
+pub(crate) mod attention;
 pub(crate) mod body_filter;
 pub mod cache;
 pub mod consumer;
