@@ -565,10 +565,13 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
     /// The session's registration instant, copied from
-    /// `AgentState.registered_at`. Dates first cost and newest-first groups;
-    /// row ordering still keys on pane creation.
+    /// `AgentState.registered_at`. Dates first cost and newest-first groups,
+    /// and seeds row ordering until an attention-zone crossing is observed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+    /// Birth or the last displayed crossing between actionable and calm zones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_at_ms: Option<i64>,
     /// Latest launch or non-keepalive prompt, the group's quiet-clock input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engaged_at: Option<Timestamp>,
@@ -663,6 +666,7 @@ impl Default for AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: None,
+            attention_at_ms: None,
             engaged_at: None,
             own_last_activity: None,
             cache: None,
@@ -753,6 +757,7 @@ impl AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: agent.registered_at,
+            attention_at_ms: None,
             engaged_at: agent.registered_at.max(agent.last_prompt_at),
             own_last_activity: None,
             cache: None,

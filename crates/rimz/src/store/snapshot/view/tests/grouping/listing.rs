@@ -275,7 +275,7 @@ fn listing_roster_folds_unstamped_rimz_worktree_agents_into_channel_pod() {
 }
 
 #[test]
-fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
+fn listing_roster_mirrors_individual_zone_order_and_group_attention_rank() {
     let mut first = agent("claude", "cohort-first", AgentStatus::Success, 30).worktree("/repo/a");
     first.launch_group = Some("launch_group_1".to_owned());
     first.launch_ordinal = Some(0);
@@ -293,12 +293,12 @@ fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
 
     assert_eq!(
         groups[0].label, "a",
-        "the waiting cohort member still lifts its group even when block order keeps it below a calm teammate"
+        "the waiting member still lifts its group"
     );
     let order = groups[0]
         .agents
         .iter()
         .map(|agent| agent.agent_id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["cohort-first", "cohort-second"]);
+    assert_eq!(order, vec!["cohort-second", "cohort-first"]);
 }

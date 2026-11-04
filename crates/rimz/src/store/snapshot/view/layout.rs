@@ -267,11 +267,10 @@ pub(super) fn sort_groups_for_presentation(
 ) {
     for index in 0..groups.len() {
         let group = &groups[index];
-        let cohorts = rank_cohort_blocks(group.rows.iter().map(row_rank_facts));
         let rows_sorted = group
             .rows
             .iter()
-            .is_sorted_by_key(|row| rank_key(row_rank_facts(row), &cohorts));
+            .is_sorted_by_key(|row| rank_key(row_rank_facts(row)));
         let inactive = group_inactive(group, now, windows);
         if rows_sorted && group.inactive == inactive {
             continue;
@@ -295,8 +294,7 @@ pub(super) fn sort_presented_groups(groups: &mut Arc<Vec<SidebarWorktreeGroup>>)
 }
 
 pub(super) fn sort_rows(rows: &mut [SidebarRow]) {
-    let cohorts = rank_cohort_blocks(rows.iter().map(row_rank_facts));
-    rows.sort_by_cached_key(|row| rank_key(row_rank_facts(row), &cohorts));
+    rows.sort_by_cached_key(|row| rank_key(row_rank_facts(row)));
 }
 
 fn row_ordinal(row: &SidebarRow) -> Option<u64> {
@@ -305,7 +303,7 @@ fn row_ordinal(row: &SidebarRow) -> Option<u64> {
         .and_then(|pane| pane.pane_id.creation_ordinal())
 }
 
-/// Everything the attention ladder reads off one row or roster agent.
+/// The row and group ranking inputs shared by cards and roster agents.
 #[derive(Clone, Debug)]
 struct RankFacts<'a> {
     is_process: bool,
@@ -313,11 +311,10 @@ struct RankFacts<'a> {
     archived: bool,
     status: Option<AgentStatus>,
     score: u32,
-    factor_milli: u32,
+    attention_at_ms: Option<i64>,
     last_activity: jiff::Timestamp,
     registered_at: Option<jiff::Timestamp>,
     pane_ordinal: Option<u64>,
-    cohort: Option<&'a str>,
     launch_ordinal: Option<u32>,
     id: &'a str,
 }
@@ -330,11 +327,10 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
         archived: row.archived,
         status,
         score: row.attention_score,
-        factor_milli: score::recovered_time_factor_milli(status, row.attention_score),
+        attention_at_ms: row.as_agent().and_then(|agent| agent.attention_at_ms),
         last_activity: row.last_activity,
         registered_at: row.as_agent().and_then(|agent| agent.registered_at),
         pane_ordinal: row_ordinal(row),
-        cohort: row.launch_cohort(),
         launch_ordinal: row.launch_ordinal(),
         id: row.id.as_str(),
     }
@@ -344,6 +340,7 @@ fn agent_rank_facts(
     agent: &AgentState,
     now: jiff::Timestamp,
     windows: AttentionWindows,
+    attention_at_ms: Option<i64>,
 ) -> RankFacts<'_> {
     let status = if agent.status == AgentStatus::Waiting {
         agent.effective_status(now)
@@ -359,11 +356,10 @@ fn agent_rank_facts(
         archived,
         status: Some(status),
         score,
-        factor_milli: score::recovered_time_factor_milli(Some(status), score),
+        attention_at_ms,
         last_activity: agent.last_activity,
         registered_at: agent.registered_at,
         pane_ordinal: agent_ordinal(agent),
-        cohort: agent_launch_cohort(agent),
         launch_ordinal: agent.launch_ordinal,
         id: agent.agent_id.as_str(),
     }
@@ -371,31 +367,13 @@ fn agent_rank_facts(
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct RankKey {
-    block: BlockKey,
-    within: WithinKey,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct BlockKey {
     is_process: bool,
+    calm: bool,
     band: u8,
-    urgency: Reverse<u32>,
-    tiebreak: BucketTiebreak,
-    identity: String,
-    cohort_absent: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct WithinKey {
+    stamp: StartKey<Reverse<i64>>,
     launch_ordinal: StartKey<u32>,
     pane_ordinal: StartKey<u64>,
     id: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum BucketTiebreak {
-    Attention(jiff::Timestamp),
-    Calm(StartKey<u64>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -433,235 +411,30 @@ impl<T: Ord> PartialOrd for StartKey<T> {
     }
 }
 
-#[derive(Clone, Debug)]
-struct CohortBlock {
-    band: u8,
-    urgency: u32,
-    tiebreak: BucketTiebreak,
-}
-
-#[derive(Clone, Debug)]
-struct CohortAccum {
-    band: u8,
-    pane_ordinal: Option<u64>,
-    oldest_attention: Option<jiff::Timestamp>,
-    best_actionable: Option<ActionableDriver>,
-    oldest_paused: Option<PausedDriver>,
-    most_recent_calm: Option<CalmDriver>,
-    has_running: bool,
-    has_success: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ActionableDriver {
-    score: u32,
-    last_activity: jiff::Timestamp,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PausedDriver {
-    factor_milli: u32,
-    last_activity: jiff::Timestamp,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CalmDriver {
-    factor_milli: u32,
-    last_activity: jiff::Timestamp,
-}
-
-fn rank_cohort_blocks<'a>(
-    facts: impl Iterator<Item = RankFacts<'a>>,
-) -> BTreeMap<String, CohortBlock> {
-    let mut blocks = BTreeMap::new();
-    for facts in facts {
-        let Some(cohort) = facts.cohort else {
-            continue;
-        };
-        let block = blocks.entry(cohort.to_owned()).or_insert(CohortAccum {
-            band: u8::MAX,
-            pane_ordinal: None,
-            oldest_attention: None,
-            best_actionable: None,
-            oldest_paused: None,
-            most_recent_calm: None,
-            has_running: false,
-            has_success: false,
-        });
-        block.band = block.band.min(facts_band(&facts));
-        if let Some(ordinal) = facts.pane_ordinal {
-            block.pane_ordinal = Some(block.pane_ordinal.map_or(ordinal, |min| min.min(ordinal)));
-        }
-        if is_attention(facts.status) {
-            block.oldest_attention = Some(
-                block
-                    .oldest_attention
-                    .map_or(facts.last_activity, |oldest| {
-                        oldest.min(facts.last_activity)
-                    }),
-            );
-        }
-        match facts.status {
-            Some(AgentStatus::Waiting | AgentStatus::Failed) => {
-                let candidate = ActionableDriver {
-                    score: facts.score,
-                    last_activity: facts.last_activity,
-                };
-                if block.best_actionable.is_none_or(|current| {
-                    candidate.score > current.score
-                        || (candidate.score == current.score
-                            && candidate.last_activity < current.last_activity)
-                }) {
-                    block.best_actionable = Some(candidate);
-                }
-            }
-            Some(AgentStatus::Paused) => {
-                let candidate = PausedDriver {
-                    factor_milli: facts.factor_milli,
-                    last_activity: facts.last_activity,
-                };
-                if block
-                    .oldest_paused
-                    .is_none_or(|current| candidate.last_activity < current.last_activity)
-                {
-                    block.oldest_paused = Some(candidate);
-                }
-            }
-            Some(AgentStatus::Running) => {
-                block.has_running = true;
-                block.observe_calm(&facts);
-            }
-            Some(AgentStatus::Success) => {
-                block.has_success = true;
-                block.observe_calm(&facts);
-            }
-            Some(AgentStatus::Sleeping | AgentStatus::Idle) | None => block.observe_calm(&facts),
-        }
-    }
-    blocks
-        .into_iter()
-        .map(|(cohort, block)| (cohort, block.finish()))
-        .collect()
-}
-
-impl CohortAccum {
-    fn observe_calm(&mut self, facts: &RankFacts<'_>) {
-        let candidate = CalmDriver {
-            factor_milli: facts.factor_milli,
-            last_activity: facts.last_activity,
-        };
-        if self
-            .most_recent_calm
-            .is_none_or(|current| candidate.last_activity > current.last_activity)
-        {
-            self.most_recent_calm = Some(candidate);
-        }
-    }
-
-    fn finish(self) -> CohortBlock {
-        // A launch block's band is the minimum member time band; read state
-        // never lifts it.
-        let band = self.band;
-        if let Some(driver) = self.best_actionable {
-            return CohortBlock {
-                band,
-                urgency: driver.score,
-                tiebreak: BucketTiebreak::Attention(
-                    self.oldest_attention.unwrap_or(driver.last_activity),
-                ),
-            };
-        }
-        if let Some(driver) = self.oldest_paused {
-            return CohortBlock {
-                band,
-                urgency: score::score_from_weight_and_factor(
-                    AgentStatus::Paused,
-                    driver.factor_milli,
-                ),
-                tiebreak: BucketTiebreak::Attention(
-                    self.oldest_attention.unwrap_or(driver.last_activity),
-                ),
-            };
-        }
-        let status = if self.has_running {
-            AgentStatus::Running
-        } else if self.has_success {
-            AgentStatus::Success
-        } else {
-            AgentStatus::Idle
-        };
-        CohortBlock {
-            band,
-            urgency: score::score_from_weight_and_factor(
-                status,
-                self.most_recent_calm
-                    .map_or(1_000, |driver| driver.factor_milli),
-            ),
-            tiebreak: BucketTiebreak::Calm(StartKey::from(self.pane_ordinal)),
-        }
-    }
-}
-
-fn rank_key(facts: RankFacts<'_>, cohorts: &BTreeMap<String, CohortBlock>) -> RankKey {
-    let block = if let Some((cohort, cohort_block)) = facts
-        .cohort
-        .and_then(|cohort| cohorts.get(cohort).map(|block| (cohort, block)))
-    {
-        BlockKey {
-            is_process: false,
-            band: cohort_block.band,
-            urgency: Reverse(cohort_block.urgency),
-            tiebreak: cohort_block.tiebreak.clone(),
-            identity: cohort.to_owned(),
-            cohort_absent: false,
-        }
-    } else {
-        // Agent cards lead the channel; process rows are the command tail beneath
-        // them, whatever either's activity. Within each side the bands hold:
-        // hot work, warm work, then archive; the fixed-point urgency score
-        // orders within a band. The final singleton tiebreak is the stable `id`
-        // alone — never `name`, which mutates through the session-name -> task
-        // -> prompt label ladder and would reshuffle a bucket on every rename.
-        BlockKey {
-            is_process: facts.is_process,
-            band: facts_band(&facts),
-            urgency: Reverse(facts.score),
-            tiebreak: bucket_tiebreak(&facts),
-            identity: facts.id.to_owned(),
-            cohort_absent: true,
-        }
-    };
+/// Each card ranks alone: newest top-zone stamp, then calm band and newest
+/// stamp. Process rows retain pane-creation order at the tail.
+fn rank_key(facts: RankFacts<'_>) -> RankKey {
+    let top = facts.status.is_some_and(AgentStatus::is_actionable);
     RankKey {
-        block,
-        within: WithinKey {
-            launch_ordinal: StartKey::from(facts.launch_ordinal),
-            pane_ordinal: StartKey::from(facts.pane_ordinal),
-            id: facts.id.to_owned(),
+        is_process: facts.is_process,
+        calm: !top,
+        band: if top || facts.is_process {
+            0
+        } else {
+            band(facts.inactive, facts.archived)
         },
+        stamp: StartKey::from(if facts.is_process {
+            None
+        } else {
+            facts
+                .attention_at_ms
+                .or_else(|| facts.registered_at.map(|birth| birth.as_millisecond()))
+                .map(Reverse)
+        }),
+        launch_ordinal: StartKey::from(facts.launch_ordinal.filter(|_| !facts.is_process)),
+        pane_ordinal: StartKey::from(facts.pane_ordinal),
+        id: facts.id.to_owned(),
     }
-}
-
-/// Tiebreak one item inside its band and rank. Attention rows
-/// (`waiting`/`failed`/`paused`) sort longest-overdue-first: a blocked or failed
-/// agent's `last_activity` is frozen, so this is both stable and the triage order
-/// the `space` "next attention" key promises. Calm rows (`success`, `running`,
-/// `idle`) and bare process rows hold pane creation order — untouched by the
-/// activity heartbeat — so a working agent never jumps just because it finished a
-/// tool, and a fresh pane appends at the bottom of its bucket.
-fn bucket_tiebreak(facts: &RankFacts<'_>) -> BucketTiebreak {
-    if is_attention(facts.status) {
-        BucketTiebreak::Attention(facts.last_activity)
-    } else {
-        BucketTiebreak::Calm(StartKey::from(facts.pane_ordinal))
-    }
-}
-
-fn facts_band(facts: &RankFacts<'_>) -> u8 {
-    band(facts.inactive, facts.archived)
-}
-
-fn is_attention(status: Option<AgentStatus>) -> bool {
-    status.is_some_and(AgentStatus::is_attention)
 }
 
 /// Ascending by key, but a missing key sorts *last* — the opposite of
@@ -854,14 +627,24 @@ impl AgentWorktreeGroup<'_> {
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
 /// and groups: actionable groups first, then the root lane, then newest agent
 /// registration first, with `external` last. The roster has no inactive partition.
-/// Within groups, attention agents lead (longest-overdue), with calm agents in
-/// stable spawn order. The `rimz agents list` roster reuses this so the CLI
-/// and the room agree on order.
+/// Within groups, actionable agents lead, newest attention stamp first; calm
+/// agents follow by band and newest stamp. Stamps come from the snapshot's
+/// enriched rows, falling back to registration. The roster uses effective agent
+/// statuses, which can differ from read-side projections such as child lifting.
 pub fn group_live_agents_by_worktree<'a>(
     agents: &[&'a AgentState],
     snapshot: &SidebarSnapshot,
 ) -> Vec<AgentWorktreeGroup<'a>> {
     let windows = AttentionWindows::from_config(&snapshot.attention);
+    let stamps: BTreeMap<_, _> = snapshot
+        .rows()
+        .filter_map(|row| {
+            Some((
+                (row.name.as_str(), row.id.as_str()),
+                row.as_agent()?.attention_at_ms?,
+            ))
+        })
+        .collect();
     let resolver = GroupResolver::new(
         snapshot,
         agents.iter().map(|agent| GroupEntry {
@@ -896,7 +679,16 @@ pub fn group_live_agents_by_worktree<'a>(
     }
     let mut groups: Vec<_> = by_key.into_values().collect();
     for (_, group) in &mut groups {
-        sort_listing_agents(&mut group.agents, snapshot.now, windows);
+        group.agents.sort_by_cached_key(|agent| {
+            rank_key(agent_rank_facts(
+                agent,
+                snapshot.now,
+                windows,
+                stamps
+                    .get(&(agent.kind.as_str(), agent.agent_id.as_str()))
+                    .copied(),
+            ))
+        });
     }
     groups.sort_by_cached_key(|(root_lane, group)| {
         group_sort_key(
@@ -904,7 +696,7 @@ pub fn group_live_agents_by_worktree<'a>(
                 .agents
                 .iter()
                 .copied()
-                .map(|agent| agent_rank_facts(agent, snapshot.now, windows)),
+                .map(|agent| agent_rank_facts(agent, snapshot.now, windows, None)),
             group.kind,
             false,
             *root_lane,
@@ -914,29 +706,10 @@ pub fn group_live_agents_by_worktree<'a>(
     groups.into_iter().map(|(_, group)| group).collect()
 }
 
-/// The agent's pane creation ordinal — the calm tiebreak the `rimz agents list`
-/// roster shares with the sidebar.
+/// Pane creation ordinal, the roster's final ordinal tiebreak, as in the sidebar.
 fn agent_ordinal(agent: &AgentState) -> Option<u64> {
     agent
         .pane
         .as_ref()
         .and_then(|pane| pane.pane_id.creation_ordinal())
-}
-
-fn sort_listing_agents(
-    agents: &mut [&AgentState],
-    now: jiff::Timestamp,
-    windows: AttentionWindows,
-) {
-    let cohorts = rank_cohort_blocks(
-        agents
-            .iter()
-            .copied()
-            .map(|agent| agent_rank_facts(agent, now, windows)),
-    );
-    agents.sort_by_cached_key(|agent| rank_key(agent_rank_facts(agent, now, windows), &cohorts));
-}
-
-fn agent_launch_cohort(agent: &AgentState) -> Option<&str> {
-    agent.team.as_deref().or(agent.launch_group.as_deref())
 }

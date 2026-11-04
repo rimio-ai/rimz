@@ -717,7 +717,7 @@ A folded inactive group hides its pipeline line and puts the stage after the tea
                                                    0s
 ```
 
-Expanding the group restores the pipeline line. Cards rank by status and age. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Inactive groups sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Asks and failures lead each group, newest attention first. Calm and parked cards follow in hot, cooling, and archived bands, newest birth or recovery first within each. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Inactive groups sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 

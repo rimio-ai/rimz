@@ -1384,8 +1384,9 @@ fn unread_write_back_copies_only_the_changed_group() {
     Arc::make_mut(&mut unchanged.rows)[0].id = "unchanged".into();
     Arc::make_mut(&mut unchanged.rows)[0].unread = false;
     Arc::make_mut(&mut shared.worktree_groups).push(unchanged);
-    let retained = shared.clone();
     let mut worker = fixture.worker();
+    crate::sidebar::attention::reconcile_snapshot(&worker.runtime, &mut shared);
+    let retained = shared.clone();
     let projected = frameless(shared);
 
     worker.publish_fold(
@@ -1677,6 +1678,11 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     UnreadEpisodes::default().persist(&runtime).unwrap();
     let mut worker = fixture.worker();
     worker.runtime = runtime.clone();
+    let (observer_tx, _observer_rx) = std::sync::mpsc::sync_channel(64);
+    worker.observer = Some(crate::sidebar::observe::RoomObserver::new(
+        observer_tx,
+        Arc::default(),
+    ));
     worker.config.notification_prefs.coalesce_ms = 0;
     let subscribers = Subscribers::default();
     let (elder, elder_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
@@ -1686,6 +1692,7 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let birth_ms = shared.now.as_millisecond();
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
         [0]
     .as_agent_mut()
@@ -1723,6 +1730,23 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
             .any(|row| row.unread)
     );
     let younger = younger_rx.wait_first_unseen().unwrap();
+    assert_eq!(
+        snapshot(&younger)
+            .rows()
+            .next()
+            .unwrap()
+            .as_agent()
+            .unwrap()
+            .attention_at_ms,
+        Some(birth_ms)
+    );
+    let FetchUpdate::Shared { context, .. } = &younger else {
+        panic!("shared observation missing");
+    };
+    assert_eq!(
+        context.observation.as_ref().unwrap().rows[0].attention_at_ms,
+        Some(birth_ms)
+    );
     assert!(
         snapshot(&younger).rows().any(|row| row.unread),
         "this publication must carry the newly reconciled episode"

@@ -103,7 +103,7 @@ pub struct Observer {
     presence: BTreeMap<String, RowPresence>,
     values: BTreeMap<(String, WatchedField), FlipRing<()>>,
     aggregates: BTreeMap<String, FlipRing<Option<String>>>,
-    orders: BTreeMap<String, FlipRing<RankingStatuses>>,
+    orders: BTreeMap<String, FlipRing<RankingInputs>>,
     last_status: BTreeMap<String, String>,
     status_transitions: BTreeMap<String, VecDeque<u64>>,
     last_roster_rows: Vec<RosterRowSig>,
@@ -637,7 +637,7 @@ impl Observer {
         for group in &sig.groups {
             let order = serialize_order(&group.render_order);
             let ring = self.orders.entry(group.key.clone()).or_default();
-            if !ring.push(sig.at_ms, Some(order), || ranking_statuses(sig, &group.key)) {
+            if !ring.push(sig.at_ms, Some(order), || ranking_inputs(sig, &group.key)) {
                 continue;
             }
             let Some((from, via, back)) = ring.oscillation(window) else {
@@ -648,17 +648,14 @@ impl Observer {
             if order_set(&order) != order_set(&via_order) {
                 continue;
             }
-            // Ranking follows status, so a row that moved and whose ranking
-            // status differs between the frame the order left and the frame it
-            // returned on explains the reorder: a short turn or an answered
-            // ask. A row whose status changed and thereby reordered the group
-            // always moved itself; a cohort block moves with its members.
-            let explained_by_status = order
+            // Only a moved row's zone, band or attention stamp explains its
+            // reorder. Calm status churn alone never changes row rank.
+            let explained_by_rank = order
                 .iter()
                 .zip(&via_order)
                 .filter(|(was, flipped)| was != flipped)
                 .any(|(row_id, _)| via.payload.get(row_id) != back.payload.get(row_id));
-            if explained_by_status {
+            if explained_by_rank {
                 continue;
             }
             drafts.push(AnomalyDraft::from_sig(
@@ -785,8 +782,8 @@ struct FlipSample<P> {
 
 type Flip<'a, P> = (&'a FlipSample<P>, &'a FlipSample<P>, &'a FlipSample<P>);
 
-/// Each row's ranking status in one group, keyed by row id.
-type RankingStatuses = BTreeMap<String, Option<String>>;
+/// Each row's zone, calm band and attention stamp in one group, keyed by row id.
+type RankingInputs = BTreeMap<String, (bool, u8, Option<i64>)>;
 
 impl<P> FlipRing<P> {
     /// Records `value` unless it repeats the last sample, and reports whether
@@ -830,11 +827,20 @@ impl<P> FlipRing<P> {
     }
 }
 
-fn ranking_statuses(sig: &FrameSig, group_key: &str) -> RankingStatuses {
+fn ranking_inputs(sig: &FrameSig, group_key: &str) -> RankingInputs {
     sig.rows
         .iter()
         .filter(|row| row.group_key == group_key)
-        .map(|row| (row.row_id.clone(), row.attention_status.clone()))
+        .map(|row| {
+            let band = if row.top {
+                0
+            } else if row.archived {
+                2
+            } else {
+                u8::from(row.inactive)
+            };
+            (row.row_id.clone(), (row.top, band, row.attention_at_ms))
+        })
         .collect()
 }
 

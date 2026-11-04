@@ -221,7 +221,7 @@ live/idle-compact/<digest>.json               idle-compaction fire records
 live/idle-stop/<digest>.json                  idle-stop helper pacing records
 live/presence.stamp                           mux/presence liveness hint
 lanes/{snapshot,agent-projection}.json        projections
-lanes/{sidebar-width,sidebar-filter,unread}.json renderer state
+lanes/{sidebar-width,sidebar-filter,unread,attention}.json renderer state
 lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
 lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
@@ -230,6 +230,8 @@ lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.j
 lanes/workspace-spending.<prefix>.json        room spend projection
 lanes/hook-drainer-outages/<pid>              wrapper-held hook-drainer outage leases
 ```
+
+The sidebar host alone writes `lanes/attention.json` on final framed folds, tracking each card's displayed top/calm crossing by launch id (row id without one). Enrichment only reads it, and ranks a crossing the record does not hold yet at the fold's clock. Like the other `lanes/` records, reset, teardown and reboot drop it; cards then fall back to their birth stamps. Its schema, retention and cold-start rules are [attention stamps](./sidebar/state.md#attention-stamps).
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:
 

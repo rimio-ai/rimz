@@ -150,7 +150,7 @@ fn auto_review_permission_listing_ranks_with_running_until_visible() {
             if age == 59 {
                 vec!["waiting", "running", "review"]
             } else {
-                vec!["review", "waiting", "running"]
+                vec!["waiting", "review", "running"]
             },
             "at {age}s"
         );
@@ -158,7 +158,7 @@ fn auto_review_permission_listing_ranks_with_running_until_visible() {
 }
 
 #[test]
-fn delegated_park_ranks_and_counts_as_paused() {
+fn delegated_park_counts_as_paused_without_leading_calm_cards() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
     let mut child =
         child_state("root", "child", AgentStatus::Running, 1).paused_turn_error(0, "limit");
@@ -166,14 +166,15 @@ fn delegated_park_ranks_and_counts_as_paused() {
     let running = agent("claude", "running", AgentStatus::Running, 0).worktree("/repo/main");
     let snapshot = room_with_agent_panes(vec![running, parent, child]);
     let group = &snapshot.worktree_groups[0];
-    assert_eq!(group.rows[0].id, "root");
-    assert_eq!(group.rows[0].attention_status(), Some(AgentStatus::Paused));
+    assert_eq!(group.rows[0].id, "running");
+    let parent = group.rows.iter().find(|row| row.id == "root").unwrap();
+    assert_eq!(parent.attention_status(), Some(AgentStatus::Paused));
     assert_eq!(group.status_counts[0].status, AgentStatus::Paused);
     assert_eq!(group.status_counts[0].count, 1);
 }
 
 #[test]
-fn bucket_order_puts_attention_first_and_idle_last() {
+fn row_order_puts_actionable_first_then_calm_by_stamp() {
     // Scrambled input proves the sort, not the insertion order.
     let agents = [
         AgentStatus::Running,
@@ -202,12 +203,12 @@ fn bucket_order_puts_attention_first_and_idle_last() {
             Some(AgentStatus::Waiting),
             Some(AgentStatus::Failed),
             Some(AgentStatus::Paused),
-            Some(AgentStatus::Success),
-            Some(AgentStatus::Running),
-            Some(AgentStatus::Sleeping),
             Some(AgentStatus::Idle),
+            Some(AgentStatus::Success),
+            Some(AgentStatus::Sleeping),
+            Some(AgentStatus::Running),
         ],
-        "attention leads; parked idle agents sink to the bottom of the group"
+        "asks and failures lead; calm cards rank by birth, not status"
     );
 
     let counts = snapshot.worktree_groups[0]
@@ -231,7 +232,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
 }
 
 #[test]
-fn calm_rows_use_pane_ordinal_but_groups_use_newest_registration() {
+fn calm_rows_and_groups_use_newest_registration() {
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
     older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
@@ -242,12 +243,9 @@ fn calm_rows_use_pane_ordinal_but_groups_use_newest_registration() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    // The `%0` pane was created before `%1`, so its row leads — activity rank and
-    // insertion order do not.
-    assert_eq!(row_order, vec!["older", "newer"]);
+    assert_eq!(row_order, vec!["newer", "older"]);
 
-    // A paneless idle row has no ordinal and tails the bucket, below every
-    // pane-backed calm row.
+    // A row without a birth stamp tails the dated calm cards.
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .push(idle_agent_row("paneless", None));
     snapshot.sort_groups_for_presentation();
@@ -256,7 +254,7 @@ fn calm_rows_use_pane_ordinal_but_groups_use_newest_registration() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(row_order, vec!["older", "newer", "paneless"]);
+    assert_eq!(row_order, vec!["newer", "older", "paneless"]);
 
     let mut older = agent_in("sess-b", "/repo/b", AgentStatus::Idle, 1_000);
     older.pane = Some(pane("%0", "node", "/repo/b"));
@@ -278,7 +276,7 @@ fn calm_rows_use_pane_ordinal_but_groups_use_newest_registration() {
 }
 
 #[test]
-fn attention_bucket_sorts_longest_overdue_first() {
+fn attention_zone_sorts_newest_stamp_first_without_status_tiers() {
     // Scrambled input; a higher rank means more recent activity.
     let agents = vec![
         ("wait-new", AgentStatus::Waiting, 9_000),
@@ -297,14 +295,13 @@ fn attention_bucket_sorts_longest_overdue_first() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    // Waiting leads failed; within each, the longest-overdue (oldest activity) rises.
-    assert_eq!(order, vec!["wait-old", "wait-new", "fail-old", "fail-new"]);
+    assert_eq!(order, vec!["wait-new", "fail-new", "fail-old", "wait-old"]);
 }
 
 #[test]
-fn hot_band_score_interleaves_attention_by_overdue_heat() {
+fn fresh_ask_leads_an_hour_old_failure() {
     let snapshot = room_with_agent_panes(vec![
-        agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(120),
+        agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 4_000).active_ago(120),
         agent_in("old-fail", "/repo/main", AgentStatus::Failed, 2_000).active_ago(50 * 60),
         agent_in("calm", "/repo/main", AgentStatus::Success, 3_000).active_ago(60),
     ]);
@@ -316,8 +313,8 @@ fn hot_band_score_interleaves_attention_by_overdue_heat() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["old-fail", "fresh-wait", "calm"],
-        "heat lets an older failure outrank a fresh ask while attention still leads calm work"
+        vec!["fresh-wait", "old-fail", "calm"],
+        "newest attention first, regardless of the group-urgency score"
     );
 }
 
@@ -393,8 +390,8 @@ fn read_state_never_changes_the_band() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["read-old", "new-wait"],
-        "among asks, the longest-overdue row leads regardless of read state"
+        vec!["new-wait", "read-old"],
+        "among asks, the newest stamp leads regardless of read state"
     );
 }
 
@@ -427,14 +424,14 @@ fn stale_attention_leads_live_work_while_parks_cool() {
     assert_eq!(
         order,
         vec![
-            "older-wait",
             "old-wait",
+            "older-wait",
             "fresh-run",
             "fresh-idle",
-            "old-done",
-            "old-park"
+            "old-park",
+            "old-done"
         ],
-        "held asks lead fresh calm work, with the older ask first; parks still cool"
+        "asks stay hot, newest birth first; calm and parked cards still cool"
     );
 }
 
@@ -561,7 +558,7 @@ fn live_process_keeps_mixed_group_above_inactive_groups() {
 }
 
 #[test]
-fn cap_keeps_inactive_success_above_hidden_idle_tail() {
+fn snapshot_keeps_all_inactive_rows_for_renderer_capping() {
     let mut agents = vec![
         agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
             .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
@@ -588,7 +585,7 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
 }
 
 #[test]
-fn cohort_rows_hold_launch_order_across_status_churn() {
+fn team_birth_ties_keep_layout_order_across_calm_status_and_read_churn() {
     let mut snapshot = room_with_agent_panes(vec![
         cohort_agent(
             "cohort-second",
@@ -608,7 +605,7 @@ fn cohort_rows_hold_launch_order_across_status_churn() {
         ),
         cohort_agent(
             "cohort-first",
-            AgentStatus::Waiting,
+            AgentStatus::Idle,
             3_000,
             "launch_group_1",
             Some(0),
@@ -616,6 +613,12 @@ fn cohort_rows_hold_launch_order_across_status_churn() {
         ),
         agent_in("loose-unread", "/repo/main", AgentStatus::Success, 4_000).in_pane("%0"),
     ]);
+    for id in ["cohort-first", "cohort-second", "cohort-tail"] {
+        row_mut(&mut snapshot, id)
+            .as_agent_mut()
+            .unwrap()
+            .registered_at = Some(ago(1));
+    }
     row_mut(&mut snapshot, "loose-unread").unread = true;
     snapshot.sort_groups_for_presentation();
 
@@ -632,12 +635,35 @@ fn cohort_rows_hold_launch_order_across_status_churn() {
             "cohort-tail",
             "loose-unread",
         ],
-        "an unread calm row no longer jumps a blocked cohort; cohort rows keep launch order and ordinal-less members tail"
+        "one team birth ties on layout ordinal, with ordinal-less legacy members last"
+    );
+    row_mut(&mut snapshot, "cohort-first")
+        .as_agent_mut()
+        .unwrap()
+        .status = AgentStatus::Running;
+    row_mut(&mut snapshot, "cohort-tail")
+        .as_agent_mut()
+        .unwrap()
+        .status = AgentStatus::Paused;
+    row_mut(&mut snapshot, "cohort-second").unread = true;
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(
+        snapshot.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "cohort-first",
+            "cohort-second",
+            "cohort-tail",
+            "loose-unread"
+        ]
     );
 }
 
 #[test]
-fn inline_cohorts_stay_contiguous_without_interleaving() {
+fn inline_members_rank_independently_by_birth() {
     let snapshot = room_with_agent_panes(vec![
         cohort_agent(
             "g1-a",
@@ -680,13 +706,13 @@ fn inline_cohorts_stay_contiguous_without_interleaving() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["g1-a", "g1-b", "g2-a", "g2-b"],
-        "block min pane ordinal orders cohorts; internal launch ordinal keeps each cohort contiguous"
+        vec!["g1-b", "g2-b", "g2-a", "g1-a"],
+        "launch groups do not override each card's own stamp"
     );
 }
 
 #[test]
-fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
+fn team_members_rank_by_their_own_zone_and_birth() {
     let blocked_a = cohort_agent(
         "blocked-a",
         AgentStatus::Waiting,
@@ -730,13 +756,13 @@ fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["blocked-a", "blocked-b", "success-a", "working-a", "idle-a",],
-        "blocked teams lead contiguously; then success, working, and idle blocks follow derived state"
+        vec!["blocked-a", "idle-a", "working-a", "success-a", "blocked-b"],
+        "only the actionable team member rises above the calm zone"
     );
 }
 
 #[test]
-fn old_ask_lifts_its_whole_cohort_regardless_of_read_state() {
+fn only_the_asking_member_lifts_out_of_its_cohorts_cooling_band() {
     let mut snapshot = room_with_agent_panes(vec![
         agent_in("fresh-run", "/repo/main", AgentStatus::Running, 1_000),
         cohort_agent(
@@ -772,7 +798,7 @@ fn old_ask_lifts_its_whole_cohort_regardless_of_read_state() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["old-a", "old-b", "old-c", "fresh-run"]);
+    assert_eq!(order, vec!["old-a", "fresh-run", "old-c", "old-b"]);
 
     row_mut(&mut snapshot, "old-b").unread = true;
     snapshot.sort_groups_for_presentation();
@@ -783,7 +809,7 @@ fn old_ask_lifts_its_whole_cohort_regardless_of_read_state() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["old-a", "old-b", "old-c", "fresh-run"],
+        vec!["old-a", "fresh-run", "old-c", "old-b"],
         "read state never changes the band"
     );
 }

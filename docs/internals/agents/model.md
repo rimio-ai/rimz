@@ -32,7 +32,7 @@ Everything on this page is provider-neutral. An integration that emits well-form
 
 A session's lifecycle state is a status, the running turn's phase, and a transient compacting head painted over both ([`LifecycleState`](../../../crates/rimz/src/agents/lifecycle.rs)). The glyph, animation, and color for each value are [the interface legend](../../interface/sidebar.md#reading-the-glyphs). This page owns what the values mean and how they move.
 
-The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`. `paused` and `sleeping` exist only in the [displayed status](#displayed-status).
+The statuses carry a base attention weight for group urgency and reports ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)), not in-group card order. The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`. `paused` and `sleeping` exist only in the [displayed status](#displayed-status).
 
 | Status | Weight | Meaning |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ The statuses rank by a base weight, most attention-hungry first ([`status_weight
 | `sleeping` | 150 | at rest on a timer, signal, condition, or file watch, including through a child (display only) |
 | `idle` | 100 | wired in, nothing in flight |
 
-`waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
+Actionable groups compare their strongest `waiting` or `failed` score, so an older failure can lift its group above a fresh ask's group. Inside a group, asks and failures share one newest-first zone; the other statuses share calm age bands, ordered by birth or the last crossing out of attention rather than by these weights. The two ordering rules are in [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
 
 The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reasoning`, `acting`, or `parked` while the status is `running`, and `idle` for every other status. `AgentState::transition` enforces that rule for snapshots and real edges, so a resting row with a live phase cannot exist in the rollup. [Turn phase](#turn-phase) covers how it moves.
 

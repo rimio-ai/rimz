@@ -83,6 +83,10 @@ fn row_with_status(id: &str, pane: &str, group: &str, status: &str) -> RowSig {
             model: Some("sonnet".to_owned()),
         },
         attention_status: Some(status.to_owned()),
+        top: matches!(status, "waiting" | "failed"),
+        inactive: false,
+        archived: false,
+        attention_at_ms: Some(0),
         sub_agent_ids: Vec::new(),
     }
 }
@@ -1694,13 +1698,13 @@ fn order_flap_measures_time_away() {
 }
 
 #[test]
-fn order_flap_is_quiet_when_a_ranking_status_explains_it() {
+fn order_flap_reports_reorders_explained_only_by_calm_status_churn() {
     let frame = |at_ms, b_first: bool, b_status: &str| {
         let a = row_with_status("a", "p1", "main", "idle");
         let b = row_with_status("b", "p2", "main", b_status);
         sig(at_ms, if b_first { vec![b, a] } else { vec![a, b] })
     };
-    for (name, frames) in [
+    let actual = [
         (
             "short turn moves the row up and back",
             vec![
@@ -1730,14 +1734,44 @@ fn order_flap_is_quiet_when_a_ranking_status_explains_it() {
                 frame(14_000, false, "idle"),
             ],
         ),
-    ] {
+    ]
+    .map(|(name, frames)| {
         let mut observer = Observer::default();
         let drafts = frames
             .into_iter()
             .flat_map(|frame| observer.observe(frame))
             .collect::<Vec<_>>();
-        assert_lacks_kind(&drafts, "order_flap", name);
-    }
+        (name, order_flaps(&drafts).len())
+    });
+    assert_eq!(actual.map(|(_, count)| count), [1; 3], "{actual:?}");
+}
+
+#[test]
+fn order_flap_is_quiet_when_zone_band_or_stamp_explains_it() {
+    let actual = ["zone", "cooling", "archive", "stamp"].map(|input| {
+        let frame = |at_ms, b_first, changed| {
+            let a = row("a", "p1", "main");
+            let mut b = row("b", "p2", "main");
+            if changed {
+                match input {
+                    "zone" => {
+                        b.top = true;
+                        b.attention_status = Some("waiting".into());
+                    }
+                    "cooling" => b.inactive = true,
+                    "archive" => b.archived = true,
+                    _ => b.attention_at_ms = Some(1),
+                }
+            }
+            sig(at_ms, if b_first { vec![b, a] } else { vec![a, b] })
+        };
+        let mut observer = Observer::default();
+        observer.observe(frame(0, false, false));
+        observer.observe(frame(11_000, false, false));
+        observer.observe(frame(12_000, true, true));
+        order_flaps(&observer.observe(frame(14_000, false, false))).len()
+    });
+    assert_eq!(actual, [0; 4]);
 }
 
 #[test]

@@ -1397,7 +1397,8 @@ allowed-dependencies = [
 # atomic::publish_staged_no_replace shares non-replacing staged-entry publication (+1).
 # paths::workflow_runs_under_strict preserves required protection facts across rooms (+1).
 # paths::loop_throttle_start_stamps names the machine, workflow and step launch stamps.
-surface-budget = 319
+# RuntimePaths::attention_path owns the host's attention-stamp lane (+1).
+surface-budget = 320
 
 [[verdict]]
 kind = "item"
@@ -3356,7 +3357,8 @@ path = "crates/rimz/src/sidebar"
 # FOCUS_MARKER_TMUX_DWELL and FOCUS_MARKER_ZELLIJ_DWELL own backend-specific consumer dwell (+2).
 # HIBERNATED_CHECK_TTL shares the held-agent cadence with the transcript watcher (+1).
 # FOLD_FLOOR and UNWATCHED_FOLD_INTERVAL share room-fold cadence bounds (+2).
-surface-budget = 248
+# attention::reconcile_snapshot stamps final folds before observation and publication (+1).
+surface-budget = 249
 
 [[verdict]]
 kind = "item"
@@ -3442,6 +3444,11 @@ reason = "Typed metric edits are part of the admitted agent-action vocabulary."
 kind = "item"
 key = "sidebar::unread::reconcile_snapshot"
 reason = "Production fetch and testkit playback share runtime unread reconciliation without notification execution."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::attention::reconcile_snapshot"
+reason = "Only the host fetch worker reconciles launch-keyed attention stamps, before observing and publishing final framed folds."
 
 [[verdict]]
 kind = "item"

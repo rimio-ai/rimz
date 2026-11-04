@@ -1176,6 +1176,11 @@ impl RuntimePaths {
         self.lane_path("unread.json")
     }
 
+    /// Launch-keyed attention stamps, reconciled only by the host fetch worker.
+    pub(crate) fn attention_path(&self) -> PathBuf {
+        self.lane_path("attention.json")
+    }
+
     pub fn pane_frame_path(&self) -> PathBuf {
         self.lane_path("snapshot.json")
     }

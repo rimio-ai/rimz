@@ -67,11 +67,11 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes
         22k · Haiku · xhigh                       5m
+  pi · GPT 5.5 · xhigh
   claude-3 · Opus 4.8 · xhigh · 1M            $29.84
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─── 85.0% 󰪥  1h
    󰿦 853k · 󱥸 734k  85k  34k  106k
-  pi · GPT 5.5 · xhigh
   claude-4 · Opus 4.8 · xhigh
 
   mux-merge #91                                main

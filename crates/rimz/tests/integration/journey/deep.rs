@@ -569,24 +569,26 @@ fn tmux_sidebar_scroll_sync_reaches_the_active_client() {
             .screen()
             .contents()
     };
+    // Calm cards rank newest birth first, so the last-born card leads.
+    let (first, overflow) = ("scroll-card-11", "scroll-card-00");
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let mut startup = Vec::new();
     while Instant::now() < deadline {
         startup.extend(client.take_bytes());
         let opens = startup.windows(8).filter(|b| *b == b"\x1b[?2026h").count();
         let closes = startup.windows(8).filter(|b| *b == b"\x1b[?2026l").count();
-        if screen().contains("scroll-card-00") && opens == closes {
+        if screen().contains(first) && opens == closes {
             break;
         }
         std::thread::sleep(Duration::from_millis(25));
     }
     let initial = screen();
     assert!(
-        initial.contains("scroll-card-00"),
+        initial.contains(first),
         "the attached client must see the first card: {initial}"
     );
     assert!(
-        !initial.contains("scroll-card-11"),
+        !initial.contains(overflow),
         "cards must overflow the viewport: {initial}"
     );
     // tmux's unanswered terminal-query timer can redraw after five seconds.
@@ -643,7 +645,7 @@ fn tmux_sidebar_scroll_sync_reaches_the_active_client() {
                 .any(|(body, _)| body.contains("scroll-card-"))
     };
     let new_content = |screen: &str| {
-        (1..12).any(|index| {
+        (0..11).any(|index| {
             let name = format!("scroll-card-{index:02}");
             screen.contains(&name) && !initial.contains(&name)
         })
@@ -666,7 +668,7 @@ fn tmux_sidebar_scroll_sync_reaches_the_active_client() {
             unwrapped_cards, 0,
             "scroll card text must never reach the client outside a sync pair"
         );
-        if (!scrolled.contains("scroll-card-00") && new_content(&scrolled) && complete_pair(&bytes))
+        if (!scrolled.contains(first) && new_content(&scrolled) && complete_pair(&bytes))
             || Instant::now() >= deadline
         {
             break;
@@ -677,7 +679,7 @@ fn tmux_sidebar_scroll_sync_reaches_the_active_client() {
         bytes.extend(client.take_bytes());
     }
     assert!(
-        !scrolled.contains("scroll-card-00"),
+        !scrolled.contains(first),
         "the client's screen must scroll past the first card: {scrolled}"
     );
     assert!(

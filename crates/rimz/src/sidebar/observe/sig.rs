@@ -53,6 +53,10 @@ pub struct RowSig {
     pub group_key: String,
     pub watched: WatchedValues,
     pub attention_status: Option<String>,
+    pub top: bool,
+    pub inactive: bool,
+    pub archived: bool,
+    pub attention_at_ms: Option<i64>,
     pub sub_agent_ids: Vec<String>,
 }
 
@@ -261,6 +265,16 @@ pub fn extract_sig(
                 attention_status: row
                     .attention_status()
                     .map(|status| status.as_str().to_owned()),
+                top: row
+                    .attention_status()
+                    .is_some_and(crate::agents::AgentStatus::is_actionable),
+                inactive: row.inactive,
+                archived: row.archived,
+                attention_at_ms: row.as_agent().and_then(|agent| {
+                    agent
+                        .attention_at_ms
+                        .or_else(|| agent.registered_at.map(|birth| birth.as_millisecond()))
+                }),
                 sub_agent_ids: row
                     .sub_agents()
                     .iter()

@@ -568,12 +568,12 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 1
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▎✓ planner                                           🮇
-@planner#main │ ▎  plan approved                                     🮇
-@planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▌○ coder                                             ▐
 @coder#main   │ ▌  .                                                 ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
               │
               │
               │

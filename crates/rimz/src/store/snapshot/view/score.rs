@@ -1,4 +1,4 @@
-//! Fixed-point attention scoring for row, team, and group ordering.
+//! Fixed-point attention scores for group urgency and agent reports.
 
 use crate::agents::AgentStatus;
 
@@ -89,23 +89,6 @@ pub(super) fn attention_facts(
         archived,
         ((u64::from(weight) * u64::from(factor)) / u64::from(MILLI)) as u32,
     )
-}
-
-/// Recover the stamped time factor for derived team-state scoring. Integer
-/// division can lose several milli-steps on low-weight statuses; that drift stays
-/// below the status-weight spacing, and keeps presentation sorting pure over
-/// stamped rows.
-pub(super) fn recovered_time_factor_milli(status: Option<AgentStatus>, score: u32) -> u32 {
-    let weight = status_weight_opt(status);
-    if weight == 0 {
-        MILLI
-    } else {
-        ((u64::from(score) * u64::from(MILLI)) / u64::from(weight)) as u32
-    }
-}
-
-pub(super) fn score_from_weight_and_factor(status: AgentStatus, factor_milli: u32) -> u32 {
-    ((u64::from(status_weight(status)) * u64::from(factor_milli)) / u64::from(MILLI)) as u32
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -265,10 +248,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            recovered_time_factor_milli(Some(AgentStatus::Waiting), 1_200),
-            2_000
-        );
     }
 
     #[test]

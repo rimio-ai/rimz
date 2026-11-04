@@ -186,23 +186,19 @@ The helper holds the linked board's lock across the stage/visit recheck, fresh h
 
 ### Attention ranking and the cap
 
-Within a group, agent cards lead and process rows form the tail. Rows order by three age bands, then by a fixed-point score inside each band. Read state never changes the band. Unread drives the wash and blink emphasis, the jump inbox, notifications, and the cap exemption, and nothing else.
+Within a group, agent cards lead and process rows form the tail. Each agent card ranks independently: displayed `attention_status()` values `waiting` and `failed` share the top zone, newest attention stamp first. Every other status, `paused` included, occupies the calm zone below it. Unread drives the wash and blink emphasis, the jump inbox, notifications, and the cap exemption, not the ranking stamp or band.
 
-| Band | Membership | Score inside the band |
+| Calm band | Membership | Order inside the band |
 |---|---|---|
-| hot | Every alive `waiting` or `failed` row, plus other rows with `last_activity` inside `[agents.attention] inactive_after_secs` (default one hour). | Attention rows (`waiting`, `failed`, `paused`) heat from 1.0x to 2.0x across the window, and `waiting` and `failed` hold 2.0x afterward. Calm rows stay flat and keep pane creation order. |
-| warm | Calm and `paused` rows past the inactive window, inside `archive_after_secs` (default 24 hours). | Decays from 1.0x to 0.0x without competing with hot work. |
-| archive | Calm and `paused` rows past the archive window. | Flat status weight. |
+| hot | `last_activity` inside `[agents.attention] inactive_after_secs` (default one hour). | Newest stamp first. |
+| cooling | Past the inactive window, inside `archive_after_secs` (default 24 hours). | Newest stamp first. |
+| archive | Past the archive window. | Newest stamp first. |
 
-The score is status weight times that time factor, both fixed-point ([`score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The weights are spaced so the lowest attention state outranks the highest calm state. Why each status weighs what it does is in [model.md](../agents/model.md#status-and-phase). Process rows sit outside the bands: their clock is the foreground process start, so an idle shell stays live and seats below every agent card. A `paused` row resumes on its own through [auto-continue](../agents/providers.md#auto-continue).
+An actionable row stays in the top zone regardless of age. A stamp begins at `registered_at` (or first sighting without a birth) and changes only when displayed status crosses between the top and calm zones. Prompts, clean results, parks, read receipts, a second ask, and `?`↔`!` do not restamp it. The host reconciles the runtime [attention record](./state.md#attention-stamps) on final framed folds before observation and publication. Every enrichment read derives `AgentCard.attention_at_ms` before the final sort; store-only and scenario rows fall back to birth. Equal stamps break on `launch_ordinal`, pane creation ordinal, then row id. Missing ordinals sort last. Process rows ignore stamps and keep pane creation order. A `paused` row resumes on its own through [auto-continue](../agents/providers.md#auto-continue).
 
-Co-launched agents hold one contiguous block. A named-team launch and an inline multi-agent layout render as one cohort inside their group, teams in declared role-list order and inline launches in agent-cell order. The block takes its band from its members and its urgency from the first case that matches ([`CohortAccum::finish`](../../../crates/rimz/src/store/snapshot/view/layout.rs)):
+Members of one launch batch share one birth timestamp and start in layout agent-cell order, teams and inline layouts alike. Each member's later zone crossings affect only its own card, so teams are not forced into contiguous blocks. Already-stored team ordinals keep their role-list order until relaunched.
 
-| Members | Block urgency | Tie-break |
-|---|---|---|
-| Any `waiting` or `failed` | The strongest actionable member's score. | Oldest attention clock. |
-| Any `paused` | The `paused` weight at the oldest paused member's time factor. | Oldest attention clock. |
-| Otherwise | `running` if any member runs, else `success` if any succeeded, else `idle`, at the most recently active member's time factor. | Earliest pane creation order. |
+The fixed-point attention score remains status weight times an age factor ([`score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs)): attention-class statuses heat from 1.0x to 2.0x over the first hour; cooling calm and parked work decays toward zero until archive. It feeds actionable group urgency, CLI `attention_score` and `teams focus`, never in-group order. The weights are in [model.md](../agents/model.md#status-and-phase).
 
 Groups rank in this order ([`compare_groups`](../../../crates/rimz/src/store/snapshot/view/layout.rs)):
 
