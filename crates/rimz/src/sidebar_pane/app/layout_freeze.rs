@@ -1,40 +1,16 @@
-//! View-owned layout freeze.
+//! View-owned timed freeze following input or a focus hold's release.
 //!
-//! Ranking remains producer truth. This module reapplies the last painted order
-//! over a fresh, already-ranked snapshot for a short interaction window and
-//! appends arrivals within their groups, with new groups after live groups, so
-//! read state and attention signals update without moving the cards under the
-//! user's eyes.
+//! The view module owns focused cards' held rank keys. This module reapplies
+//! the last painted order for the settling window, appending arrivals within
+//! their partitions and new groups after live groups. Content keeps updating.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, ViewState};
 use crate::store::snapshot::{
-    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+    HeldRank, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
-
-/// The focused row leaving the attention class or entering `Running` is the
-/// user acting on that agent in its own pane -- answering its ask or submitting
-/// a prompt -- the moment their eyes return to the sidebar. It arms the same
-/// hold a sidebar interaction does.
-pub(super) fn focused_interaction(
-    prev: &SidebarSnapshot,
-    current: &SidebarSnapshot,
-    selected: Option<&PaneId>,
-) -> bool {
-    let Some(selected) = selected else {
-        return false;
-    };
-    let prev_status = super::state::row_of_pane(prev, selected).and_then(|row| row.status());
-    let next_status = super::state::row_of_pane(current, selected).and_then(|row| row.status());
-    let answered = prev_status.is_some_and(AgentStatus::is_attention)
-        && !next_status.is_some_and(AgentStatus::is_attention);
-    let prompted =
-        next_status == Some(AgentStatus::Running) && prev_status != Some(AgentStatus::Running);
-    answered || prompted
-}
 
 pub(super) fn arm_freeze(ui: &mut ViewState, now_ms: i64) {
     ui.freeze = Some(LayoutFreeze {
@@ -49,6 +25,7 @@ pub(super) fn apply_freeze(
     interacted: bool,
     now_ms: i64,
     parked: bool,
+    held: &HashMap<PaneId, HeldRank>,
 ) {
     if interacted {
         arm_freeze(ui, now_ms);
@@ -63,7 +40,7 @@ pub(super) fn apply_freeze(
     if let Some(hold) = ui.freeze.as_mut() {
         migrate_frozen_order(current, &mut hold.frozen);
         admit_new_items(current, &mut hold.frozen);
-        reorder_to_frozen(current, &hold.frozen);
+        reorder_to_frozen(current, &hold.frozen, held);
     }
     if ui.freeze.is_some() {
         super::selection::anchor_selection(ui, current);
@@ -102,24 +79,22 @@ pub(super) fn defer_inactive_admission(
     current: &mut SidebarSnapshot,
     previous: &SidebarSnapshot,
     selected: Option<&PaneId>,
-    focused: Option<&PaneId>,
+    focused: &[PaneId],
     held: bool,
 ) -> bool {
-    let viewed = [selected, focused].map(|pane| {
-        pane.and_then(|pane| current.row_owning_pane(pane))
-            .map(|row| row.id.clone())
-    });
+    let viewed: HashSet<_> = selected
+        .into_iter()
+        .chain(focused)
+        .filter_map(|pane| current.row_owning_pane(pane))
+        .map(|row| row.id.clone())
+        .collect();
     let defer = |group: &SidebarWorktreeGroup| {
         group.inactive.is_some()
             && previous
                 .worktree_groups
                 .iter()
                 .any(|old| old.key == group.key && old.inactive.is_none())
-            && (held
-                || group
-                    .rows
-                    .iter()
-                    .any(|row| viewed.iter().flatten().any(|id| id == &row.id)))
+            && (held || group.rows.iter().any(|row| viewed.contains(&row.id)))
     };
     if !current.worktree_groups.iter().any(defer) {
         return false;
@@ -142,7 +117,7 @@ pub(super) fn adopt_shared_order(
 ) {
     migrate_frozen_order(current, &mut order);
     admit_new_items(current, &mut order);
-    reorder_to_frozen(current, &order);
+    reorder_to_frozen(current, &order, &HashMap::new());
     ui.freeze = armed_ms.map(|armed_ms| LayoutFreeze {
         frozen: order,
         armed_ms,
@@ -151,20 +126,17 @@ pub(super) fn adopt_shared_order(
     ui.last_order = capture_order(current, ui);
 }
 
-pub(super) fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
+pub(super) fn reorder_to_frozen(
+    current: &mut SidebarSnapshot,
+    frozen: &FrozenOrder,
+    held: &HashMap<PaneId, HeldRank>,
+) {
     let group_pos: HashMap<&str, usize> = frozen
         .groups
         .iter()
         .enumerate()
         .map(|(index, key)| (key.as_str(), index))
         .collect();
-    let row_pos: HashMap<&str, usize> = frozen
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| (row.id.as_str(), index))
-        .collect();
-
     let group_key = |group: &SidebarWorktreeGroup| {
         (
             group.kind == SidebarWorktreeKind::External,
@@ -178,23 +150,7 @@ pub(super) fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOr
     if !current.worktree_groups.iter().is_sorted_by_key(group_key) {
         std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(group_key);
     }
-    let row_key = |row: &SidebarRow| {
-        (
-            row.is_process(),
-            row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX),
-        )
-    };
-    for index in 0..current.worktree_groups.len() {
-        if current.worktree_groups[index]
-            .rows
-            .iter()
-            .is_sorted_by_key(row_key)
-        {
-            continue;
-        }
-        let group = &mut std::sync::Arc::make_mut(&mut current.worktree_groups)[index];
-        std::sync::Arc::make_mut(&mut group.rows).sort_by_key(row_key);
-    }
+    current.sort_rows_in_order(frozen.rows.iter().map(|row| row.id.as_str()), held);
 }
 
 fn migrate_frozen_order(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {

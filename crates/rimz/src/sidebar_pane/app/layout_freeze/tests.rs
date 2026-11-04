@@ -23,7 +23,7 @@ fn arrivals_append_within_the_agent_and_process_partitions() {
         row("build", "terminal_3"),
     ]
     .into();
-    apply_freeze(&mut ui, &mut current, false, 1_001, false);
+    apply_freeze(&mut ui, &mut current, false, 1_001, false, &HashMap::new());
     assert_eq!(
         row_ids(&current, "a"),
         ["agent-a", "agent-b", "shell", "build", "new-process"]
@@ -46,12 +46,26 @@ fn freeze_releases_at_the_deadline_including_parked_ties() {
         let mut ui = ViewState::default();
         let mut current = snapshot_with_groups(vec![group("a", vec![row("a1", "terminal_1")])]);
         arm_freeze(&mut ui, 1_000);
-        apply_freeze(&mut ui, &mut current, false, deadline - 1, parked);
+        apply_freeze(
+            &mut ui,
+            &mut current,
+            false,
+            deadline - 1,
+            parked,
+            &HashMap::new(),
+        );
         assert!(
             ui.freeze.is_some(),
             "holds through deadline - 1 (parked={parked})"
         );
-        apply_freeze(&mut ui, &mut current, false, deadline, parked);
+        apply_freeze(
+            &mut ui,
+            &mut current,
+            false,
+            deadline,
+            parked,
+            &HashMap::new(),
+        );
         assert!(
             ui.freeze.is_none(),
             "releases at the exact deadline (parked={parked})"
@@ -179,7 +193,7 @@ fn already_frozen_order_keeps_groups_and_rows_shared() {
     ]);
     let frozen = capture_order(&original, &ViewState::default());
     let mut current = original.clone();
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
     assert!(std::sync::Arc::ptr_eq(
         &current.worktree_groups,
         &original.worktree_groups
@@ -202,7 +216,7 @@ fn frozen_reorder_detaches_only_changed_rows() {
     let mut frozen = capture_order(&original, &ViewState::default());
     frozen.rows.swap(0, 1);
     let mut current = original.clone();
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
     assert_eq!(row_ids(&current, "a"), ["a1", "a2"]);
     assert!(!std::sync::Arc::ptr_eq(
         &current.worktree_groups,
@@ -288,147 +302,417 @@ fn frozen_reorder_matches_stable_sort_across_partitions_and_arrivals() {
                     )
                 });
             }
-            reorder_to_frozen(&mut current, &frozen);
+            reorder_to_frozen(&mut current, &frozen, &HashMap::new());
             assert_eq!(current.worktree_groups, expected.worktree_groups);
         }
     }
 }
 
 #[test]
-fn focused_waiting_row_becoming_running_is_an_interaction() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
-    )]);
-    let current = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-
-    assert!(focused_interaction(&prev, &current, Some(&selected)));
+fn focused_status_changes_keep_the_captured_rank_without_timing_out() {
+    for (before, after) in [
+        (AgentStatus::Waiting, AgentStatus::Running),
+        (AgentStatus::Idle, AgentStatus::Running),
+        (AgentStatus::Running, AgentStatus::Waiting),
+        (AgentStatus::Running, AgentStatus::Running),
+        (AgentStatus::Running, AgentStatus::Success),
+        (AgentStatus::Paused, AgentStatus::Running),
+    ] {
+        let mut previous = hold_snapshot(vec![group(
+            "a",
+            vec![
+                stamped_row("focused", "terminal_1", before, 20),
+                stamped_row("other", "terminal_2", AgentStatus::Waiting, 10),
+            ],
+        )]);
+        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+        rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+        let expected = row_ids(&rig.context.current, "a")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        rig.clock.advance(std::time::Duration::from_secs(31));
+        let row = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut previous.worktree_groups)[0].rows,
+        )
+        .iter_mut()
+        .find(|row| row.id == "focused")
+        .unwrap();
+        let agent = row.as_agent_mut().unwrap();
+        agent.status = after;
+        if before.is_actionable() != after.is_actionable() {
+            agent.attention_at_ms = Some(30);
+        }
+        rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+        assert!(
+            rig.ui.freeze.is_none(),
+            "{before:?} -> {after:?} is held, not timed"
+        );
+        assert_eq!(row_ids(&rig.context.current, "a"), expected);
+        rig.clock.advance(std::time::Duration::from_secs(31));
+        rig.present(previous, std::slice::from_ref(&focused), false);
+        assert_eq!(row_ids(&rig.context.current, "a"), expected);
+    }
 }
 
 #[test]
-fn focused_running_row_staying_running_is_not_an_interaction() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-    let current = prev.clone();
-
-    assert!(!focused_interaction(&prev, &current, Some(&selected)));
-}
-
-#[test]
-fn attention_drop_on_an_unselected_row_is_ignored() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
+fn a_focus_entry_captures_the_previous_rank_before_this_folds_ask() {
+    let previous = hold_snapshot(vec![group(
         "a",
         vec![
-            agent_row("selected", "terminal_1", AgentStatus::Running),
-            agent_row("other", "terminal_2", AgentStatus::Waiting),
+            stamped_row("other", "terminal_2", AgentStatus::Running, 20),
+            stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
         ],
     )]);
-    let current = snapshot_with_groups(vec![group(
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+    let mut next = previous;
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
+    )[1];
+    row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+    row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+    rig.present(next, &[focused], false);
+    assert_eq!(row_ids(&rig.context.current, "a"), ["other", "focused"]);
+}
+
+#[test]
+fn a_prompt_lifting_a_focused_cooling_card_does_not_move_it() {
+    let mut cold = stamped_row("focused", "terminal_1", AgentStatus::Idle, 30);
+    cold.inactive = true;
+    let previous = hold_snapshot(vec![group(
         "a",
         vec![
-            agent_row("selected", "terminal_1", AgentStatus::Running),
-            agent_row("other", "terminal_2", AgentStatus::Running),
+            stamped_row("other", "terminal_2", AgentStatus::Idle, 20),
+            cold,
         ],
     )]);
-
-    assert!(!focused_interaction(&prev, &current, Some(&selected)));
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+    rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+    let mut next = previous;
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
+    )[1];
+    row.inactive = false;
+    row.as_agent_mut().unwrap().status = AgentStatus::Running;
+    rig.present(next.clone(), std::slice::from_ref(&focused), false);
+    rig.clock.advance(std::time::Duration::from_secs(31));
+    rig.present(next, &[focused], false);
+    assert_eq!(row_ids(&rig.context.current, "a"), ["other", "focused"]);
 }
 
 #[test]
-fn attention_drop_without_a_selection_is_ignored() {
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
-    )]);
-    let current = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-
-    assert!(!focused_interaction(&prev, &current, None));
-}
-
-#[test]
-fn focused_attention_row_leaving_the_snapshot_drops_attention() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
-    )]);
-    let current = snapshot_with_groups(vec![group("a", Vec::new())]);
-
-    assert!(focused_interaction(&prev, &current, Some(&selected)));
-}
-
-#[test]
-fn focused_idle_row_becoming_running_is_a_prompt() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Idle)],
-    )]);
-    let current = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-
-    assert!(focused_interaction(&prev, &current, Some(&selected)));
-}
-
-#[test]
-fn focused_running_row_materializing_is_a_prompt() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group("a", Vec::new())]);
-    let current = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-
-    assert!(focused_interaction(&prev, &current, Some(&selected)));
-}
-
-#[test]
-fn focused_running_row_finishing_is_not_an_interaction() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
-    )]);
-    let current = snapshot_with_groups(vec![group(
-        "a",
-        vec![agent_row("selected", "terminal_1", AgentStatus::Success)],
-    )]);
-
-    assert!(!focused_interaction(&prev, &current, Some(&selected)));
-}
-
-#[test]
-fn prompt_on_an_unselected_row_is_ignored() {
-    let selected = pane("terminal_1", "tab_0", false).pane_id;
-    let prev = snapshot_with_groups(vec![group(
+fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
+    let previous = hold_snapshot(vec![group(
         "a",
         vec![
-            agent_row("selected", "terminal_1", AgentStatus::Idle),
-            agent_row("other", "terminal_2", AgentStatus::Idle),
+            stamped_row("other", "terminal_2", AgentStatus::Running, 20),
+            stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
         ],
     )]);
-    let current = snapshot_with_groups(vec![group(
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+    rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+    let mut next = previous;
+    let now = next.now;
+    let rows =
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows);
+    let parent = rows[1].as_agent_mut().unwrap();
+    parent.attention_at_ms = Some(30);
+    parent
+        .sub_agents
+        .push(crate::store::snapshot::SidebarSubAgent {
+            id: "child".into(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            pane: None,
+            prior_turn: false,
+            name: "child".into(),
+            petname: None,
+            provider_native: true,
+            status: AgentStatus::Waiting,
+            stalled: false,
+            phase: crate::agents::TurnPhase::Idle,
+            turn_error_label: None,
+            task: None,
+            first_prompt: None,
+            profile: None,
+            model: None,
+            fast: false,
+            effort: None,
+            description: None,
+            tokens: None,
+            context_window: None,
+            compaction_count: 0,
+            cost_usd: None,
+            elapsed_secs: None,
+            started_at: None,
+            finished_at: None,
+            last_activity: now,
+            registered_at: Some(now),
+        });
+    rows.push(stamped_row(
+        "arrival",
+        "terminal_3",
+        AgentStatus::Waiting,
+        40,
+    ));
+    rig.present(next, &[focused], false);
+    assert_eq!(
+        row_ids(&rig.context.current, "a"),
+        ["arrival", "other", "focused"]
+    );
+}
+
+#[test]
+fn a_focused_shell_becoming_an_agent_stays_in_the_process_tail_even_during_a_freeze() {
+    let previous = hold_snapshot(vec![group(
         "a",
         vec![
-            agent_row("selected", "terminal_1", AgentStatus::Idle),
-            agent_row("other", "terminal_2", AgentStatus::Running),
+            stamped_row("agent", "terminal_3", AgentStatus::Running, 10),
+            row("shell", "terminal_1"),
+            row("focused", "terminal_2"),
         ],
     )]);
+    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+    rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+    arm_freeze(&mut rig.ui, rig.clock.now_ms() as i64);
+    let mut next = previous;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows)[2] =
+        stamped_row("new-id", "terminal_2", AgentStatus::Waiting, 30);
+    rig.present(next.clone(), std::slice::from_ref(&focused), false);
+    assert_eq!(
+        row_ids(&rig.context.current, "a"),
+        ["agent", "shell", "new-id"]
+    );
+    rig.clock.advance(std::time::Duration::from_secs(31));
+    rig.present(next, &[focused], false);
+    assert_eq!(
+        row_ids(&rig.context.current, "a"),
+        ["agent", "shell", "new-id"]
+    );
+}
 
-    assert!(!focused_interaction(&prev, &current, Some(&selected)));
+#[test]
+fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping() {
+    let mut previous = inactivity_boundary();
+    let focused = pane("terminal_3", "tab_0", false).pane_id;
+    let cooling = pane("terminal_2", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), None);
+    rig.present(previous.clone(), &[focused.clone(), cooling.clone()], false);
+    assert_eq!(
+        group_keys(&rig.context.current),
+        ["a", "b", "c", "external"]
+    );
+    rig.clock.advance(std::time::Duration::from_secs(1));
+    previous.now = rig.clock.timestamp();
+    let mut arrival = stamped_row("new", "terminal_5", AgentStatus::Running, 30);
+    arrival.as_agent_mut().unwrap().registered_at = Some(previous.now);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut previous.worktree_groups)[2].rows)
+        .push(arrival);
+    rig.present(previous, &[focused, cooling], false);
+    assert!(
+        !inactive_group(&rig.context.current, "b"),
+        "every co-viewer's focus defers folding"
+    );
+    assert_eq!(
+        group_keys(&rig.context.current),
+        ["a", "b", "c", "external"]
+    );
+}
+
+#[test]
+fn releasing_focus_arms_the_existing_deadline_then_settles_the_card() {
+    for (parked, seconds) in [(false, 5), (true, 30)] {
+        let previous = hold_snapshot(vec![group(
+            "a",
+            vec![
+                stamped_row("other", "terminal_2", AgentStatus::Running, 20),
+                stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
+            ],
+        )]);
+        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+        rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+        let mut next = previous;
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
+        )[1];
+        row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+        row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+        rig.present(next.clone(), std::slice::from_ref(&focused), false);
+        rig.clock.advance(std::time::Duration::from_secs(40));
+        rig.present(next.clone(), &[], parked);
+        assert_eq!(
+            rig.ui.freeze.as_ref().map(|hold| hold.armed_ms),
+            Some(rig.clock.now_ms() as i64)
+        );
+        rig.clock
+            .advance(std::time::Duration::from_millis(seconds * 1_000 - 1));
+        rig.present(next.clone(), &[], parked);
+        assert_eq!(row_ids(&rig.context.current, "a"), ["other", "focused"]);
+        rig.clock.advance(std::time::Duration::from_millis(1));
+        rig.present(next, &[], parked);
+        assert!(rig.ui.freeze.is_none());
+        assert_eq!(row_ids(&rig.context.current, "a"), ["focused", "other"]);
+    }
+}
+
+#[test]
+fn refocusing_before_the_release_freeze_settles_keeps_the_held_rank() {
+    let mut cold = stamped_row("focused", "terminal_1", AgentStatus::Idle, 30);
+    cold.inactive = true;
+    let previous = hold_snapshot(vec![group(
+        "a",
+        vec![
+            stamped_row("other", "terminal_2", AgentStatus::Idle, 20),
+            cold,
+        ],
+    )]);
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
+    rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+    let mut next = previous;
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
+    )[1];
+    row.inactive = false;
+    row.as_agent_mut().unwrap().status = AgentStatus::Running;
+    rig.present(next.clone(), std::slice::from_ref(&focused), false);
+    rig.clock.advance(std::time::Duration::from_secs(1));
+    rig.present(next.clone(), &[], false);
+    rig.clock.advance(std::time::Duration::from_secs(1));
+    rig.present(next.clone(), std::slice::from_ref(&focused), false);
+    rig.clock.advance(std::time::Duration::from_secs(10));
+    rig.present(next, &[focused], false);
+    assert!(rig.ui.freeze.is_none());
+    assert_eq!(row_ids(&rig.context.current, "a"), ["other", "focused"]);
+}
+
+#[test]
+fn first_fetch_and_new_panes_capture_from_the_current_snapshot() {
+    for empty in [true, false] {
+        let previous = hold_snapshot(if empty {
+            Vec::new()
+        } else {
+            vec![group(
+                "a",
+                vec![stamped_row("other", "terminal_2", AgentStatus::Running, 20)],
+            )]
+        });
+        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let mut rig = HoldRig::new(previous, Some(focused.clone()));
+        let mut next = hold_snapshot(vec![group(
+            "a",
+            vec![
+                stamped_row("other", "terminal_2", AgentStatus::Running, 20),
+                stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
+            ],
+        )]);
+        rig.present(next.clone(), std::slice::from_ref(&focused), false);
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
+        )[1];
+        row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+        row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+        rig.clock.advance(std::time::Duration::from_secs(31));
+        rig.present(next, &[focused], false);
+        assert_eq!(
+            row_ids(&rig.context.current, "a"),
+            ["other", "focused"],
+            "first fetch={empty}"
+        );
+    }
+}
+
+#[test]
+fn only_focused_rows_hold_and_a_disappearing_row_releases_its_hold() {
+    let previous = hold_snapshot(vec![group(
+        "a",
+        vec![
+            stamped_row("focused", "terminal_1", AgentStatus::Waiting, 20),
+            stamped_row("other", "terminal_2", AgentStatus::Idle, 10),
+        ],
+    )]);
+    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = HoldRig::new(previous.clone(), None);
+    rig.present(previous.clone(), std::slice::from_ref(&focused), false);
+    let mut next = previous;
+    let rows =
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows);
+    rows.remove(0);
+    rows[0].as_agent_mut().unwrap().status = AgentStatus::Running;
+    rig.clock.advance(std::time::Duration::from_secs(40));
+    rig.present(next, &[focused], false);
+    assert_eq!(
+        rig.ui.freeze.as_ref().map(|hold| hold.armed_ms),
+        Some(rig.clock.now_ms() as i64)
+    );
+    assert_eq!(row_ids(&rig.context.current, "a"), ["other"]);
+}
+
+fn stamped_row(id: &str, raw_pane: &str, status: AgentStatus, stamp: i64) -> SidebarRow {
+    let mut row = agent_row(id, raw_pane, status);
+    row.last_activity = jiff::Timestamp::from_second(100_000).unwrap();
+    let birth = row.last_activity;
+    let card = row.as_agent_mut().unwrap();
+    card.registered_at = Some(birth);
+    card.attention_at_ms = Some(stamp);
+    row
+}
+
+fn hold_snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
+    let mut snapshot = snapshot_with_groups(groups);
+    snapshot.now = jiff::Timestamp::from_second(100_000).unwrap();
+    snapshot.sort_groups_for_presentation();
+    snapshot
+}
+
+struct HoldRig {
+    clock: super::super::clock::LoopClock,
+    ui: ViewState,
+    context: super::super::view_state::ViewContext,
+}
+
+impl HoldRig {
+    fn new(previous: SidebarSnapshot, selected: Option<PaneId>) -> Self {
+        let clock = super::super::clock::LoopClock::play(previous.now);
+        Self {
+            context: super::super::view_state::ViewContext::new(previous, clock.now()),
+            clock,
+            ui: ViewState {
+                selected_pane: selected.clone(),
+                baseline_pane: selected,
+                ..ViewState::default()
+            },
+        }
+    }
+
+    fn present(&mut self, next: SidebarSnapshot, focused: &[PaneId], parked: bool) {
+        let previous = std::mem::replace(&mut self.context.current, next);
+        let selected = self.ui.selected_pane.clone();
+        self.context.reconcile_selection_and_order(
+            &mut self.ui,
+            super::super::view_state::SelectionFold {
+                previous: &previous,
+                selected,
+                focused: focused
+                    .first()
+                    .filter(|first| focused.iter().all(|pane| pane == *first))
+                    .cloned(),
+                held_panes: focused.to_vec(),
+                cleared: false,
+                filter: None,
+                mux: crate::MuxName::Zellij,
+                clock: &self.clock,
+                now: self.clock.now(),
+                parked,
+            },
+        );
+        self.ui.last_order = capture_order(&self.context.current, &self.ui);
+    }
 }
 
 #[test]
@@ -458,7 +742,7 @@ fn reorder_pipeline_appends_unknowns_after_frozen_items() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
 
     assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
@@ -485,7 +769,7 @@ fn mid_hold_group_churn_keeps_new_last_ranked_group_last() {
     };
 
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
 
     assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
     assert_eq!(frozen.groups, vec!["a", "b", "new"]);
@@ -509,7 +793,7 @@ fn new_row_appends_after_frozen_neighbors() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
 
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a3", "a2"]);
     assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a3", "a2"]);
@@ -529,7 +813,7 @@ fn new_first_ranked_row_appends_at_tail() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen);
+    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
 
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a-new"]);
     assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a-new"]);
@@ -582,7 +866,7 @@ fn apply_freeze_arms_holds_and_expires() {
     )]);
     let now_ms = 1_000;
 
-    apply_freeze(&mut ui, &mut current, true, now_ms, false);
+    apply_freeze(&mut ui, &mut current, true, now_ms, false, &HashMap::new());
 
     let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     assert_eq!(
@@ -593,12 +877,26 @@ fn apply_freeze_arms_holds_and_expires() {
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_freeze(&mut ui, &mut current, false, expires_ms - 1, false);
+    apply_freeze(
+        &mut ui,
+        &mut current,
+        false,
+        expires_ms - 1,
+        false,
+        &HashMap::new(),
+    );
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
+    apply_freeze(
+        &mut ui,
+        &mut current,
+        false,
+        expires_ms,
+        false,
+        &HashMap::new(),
+    );
     assert!(ui.freeze.is_none());
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
 }
@@ -878,6 +1176,7 @@ fn reconcile_fold(
         SelectionFold {
             previous,
             selected,
+            held_panes: focused.iter().cloned().collect(),
             focused,
             cleared: false,
             filter: Some(filter),
@@ -922,7 +1221,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     let now_ms = 1_000;
     let mut current = snapshot_with_groups(groups());
 
-    apply_freeze(&mut ui, &mut current, true, now_ms, false);
+    apply_freeze(&mut ui, &mut current, true, now_ms, false, &HashMap::new());
 
     assert_eq!(
         group_keys(&current),
@@ -939,7 +1238,14 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
 
     let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     let mut current = snapshot_with_groups(groups());
-    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
+    apply_freeze(
+        &mut ui,
+        &mut current,
+        false,
+        expires_ms,
+        false,
+        &HashMap::new(),
+    );
 
     assert!(ui.freeze.is_none());
     assert_eq!(
@@ -1017,7 +1323,7 @@ fn freeze_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
         ],
     )]);
 
-    apply_freeze(&mut ui, &mut current, true, 1_000, false);
+    apply_freeze(&mut ui, &mut current, true, 1_000, false, &HashMap::new());
 
     assert_eq!(
         row_ids(&current, "team"),

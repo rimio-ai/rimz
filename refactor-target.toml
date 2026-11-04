@@ -3742,7 +3742,13 @@ path = "crates/rimz/src/store"
 # workflow::{RunRead, unfinished_under} share strict and best-effort cross-room run protection (+2).
 # SidebarInactive carries fold membership and landedness to renderer consumers (+1).
 # SidebarSnapshot::sort_presented_groups orders renderer-deferred membership (+1).
-surface-budget = 533
+# HeldRank and SidebarSnapshot::{capture_held_rank, sort_groups_with_holds, sort_rows_in_order} keep focus and frozen partition keys inside the view (+4).
+surface-budget = 537
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::layout::HeldRank"
+reason = "Client views retain opaque pane and group ranks across focus; only the view module interprets them."
 
 [[verdict]]
 kind = "item"

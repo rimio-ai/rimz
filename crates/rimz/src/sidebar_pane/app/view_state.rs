@@ -1,5 +1,6 @@
 //! Portable reconciliation state advanced by the attachment painting a view.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,7 +19,7 @@ use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::timing::{FOCUS_MARKER_TMUX_DWELL, FOCUS_MARKER_ZELLIJ_DWELL, TAB_READ_DWELL};
 use crate::sidebar::unread::UnreadClearCause;
 use crate::sidebar_pane::render::{self, ViewState};
-use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
+use crate::store::snapshot::{HeldRank, SidebarOwnView, SidebarSnapshot};
 
 use super::clock::LoopClock;
 use super::fetch::{FetchUpdate, FoldInputs, SnapshotSource};
@@ -47,6 +48,7 @@ pub(super) struct SelectionFold<'a> {
     pub(super) previous: &'a SidebarSnapshot,
     pub(super) selected: Option<PaneId>,
     pub(super) focused: Option<PaneId>,
+    pub(super) held_panes: Vec<PaneId>,
     pub(super) cleared: bool,
     pub(super) filter: Option<crate::sidebar_pane::view::BodyLens>,
     pub(super) mux: MuxName,
@@ -99,6 +101,9 @@ pub(super) struct ViewContext {
     pub(super) confirmed_focus_intent_ms: u64,
     pub(super) health: Health,
     pub(super) gate: GateState,
+    // Active keys are bounded by client focuses; released keys by row panes and the timed freeze.
+    pub(super) held_ranks: HashMap<PaneId, HeldRank>,
+    pub(super) released_ranks: HashMap<PaneId, HeldRank>,
 }
 
 impl ViewContext {
@@ -124,6 +129,8 @@ impl ViewContext {
             confirmed_focus_intent_ms: 0,
             health: Health::default(),
             gate: GateState::default(),
+            held_ranks: HashMap::new(),
+            released_ranks: HashMap::new(),
         }
     }
 
@@ -505,6 +512,7 @@ impl ViewContext {
             previous,
             selected,
             focused,
+            mut held_panes,
             cleared,
             filter,
             mux,
@@ -513,16 +521,42 @@ impl ViewContext {
             parked,
         } = fold;
         let now_ms = clock.timestamp_at(now).as_millisecond();
+        held_panes.retain(|pane| self.current.row_owning_pane(pane).is_some());
+        let mut focus_released = false;
+        self.held_ranks.retain(|pane, rank| {
+            if held_panes.contains(pane) {
+                return true;
+            }
+            self.released_ranks.insert(pane.clone(), rank.clone());
+            focus_released = true;
+            false
+        });
+        self.released_ranks
+            .retain(|pane, _| self.current.row_owning_pane(pane).is_some());
+        for pane in &held_panes {
+            if self.held_ranks.contains_key(pane) {
+                continue;
+            }
+            let mut capture_ranks = self.released_ranks.clone();
+            capture_ranks.extend(self.held_ranks.clone());
+            // First fetch and new panes have no previous row: capture this fold's rank.
+            if let Some(rank) = previous
+                .capture_held_rank(pane, &capture_ranks)
+                .or_else(|| self.current.capture_held_rank(pane, &capture_ranks))
+            {
+                self.held_ranks.insert(pane.clone(), rank);
+            }
+        }
         // Presentation sort reorders the snapshot's full row set. The layout freeze
         // below can keep this sorted order stable across a read-clear long enough
         // for the user to confirm where they landed.
-        self.current.sort_groups_for_presentation();
+        self.current.sort_groups_with_holds(&self.held_ranks);
         // Keep the viewed row visible before selection reconciliation can lose it.
         let mut deferred = layout_freeze::defer_inactive_admission(
             &mut self.current,
             previous,
             ui.selected_pane.as_ref(),
-            focused.as_ref(),
+            &held_panes,
             false,
         );
         // Reconcile the highlight as part of the fold, before the next frame paints:
@@ -562,23 +596,33 @@ impl ViewContext {
                 self.pending_input_focus = None;
             }
         }
-        let acted =
-            layout_freeze::focused_interaction(previous, &self.current, ui.selected_pane.as_ref());
-        let interacted = cleared || ui.selected_pane != selected || acted;
+        let interacted = cleared || ui.selected_pane != selected || focus_released;
         let held = ui.freeze.is_some();
-        layout_freeze::apply_freeze(ui, &mut self.current, interacted, now_ms, parked);
+        let mut frozen_ranks = self.released_ranks.clone();
+        frozen_ranks.extend(self.held_ranks.clone());
+        layout_freeze::apply_freeze(
+            ui,
+            &mut self.current,
+            interacted,
+            now_ms,
+            parked,
+            &frozen_ranks,
+        );
+        if ui.freeze.is_none() {
+            self.released_ranks.clear();
+        }
         deferred |= layout_freeze::defer_inactive_admission(
             &mut self.current,
             previous,
             ui.selected_pane.as_ref(),
-            focused.as_ref(),
+            &held_panes,
             ui.freeze.is_some(),
         );
         if deferred {
             if let Some(hold) = &ui.freeze {
-                layout_freeze::reorder_to_frozen(&mut self.current, &hold.frozen);
+                layout_freeze::reorder_to_frozen(&mut self.current, &hold.frozen, &frozen_ranks);
             } else {
-                self.current.sort_presented_groups();
+                self.current.sort_presented_groups(&self.held_ranks);
             }
             super::selection::anchor_selection(ui, &self.current);
         }
