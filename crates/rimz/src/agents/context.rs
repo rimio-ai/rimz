@@ -1585,7 +1585,10 @@ fn is_transient_server_error(lower: &str) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTurnError {
     /// Whether this record proves the turn ended, rather than a mid-turn error.
-    /// Older sidecars and unproven provider records leave it false.
+    /// Older sidecars and unproven provider records leave it false. Codex also
+    /// writes false markers in the middle of a turn, from its rollout
+    /// `turn_error`, `stream_error`, and `error` records, so a false marker
+    /// does not prove the turn is over.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ended_turn: bool,
     /// The display class for the dead turn. Older sidecars omitted this field;
