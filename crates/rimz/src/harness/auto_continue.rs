@@ -25,7 +25,7 @@
 //! reuse stamped park parses. A write, removal, or helper spawn rereads fresh
 //! bytes and recomputes its decision first.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -50,6 +50,73 @@ use crate::store::snapshot::SidebarSnapshot;
 /// before the agent's first hook lands; if a nudge fails to wake a still-parked
 /// agent, RimZ retries on this cadence rather than typing every frame.
 const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Read card status with lazy evidence for spent provider pauses.
+///
+/// One value serves one snapshot. Evidence is built at most once, from the
+/// snapshot and time of the first status read that needs it. Budget parks
+/// retain precedence over spent provider pauses.
+pub struct CardStatus {
+    store: Option<crate::Store>,
+    demotion: OnceCell<crate::agents::ParkDemotion>,
+}
+
+impl CardStatus {
+    pub fn new(store: &crate::Store) -> Self {
+        Self {
+            store: Some(store.clone()),
+            demotion: OnceCell::new(),
+        }
+    }
+
+    pub fn from_demotion(demotion: crate::agents::ParkDemotion) -> Self {
+        Self {
+            store: None,
+            demotion: demotion.into(),
+        }
+    }
+
+    pub fn status(
+        &self,
+        snapshot: &SidebarSnapshot,
+        agent: &AgentState,
+        now: Timestamp,
+    ) -> AgentStatus {
+        let status = agent.effective_status(now);
+        if status != AgentStatus::Paused || agent.budget_park.is_some() {
+            return status;
+        }
+        let Some((class, _)) = agent
+            .displayed_turn_error(now)
+            .filter(|(class, _)| class.pauses_turn())
+        else {
+            return status;
+        };
+        let demotion = self.demotion.get_or_init(|| {
+            // A reader without a store already has fixed evidence in the cell.
+            let store = self.store.as_ref().expect("fixed evidence is initialized");
+            park_demotion(
+                Some(store),
+                store.paths(),
+                store.runtime_paths(),
+                &crate::config::MachineConfig::load_lenient(),
+                &snapshot.agents,
+                snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+                now,
+            )
+        });
+        if demotion.is_spent(agent, class) {
+            AgentStatus::Failed
+        } else {
+            status
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evidence_built(&self) -> bool {
+        self.demotion.get().is_some()
+    }
+}
 
 /// Read durable park evidence for the sidebar and rowless CLI projections.
 ///

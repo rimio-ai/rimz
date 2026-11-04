@@ -47,4 +47,4 @@ pub mod tmp_floor;
 pub mod workflow;
 pub mod worktree_entry;
 
-pub use auto_continue::{AutoContinueRequest, park_demotion};
+pub use auto_continue::{AutoContinueRequest, CardStatus, park_demotion};

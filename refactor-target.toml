@@ -2150,7 +2150,8 @@ path = "crates/rimz/src/harness"
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
 # workflow::parse shares the sealed-spec parser with cached sidebar projection (+1).
-surface-budget = 1076
+# auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
+surface-budget = 1077
 
 [[verdict]]
 kind = "item"
@@ -6657,6 +6658,11 @@ reason = "Spent-child CLI parity preserves the root status ladder's spent-window
 kind = "item"
 key = "harness::auto_continue::park_demotion"
 reason = "Spent-child CLI parity assembles durable demotion inputs once for sidebar and binary consumers."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_continue::CardStatus"
+reason = "Message gates, reply waits and takeover share a read-only status reader with lazy spent-pause evidence."
 
 [[verdict]]
 kind = "item"

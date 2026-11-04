@@ -3,6 +3,7 @@ use std::io::Write;
 use jiff::Timestamp;
 
 use super::*;
+use crate::agents::ParkDemotion;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
 use crate::store::event::{EventEnvelope, MessageEventMethod};
@@ -123,7 +124,6 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
 
 #[test]
 fn wake_in_flight_keeps_a_rested_agent_sleeping() {
-    let (_dir, store) = wait_store();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Success;
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -145,8 +145,7 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             ),
             messages: vec![message],
             now: Timestamp::now(),
-            store: store.clone(),
-            demotion: ParkDemotion::default().into(),
+            card_status: CardStatus::from_demotion(ParkDemotion::default()),
         }
     };
     let wake = |notice| MessageSender::Harness { notice };
@@ -188,14 +187,12 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
 
 #[test]
 fn turn_wait_reason_projects_each_open_status() {
-    let (_dir, store) = wait_store();
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let view = TurnWaitView {
         snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], Timestamp::now()),
         messages: vec![],
         now: Timestamp::now(),
-        store,
-        demotion: ParkDemotion::default().into(),
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
     };
     for (status, expected) in [
         (AgentStatus::Running, TurnWaitReason::Running),
@@ -221,15 +218,13 @@ fn provider_error_settles_the_reply_decision_until_new_activity() {
     use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
 
     let at = Timestamp::from_second(1_000).unwrap();
-    let (_dir, store) = wait_store();
     let now = Timestamp::from_second(2_000).unwrap();
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let view = TurnWaitView {
         snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], now),
         messages: vec![],
         now,
-        store,
-        demotion: ParkDemotion::default().into(),
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
     };
     let reply = WaitPhase::Reply {
         turn_started_at: Some(at),
@@ -293,7 +288,6 @@ fn spent_provider_pauses_end_replies_but_recoverable_and_budget_parks_stay_open(
     };
     use TurnCompletion::{Failed, Open};
 
-    let (_dir, store) = wait_store();
     let at = Timestamp::from_second(1_000).unwrap();
     let now = Timestamp::from_second(2_000).unwrap();
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
@@ -353,8 +347,7 @@ fn spent_provider_pauses_end_replies_but_recoverable_and_budget_parks_stay_open(
             snapshot: SidebarSnapshot::build_with_agents(workspace.clone(), vec![], now),
             messages: vec![],
             now,
-            store: store.clone(),
-            demotion: ParkDemotion::new(&capacities, exhausted, now).into(),
+            card_status: CardStatus::from_demotion(ParkDemotion::new(&capacities, exhausted, now)),
         };
         assert_eq!(
             view.completion(&agent),
@@ -386,7 +379,7 @@ fn spent_pause_evidence_is_lazy_and_cached_per_view() {
     assert!(!view.wake_in_flight(&agent, true));
     assert!(!view.soft_compact_in_flight(&agent));
     assert_eq!(view.completion(&agent), TurnCompletion::Open);
-    assert!(view.demotion.get().is_none());
+    assert!(!view.card_status.evidence_built());
 
     agent.context = Some(AgentContext {
         turn_error: Some(AgentTurnError {
@@ -404,7 +397,7 @@ fn spent_pause_evidence_is_lazy_and_cached_per_view() {
     );
     assert!(!view.wake_in_flight(&agent, true));
     assert!(!view.soft_compact_in_flight(&agent));
-    assert!(view.demotion.get().is_none());
+    assert!(!view.card_status.evidence_built());
     assert_eq!(view.reason(&agent), Some(TurnWaitReason::Paused));
 
     let cache = RateLimitsCache {
@@ -438,7 +431,6 @@ fn spent_pause_evidence_is_lazy_and_cached_per_view() {
 
 #[test]
 fn turn_wait_reason_defers_person_until_permission_review_expires() {
-    let (_dir, store) = wait_store();
     let at = Timestamp::from_second(1_000).unwrap();
     let mut agent = crate::testkit::agent_state("codex", "child", at);
     agent.status = AgentStatus::Waiting;
@@ -468,8 +460,7 @@ fn turn_wait_reason_defers_person_until_permission_review_expires() {
             ),
             messages: vec![],
             now,
-            store: store.clone(),
-            demotion: ParkDemotion::default().into(),
+            card_status: CardStatus::from_demotion(ParkDemotion::default()),
         };
         assert_eq!(view.reason(&agent), Some(reason));
     }
@@ -477,7 +468,6 @@ fn turn_wait_reason_defers_person_until_permission_review_expires() {
 
 #[test]
 fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
-    let (_dir, store) = wait_store();
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", now);
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -523,8 +513,7 @@ fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
                     ),
                     messages: vec![message.clone()],
                     now,
-                    store: store.clone(),
-                    demotion: ParkDemotion::default().into(),
+                    card_status: CardStatus::from_demotion(ParkDemotion::default()),
                 };
                 assert_eq!(
                     view.status(&agent),
@@ -578,7 +567,6 @@ fn wake_turn_continues_an_anchored_reply_without_a_sleeping_poll() {
 
 #[test]
 fn card_uses_recorded_wake_classification() {
-    let (_dir, store) = wait_store();
     let agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     let mut wire = serde_json::to_value(agent).unwrap();
     for (prompt, expected) in [
@@ -602,8 +590,7 @@ fn card_uses_recorded_wake_classification() {
             ),
             messages: Vec::new(),
             now: Timestamp::UNIX_EPOCH,
-            store: store.clone(),
-            demotion: ParkDemotion::default().into(),
+            card_status: CardStatus::from_demotion(ParkDemotion::default()),
         };
         assert_eq!(view.card(&view.snapshot.agents[0]).wake_turn, expected);
     }
@@ -611,7 +598,6 @@ fn card_uses_recorded_wake_classification() {
 
 #[test]
 fn card_identifies_wake_turns_from_the_rollup_classification() {
-    let (_dir, store) = wait_store();
     let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Running;
     agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
@@ -637,8 +623,7 @@ fn card_identifies_wake_turns_from_the_rollup_classification() {
             ),
             messages: Vec::new(),
             now: Timestamp::UNIX_EPOCH,
-            store: store.clone(),
-            demotion: ParkDemotion::default().into(),
+            card_status: CardStatus::from_demotion(ParkDemotion::default()),
         };
         assert_eq!(
             view.card(&view.snapshot.agents[0]).wake_turn,
@@ -839,8 +824,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: running,
         messages: vec![message.clone()],
         now: Timestamp::now(),
-        store: store.clone(),
-        demotion: ParkDemotion::default().into(),
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
     };
     assert!(!advance_leg(&mut leg, &store, &running, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.last_message, None);
@@ -851,8 +835,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: idle,
         messages: vec![message],
         now: Timestamp::now(),
-        store: store.clone(),
-        demotion: ParkDemotion::default().into(),
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
     };
     assert!(advance_leg(&mut leg, &store, &idle, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.result().final_message, None);
