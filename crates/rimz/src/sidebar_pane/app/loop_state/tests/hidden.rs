@@ -2381,6 +2381,38 @@ fn zellij_room_reminder_banner_comes_from_the_watched_pane_only() {
 }
 
 #[test]
+fn reveal_paints_when_the_fork_source_already_reduced_the_publication() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = mirror_pair(mux);
+        pair.clock.advance(Duration::from_secs(35));
+        set_cost(&mut pair.snapshot, 0.5);
+        pair.sample_with(&[(1, 0), (2, 1)], |frame| {
+            frame.client_view_fresh = false;
+        });
+        repaint_source(&mut pair);
+        let hidden = &mut pair.panes[1];
+        hidden.state.pane.dirty = false;
+        hidden.state.pane.next_frame = pair.clock.now() + animation_frame(&pair.snapshot);
+        let before = hidden.state.pane.paints;
+        hidden.state.on_snapshot();
+        assert_eq!(
+            hidden.state.views.mirror().worktree_groups[0].rows[0]
+                .as_agent()
+                .unwrap()
+                .delegated_cost_usd,
+            Some(0.5),
+            "the revealed view has current content"
+        );
+        pair.clock.advance(animation_frame(&pair.snapshot));
+        assert!(
+            advance_wakeup(hidden, Wakeup::Tick),
+            "{mux:?}: a caught-up fork must still paint its revealing pane"
+        );
+        assert_eq!(hidden.state.pane.paints, before + 1);
+    }
+}
+
+#[test]
 fn arrival_settles_spend_accrued_while_hidden() {
     let mut pair = super::scroll::SharedPanes::new(MuxName::Zellij);
     set_cost(&mut pair.snapshot, 1.0);

@@ -285,6 +285,7 @@ impl ViewAccess {
             }
             let mut arrival_until = None;
             if route.advancing && (entry.unpainted || entry.last_pane.as_ref() != Some(&own_pane)) {
+                pane.dirty = true;
                 if entry
                     .last_pane
                     .as_ref()

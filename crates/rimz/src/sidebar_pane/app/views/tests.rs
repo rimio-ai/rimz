@@ -198,6 +198,40 @@ fn colocated_clients_split_and_rejoin_the_destination_view() {
 }
 
 #[test]
+fn reconciliation_drops_the_view_left_for_evidence() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 11;
+    let source = views.panes[&pane(10)];
+    views.input(&pane(20), clock.now()).scroll_offset = 22;
+    sample(&mut views, &clock, &[(1, 20)]);
+    assert!(
+        !views.entries.contains_key(&source),
+        "the client left this view for its evidence-routed destination"
+    );
+    assert_eq!(views.paint(&pane(10), clock.now()).scroll_offset, 22);
+}
+
+#[test]
+fn reconciliation_drops_the_view_left_for_an_incumbent() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10), (2, 20)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 11;
+    views.input(&pane(20), clock.now()).scroll_offset = 22;
+    let source = views.panes[&pane(10)];
+    let incumbent = views.panes[&pane(20)];
+    sample(&mut views, &clock, &[(1, 20), (2, 20)]);
+    assert!(
+        !views.entries.contains_key(&source),
+        "the client joined another view instead of departing"
+    );
+    assert_eq!(views.panes[&pane(20)], incumbent);
+    assert_eq!(views.paint(&pane(20), clock.now()).scroll_offset, 22);
+}
+
+#[test]
 fn arrival_keeps_evidence_input_despite_newer_coviewer_input() {
     let clock = clock();
     let mut views = Views::default();
@@ -411,6 +445,71 @@ fn an_anonymous_painted_view_outlives_retention() {
     views.input(&pane(10), clock.now()).scroll_offset = 17;
     clock.advance(HOLD + Duration::from_millis(1));
     assert_eq!(views.paint(&pane(10), clock.now()).scroll_offset, 17);
+}
+
+#[test]
+fn evidence_does_not_restore_a_paint_only_anonymous_view() {
+    let clock = clock();
+    let mut views = Views::default();
+    views.paint(&pane(10), clock.now()).scroll_offset = 17;
+    let (_, anonymous) = views.presentation(&pane(10), clock.now(), false);
+    anonymous.last_pane = Some(pane(10));
+    views.paint(&pane(20), clock.now());
+    sample(&mut views, &clock, &[(1, 20)]);
+    views.paint(&pane(20), clock.now()).scroll_offset = 33;
+    assert_eq!(
+        views.paint(&pane(10), clock.now()).scroll_offset,
+        33,
+        "a startup attachment's anonymous paint is not a saved viewer's presentation"
+    );
+}
+
+#[test]
+fn evidence_copies_the_clients_painting_view_over_a_newer_paint_only_one() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 20)]);
+    views.input(&pane(20), clock.now()).scroll_offset = 33;
+    views.paint(&pane(30), clock.now());
+    views.paint(&pane(20), clock.now()).scroll_offset = 44;
+    assert_eq!(
+        views.paint(&pane(10), clock.now()).scroll_offset,
+        44,
+        "a later attachment's paint does not outrank the client's current view"
+    );
+}
+
+#[test]
+fn evidence_skips_a_departed_coviewers_copy_while_a_client_is_attached() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10), (2, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 11;
+    sample(&mut views, &clock, &[(1, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 22;
+    assert_eq!(views.paint(&pane(20), clock.now()).scroll_offset, 22);
+}
+
+#[test]
+fn evidence_skips_a_reattached_clients_old_view_while_a_client_is_attached() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 11;
+    sample(&mut views, &clock, &[(2, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 22;
+    assert_eq!(views.paint(&pane(20), clock.now()).scroll_offset, 22);
+}
+
+#[test]
+fn evidence_skips_a_departed_clients_own_view_while_a_client_is_attached() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10), (2, 20)]);
+    views.input(&pane(20), clock.now()).scroll_offset = 11;
+    sample(&mut views, &clock, &[(1, 10)]);
+    views.input(&pane(10), clock.now()).scroll_offset = 22;
+    assert_eq!(views.paint(&pane(30), clock.now()).scroll_offset, 22);
 }
 
 #[test]

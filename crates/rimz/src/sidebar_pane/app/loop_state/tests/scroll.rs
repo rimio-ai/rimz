@@ -535,6 +535,238 @@ fn arrival_holds_last_painted_order_and_catches_up_content() {
 }
 
 #[test]
+fn arrival_preserves_reranked_order_across_sidebar_panes() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        reranked_arrival(mux, false);
+    }
+}
+
+#[test]
+fn tmux_arrival_keeps_latest_order_when_focus_precedes_the_client_sample() {
+    reranked_arrival(MuxName::Tmux, true);
+}
+
+#[test]
+fn zellij_arrival_keeps_latest_order_when_focus_precedes_the_client_sample() {
+    reranked_arrival(MuxName::Zellij, true);
+}
+
+#[test]
+fn tmux_arrival_keeps_latest_order_after_external_pane_focus() {
+    external_focus_arrival(MuxName::Tmux, true);
+}
+
+#[test]
+fn zellij_arrival_keeps_latest_order_after_external_pane_focus() {
+    external_focus_arrival(MuxName::Zellij, true);
+}
+
+#[test]
+fn arrival_ignores_anonymous_startup_views_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        external_focus_arrival(mux, false);
+    }
+}
+
+fn external_focus_arrival(mux: MuxName, source_sample_fresh: bool) {
+    use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState};
+
+    let mut pair = if source_sample_fresh {
+        SharedPanes::new(mux)
+    } else {
+        SharedPanes::unpainted(mux)
+    };
+    let groups = Arc::make_mut(&mut pair.snapshot.worktree_groups);
+    groups[0].root_lane = true;
+    let mut probe = groups[0].clone();
+    probe.key = "probe".into();
+    probe.label = "probe".into();
+    probe.root_lane = false;
+    probe.rows = Arc::new(Arc::make_mut(&mut groups[0].rows).split_off(10));
+    groups.push(probe);
+    let source_focus = groups[0].rows[0].pane.as_ref().unwrap().pane_id.clone();
+    if source_sample_fresh {
+        pair.add_hidden(1);
+    }
+    let background = pair
+        .panes
+        .get(2)
+        .map(|rig| rig.state.pane.config.own_pane.clone());
+    let unlisted = background.clone().or_else(|| {
+        (!source_sample_fresh).then(|| pair.panes[0].state.pane.config.own_pane.clone())
+    });
+    pair.sample_with(&[(1, 0)], |frame| {
+        frame.client_view_fresh = source_sample_fresh;
+        frame.client_views[0].pane_id = source_focus.clone();
+        if let Some(unlisted) = &unlisted {
+            frame
+                .tabs
+                .retain(|tab| !tab.panes.iter().any(|pane| &pane.pane_id == unlisted));
+        }
+    });
+    pair.paint(0);
+    // A background tab's attachment can paint before topology lists it or samples a viewer.
+    if background.is_some() {
+        pair.paint(2);
+    }
+
+    pair.clock.advance(Duration::from_millis(1));
+    let target = pair.panes[1].state.pane.config.own_pane.clone();
+    let mut anchor = FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".into(),
+        pane_id: target.clone(),
+        origin: FocusOrigin::User,
+        repair_generation: None,
+        issued_at_ms: pair.clock.now_ms(),
+        applied_at_ms: None,
+        state: FocusIntentState::Requested,
+        pre_action: vec![crate::pane::ClientPaneView {
+            client_id: match mux {
+                MuxName::Tmux => crate::ids::MuxClientId::Tmux("client-1".into()),
+                MuxName::Zellij => crate::ids::MuxClientId::Zellij(1),
+            },
+            pane_id: source_focus.clone(),
+        }],
+        placement: None,
+        order: None,
+    };
+    for rig in &mut pair.panes {
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+        let envelope = SidebarEventEnvelope::new(
+            rig.ws.clone(),
+            Some("rimz-test".into()),
+            pair.clock.now_ms(),
+            SidebarEvent::FocusIntent {
+                pane_id: target.clone(),
+                nonce: anchor.nonce,
+            },
+        );
+        rig.record_event(&envelope);
+        rig.state.on_event(&mut rig.terminal, envelope);
+    }
+    pair.paint(1);
+    anchor.state = FocusIntentState::Applied;
+    anchor.applied_at_ms = Some(pair.clock.now_ms());
+    for rig in &pair.panes {
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    }
+    switch_sidebar(&mut pair, 1, true);
+    pair.clock.advance(Duration::from_secs(35));
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let before = pair.view(1).last_order;
+    let row = &mut Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[1].rows)[2];
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    row.attention_score = 1000;
+    pair.clock.advance(Duration::from_secs(35));
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let settled = pair.view(1).last_order;
+    assert_ne!(settled.groups, before.groups, "the ask lifts its group");
+    assert_eq!(settled.rows[0].id, "agent-12", "the ask lifts its card");
+    assert!(pair.view(1).freeze.is_none());
+    pair.clock.advance(Duration::from_millis(1));
+    let rig = &mut pair.panes[0];
+    let envelope = SidebarEventEnvelope::new(
+        rig.ws.clone(),
+        Some("rimz-test".into()),
+        pair.clock.now_ms(),
+        SidebarEvent::FocusChanged {
+            focused: vec![source_focus.clone()],
+            unfocused: vec![target],
+        },
+    );
+    rig.record_event(&envelope);
+    rig.state.on_event(&mut rig.terminal, envelope);
+    pair.paint(0);
+    pair.sample_with(&[(1, 0)], |frame| {
+        frame.client_views[0].pane_id = source_focus.clone();
+    });
+    pair.clock.advance(Duration::from_secs(2));
+    pair.sample_with(&[(1, 0)], |frame| {
+        frame.client_views[0].pane_id = source_focus;
+    });
+    pair.paint(0);
+    let arrived = pair.view(0).last_order;
+    assert_eq!(
+        (&arrived.groups, &arrived.rows[0].id),
+        (&settled.groups, &settled.rows[0].id),
+        "{mux:?}: native arrival after external pane focus must keep the last painted order"
+    );
+}
+
+fn switch_sidebar(pair: &mut SharedPanes, destination: usize, event_first: bool) {
+    pair.clock.advance(Duration::from_millis(1));
+    if event_first {
+        let focused = vec![pair.panes[destination].state.pane.config.own_pane.clone()];
+        let unfocused = pair.snapshot.viewed_panes.clone();
+        let rig = &mut pair.panes[destination];
+        let envelope = SidebarEventEnvelope::new(
+            rig.ws.clone(),
+            Some("rimz-test".into()),
+            pair.clock.now_ms(),
+            SidebarEvent::FocusChanged { focused, unfocused },
+        );
+        rig.record_event(&envelope);
+        rig.state.on_event(&mut rig.terminal, envelope);
+        pair.paint(destination);
+    }
+    pair.sample(&[(1, destination)]);
+    pair.paint(destination);
+}
+
+fn reranked_arrival(mux: MuxName, event_first: bool) {
+    let mut pair = SharedPanes::new(mux);
+    let groups = Arc::make_mut(&mut pair.snapshot.worktree_groups);
+    groups[0].root_lane = true;
+    let mut probe = groups[0].clone();
+    probe.key = "probe".into();
+    probe.label = "probe".into();
+    probe.root_lane = false;
+    probe.rows = Arc::new(Arc::make_mut(&mut groups[0].rows).split_off(10));
+    groups.push(probe);
+    pair.sample(&[(1, 0)]);
+    pair.paint(0);
+    switch_sidebar(&mut pair, 1, event_first);
+    pair.clock.advance(Duration::from_secs(31));
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let before = pair.view(1).last_order;
+    let row = &mut Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[1].rows)[2];
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    row.attention_score = 1000;
+    pair.clock.advance(Duration::from_secs(31));
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let settled = pair.view(1).last_order;
+    assert_ne!(
+        settled.groups, before.groups,
+        "{mux:?}: the ask lifts its group"
+    );
+    assert_eq!(
+        settled.rows[0].id, "agent-12",
+        "{mux:?}: the ask lifts its card"
+    );
+    assert!(pair.view(1).freeze.is_none());
+    for destination in [0, 1, 0] {
+        switch_sidebar(&mut pair, destination, event_first);
+        pair.clock.advance(Duration::from_secs(2));
+        pair.sample(&[(1, destination)]);
+        pair.paint(destination);
+        let arrived = pair.view(destination).last_order;
+        assert_eq!(
+            (&arrived.groups, &arrived.rows[0].id),
+            (&settled.groups, &settled.rows[0].id),
+            "{mux:?}: arrival must keep the last painted order, not an older layout"
+        );
+        pair.clock.advance(Duration::from_secs(31));
+        pair.sample(&[(1, destination)]);
+        pair.paint(destination);
+    }
+}
+
+#[test]
 fn an_expired_hold_keeps_the_last_painted_order_for_the_first_return_frame() {
     let mut pair = SharedPanes::new(MuxName::Zellij);
     pair.input(0);
