@@ -2143,7 +2143,8 @@ path = "crates/rimz/src/harness"
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
-surface-budget = 1075
+# workflow::parse shares the sealed-spec parser with cached sidebar projection (+1).
+surface-budget = 1076
 
 [[verdict]]
 kind = "item"
@@ -3743,7 +3744,29 @@ path = "crates/rimz/src/store"
 # SidebarInactive carries fold membership and landedness to renderer consumers (+1).
 # SidebarSnapshot::sort_presented_groups orders renderer-deferred membership (+1).
 # HeldRank and SidebarSnapshot::{capture_held_rank, sort_groups_with_holds, sort_rows_in_order} keep focus and frozen partition keys inside the view (+4).
-surface-budget = 537
+# SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind, RunRecord::{session_attempt, step_agent},
+# and SidebarWorktreeGroup::has_rows_or_workflow share live run groups (+6).
+surface-budget = 543
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarWorkflow"
+reason = "Sidebar enrichment carries one live workflow projection per worktree to renderer consumers."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarWorkflowNode"
+reason = "The serialized main rail and current node share named step/check vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::WorkflowNodeKind"
+reason = "Workflow strips distinguish main-rail step and check glyphs without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::parse"
+reason = "The stat-gated sidebar cache parses sealed workflow bytes through the same tolerant parser as load."
 
 [[verdict]]
 kind = "item"

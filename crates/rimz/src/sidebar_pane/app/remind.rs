@@ -188,6 +188,7 @@ mod tests {
             team: None,
             cohort_effort: None,
             pipeline: None,
+            workflow: None,
             status_counts: Vec::new(),
             rows: rows.into(),
             diff_added: None,

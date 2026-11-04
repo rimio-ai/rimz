@@ -237,6 +237,46 @@ fn pr_state_projection_uses_the_given_map() {
         Some(crate::store::snapshot::WorktreePrQueue::Dequeued)
     );
 
+    write_worktree_marker(&worktree, "feature");
+    let roots = WorktreeRootsCache {
+        refreshed_at_ms: 0,
+        roots: vec![worktree.clone()],
+        marker_names: BTreeMap::from([(worktree.clone(), "feature".into())]),
+    };
+    for state in ["active", "parked"] {
+        let mut rowless = snapshot.clone();
+        let group = &mut Arc::make_mut(&mut rowless.worktree_groups)[0];
+        group.key = "channel:feature".into();
+        group.label = "feature".into();
+        group.kind = SidebarWorktreeKind::Channel;
+        group.rows = Vec::new().into();
+        group.workflow = Some(
+            serde_json::from_value(serde_json::json!({
+                "run": crate::ids::WorkflowRunId::new(), "workflow":"land", "scope_path":worktree,
+                "state":state, "track":[], "current":{"name":"watch", "kind":"check"},
+                "detour_parent":null, "visits":0, "capped":false, "word":"queued",
+                "since":rowless.now, "hold_limit":null, "entered_at":rowless.now,
+                "created_at":rowless.now, "agent":null
+            }))
+            .unwrap(),
+        );
+        group.pr_state = None;
+        group.pr_queue = None;
+        group.ci = None;
+        project_pr_state_map(
+            &mut rowless,
+            &states,
+            &branch_ci,
+            &DiffStatsCache::default(),
+            Some(&roots),
+        );
+        let group = &rowless.worktree_groups[0];
+        assert_eq!(group.pr_state, Some(WorktreePrState::Open));
+        assert_eq!(group.pr_number, Some(91));
+        assert_eq!(group.ci, Some(WorktreeCi::Passing));
+        assert_eq!(group.pr_queue, Some(WorktreePrQueue::Dequeued));
+    }
+
     states.insert(
         worktree.display().to_string(),
         PrLink {

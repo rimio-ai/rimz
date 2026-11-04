@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, ParkDemotion};
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::agents::{AgentState, ParkDemotion, WorkflowAttemptRole};
+use crate::ids::{AgentKind, AgentSessionId, WorkflowRunId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::layout::{
@@ -83,6 +83,40 @@ impl<'a> AgentProjectionIndex<'a> {
             .iter()
             .map(|(key, children)| (key, children.as_slice()))
     }
+
+    /// The attempt seq of the run's step pinned on this row's root agent.
+    fn step_seq(&self, row: &SidebarRow, run: &WorkflowRunId) -> Option<u64> {
+        let agent = self.root(&(
+            AgentKind::new_unchecked(row.name.clone()),
+            AgentSessionId::from(row.id.as_str()),
+        ))?;
+        let pin = agent.workflow.as_ref()?;
+        (row.is_agent() && pin.run == *run && pin.role == WorkflowAttemptRole::Step)
+            .then_some(pin.seq)
+    }
+}
+
+type GroupSeed = (String, SidebarWorktreeKind, bool, Vec<SidebarRow>);
+
+/// A run on a branch-split path joins the split group holding its newest step
+/// root, else the one with the newest activity. `None` leaves the run to mint
+/// its own group: no row resolves to its scope.
+fn split_run_group(
+    by_group: &BTreeMap<String, GroupSeed>,
+    key: &str,
+    run: &WorkflowRunId,
+    agents: &AgentProjectionIndex<'_>,
+) -> Option<String> {
+    let split = format!("{key}\n");
+    by_group
+        .iter()
+        .filter(|(group, _)| group.as_str() == key || group.starts_with(&split))
+        .max_by_key(|(_, (_, _, _, rows))| {
+            rows.iter()
+                .map(|row| (agents.step_seq(row, run), row.last_activity))
+                .max()
+        })
+        .map(|(group, _)| group.clone())
 }
 
 /// The per-machine attention timing windows the row fold reads, bundled so the
@@ -124,6 +158,7 @@ impl SidebarSnapshot {
         &self,
         mut rows: Vec<SidebarRow>,
         demotion: &ParkDemotion,
+        workflows: &[super::SidebarWorkflow],
     ) -> Vec<SidebarWorktreeGroup> {
         let now = self.now;
         let windows = AttentionWindows::from_config(&self.attention);
@@ -170,8 +205,7 @@ impl SidebarSnapshot {
             }),
         );
 
-        let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, bool, Vec<SidebarRow>)> =
-            BTreeMap::new();
+        let mut by_group: BTreeMap<String, GroupSeed> = BTreeMap::new();
         for row in rows {
             let identity = resolver.resolve(GroupEntry {
                 channel: row.channel.as_deref(),
@@ -182,6 +216,36 @@ impl SidebarSnapshot {
                 .entry(identity.key)
                 .and_modify(|(_, _, _, rows)| rows.push(row.clone()))
                 .or_insert_with(|| (identity.label, identity.kind, identity.root_lane, vec![row]));
+        }
+
+        let mut runs_by_group = BTreeMap::<_, &super::SidebarWorkflow>::new();
+        for run in workflows.iter().filter(|run| !run.state.is_terminal()) {
+            let identity = resolver.resolve(GroupEntry {
+                channel: None,
+                path: Some(&run.scope_path),
+                branch: None,
+            });
+            if identity.kind == SidebarWorktreeKind::External {
+                continue;
+            }
+            let key = split_run_group(&by_group, &identity.key, &run.run, &agent_index)
+                .unwrap_or(identity.key);
+            runs_by_group
+                .entry(key.clone())
+                .and_modify(|current| {
+                    if run.created_at > current.created_at {
+                        *current = run;
+                    }
+                })
+                .or_insert(run);
+            by_group.entry(key).or_insert_with(|| {
+                (
+                    identity.label,
+                    identity.kind,
+                    identity.root_lane,
+                    Vec::new(),
+                )
+            });
         }
 
         let mut groups = by_group
@@ -205,6 +269,7 @@ impl SidebarSnapshot {
                 SidebarWorktreeGroup {
                     stalled_since: None,
                     pr_stack: Default::default(),
+                    workflow: runs_by_group.remove(&key).cloned(),
                     key,
                     label,
                     label_qualifier: None,

@@ -94,6 +94,7 @@ fn row_snapshot_at(
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: vec![SidebarStatusCount { status, count: 1 }],
         rows: vec![crate::store::snapshot::SidebarRow {
             checkout: None,
@@ -225,6 +226,7 @@ fn snapshot_in_group(
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: vec![row].into(),
         diff_added: None,

@@ -43,10 +43,10 @@ pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
     ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarInactive,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
-    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey,
-    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, UnitStatus, WorktreeCi,
-    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, agent_idle_since, card_status,
-    lead_unread_row, needs_you,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow,
+    SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice,
+    UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    agent_idle_since, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -96,7 +96,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 74;
+pub const SNAPSHOT_VERSION: u32 = 75;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

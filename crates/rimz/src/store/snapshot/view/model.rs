@@ -430,6 +430,39 @@ pub enum SidebarInactive {
     Unlanded,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowNodeKind {
+    Step,
+    Check,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarWorkflowNode {
+    pub name: String,
+    pub kind: WorkflowNodeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SidebarWorkflow {
+    pub run: crate::ids::WorkflowRunId,
+    pub workflow: String,
+    pub scope_path: String,
+    pub state: crate::store::workflow::RunState,
+    pub track: Vec<SidebarWorkflowNode>,
+    pub current: SidebarWorkflowNode,
+    pub detour_parent: Option<String>,
+    pub visits: u64,
+    pub capped: bool,
+    pub word: String,
+    pub since: jiff::Timestamp,
+    /// A `hold` outcome's configured limit, `?` when the sealed spec gives none.
+    pub hold_limit: Option<String>,
+    pub entered_at: jiff::Timestamp,
+    pub created_at: jiff::Timestamp,
+    pub agent: Option<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -449,6 +482,8 @@ pub struct SidebarWorktreeGroup {
     pub cohort_effort: Option<SidebarCohortEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<SidebarPipeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<SidebarWorkflow>,
     /// Latest work clock of an unfinished unit projected as stuck; absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stalled_since: Option<jiff::Timestamp>,
@@ -606,6 +641,14 @@ impl UnitStatus {
 }
 
 impl SidebarWorktreeGroup {
+    pub(crate) fn has_rows_or_workflow(&self) -> bool {
+        !self.rows.is_empty()
+            || self
+                .workflow
+                .as_ref()
+                .is_some_and(|run| !run.state.is_terminal())
+    }
+
     pub fn unit_statuses(&self) -> BTreeMap<SidebarUnitKey<'_>, UnitStatus> {
         let owner = self.pipeline_owner();
         let mut units: BTreeMap<_, Vec<_>> = BTreeMap::new();
@@ -854,6 +897,7 @@ mod tests {
             team: None,
             cohort_effort: None,
             pipeline: None,
+            workflow: None,
             status_counts: Vec::new(),
             rows: rows.into(),
             diff_added: None,

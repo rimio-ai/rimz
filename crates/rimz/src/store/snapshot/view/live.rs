@@ -21,7 +21,7 @@ use crate::store::snapshot::panes::{
 
 use super::aggregate::AttentionWindows;
 use super::layout::refresh_overlay_group;
-use super::{SidebarRow, SidebarSnapshot};
+use super::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup};
 
 mod projection;
 
@@ -235,7 +235,7 @@ impl SidebarSnapshot {
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, &ParkDemotion::default());
+        self.fold_admitted_live_panes(&panes, None, None, &ParkDemotion::default(), None);
         self
     }
 
@@ -248,7 +248,7 @@ impl SidebarSnapshot {
     ) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
         let demotion = ParkDemotion::new(provider_capacities, BTreeSet::new(), self.now);
-        self.fold_admitted_live_panes(&panes, None, None, &demotion);
+        self.fold_admitted_live_panes(&panes, None, None, &demotion, None);
         self
     }
 
@@ -270,9 +270,15 @@ impl SidebarSnapshot {
         lazy_pairings: &LazyAgentPairingResult,
         unread_row_ids: Option<&BTreeSet<String>>,
         demotion: &ParkDemotion,
+        workflows: &[super::SidebarWorkflow],
     ) -> (Self, Vec<DiagEvent>) {
-        let diagnostics =
-            self.fold_admitted_live_panes(&panes, Some(lazy_pairings), unread_row_ids, demotion);
+        let diagnostics = self.fold_admitted_live_panes(
+            &panes,
+            Some(lazy_pairings),
+            unread_row_ids,
+            demotion,
+            Some(workflows),
+        );
         (self, diagnostics)
     }
 
@@ -282,13 +288,27 @@ impl SidebarSnapshot {
         lazy_pairings: Option<&LazyAgentPairingResult>,
         unread_row_ids: Option<&BTreeSet<String>>,
         demotion: &ParkDemotion,
+        workflows: Option<&[super::SidebarWorkflow]>,
     ) -> Vec<DiagEvent> {
         let mut projection = self.rows_from_panes(panes, lazy_pairings);
         if let Some(unread_row_ids) = unread_row_ids {
             stamp_unread_rows(&mut projection.rows, unread_row_ids);
         }
         self.agent_panes = Arc::new(projection.agent_panes);
-        self.worktree_groups = Arc::new(self.build_worktree_groups(projection.rows, demotion));
+        let carried;
+        let workflows = match workflows {
+            Some(workflows) => workflows,
+            None => {
+                carried = self
+                    .worktree_groups
+                    .iter()
+                    .filter_map(|group| group.workflow.clone())
+                    .collect::<Vec<_>>();
+                &carried
+            }
+        };
+        self.worktree_groups =
+            Arc::new(self.build_worktree_groups(projection.rows, demotion, workflows));
         projection.diagnostics
     }
 
@@ -345,9 +365,10 @@ impl SidebarSnapshot {
         if self
             .worktree_groups
             .iter()
-            .any(|group| group.rows.is_empty())
+            .any(|group| !group.has_rows_or_workflow())
         {
-            Arc::make_mut(&mut self.worktree_groups).retain(|group| !group.rows.is_empty());
+            Arc::make_mut(&mut self.worktree_groups)
+                .retain(SidebarWorktreeGroup::has_rows_or_workflow);
         }
         if self
             .focused_pane

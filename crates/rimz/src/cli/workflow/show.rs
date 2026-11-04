@@ -113,7 +113,8 @@ impl View<'_> {
         let record = self.record;
         let asking = workflow_view::asking(record);
         let agent = agent.or_else(|| {
-            workflow_view::session_attempt(record)
+            record
+                .session_attempt()
                 .and_then(|attempt| attempt.run.as_ref())
                 .map(|run| run.handle.as_str())
         });
@@ -133,13 +134,15 @@ impl View<'_> {
                 record.park.as_ref().map_or("", |park| park.reason.as_str())
             )
         } else if let Some(asking) = asking {
-            let step =
-                workflow_view::session_attempt(record).map_or(record.node.as_str(), |a| &a.node);
+            let step = record
+                .session_attempt()
+                .map_or(record.node.as_str(), |a| &a.node);
             context = format!(" · {} ({})", asking.ask.handle, asking.ask.kind);
             format!("{step} is asking you")
         } else if workflow_view::with_you(record) {
-            let step =
-                workflow_view::session_attempt(record).map_or(record.node.as_str(), |a| &a.node);
+            let step = record
+                .session_attempt()
+                .map_or(record.node.as_str(), |a| &a.node);
             context = format!(
                 " · {}{}",
                 agent.unwrap_or("—"),
@@ -203,7 +206,8 @@ impl View<'_> {
             render::paint(render::palette::muted(), &phrase.forecast),
         )?;
         if asking.is_some() {
-            let timeout = workflow_view::session_attempt(record)
+            let timeout = record
+                .session_attempt()
                 .and_then(|a| self.spec.steps.get(&a.node))
                 .and_then(|step| step.timeout.as_ref());
             writeln!(

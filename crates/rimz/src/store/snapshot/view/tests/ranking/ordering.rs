@@ -489,6 +489,7 @@ fn inactive_groups_sink_below_process_groups() {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: vec![process_row("zsh", "/repo/b")].into(),
         diff_added: None,
@@ -857,6 +858,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: agents
             .iter()

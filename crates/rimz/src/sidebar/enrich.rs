@@ -42,6 +42,8 @@ use super::refresh::rate_limits::apply_cached_rate_limits;
 use super::timing::LINK_STATS_STALE;
 use crate::remote::link::LINK_STATS_EXPIRE;
 
+mod workflows;
+
 #[cfg(test)]
 mod tests;
 
@@ -196,6 +198,7 @@ fn project_diff_stats(
             &group.label,
             &group.key,
             &group.rows,
+            group.workflow.as_ref(),
             roots_cache,
         ) else {
             continue;
@@ -262,7 +265,9 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
         if group.kind == SidebarWorktreeKind::Channel {
             continue;
         }
-        let Some(path) = worktree_group_path_fields(&group.key, &group.rows) else {
+        let Some(path) =
+            worktree_group_path_fields(&group.key, &group.rows, group.workflow.as_ref())
+        else {
             continue;
         };
         let components = Path::new(path)
@@ -336,9 +341,10 @@ fn cached_git_backed_worktree_path<'a>(
     label: &str,
     key: &'a str,
     rows: &'a [SidebarRow],
+    workflow: Option<&'a crate::store::snapshot::SidebarWorkflow>,
     roots_cache: Option<&WorktreeRootsCache>,
 ) -> Option<&'a str> {
-    let path = worktree_group_path_fields(key, rows)?;
+    let path = worktree_group_path_fields(key, rows, workflow)?;
     match kind {
         SidebarWorktreeKind::Worktree => Some(path),
         SidebarWorktreeKind::Channel => roots_cache?
@@ -364,6 +370,7 @@ fn project_pr_state_map(
             &group.label,
             &group.key,
             &group.rows,
+            group.workflow.as_ref(),
             roots_cache,
         ) else {
             continue;
@@ -670,12 +677,12 @@ fn throttle_notices(
     notices.into_iter().map(|(_, notice)| notice).collect()
 }
 
-/// Project parked runs and starts needing a fix even before an agent launches.
+/// Read runs once for group seeds, parked notices and starts needing a fix.
 fn project_workflow_and_throttle_state(
     snapshot: &mut SidebarSnapshot,
     state: &StatePaths,
     runtime: &RuntimePaths,
-) {
+) -> Vec<crate::store::workflow::RunRecord> {
     let records = crate::store::workflow::list(state).unwrap_or_else(|err| {
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
@@ -683,13 +690,13 @@ fn project_workflow_and_throttle_state(
     snapshot.throttle_notices =
         throttle_notices(state, runtime, &records, snapshot.project_root.as_deref());
     let mut parked: Vec<_> = records
-        .into_iter()
+        .iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Parked)
         .filter_map(|record| {
             let park = record.park.as_ref()?;
             let address = record.address().to_string();
             Some(crate::store::snapshot::ParkedWorkflow {
-                run: record.id,
+                run: record.id.clone(),
                 address,
                 since: park.at,
             })
@@ -697,6 +704,7 @@ fn project_workflow_and_throttle_state(
         .collect();
     parked.sort_by_key(|run| run.since);
     snapshot.parked_workflows = parked;
+    records
 }
 
 fn enrich_core(
@@ -801,7 +809,8 @@ fn enrich_core(
         );
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
     }
-    project_workflow_and_throttle_state(&mut snapshot, state, runtime);
+    let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state, runtime);
+    let workflow_seeds = workflows::seeds(&workflow_records, state);
     let outages = crate::harness::drainer_outage::read(runtime);
     snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {
         since: Timestamp::from_millisecond(first.since_ms.min(i64::MAX as u64) as i64)
@@ -928,6 +937,7 @@ fn enrich_core(
             &lazy_pairings,
             Some(&unread_row_ids),
             &demotion,
+            &workflow_seeds,
         );
         snapshot = next_snapshot;
         for event in diagnostics {
@@ -935,6 +945,8 @@ fn enrich_core(
         }
         apply_pane_metrics(&mut snapshot, metrics);
     }
+    // Pane ownership excludes shadowed sessions before the shared attempt join.
+    workflows::bind_agents(&mut snapshot, &workflow_records);
     // Per-machine display preferences and the per-provider dashboard are
     // environment, not store, so the rollup base carries neither. The
     // producer probes accounts out of band and publishes them alongside its
@@ -956,7 +968,10 @@ fn enrich_core(
     disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
     for group in Arc::make_mut(&mut folded.worktree_groups) {
-        group.pipeline = pipeline_cache.groups.get(&group.key).cloned();
+        group.pipeline = group
+            .team
+            .as_ref()
+            .and_then(|_| pipeline_cache.groups.get(&group.key).cloned());
     }
     folded.project_stuck_stages();
     super::refresh::keep_warm::project_cache_clocks(

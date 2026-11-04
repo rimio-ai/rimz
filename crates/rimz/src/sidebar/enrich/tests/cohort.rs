@@ -51,10 +51,22 @@ fn published_pipeline_projects_stuck_attention_and_clears_on_fresh_member_activi
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[1]
     .last_activity = snapshot.now;
-    let cleared = fold_producing(snapshot, None, &runtime);
+    let cleared = fold_producing(snapshot.clone(), None, &runtime);
     let owner = cleared.rows().find(|row| row.id == "coder").unwrap();
     assert_eq!(owner.status(), Some(AgentStatus::Success));
     assert_eq!(owner.turn_error_label(), None);
+    assert!(cleared.worktree_groups[0].pipeline.is_some());
+
+    // A run or a solo row can hold the group after its team stops; the stale
+    // entry draws nothing.
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.team = None;
+    for row in std::sync::Arc::make_mut(&mut group.rows) {
+        row.as_agent_mut().unwrap().team = None;
+    }
+    let teamless = fold_producing(snapshot, None, &runtime);
+    assert_eq!(teamless.worktree_groups.len(), 1);
+    assert_eq!(teamless.worktree_groups[0].pipeline, None);
 }
 
 #[test]

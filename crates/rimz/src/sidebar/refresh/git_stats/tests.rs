@@ -7,6 +7,58 @@ use std::process::Command;
 
 mod index_refresh;
 
+#[test]
+fn rowless_active_and_parked_groups_supply_the_run_scope_to_git_demand() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let path = dir.path().to_string_lossy().into_owned();
+    let marker = crate::worktree::WorktreeMarker {
+        version: 1,
+        name: "lane".into(),
+        branch: "lane".into(),
+        base_branch: None,
+        from_pr: None,
+        base_ref: "HEAD".into(),
+        repo_root: dir.path().to_path_buf(),
+        worktree_path: dir.path().to_path_buf(),
+        created_at: Timestamp::UNIX_EPOCH,
+    };
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(
+        dir.path().join(".git/rimz-worktree.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    for state in ["active", "parked"] {
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace.clone(), vec![], Timestamp::UNIX_EPOCH);
+        let mut group = worktree_group(dir.path(), Vec::new());
+        group.kind = SidebarWorktreeKind::Channel;
+        group.key = "channel:lane".into();
+        group.label = "lane".into();
+        group.workflow = Some(
+            serde_json::from_value(serde_json::json!({
+                "run": crate::ids::WorkflowRunId::new(), "workflow":"land", "scope_path":path,
+                "state":state, "track":[], "current":{"name":"watch", "kind":"check"},
+                "detour_parent":null, "visits":0, "capped":false, "word":"queued",
+                "since":snapshot.now, "hold_limit":null, "entered_at":snapshot.now,
+                "created_at":snapshot.now, "agent":null
+            }))
+            .unwrap(),
+        );
+        snapshot.worktree_groups = vec![group].into();
+        assert_eq!(
+            needed_worktree_paths(&snapshot, BTreeSet::new()),
+            std::slice::from_ref(&path),
+            "{state} run checkout stays probed"
+        );
+        assert!(
+            hot_worktree_paths(&snapshot).is_empty(),
+            "a run alone supplies no row heat"
+        );
+    }
+}
+
 fn hot_paths(paths: impl IntoIterator<Item = String>) -> BTreeMap<String, HotWorktree> {
     paths
         .into_iter()
@@ -1194,6 +1246,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: vec![activity_row(false, None, Timestamp::now(), path)].into(),
         diff_added: None,

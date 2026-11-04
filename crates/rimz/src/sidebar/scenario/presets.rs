@@ -310,6 +310,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         team: None,
         cohort_effort: None,
         pipeline: None,
+        workflow: None,
         status_counts: Vec::new(),
         rows: spec.rows.into(),
         diff_added: spec.diff_added,
