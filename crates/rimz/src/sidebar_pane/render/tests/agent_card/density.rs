@@ -184,6 +184,75 @@ fn stale_cards_shrink_only_unread_free_resting_history() {
 }
 
 #[test]
+fn stale_age_keeps_its_column_across_costs_and_widths() {
+    let theme = Theme::fixed(false);
+    for (days, label) in [(2, "2d"), (12, "12d")] {
+        for (cost, cost_label, age_inset) in [
+            (Some(0.89), Some("$0.89"), 8),
+            (Some(10.41), Some("$10.41"), 8),
+            (Some(128.40), Some("$128.40"), 9),
+            (Some(1234.56), Some("$1,234.56"), 11),
+            (None, None, 8),
+            (Some(0.004), None, 8),
+        ] {
+            let mut snapshot = snapshot_with(vec![density_agent(
+                "old",
+                "claude",
+                AgentStatus::Success,
+                Some(
+                    "a long description that must clip even on the widest stale card in this test",
+                ),
+                40,
+            )]);
+            let row = snapshot.rows_mut().next().unwrap();
+            row.last_activity = fixed_now() - Duration::from_secs(days * 86400);
+            row.unread = false;
+            row.as_agent_mut().unwrap().delegated_cost_usd = cost;
+            for width in [26, 36, 70] {
+                let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+                assert_eq!(lines.len(), 2, "one header and one stale line");
+                let line = &lines[1];
+                let spans = &line.spans[1..line.spans.len() - 1];
+                let age_index = spans
+                    .iter()
+                    .position(|span| span.content.trim() == label)
+                    .expect("stale card keeps its age at every width");
+                let age_end: usize = spans[..=age_index].iter().map(|span| span.width()).sum();
+                assert_eq!(
+                    age_end,
+                    content_width(width) - age_inset,
+                    "age column at width {width}, cost {cost:?}: {line}"
+                );
+                assert_eq!(spans[age_index].content, label, "bare age span: {line}");
+                let left: String = spans[..age_index]
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                let gap = left.chars().rev().take_while(|ch| *ch == ' ').count();
+                assert!(gap >= 2, "two cells before the age: {line}");
+                if let Some(cost_label) = cost_label {
+                    let cost_index = spans
+                        .iter()
+                        .position(|span| span.content == cost_label)
+                        .expect("visible cost keeps its own span");
+                    let cost_end: usize =
+                        spans[..=cost_index].iter().map(|span| span.width()).sum();
+                    assert_eq!(cost_end, content_width(width), "cost pins right: {line}");
+                } else {
+                    let tail: String = spans[age_index + 1..]
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect();
+                    assert_eq!(tail, "        ", "empty cost slot stays reserved: {line}");
+                }
+                let used: usize = spans.iter().map(|span| span.width()).sum();
+                assert!(used <= content_width(width), "stale line fits: {line}");
+            }
+        }
+    }
+}
+
+#[test]
 fn stale_age_wears_the_cache_clock_tone() {
     let theme = Theme::fixed(false);
     let clock = CacheClock {
@@ -195,7 +264,7 @@ fn stale_age_wears_the_cache_clock_tone() {
     for (cache, label, expected) in [
         (
             Some(clock),
-            " 2d",
+            "2d",
             theme.style(theme.component(Component::CacheExpired), Modifier::empty()),
         ),
         (
@@ -204,16 +273,16 @@ fn stale_age_wears_the_cache_clock_tone() {
                 last_request_at: Some(fixed_now() - Duration::from_secs(120)),
                 ..clock
             }),
-            " 2m",
+            "2m",
             theme.good(Modifier::empty()),
         ),
-        (None, " 2d", theme.muted()),
+        (None, "2d", theme.muted()),
         (
             Some(CacheClock {
                 last_request_at: Some(fixed_now() - Duration::from_secs(120)),
                 ..clock
             }),
-            " 2m",
+            "2m",
             theme.muted(),
         ),
         (

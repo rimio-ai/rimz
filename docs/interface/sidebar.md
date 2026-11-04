@@ -415,7 +415,7 @@ A card's slots are set by its stage, age, density, and selection reach. Data fil
 
 | card | lines |
 |------|-------|
-| stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, age, and cost pinned right; selection, a held expansion, or a subagents and waits section clicked open restores the card |
+| stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, age in a fixed column, and cost pinned right; selection, a held expansion, or a subagents and waits section clicked open restores the card |
 | fresh: idle, never prompted, including held cards | identity, plus the description when it was launched with one |
 | fresh, live-selected | adds the empty meter `▢ 0.0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
 | engaged, resting: after its first prompt | identity, description, meter, with `▢ 0.0%` until data arrives |
@@ -432,7 +432,7 @@ Selecting an engaged card inserts its stats line below the meter and appends ent
 | `expanded` | every engaged card keeps its stats line and lists its subagent and wait entries |
 | `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
 
-`[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the description, coarse age, and cost on the stale line, the cost at the right edge as on the identity line, clipping the description to fit. The age uses the same own cache clock and tone as the meter's age pin, without a clock face. A keepalive refreshes the number without reopening the card; child activity still postpones shrinking but never refreshes the displayed age.
+`[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the description, coarse age, and cost on the stale line, clipping the description to leave at least two blank cells before the age. The age's right edge sits two cells left of a 6-cell cost slot at the right edge, held even with no cost; a wider cost shifts the age left on that row only. The age uses the same own cache clock and tone as the meter's age pin, without a clock face. A keepalive refreshes the number without reopening the card; child activity still postpones shrinking but never refreshes the displayed age.
 
 ### Subagents and waits
 

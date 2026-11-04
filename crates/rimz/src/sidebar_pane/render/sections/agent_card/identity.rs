@@ -256,6 +256,10 @@ fn cost_spans(row_ctx: &RowCtx<'_>, row: &SidebarRow, cost_usd: Option<f64>) -> 
     right
 }
 
+/// Cells a stale line reserves for its cost, so the age keeps one column across costs up
+/// to `$99.99` and with none.
+const STALE_COST_SLOT: usize = 6;
+
 pub(super) fn stale_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -265,15 +269,14 @@ pub(super) fn stale_line(
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.idle_since(), ctx.now));
-    let mut right = vec![Span::styled(
-        format!("{age:>3}"),
-        cache_age_style(theme, row, ctx.now),
-    )];
     let cost = cost_spans(ctx, row, cost_usd);
-    if !cost.is_empty() {
-        right.push(Span::raw("  "));
-        right.extend(cost);
-    }
+    let mut right = vec![
+        // The pin supplies the other cell of the two-cell gap before the age.
+        Span::raw(" "),
+        Span::styled(age, cache_age_style(theme, row, ctx.now)),
+        Span::raw(" ".repeat(2 + STALE_COST_SLOT.saturating_sub(spans_width(&cost)))),
+    ];
+    right.extend(cost);
     let mut left = vec![
         agent_lead_cell(
             theme,
