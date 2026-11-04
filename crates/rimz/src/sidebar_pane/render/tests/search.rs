@@ -28,6 +28,7 @@ fn bottom(
         pane_ui,
         &ui.visible_roster(snapshot),
     )
+    .0
 }
 
 #[test]
@@ -437,7 +438,7 @@ fn search_line_stays_visible_during_active_alert() {
         since: fixed_now(),
         recovered_at: None,
     };
-    let block = build_bottom_chrome(
+    let (block, _) = build_bottom_chrome(
         &snapshot,
         Some(&alert),
         &theme,

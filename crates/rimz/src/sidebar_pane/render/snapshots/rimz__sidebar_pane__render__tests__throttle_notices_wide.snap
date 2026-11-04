@@ -6,7 +6,6 @@ expression: screen
 
  ◎ 0                                                                                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
  ¤ 0                                                                                                    $0.00
- ? review triage asked                                                                                     0s
  ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -24,5 +23,6 @@ expression: screen
  ⚠ capacity check failing: claude exit 1 · 4 held · rimz doctor
  ⚠ starts held: free disk 1G < 2G at /repo · rimz doctor
  ⚠ starts held: cannot count open agents: broken record · 2 held · rimz doctor
+ ⚠ review#repo parked · rimz workflow list · x dismiss
 
                                                                                                    ? for help

@@ -148,9 +148,8 @@ fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
     let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
     value["parked_workflows"] = serde_json::json!([
         {
-            "run": "wf_0190b8172c0070008000000000000001", "workflow": "review",
-            "node": "triage", "reason": "asked", "text": null,
-            "checkout": "/repo", "since": fixed_now()
+            "run": "wf_0190b8172c0070008000000000000001", "address": "review#repo",
+            "since": fixed_now()
         }
     ]);
     value["throttle_notices"] = serde_json::json!([
@@ -171,12 +170,19 @@ fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
             && wide.contains("· 4 held · rimz doctor")
             && wide.contains("⚠ starts held: free disk 1G < 2G at /repo")
             && wide.contains("⚠ starts held: cannot count open agents: broken record")
-            && wide.contains("review triage asked")
+            && wide.contains("⚠ review#repo parked · rimz workflow list · x dismiss")
             && narrow.contains("· 4 held · rimz doctor")
             && !wide.contains("1 held")
             && !clear.contains("rimz doctor"),
         "notices keep their count and fix while the cause clips:\n{wide}\n{narrow}\n{clear}"
     );
+    let lines: Vec<_> = wide.lines().collect();
+    let held = lines
+        .iter()
+        .rposition(|line| line.contains("rimz doctor"))
+        .unwrap();
+    assert!(lines[held + 1].contains("review#repo parked"), "{wide}");
+    assert!(lines[held + 2].trim().is_empty(), "{wide}");
     for (name, screen) in [
         ("throttle_notices_wide", wide),
         ("throttle_notices_l2", narrow),
@@ -216,44 +222,166 @@ fn throttle_notices_keep_the_cause_count_and_fix_in_bottom_chrome() {
 }
 
 #[test]
-fn parked_workflows_keep_their_age_at_wide_and_l2_widths() {
-    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
-    value["parked_workflows"] = serde_json::json!([
-        {"run":"wf_0190b8172c0070008000000000000001","workflow":"babysit-pr","node":"triage","reason":"asked","text":"Which compatibility fix should ship before the release?","checkout":"/repo/fix","since":(fixed_now()-Duration::from_secs(300)).to_string()},
-        {"run":"wf_0190b8172c0070008000000000000002","workflow":"review","node":"sweep","reason":"cap","text":null,"checkout":"/repo/review","since":(fixed_now()-Duration::from_secs(120)).to_string()}
-    ]);
-    let mut snapshot: SidebarSnapshot = serde_json::from_value(value).unwrap();
-    snapshot.now = fixed_now();
-    for (width, name) in [(80, "parked_workflows_wide"), (46, "parked_workflows_l2")] {
+fn park_notice_names_one_run_without_a_cockpit_line() {
+    let snapshot = park_snapshot(1);
+    for (width, name) in [
+        (80, "park_notice_single_wide"),
+        (46, "park_notice_single_l2"),
+    ] {
         let screen = snapshot_to_screen(&snapshot, width, 18);
         assert!(
-            screen.contains("babysit-pr triage asked")
-                && screen.contains("review sweep cap")
-                && screen.contains("5m")
-                && screen.contains("2m"),
-            "parked runs and ages must survive at width {width}: {screen}"
+            screen.contains("rimz workflow list · x dismiss"),
+            "{screen}"
         );
+        if width == 80 {
+            assert!(screen.contains("⚠ land#dollar-align parked"), "{screen}");
+        }
+        assert_cockpit_has_no_parks(&screen);
+        assert_snapshot(name, screen);
+    }
+}
+
+fn park_snapshot(count: usize) -> SidebarSnapshot {
+    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
+    value["parked_workflows"] = (1..=count)
+        .map(|n| {
+            serde_json::json!({
+                "run": format!("wf_0190b8172c007000800000000000000{n}"),
+                "address": "land#dollar-align",
+                "since": fixed_now() - Duration::from_secs(60 * (count + 1 - n) as u64)
+            })
+        })
+        .collect();
+    let mut snapshot: SidebarSnapshot = serde_json::from_value(value).unwrap();
+    snapshot.now = fixed_now();
+    snapshot
+}
+
+fn assert_cockpit_has_no_parks(screen: &str) {
+    let lines: Vec<_> = screen.lines().collect();
+    let spend = lines.iter().position(|line| line.contains('¤')).unwrap();
+    assert!(lines[spend + 1].contains('─'), "{screen}");
+    assert!(
+        !screen.contains("triage") && !screen.contains("Which fix?"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn park_notice_counts_all_runs_without_cockpit_lines() {
+    let snapshot = park_snapshot(3);
+    for (width, name) in [
+        (80, "park_notice_multiple_wide"),
+        (46, "park_notice_multiple_l2"),
+    ] {
+        let screen = snapshot_to_screen(&snapshot, width, 18);
+        assert!(
+            screen.contains("rimz workflow list · x dismiss"),
+            "{screen}"
+        );
+        if width == 80 {
+            assert!(screen.contains("⚠ 3 workflow runs parked"), "{screen}");
+        }
+        assert_cockpit_has_no_parks(&screen);
         assert_snapshot(name, screen);
     }
 }
 
 #[test]
-fn parked_workflows_cap_at_three_lines_then_count_the_rest() {
-    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
-    value["parked_workflows"] = (1..=5)
-        .map(|n| {
-            serde_json::json!({"run":format!("wf_0190b8172c007000800000000000000{n}"),"workflow":format!("flow{n}"),"node":"gate","reason":"user","text":null,"checkout":"/repo","since":(fixed_now()-Duration::from_secs(60 * (6 - n))).to_string()})
-        })
-        .collect();
-    let mut snapshot: SidebarSnapshot = serde_json::from_value(value).unwrap();
-    snapshot.now = fixed_now();
+fn park_notice_keeps_the_command_at_the_dismiss_hint_boundary() {
+    let snapshot = park_snapshot(1);
+    for (inner, expected) in [
+        (12, "· rimz work"),
+        (22, "⚠ · rimz workflow list"),
+        (35, "⚠ land#dollar- · rimz workflow list"),
+        (36, "⚠ l · rimz workflow list · x dismiss"),
+        (37, "⚠ la · rimz workflow list · x dismiss"),
+    ] {
+        let screen = snapshot_to_screen(&snapshot, inner + 2, 18);
+        let line = screen.lines().find(|line| line.contains("rimz work"));
+        assert_eq!(
+            line.map(str::trim),
+            Some(expected),
+            "width {inner}: {screen}"
+        );
+    }
+}
+
+#[test]
+fn park_notice_is_hidden_by_active_but_not_recovered_refresh_alerts() {
+    let snapshot = park_snapshot(1);
+    let mut alert = Alert::active("snapshot failed", fixed_now());
+    let screen = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
+    assert!(screen.contains("Sidebar degraded"), "{screen}");
+    assert!(!screen.contains("rimz workflow list"), "{screen}");
+    assert_cockpit_has_no_parks(&screen);
+    alert.recovered_at = Some(fixed_now());
+    let screen = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
+    let lines: Vec<_> = screen.lines().collect();
+    let notice = lines
+        .iter()
+        .position(|line| line.contains("rimz workflow list"))
+        .unwrap();
+    let footer = lines
+        .iter()
+        .position(|line| line.contains("? for help"))
+        .unwrap();
+    let recovered = lines
+        .iter()
+        .position(|line| line.contains("last alert"))
+        .unwrap();
+    assert!(notice < footer && footer < recovered, "{screen}");
+}
+
+#[test]
+fn park_notice_unfolds_the_dashboard_footer() {
+    let mut snapshot = park_snapshot(1);
+    snapshot.providers = two_provider_panels();
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    let screen = snapshot_to_screen(&snapshot, 80, 36);
+    let lines: Vec<_> = screen.lines().collect();
+    let footer = lines
+        .iter()
+        .position(|line| line.contains("? for help"))
+        .unwrap();
+    assert!(lines[footer - 1].trim().is_empty(), "{screen}");
+    assert!(lines[footer - 2].contains("rimz workflow list"), "{screen}");
+}
+
+#[test]
+fn park_notice_reraises_for_unseen_pairs_and_reparks_and_clears_with_the_snapshot() {
+    let mut snapshot = park_snapshot(2);
+    let view = ViewState {
+        dismissed_parks: snapshot
+            .parked_workflows
+            .iter()
+            .map(|run| (run.run.clone(), run.since))
+            .collect(),
+        ..selected_ui()
+    };
+    let render = |snapshot: &SidebarSnapshot| {
+        snapshot_to_screen_with_alert_and_ui(snapshot, None, &view, &UiState::default(), 80, 18)
+    };
+    assert!(!render(&snapshot).contains("rimz workflow list"));
+    let since = snapshot.parked_workflows[0].since;
+    snapshot.parked_workflows[0].since -= Duration::from_secs(120);
+    assert!(render(&snapshot).contains("2 workflow runs parked"));
+    snapshot.parked_workflows[0].since = since;
+    let mut new_park = snapshot.parked_workflows[0].clone();
+    new_park.run = "wf_0190b8172c0070008000000000000003".parse().unwrap();
+    new_park.since -= Duration::from_secs(180);
+    snapshot.parked_workflows.push(new_park);
+    assert!(render(&snapshot).contains("3 workflow runs parked"));
+    snapshot.parked_workflows.remove(1);
+    assert!(render(&snapshot).contains("2 workflow runs parked"));
+    snapshot.parked_workflows.clear();
+    assert!(!render(&snapshot).contains("rimz workflow list"));
+    let snapshot = park_snapshot(1);
     let screen = snapshot_to_screen(&snapshot, 80, 18);
-    for shown in ["flow1 gate", "flow2 gate", "flow3 gate", "+2 parked"] {
-        assert!(screen.contains(shown), "{shown} missing: {screen}");
-    }
-    for hidden in ["flow4", "flow5"] {
-        assert!(!screen.contains(hidden), "{hidden} shown: {screen}");
-    }
+    assert!(
+        screen.contains("rimz workflow list"),
+        "a new host forgets dismissal: {screen}"
+    );
 }
 
 #[test]

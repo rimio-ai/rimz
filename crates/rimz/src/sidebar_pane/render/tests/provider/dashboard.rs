@@ -170,7 +170,7 @@ fn skipped_settings_notice_is_above_the_footer_and_absent_at_zero() {
     for count in [2, 0] {
         snapshot.skipped_settings = count;
         let roster = VisibleRoster::new(&snapshot, &BodyLens::default(), &Default::default(), None);
-        let block = compose::build_bottom_chrome(
+        let (block, _) = compose::build_bottom_chrome(
             &snapshot,
             None,
             &theme,

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, ScrollbarMode};
@@ -20,7 +20,7 @@ use super::sections::{
     CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
     cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
     fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
-    parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
+    worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -123,7 +123,8 @@ pub(super) fn compose_lines_with_meter(
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
-    let bottom = build_bottom_chrome(snapshot, alert, theme, cells, view, ui, &roster);
+    let (bottom, park_notice) =
+        build_bottom_chrome(snapshot, alert, theme, cells, view, ui, &roster);
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -282,6 +283,23 @@ pub(super) fn compose_lines_with_meter(
     for _ in 0..pad {
         frame.push_inert(Line::from(""));
     }
+    let painted_parks = if park_notice.is_some_and(|row| {
+        frame
+            .lines
+            .iter()
+            .chain(bottom.lines.iter().take(row))
+            .map(|line| super::frame_rows::wrapped_line_height(line, width))
+            .sum::<usize>()
+            < height
+    }) {
+        snapshot
+            .parked_workflows
+            .iter()
+            .map(|run| (run.run.clone(), run.since))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     frame.append(bottom);
     if let Some(pixels) = meter_pixels {
         pixels.observe_visible(&frame.lines);
@@ -296,6 +314,7 @@ pub(super) fn compose_lines_with_meter(
         top_height: layout.top_shown,
         bottom_height,
         content_height,
+        painted_parks,
         painted_rows,
         anchored_rows,
         drawn_selection: view
@@ -474,6 +493,7 @@ struct BottomPlan {
     corner: BottomCorner,
     truth_notice: bool,
     gate_notice: bool,
+    park_notice: bool,
     footer: bool,
     alert: bool,
 }
@@ -481,9 +501,15 @@ struct BottomPlan {
 fn plan_bottom_chrome(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
+    view: &ViewState,
     ui: &UiState,
 ) -> BottomPlan {
     let alert_active = alert.is_some_and(Alert::is_active);
+    let park_notice = !alert_active
+        && snapshot
+            .parked_workflows
+            .iter()
+            .any(|run| view.dismissed_parks.get(&run.run) != Some(&run.since));
     let dashboard = dashboard_present(snapshot, alert_active).then(|| dashboard_mode(snapshot));
     let owns_store = dashboard.is_some_and(|mode| mode.owns_store(!snapshot.providers.is_empty()));
     let folded_footer = owns_store
@@ -491,6 +517,7 @@ fn plan_bottom_chrome(
         && ui.gate_notice.is_none()
         && snapshot.skipped_settings == 0
         && snapshot.throttle_notices.is_empty()
+        && !park_notice
         && alert.is_none();
     let corner = if alert_active || owns_store {
         BottomCorner::None
@@ -505,6 +532,7 @@ fn plan_bottom_chrome(
         corner,
         truth_notice: !alert_active && snapshot.truth_degraded.is_some(),
         gate_notice: !alert_active && ui.gate_notice.is_some(),
+        park_notice,
         footer: !alert_active && !folded_footer,
         alert: alert.is_some(),
     }
@@ -518,8 +546,8 @@ pub(super) fn build_bottom_chrome(
     view: &ViewState,
     ui: &UiState,
     roster: &VisibleRoster<'_>,
-) -> RenderedBlock {
-    let plan = plan_bottom_chrome(snapshot, alert, ui);
+) -> (RenderedBlock, Option<usize>) {
+    let plan = plan_bottom_chrome(snapshot, alert, view, ui);
     let inner = content_width(cells);
     let mut header = RenderedBlock::default();
     if let Some(line) = search_line(theme, view, roster, snapshot, cells) {
@@ -580,6 +608,15 @@ pub(super) fn build_bottom_chrome(
             )));
         }
     }
+    let park_notice =
+        (plan.park_notice && inner > 0).then_some(header.lines.len() + bottom.lines.len());
+    if plan.park_notice {
+        bottom.push_inert(pad_chrome(super::chrome::park_notice_line(
+            theme,
+            &snapshot.parked_workflows,
+            inner,
+        )));
+    }
     if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
         if !footer.is_empty() {
@@ -609,7 +646,7 @@ pub(super) fn build_bottom_chrome(
     }
     header.append(bottom);
     header.tag("chrome");
-    header
+    (header, park_notice)
 }
 
 fn dashboard_chrome(
@@ -681,6 +718,7 @@ fn bottom_corner_chrome(
 /// One draw's lines, typed interactions, and resolved zone positions.
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub(in crate::sidebar_pane) struct ComposedFrame {
+    pub(super) painted_parks: BTreeMap<crate::ids::WorkflowRunId, jiff::Timestamp>,
     pub(super) painted_rows: Vec<(String, isize)>,
     pub(super) anchored_rows: Vec<(String, isize)>,
     pub(super) drawn_selection: Option<String>,
@@ -1035,23 +1073,6 @@ pub(super) fn top_lines(
         inner,
     );
     header.push(spend);
-    // The top zone does not scroll, so the oldest parked runs show and the
-    // rest collapse into a count.
-    const PARKED_LINES: usize = 3;
-    let parked = &snapshot.parked_workflows;
-    header.extend(
-        parked
-            .iter()
-            .take(PARKED_LINES)
-            .map(|run| parked_workflow_line(theme, run, snapshot.now, inner)),
-    );
-    if parked.len() > PARKED_LINES {
-        header.push(parked_overflow_line(
-            theme,
-            parked.len() - PARKED_LINES,
-            inner,
-        ));
-    }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();
     let mut cockpit_hits = Vec::with_capacity(1);

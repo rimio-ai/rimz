@@ -212,7 +212,7 @@ An unrecorded checkout retries a sustained-true condition every five minutes. A 
 
 ## Park reasons
 
-A parked run appears under NEEDS YOU in `workflow list` and, when it belongs to a loop task, `loop list`. The sidebar cockpit also surfaces it; `show` explains why and prints the available next commands.
+A parked run appears under NEEDS YOU in `workflow list` and, when it belongs to a loop task, `loop list`. A dismissable sidebar notice names its address, or the parked-run count, and points to `rimz workflow list` without giving a reason. A new park raises the notice again after `x` dismisses it; `show` explains why and prints the available next commands.
 
 The list's park phrase is `<reason>[: <text>]`. Cap, timeout, and deadline phrases derive `cap: <used> of <max> visits`, `timeout: waited <timeout>`, and `deadline: passed <clock>` from the sealed spec and record; other reasons keep the recorded text on one line.
 

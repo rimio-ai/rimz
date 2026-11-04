@@ -211,6 +211,29 @@ pub(super) fn throttle_notice_line(
     layout::pin_right(left, right, width.min(full))
 }
 
+pub(super) fn park_notice_line(
+    theme: &Theme,
+    parked: &[crate::store::snapshot::ParkedWorkflow],
+    width: usize,
+) -> Line<'static> {
+    let style = theme.styled(Component::ParkNotice, Modifier::empty());
+    let glyph = theme.glyph(GlyphRole::ChromeAlert);
+    let label = match parked {
+        [run] => format!("{} parked", run.address),
+        runs => format!("{} workflow runs parked", runs.len()),
+    };
+    let left = vec![Span::styled(format!("{glyph} {label}"), style)];
+    let seam = value_seam(theme);
+    let mut suffix = format!("{}rimz workflow list{seam}x dismiss", seam.trim_start());
+    if width < layout::text_width(glyph) + 3 + layout::text_width(&suffix) {
+        suffix = format!("{}rimz workflow list", seam.trim_start());
+    }
+    let right = vec![Span::styled(suffix, style)];
+    let full = left.iter().chain(&right).map(Span::width).sum::<usize>() + 1;
+    let line = layout::pin_right(left, right, width.min(full));
+    Line::from(layout::trim_spans_to_width(line.spans, width))
+}
+
 pub(super) fn truth_notice_lines(
     theme: &Theme,
     notice: &TruthNotice,

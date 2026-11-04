@@ -130,6 +130,8 @@ pub(crate) enum Component {
     FastMode,
     /// Starts needing a fix, above the footer.
     ThrottleNotice,
+    /// Parked workflow runs needing the user, above the footer.
+    ParkNotice,
 }
 
 #[cfg(test)]
@@ -183,6 +185,7 @@ impl Component {
         Component::CompactionPoint,
         Component::FastMode,
         Component::ThrottleNotice,
+        Component::ParkNotice,
     ];
 }
 
@@ -199,7 +202,7 @@ impl Component {
                 palette.good
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
-            | ThrottleNotice => palette.warn,
+            | ThrottleNotice | ParkNotice => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }

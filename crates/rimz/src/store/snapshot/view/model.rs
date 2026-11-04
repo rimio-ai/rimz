@@ -99,15 +99,11 @@ pub struct ThrottleNotice {
     pub count: usize,
 }
 
-/// One parked workflow run, drawn as an inert cockpit line.
+/// One parked workflow run contributing to the dismissable bottom notice.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParkedWorkflow {
     pub run: crate::ids::WorkflowRunId,
-    pub workflow: String,
-    pub node: String,
-    pub reason: crate::store::workflow::ParkReason,
-    pub text: Option<String>,
-    pub checkout: std::path::PathBuf,
+    pub address: String,
     pub since: jiff::Timestamp,
 }
 

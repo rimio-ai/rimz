@@ -198,7 +198,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 ## The cockpit
 
-The cockpit is the top block. Its lines stay put as agents change status; the unread banner and [parked workflow runs](#parked-workflow-runs) add or remove rows.
+The cockpit is the top block. Its lines stay put as agents change status; the unread banner adds or removes a row. The make-up line is absent in an empty or process-only room.
 
 ```
  ⌘ query-engine                     ~/code/query-engine
@@ -217,7 +217,6 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
 | 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
-| then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
 | 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
 
@@ -226,20 +225,6 @@ Before any spend arrives the token breakdown shows zeroes and the spend shows `$
 The room's scope is a path prefix: the project root and each grouped worktree root. A checkout you reach through a symlink spelled differently from the path in the agent's transcript can count as outside the room until the two paths agree.
 
 The `⑃ N` colour reads each worktree's own pull request, since stacked pull requests carry no CI: red when any fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
-
-### Parked workflow runs
-
-A [workflow run](../guide/workflows.md) that parks for you adds one line under the spend line, oldest park first, and the line goes when you resume or cancel the run. The top zone does not scroll, so it shows at most three such lines; past three, a fourth line `? +N parked` counts the rest, and `rimz workflow list` names them with addresses such as `review#feat-x` for `show`, `resume`, or `cancel`:
-
-```
- ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
- ¤ 0                                                                      $0.00
- ? babysit-pr triage asked: Which compatibility fix should ship before the r 5m
- ? review sweep cap                                                          2m
- ──────────────────────────────────────────────────────────────────────────────
-```
-
-Each line is the waiting `?` glyph, the workflow, the node it parked at, and the park reason (`user`, `cap`, `deadline`, `timeout`, `invalid`, `asked`, or `check`), followed by its text when the park carries one: the question for `asked`, the check's own `reason` for `user`. The text loses its right end at the pane edge, and the time since the park stays on the right. The line is not a click target: `rimz workflow show <run>` and `rimz workflow resume <run>` act on it ([workflow commands](../reference/cli/workflow.md)). On a watched tab it appears within one data tick of the park.
 
 ### The make-up line
 
@@ -870,6 +855,34 @@ At 46 columns the same notices keep their suffixes:
  ⚠ starts held: cannot · 2 held · rimz doctor
 ```
 
+A [workflow run](../guide/workflows.md) that parks for you raises one warning notice after the held-start notices and above the blank line and footer. It names the run's address, or counts every parked run when several are parked, then points to `rimz workflow list` and offers `x dismiss`. It never gives a park reason or question; the command names the parked runs and explains why they stopped. The notice is not a click target and keeps the footer unfolded. On a watched tab a new park appears within one data tick.
+
+At 80 columns, one parked run reads:
+
+```
+ ⚠ land#dollar-align parked · rimz workflow list · x dismiss
+
+                                                                     ? for help
+```
+
+Several parked runs replace the address with their count:
+
+```
+ ⚠ 3 workflow runs parked · rimz workflow list · x dismiss
+```
+
+At 46 columns, the label clips first:
+
+```
+ ⚠ land#doll · rimz workflow list · x dismiss
+
+                                   ? for help
+```
+
+Press `x` to dismiss the parks the notice shows on screen; a park the pane has not drawn yet stays undismissed. Another run parking, or the same run parking again, raises it again with the full parked count, including dismissed runs. Resuming or canceling a run reduces that count; no parked runs means no notice. Dismissal is shared by co-viewers, lasts until the sidebar host restarts, and leaves no sidebar reminder until another park. `rimz workflow list` still shows every parked run.
+
+Narrow panes clip the address or count first. When the full suffix would leave less than the warning glyph, a space, and one cell of leading text, `· x dismiss` drops and `· rimz workflow list` stays; `x` still works. Below that, the line clips at the right edge.
+
 When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor` (singular `setting` for one). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice.
 
 When RimZ repairs a partial read of the multiplexer's panes by carrying panes over from the last frame, a dim notice appears above the footer and the room stays usable:
@@ -912,7 +925,7 @@ When several agents are affected, it names the earliest one's card: `coder and 2
  ⚠ last alert 2m ago: hook drainer unreachable for 40s · x dismiss
 ```
 
-An active `Sidebar degraded` alert hides the hook-drainer line; after refresh recovery both lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
+An active `Sidebar degraded` alert hides the park notice and hook-drainer line. Pressing `x` clears that alert without dismissing the park notice it hid. Once the notice shows, the next `x` dismisses its parks together with any recovered drainer or refresh alerts. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert and the park notice above the footer. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
 
 ### The help overlay
 
@@ -964,7 +977,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `←` / `→` | switch the dashboard tab |
 | `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `r` | reload this tab's sidebar |
-| `x` | dismiss recovered alerts, or an active `Sidebar degraded` alert |
+| `x` | dismiss the park notice and recovered alerts on screen, or an active `Sidebar degraded` alert without dismissing the park notice it hides |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
 | `Esc` | clear only the text search; while help is open, close help only |

@@ -370,7 +370,7 @@ A blocking question or permission prompt from a turn step's leader or its subage
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and parks the run, unless `on.deadline` routes it somewhere else.
 
-A parked run appears in three places: a line in the [sidebar cockpit](../interface/sidebar.md), the NEEDS YOU section of `rimz loop list` when a loop task started it, and NEEDS YOU in `rimz workflow list`, with its address and reason. Blocking questions and capacity holds needing a fix also appear under NEEDS YOU; a staying session that is simply `with you` stays in ACTIVE. The [park reasons table](../reference/cli/workflow.md#park-reasons) gives the exact word for each park.
+A parked run raises a dismissable [sidebar notice](../interface/sidebar.md#notices-and-alerts) naming its address, or the count when several runs are parked, with a `rimz workflow list` hint but no reason. Press `x` to dismiss it; a new park raises it again. Parked runs remain under NEEDS YOU in `rimz workflow list` with their addresses and reasons, and in `rimz loop list` when a loop task started them. Blocking questions and capacity holds needing a fix also appear under NEEDS YOU; a staying session that is simply `with you` stays in ACTIVE. The [park reasons table](../reference/cli/workflow.md#park-reasons) gives the exact word for each park.
 
 Fix what the reason names, then send the run back to work:
 
