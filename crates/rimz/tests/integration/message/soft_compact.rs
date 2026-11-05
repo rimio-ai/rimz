@@ -701,7 +701,7 @@ fn wrap_up_skips_an_input_prompt_raised_while_it_waited_for_the_pane_lock() {
     release.write_all(&[1]).unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
-        fixture.trace().is_empty(),
+        fixture.trace().iter().all(|line| is_client_view_read(line)),
         "no write into an input prompt: {:?}, {output:?}",
         fixture.trace()
     );

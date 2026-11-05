@@ -477,6 +477,18 @@ pub(super) fn render_delivery_check(
         render::paint(render::palette::header(), "DELIVERY CHECK")
     )?;
     let mut kv = render::KeyVals::new().indent(2);
+    if let Some(hold) = check.typing_hold {
+        kv.push(
+            "typing hold",
+            condition_cell(
+                false,
+                format!(
+                    "someone is using the receiver's pane; retry {}",
+                    time_until_with_absolute(hold.until, now)
+                ),
+            ),
+        );
+    }
     let (ok, detail) = schedule_detail(check, now);
     kv.push("schedule", condition_cell(ok, detail));
     if !check.after.is_empty() {
@@ -673,6 +685,10 @@ pub(super) fn render_verdict(
     now: Timestamp,
 ) -> String {
     match verdict {
+        deliver::DeliveryVerdict::TypingHeld { until } => format!(
+            "held: someone is using the receiver's pane; retry {}",
+            time_until_with_absolute(*until, now)
+        ),
         deliver::DeliveryVerdict::Expired { expires_at } => {
             let validity = rimz::store::message::command_validity();
             let queued_at = *expires_at - validity;
@@ -816,6 +832,7 @@ pub(super) fn delivery_action_hint(
         deliver::DeliveryVerdict::ReceiverEnded => None,
         deliver::DeliveryVerdict::WaitingForRegistration { .. } => None,
         deliver::DeliveryVerdict::Expired { .. } => None,
+        deliver::DeliveryVerdict::TypingHeld { .. } => None,
     }
 }
 
@@ -1022,6 +1039,7 @@ mod tests {
     fn delivery_checks_report_recent_attempt_and_after_blocker() {
         let message_id = MessageId::parse("msg_0000000000000001").unwrap();
         let mut check = deliver::DeliveryCheck {
+            typing_hold: None,
             register_by: None,
             expiry: deliver::ExpiryCheck {
                 expired: false,

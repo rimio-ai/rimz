@@ -6,6 +6,8 @@ To hand work to an agent that is already running, you switch to its pane and typ
 
 Every send becomes a durable record before a byte reaches the pane. A busy agent, a room you close and reopen, or a failed write all leave a record you can read back, with the outcome on it, so nothing you send disappears quietly.
 
+On tmux, messages also wait while someone is using the receiving pane, until 30 seconds after that viewing client's last input. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
+
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"     # parks: lands when @claude's turn ends
 rimz message --steer @claude "stop: the parser test comes first"  # writes into the live turn now
@@ -78,7 +80,7 @@ Nothing is locked in until it lands: `rimz message cancel msg_06gc05m0d327d1d0` 
 
 Other receipts name the opening time, the first unmet `--after` or `--when` condition, the blocking message id, or the missing live pane. A resumed provider gets a receipt saying it is starting. A parent's follow-up to its ended child instead names the registration deadline and says it is queued while the child resumes; the three-second pane-bind check never discards it. When a prompt owns the input, the receipt says your text will not be read until that prompt is answered and points to `rimz asks show @coder` and `rimz answer @coder <choice>`. `message show` gives the same pair of commands for that blocker.
 
-**Steer the live turn.** `--steer` writes into the live turn now, the way typing into its pane would, so you can redirect it mid-thought. If RimZ is already writing a command, message, or answer to that pane, steer waits up to 30 seconds for that write to finish, its submit key included, rather than inserting text halfway through it.
+**Steer the live turn.** `--steer` writes into the live turn once the typing hold clears, so you can redirect it mid-thought without joining someone's active draft. If RimZ is already writing a command, message, or answer to that pane, steer waits up to 30 seconds for that write to finish, its submit key included, rather than inserting text halfway through it.
 
 ```sh
 rimz message --steer @claude "stop: rebase on main first, the parser moved"
@@ -105,6 +107,7 @@ A durable record is not a delivery guarantee, and the record is where a failure 
 
 A parked message delivers the moment the agent can take it, which means all of these hold:
 
+- Nobody viewing its pane has input recent enough to keep the typing hold active.
 - Its `--schedule` floor has passed and every `--after` and `--when` condition is met.
 - It is the oldest ready message for that agent. Messages to one agent deliver oldest first, and scheduled or condition-held ones step out of line until they are ready.
 - The agent is not [compacting its context](#compact-before-the-message-lands), and its status opens the `--on` gate.
@@ -255,7 +258,7 @@ A message can remain `sent` while RimZ catches up with the agent's hooks. If a h
 
 A prompt sent while an agent is starting after a resume also stays `sent`, keeping its queue position rather than being typed again. RimZ waits until the agent reports its first activity since the resume, or ten confirmation windows pass after the resume (five minutes by default), then lets the most recently armed confirmation deadline finish before retrying. An ordinary startup hold adds no warning in `rimz doctor`. A write from before the resume still retries normally, because it went to the previous process.
 
-`message steer` delivers past the schedule, the conditions, the queue order, and the gate. An open prompt still stops it unless you add `--force`. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
+`message steer` delivers past the schedule, the conditions, the queue order, and the gate, but still waits for the typing hold, even with `--force`. An open prompt still stops it unless you add `--force`. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
 
 ## Agents message each other
 

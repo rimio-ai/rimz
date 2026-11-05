@@ -1,5 +1,102 @@
 use super::*;
 
+#[test]
+fn typing_hold_replay_policy_uses_its_own_force() {
+    let until = Timestamp::from_second(10_000).unwrap();
+    let cases = [
+        ("steer", false, DeliveryPolicy::Steer { force: false }),
+        ("steer", true, DeliveryPolicy::Steer { force: true }),
+        (
+            "interrupt",
+            false,
+            DeliveryPolicy::Interrupt { force: false },
+        ),
+        ("interrupt", true, DeliveryPolicy::Interrupt { force: true }),
+    ];
+    let observed = cases.map(|(replay, force, _)| {
+        let hold = serde_json::from_value(serde_json::json!({
+            "until": until,
+            "replay": replay,
+            "force": force,
+        }))
+        .unwrap();
+        DeliveryPolicy::from_typing_hold(hold)
+    });
+    assert_eq!(observed, cases.map(|(_, _, policy)| Some(policy)));
+}
+
+#[test]
+fn stored_typing_hold_applies_to_every_policy_except_a_forced_interrupt() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("receiver", AgentStatus::Idle);
+    let live = snapshot(receiver.clone(), true, now);
+    let mut encoded = serde_json::to_value(message(&receiver, 1, "go")).unwrap();
+    encoded["typing_hold"] = serde_json::json!({"until": now + Duration::from_secs(30)});
+    let held: MessageRecord = serde_json::from_value(encoded).unwrap();
+    let observed = [
+        DeliveryPolicy::Boundary,
+        DeliveryPolicy::Steer { force: false },
+        DeliveryPolicy::Steer { force: true },
+        DeliveryPolicy::Interrupt { force: false },
+        DeliveryPolicy::Interrupt { force: true },
+    ]
+    .map(|policy| {
+        matches!(
+            delivery_candidate(std::slice::from_ref(&held), &live, &held.message_id, policy, now),
+            Candidacy::Refused(verdict) if verdict.reason().contains("someone is using")
+        )
+    });
+    assert_eq!(observed, [true, true, true, true, false]);
+}
+
+#[test]
+fn forced_interrupt_ignores_a_stored_typing_hold_when_the_pane_is_gone() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("receiver", AgentStatus::Idle);
+    let live = snapshot(receiver.clone(), false, now);
+    let mut held = message(&receiver, 1, "go");
+    held.typing_hold = Some(TypingHold {
+        until: now + Duration::from_secs(30),
+        replay: None,
+        force: false,
+    });
+    let verdict = match delivery_candidate(
+        std::slice::from_ref(&held),
+        &live,
+        &held.message_id,
+        DeliveryPolicy::Interrupt { force: true },
+        now,
+    ) {
+        Candidacy::Refused(verdict) => Some(verdict),
+        _ => None,
+    };
+    assert_eq!(
+        verdict,
+        Some(DeliveryVerdict::NoPane {
+            pinned_pane_id: held.pane_id,
+        })
+    );
+}
+
+#[test]
+fn explain_releases_the_stored_typing_hold_at_the_exact_deadline() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("receiver", AgentStatus::Idle);
+    let live = snapshot(receiver.clone(), true, now);
+    let mut encoded = serde_json::to_value(message(&receiver, 1, "go")).unwrap();
+    let observed = [-1, 0, 1].map(|offset| {
+        encoded["typing_hold"] =
+            serde_json::json!({"until": now + jiff::SignedDuration::from_secs(offset)});
+        let held: MessageRecord = serde_json::from_value(encoded.clone()).unwrap();
+        let check = explain(&held, std::slice::from_ref(&held), &live, now);
+        let value = serde_json::to_value(&check).unwrap();
+        value
+            .get("typing_hold")
+            .is_some_and(serde_json::Value::is_object)
+    });
+    assert_eq!(observed, [false, false, true]);
+}
+
 fn explain(
     message: &MessageRecord,
     pending: &[MessageRecord],
@@ -821,6 +918,7 @@ fn waiting_dwell_starts_when_permission_review_becomes_visible() {
 
 fn ready_check() -> DeliveryCheck {
     DeliveryCheck {
+        typing_hold: None,
         register_by: None,
         expiry: ExpiryCheck {
             expired: false,

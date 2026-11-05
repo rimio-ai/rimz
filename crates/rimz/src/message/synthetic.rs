@@ -74,6 +74,11 @@ pub fn attempt_now(
     );
     let reason = match &outcome {
         Ok(DeliveryReport::Sent { .. }) => return Ok(true),
+        Ok(DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { .. }))
+            if on_miss == DeliveryFailureDisposition::Retry =>
+        {
+            None
+        }
         Ok(DeliveryReport::Refused(verdict)) => Some(verdict.reason()),
         Ok(DeliveryReport::Stopped) if on_miss == DeliveryFailureDisposition::Terminal => {
             Some(fallback_reason.to_owned())
