@@ -241,12 +241,13 @@ pub(super) fn assert_grid(
             "the column at {left} holds {want_rows} rows: {panes:?}",
         );
         assert_eq!(
-            column[0].top, 0,
+            column[0].top, 1,
             "the column at {left} starts at the top of the window: {panes:?}",
         );
         let spanned = column.iter().map(|pane| pane.height).sum::<u64>() + column.len() as u64 - 1;
         assert_eq!(
-            spanned, window_height,
+            spanned,
+            window_height - 1,
             "the column at {left} spans the full window height: {panes:?}",
         );
         assert!(

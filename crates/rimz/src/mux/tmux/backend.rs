@@ -10,7 +10,7 @@ use super::layout::{Layout, Refusal};
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
     sidebar_serve_command, sidebar_width_option_set_cmd, spawn_command_is_sidebar_serve,
-    stack_hook_commands, stack_window_options, window_option_argv,
+    stack_hook_commands,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::{SplitAxis, TmuxPaneGeometry, sanitize_window_name};
@@ -1749,32 +1749,6 @@ impl TmuxBackend {
                 " ; if-shell -F '#{{!=:#{{window_zoomed_flag}},1}}' {{ resize-pane -t {open} -y #{{window_height}} }}"
             ));
         }
-        let borders = stack_window_options(&Default::default(), true)
-            .into_iter()
-            .filter(|(key, _)| {
-                matches!(
-                    *key,
-                    "pane-border-status" | "pane-border-format" | "@rimz_stack_borders_owned"
-                )
-            })
-            .map(|(key, value)| {
-                window_option_argv(key, value.as_deref(), Some(&members[0]))
-                    .into_iter()
-                    .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect::<Vec<_>>()
-            .join(" ; ");
-        // Apply borders before expansion: tmux <3.8 can subtract a status row from a one-row cell.
-        commands.push(vec![
-            "if-shell".into(),
-            "-F".into(),
-            "-t".into(),
-            members[0].clone(),
-            "#{@rimz_stack_borders}".into(),
-            borders,
-        ]);
         commands.push(vec![
             "run-shell".into(),
             "-C".into(),

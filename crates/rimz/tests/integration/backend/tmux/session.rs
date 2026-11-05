@@ -453,18 +453,15 @@ fn ensure_session_diffs_window_options_at_250_windows() {
         "-F",
         concat!(
             "#{window_id}|#{allow-passthrough}|#{aggressive-resize}|#{pane-border-status}|",
-            "#{pane-border-lines}|#{@rimz_stack_borders_owned}|#{pane-border-format}",
+            "#{pane-border-lines}|#{@rimz_borders}|#{pane-border-format}",
         ),
     ]);
     assert_eq!(windows.lines().count(), 250);
     for window in windows.lines() {
         let (_, values) = window.split_once('|').unwrap();
-        assert!(values.starts_with("on|1|top|double||"), "{window}");
+        assert!(values.starts_with("on|1|top|double|1|"), "{window}");
         assert!(
-            values.ends_with(concat!(
-                "#{?#{==:#{pane_title},rimz-sidebar},#{p999: }, ",
-                "#{pane_index} #{pane_current_command} }",
-            )),
+            values.ends_with("#{?#{==:#{pane_title},rimz-sidebar}, rimz , #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} }"),
             "{window}",
         );
     }
@@ -543,13 +540,19 @@ fn ensure_session_diffs_window_options_at_250_windows() {
 }
 
 #[test]
-fn ensure_session_unsets_border_options_to_restore_inheritance() {
+fn inherit_restores_marked_borders_and_preserves_unmarked_windows() {
     require_tmux!();
     let server = TmuxServer::new();
     let cwd = TempDir::new().expect("cwd tempdir");
     let session = "rimz-border-inheritance";
     server.ensure_with_shell(session);
     server.tmux(&["set-window-option", "-g", "pane-border-status", "bottom"]);
+    server.tmux(&[
+        "set-window-option",
+        "-g",
+        "pane-border-format",
+        "user | #{pane_index}",
+    ]);
     let first = server.display(session, "#{window_id}");
     let second = server.stdout(&[
         "new-window",
@@ -578,7 +581,7 @@ fn ensure_session_unsets_border_options_to_restore_inheritance() {
             ("pane-border-lines", "double"),
         ] {
             assert_eq!(
-                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                server.stdout(&["show-options", "-wqv", "-t", window, key]),
                 expected,
                 "{key} on window {window} before removal",
             );
@@ -590,17 +593,71 @@ fn ensure_session_unsets_border_options_to_restore_inheritance() {
         );
     }
 
-    opts.config.tmux.pane_border_status = None;
+    let untouched = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "sh",
+    ]);
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &untouched,
+        "pane-border-status",
+        "off",
+    ]);
+    let legacy = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "sh",
+    ]);
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &legacy,
+        "pane-border-status",
+        "top",
+    ]);
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &legacy,
+        "pane-border-format",
+        "old stack",
+    ]);
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &legacy,
+        "@rimz_stack_borders_owned",
+        "1",
+    ]);
+    opts.config.tmux =
+        toml::from_str("pane_border_status = 'inherit'").expect("inherit is a border policy");
     opts.config.tmux.pane_border_lines = None;
-    server.backend.ensure_session(&opts).expect("unset borders");
-    for window in [&first, &second] {
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("hand borders back");
+    for window in [&first, &second, &legacy] {
         for key in [
             "pane-border-status",
             "pane-border-format",
             "pane-border-lines",
+            "@rimz_borders",
+            "@rimz_stack_borders_owned",
         ] {
             assert_eq!(
-                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                server.stdout(&["show-options", "-wqv", "-t", window, key]),
                 "",
                 "{key} on window {window} must no longer have a local value",
             );
@@ -610,10 +667,17 @@ fn ensure_session_unsets_border_options_to_restore_inheritance() {
             "bottom",
             "window {window} must inherit the global border status",
         );
+        assert_eq!(
+            server.display(window, "#{E:pane-border-format}"),
+            format!("user | {}", server.display(window, "#{pane_index}"))
+        );
     }
-    eprintln!(
-        "live tmux: both windows have no local border options and inherit pane-border-status bottom"
-    );
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("inherit reapply");
+    assert_eq!(server.display(&untouched, "#{pane-border-status}"), "off");
+    assert_eq!(server.display(session, "#{window_id}"), first);
 }
 
 /// `focus_pane` lands cross-window: tmux's `select-pane` activates within its

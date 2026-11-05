@@ -153,8 +153,9 @@ impl ZellijClipboard {
 }
 
 /// RimZ-owned tmux room defaults. Session/window options stay scoped to the
-/// RimZ session. Optional pane-border fields are passed only when the user sets
-/// them here, so the user's `~/.tmux.conf` remains authoritative otherwise.
+/// RimZ session. Pane borders default to `top`; `bottom` moves the labels, `off`
+/// hides them, and `inherit` hands borders back to the user's `~/.tmux.conf`.
+/// The optional line style inherits unless set here.
 /// tmux server options are runtime-global inside the tmux server; RimZ sets
 /// them because clipboard and rich-key support are server-scoped.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -170,8 +171,7 @@ pub struct TmuxConfig {
     pub escape_time_ms: u32,
     pub renumber_windows: bool,
     pub aggressive_resize: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pane_border_status: Option<TmuxPaneBorderStatus>,
+    pub pane_border_status: TmuxPaneBorderStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_border_lines: Option<TmuxPaneBorderLines>,
 }
@@ -195,7 +195,7 @@ impl Default for TmuxConfig {
             escape_time_ms: 10,
             renumber_windows: true,
             aggressive_resize: true,
-            pane_border_status: None,
+            pane_border_status: TmuxPaneBorderStatus::Top,
             pane_border_lines: None,
         }
     }
@@ -241,10 +241,11 @@ impl TmuxExtendedKeysFormat {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TmuxPaneBorderStatus {
-    #[default]
     Off,
+    #[default]
     Top,
     Bottom,
+    Inherit,
 }
 
 impl TmuxPaneBorderStatus {
@@ -253,6 +254,7 @@ impl TmuxPaneBorderStatus {
             Self::Off => "off",
             Self::Top => "top",
             Self::Bottom => "bottom",
+            Self::Inherit => "inherit",
         }
     }
 }

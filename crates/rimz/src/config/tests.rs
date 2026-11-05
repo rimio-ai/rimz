@@ -1826,7 +1826,7 @@ fn tmux_room_options_parse_and_defaults_are_agent_friendly() {
     assert_eq!(defaults.tmux.escape_time_ms, 10);
     assert!(defaults.tmux.renumber_windows);
     assert!(defaults.tmux.aggressive_resize);
-    assert_eq!(defaults.tmux.pane_border_status, None);
+    assert_eq!(defaults.tmux.pane_border_status, TmuxPaneBorderStatus::Top);
     assert_eq!(defaults.tmux.pane_border_lines, None);
 
     let config = load_no_fragments(&write(
@@ -1843,13 +1843,20 @@ fn tmux_room_options_parse_and_defaults_are_agent_friendly() {
         config.tmux.extended_keys_format,
         TmuxExtendedKeysFormat::Xterm,
     );
-    assert_eq!(
-        config.tmux.pane_border_status,
-        Some(TmuxPaneBorderStatus::Top)
-    );
+    assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Top);
     assert_eq!(
         config.tmux.pane_border_lines,
         Some(TmuxPaneBorderLines::Heavy)
+    );
+}
+
+#[test]
+fn tmux_border_modes_parse_and_reject_unknown_values() {
+    assert_eq!(
+        ["top", "bottom", "off", "inherit", "unknown"].map(|mode| {
+            toml::from_str::<TmuxConfig>(&format!("pane_border_status = '{mode}'")).is_ok()
+        }),
+        [true, true, true, true, false],
     );
 }
 

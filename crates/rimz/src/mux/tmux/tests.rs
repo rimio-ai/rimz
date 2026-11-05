@@ -278,8 +278,20 @@ fn window_options_shim(
          case \"$*\" in\n*'#{allow-passthrough}'*) cat \"$dir/windows\" ;;\n\
          *) awk -F '|' '/^@/ { print $1 \"|\" $2 \"|\" $4 \"|\" $7; next } { print }' \"$dir/windows\" ;;\nesac\n",
     );
-    std::fs::write(temp.path().join("windows"), windows).unwrap();
-    std::fs::write(temp.path().join("read-stdout"), read_stdout).unwrap();
+    let border_format = tmux_window_options(&TmuxConfig::default())
+        .into_iter()
+        .find_map(|(key, value)| (key == "pane-border-format").then_some(value).flatten())
+        .unwrap();
+    std::fs::write(
+        temp.path().join("windows"),
+        windows.replace("<rimz-format>", &border_format),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("read-stdout"),
+        read_stdout.replace("<rimz-format>", &border_format),
+    )
+    .unwrap();
     std::fs::write(temp.path().join("script-stdout"), script_stdout).unwrap();
     let mut backend = TmuxBackend::with_socket("/test/socket");
     backend.program = Some(shim);
@@ -290,8 +302,8 @@ fn window_options_shim(
 #[test]
 fn window_options_matching_effective_values_need_no_writes() {
     let (temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n@4||on|on|bottom|single||user|format\n",
-        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "single\n@4||on|on|top|single|1|<rimz-format>\n",
+        "__rimz_script_begin_0__\non\ntop\nsingle\n<rimz-format>\n__rimz_script_end_0__\n",
         "",
     );
     assert!(
@@ -324,8 +336,8 @@ fn window_options_matching_effective_values_need_no_writes() {
 #[test]
 fn window_options_script_writes_only_the_differing_key() {
     let (temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n@4||on|off|bottom|single||user|format\n",
-        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "single\n@4||on|off|top|single|1|<rimz-format>\n",
+        "__rimz_script_begin_0__\non\ntop\nsingle\n<rimz-format>\n__rimz_script_end_0__\n",
         "__rimz_script_begin_0__\n__rimz_script_end_0__\n",
     );
     assert!(
@@ -351,13 +363,13 @@ fn window_options_script_writes_only_the_differing_key() {
 #[test]
 fn window_options_partial_failure_still_applies_other_windows() {
     let (temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n\
-         @999||on|off|bottom|single||user|format\n\
-         @998||on|off|bottom|single||user|format\n\
-         @4||on|off|bottom|single||user|format\n",
-        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n\
+        "single\n\
+         @999||on|off|top|single|1|<rimz-format>\n\
+         @998||on|off|top|single|1|<rimz-format>\n\
+         @4||on|off|top|single|1|<rimz-format>\n",
+        "__rimz_script_begin_0__\non\ntop\nsingle\n<rimz-format>\n__rimz_script_end_0__\n\
          __rimz_script_begin_1__\non\n\
-         __rimz_script_begin_2__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_2__\n",
+         __rimz_script_begin_2__\non\ntop\nsingle\n<rimz-format>\n__rimz_script_end_2__\n",
         "__rimz_script_begin_0__\n__rimz_script_begin_1__\n__rimz_script_end_1__\n",
     );
     assert!(
@@ -386,8 +398,8 @@ fn window_options_partial_failure_still_applies_other_windows() {
 #[test]
 fn window_options_all_lines_failing_refuses_room_open() {
     let (_temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n@999||on|off|bottom|single||user|format\n",
-        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "single\n@999||on|off|top|single|1|<rimz-format>\n",
+        "__rimz_script_begin_0__\non\ntop\nsingle\n<rimz-format>\n__rimz_script_end_0__\n",
         "__rimz_script_begin_0__\n",
     );
     assert!(
@@ -402,7 +414,7 @@ fn window_options_all_lines_failing_refuses_room_open() {
 #[test]
 fn window_options_failed_read_does_not_count_a_matching_window() {
     let (temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n@999||on|on|bottom|single||user|format\n",
+        "single\n@999||on|on|top|single|1|<rimz-format>\n",
         "__rimz_script_begin_0__\non\n",
         "",
     );
@@ -419,7 +431,7 @@ fn window_options_failed_read_does_not_count_a_matching_window() {
 #[test]
 fn window_options_read_transport_failure_refuses_room_open() {
     let (temp, backend) = window_options_shim(
-        "bottom\nsingle\nuser|format\n@4||on|on|bottom|single||user|format\n",
+        "single\n@4||on|on|top|single|1|<rimz-format>\n",
         "-:2: unknown command: broken\n",
         "",
     );
