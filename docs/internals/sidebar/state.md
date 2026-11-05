@@ -404,9 +404,9 @@ The producer repairs raced-null processes, missing cwds, and briefly omitted pan
 
 | Lane | Writer | Carries |
 | --- | --- | --- |
-| `lanes/agent-projection.json` | Producer fetch worker | For one session: normalized admitted agent kinds, default launch models, the sorted admitted `(kind, absolute workspace)` inputs, and provider-validated local-session observations. |
+| `lanes/agent-projection.json` | Producer fetch worker | For one session: normalized admitted agent kinds, default launch models, the optional `untracked` map of kind-wide hook reasons and full fixes, the sorted admitted `(kind, absolute workspace)` inputs, and provider-validated local-session observations. |
 
-The host probes wiring behind exact input stamps and batches account-scoped discovery per represented kind. It compares the fresh agent projection against its last successful publication in memory and writes the file only on change. A failed write stays retryable. The producing fold already carries the new projection to panes, so publication sends no extra wake.
+The host probes wiring and hook reasons behind exact input stamps and batches account-scoped discovery per represented kind. Those stamps cover every file read by hook detection, managed disabled/trust checks, and default-model reads. It compares the fresh agent projection against its last successful publication in memory and writes the file only on change. A failed write stays retryable. The producing fold already carries the new projection to panes, so publication sends no extra wake. Older publications default to an empty reason map; empty maps are omitted.
 
 Readers bind observations through the intersection of published and current inputs. The host filters its retained projection the same way. Passive readers parse the file once and validate the session, so a newly added input waits for the next publication and a removed one disappears at once. A missing, malformed, or wrong-session file fails closed. CLI inspection probes privately and never publishes the file.
 

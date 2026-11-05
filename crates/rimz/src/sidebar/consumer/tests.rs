@@ -577,6 +577,7 @@ fn published_wiring_admits_a_hook_only_idle_pane_without_provider_config() {
                     "droid".to_owned(),
                     "fixture-model".to_owned(),
                 )]),
+                untracked: std::collections::BTreeMap::new(),
             },
             inputs: Default::default(),
             observations: Vec::new(),

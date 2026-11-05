@@ -766,6 +766,7 @@ mod tests {
             WiredAgentProjection {
                 kinds: vec!["codex".to_owned()],
                 default_models: std::collections::BTreeMap::new(),
+                untracked: std::collections::BTreeMap::new(),
             },
             &runtime,
         );

@@ -18,12 +18,14 @@ use crate::ids::AgentKind;
 use crate::pane::PaneRef;
 use crate::store::snapshot::SidebarSnapshot;
 
-/// Agent kinds admitted for sessionless idle synthesis and their launch-model
-/// fallbacks, in adapter display order.
+/// Wiring admission, known reporting gaps, and launch-model fallbacks. Admitted
+/// kinds stay in adapter display order, independently of the reason map.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WiredAgentProjection {
     pub kinds: Vec<String>,
     pub default_models: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub untracked: BTreeMap<String, crate::agents::NotTracked>,
 }
 
 /// Projections consumed together by one sidebar fold.
@@ -228,6 +230,11 @@ fn probe_adapters() -> WiredAgentProjection {
     let mut projection = WiredAgentProjection::default();
     for agent in crate::agents::all_definitions() {
         let definition = agent.spec();
+        if let Some(reason) = crate::agents::not_tracked_hooks(agent, &login_env) {
+            projection
+                .untracked
+                .insert(definition.kind.to_owned(), reason);
+        }
         let wired = definition.capabilities.local_session_discovery
             != LocalSessionDiscovery::Unsupported
             || (definition.has_wired_hook_install() && agent.hooks_installed(&login_env));
@@ -419,7 +426,28 @@ mod tests {
         WiredAgentProjection {
             kinds: vec![kind.to_owned()],
             default_models: BTreeMap::new(),
+            untracked: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn publication_preserves_optional_untracked_reasons() {
+        let old = serde_json::json!({
+            "session_name": "room",
+            "wiring": {"kinds": ["unregistered"], "default_models": {}},
+            "inputs": {"by_kind": {}},
+            "observations": [],
+        });
+        let parsed: AgentProjectionPublication = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(parsed.wiring.kinds, ["unregistered"]);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), old);
+        let mut with_reason = old;
+        with_reason["wiring"]["untracked"] = serde_json::json!({
+            "unregistered": {"reason": "hooks_blocked", "fix": "enable hooks, then restart"}
+        });
+        let parsed: AgentProjectionPublication =
+            serde_json::from_value(with_reason.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), with_reason);
     }
 
     fn observation(workspace: &Path, session: &str) -> LocalSessionObservation {
