@@ -72,6 +72,7 @@ fn template_defaults_deserialize_to_machine_defaults() {
 
 #[test]
 fn template_covers_serialized_default_leaves() {
+    assert!(Kind::Core.template().contains("# typing_hold = \"30s\""));
     let mut defaults = template_comparison_defaults(MachineConfig::default());
     defaults.agents.teams.0.clear();
     let serialized = toml::to_string(&defaults).expect("serialize defaults");

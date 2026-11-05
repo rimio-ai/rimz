@@ -2421,6 +2421,25 @@ fn harness_prompt_cache_edits_validate_provider_and_duration() {
 }
 
 #[test]
+fn harness_typing_hold_edits_validate_durations() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path(),
+    ));
+    let outcomes = ["30s", "off", "2m", "0s", "yesterday"].map(|value| {
+        let changed = editor.set("harness.typing_hold", value);
+        changed.is_ok()
+            && editor
+                .get(Some("harness.typing_hold"))
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                == Some(value.to_owned())
+    });
+    assert_eq!(outcomes, [true, true, true, false, false]);
+}
+
+#[test]
 fn prompt_cache_margin_edits_validate_the_merged_configuration() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

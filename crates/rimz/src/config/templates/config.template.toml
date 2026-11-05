@@ -277,6 +277,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 ## htop = "htop"
 
 [harness]
+# typing_hold = "30s"             # hold message writes after a viewing client's input; off disables it
 ## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
 ## turn_budget = "3"              # cap every agent turn at this dollar amount
 # Native window for Claude/Codex profiles without auto-compact; "off" passes none.

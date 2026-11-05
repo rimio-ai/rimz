@@ -530,6 +530,39 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
 }
 
 #[test]
+fn typing_hold_defaults_and_round_trips() {
+    let values = ["", "typing_hold = 'off'", "typing_hold = '2m'"].map(|raw| {
+        let config: HarnessConfig = toml::from_str(raw).unwrap();
+        toml::Value::try_from(config)
+            .unwrap()
+            .get("typing_hold")
+            .cloned()
+    });
+    assert_eq!(
+        values,
+        ["30s", "off", "2m"].map(|value| Some(toml::Value::String(value.to_owned())))
+    );
+}
+
+#[test]
+fn typing_hold_invalid_value_warns_and_uses_the_default() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[harness]\ntyping_hold = 'yesterday'\n");
+    let config = load_lenient_no_fragments(&path);
+    let warning = config.notices.unreadable_files.get(&path);
+    assert!(
+        warning.is_some_and(|warning| warning.contains("harness.typing_hold")),
+        "{warning:?}"
+    );
+    assert_eq!(
+        toml::Value::try_from(config.harness)
+            .unwrap()
+            .get("typing_hold"),
+        Some(&toml::Value::String("30s".to_owned()))
+    );
+}
+
+#[test]
 fn account_budget_validation_is_typed_and_lenient_load_preserves_preflight_detail() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(
