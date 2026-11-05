@@ -1371,12 +1371,17 @@ fn classify_diagnostic(
                 model::DoctorState::Investigate
             }
         }
-        DiagEvent::ModelCatalogRefreshFailed { rung, .. } => match rung {
-            rimz::diag::record::ModelCatalogFallback::CachedCatalog => {
+        // A baked fallback merged earlier keeps the incident Investigate after a
+        // cached-catalog record for the same account lands.
+        DiagEvent::ModelCatalogRefreshFailed { rung, .. } => {
+            if *rung == rimz::diag::record::ModelCatalogFallback::CachedCatalog
+                && severity == rimz::diag::record::DiagSeverity::Info
+            {
                 model::DoctorState::Contained
+            } else {
+                model::DoctorState::Investigate
             }
-            rimz::diag::record::ModelCatalogFallback::Baked => model::DoctorState::Investigate,
-        },
+        }
         DiagEvent::HookDrainerReconnected { .. }
         | DiagEvent::HookIngressTruncated { .. }
         | DiagEvent::HookIngressDropped { .. }
