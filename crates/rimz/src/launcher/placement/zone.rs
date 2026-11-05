@@ -293,7 +293,6 @@ pub fn split_into_subagent_zone(
     env: BTreeMap<String, String>,
     sidebar: SidebarPaneOptions,
     pane: &PaneCmd,
-    child_name: &str,
     channel: Option<&str>,
     after: Option<PaneId>,
     run_id: &crate::RunId,
@@ -388,7 +387,6 @@ pub fn split_into_subagent_zone(
                 session_name: session_name.clone(),
                 pane_id: pane_id.clone(),
             },
-            title: Some(child_name.to_owned()),
             env: env.clone(),
             placement,
             ..SplitPaneOptions::from_command(pane, cwd)
@@ -422,7 +420,6 @@ pub fn split_into_subagent_zone(
                         session_name,
                         pane_id,
                     },
-                    title: Some(child_name.to_owned()),
                     env: env.clone(),
                     ..SplitPaneOptions::from_command(pane, cwd)
                 }) {

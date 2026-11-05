@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 
 use crate::agents::account::{ProviderStatus, read_accounts_cache};
 use crate::agents::definition::LaunchPermissionArgs;
-use crate::agents::{PermissionMode, TierSkipReason};
+use crate::agents::{PermissionMode, TierSkipReason, pane_title};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
@@ -2054,6 +2054,8 @@ pub struct LayoutPaneParams<'a> {
     pub pick_session: bool,
     pub resume_seeds: Option<&'a [CohortSeed]>,
     pub launch_identities: &'a [AgentLaunchIdentity],
+    /// Parent rows used to compose agent pane display titles.
+    pub agents: &'a [crate::agents::AgentState],
     pub fallback_channel: Option<&'a str>,
     /// The reminder section for the cell that receives the prompt.
     pub reminder_section: Option<&'a crate::harness::launch::ReminderSection>,
@@ -2111,24 +2113,14 @@ pub fn compile_layout_panes(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let name = match cell {
-                        Cell::Agent(cell)
-                            if params
-                                .leader_run
-                                .is_some_and(|run| run.leader_index == agent_index) =>
-                        {
-                            cell.kind.to_string()
-                        }
-                        _ => cell.pane_name(),
-                    };
-                    let argv = match cell {
+                    let (argv, name) = match cell {
                         Cell::Command { argv } => {
                             let mut argv = if argv.is_empty() {
                                 vec![crate::proc::user_shell_program()]
                             } else {
                                 argv.clone()
                             };
-                            if let Some(run) = params.leader_run {
+                            let argv = if let Some(run) = params.leader_run {
                                 let mut wrapper = vec![
                                     rimz_bin.to_string_lossy().into_owned(),
                                     "agents".to_owned(),
@@ -2143,35 +2135,50 @@ pub fn compile_layout_panes(
                                 wrapper
                             } else {
                                 argv
-                            }
+                            };
+                            (argv, cell.pane_name())
                         }
                         Cell::Agent(cell) => {
                             let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);
-                            let argv = match seed {
+                            let (argv, seat) = match seed {
                                 Some(CohortSeed::Resume(agent)) => {
                                     // The layout already resolved this cell from its profile or
                                     // role binding, so the posture to replay is right here.
-                                    resume_command(
+                                    let checkout = agent
+                                        .checkout
+                                        .as_ref()
+                                        .and(agent.worktree_path.as_deref())
+                                        .map(Path::new);
+                                    let argv = resume_command(
                                         &rimz_bin,
                                         params.runtime,
                                         &ResumeLaunchIdentity::from(agent.as_ref()),
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
                                         !params.in_place,
-                                        agent.checkout.as_ref().and(agent.worktree_path.as_deref()).map(Path::new),
-                                    )?
-                                },
+                                        checkout,
+                                    )?;
+                                    (argv, pane_title::Seat::from(agent.as_ref()))
+                                }
                                 Some(CohortSeed::Fresh) | None => {
                                     let Some(launch) = launches.next() else {
                                         bail!(
                                             "launch plan missing identity for agent cell {agent_index}"
                                         );
                                     };
-                                    fresh_agent_argv(cell, launch, &rimz_bin, params, agent_index)?
+                                    let argv = fresh_agent_argv(
+                                        cell, launch, &rimz_bin, params, agent_index,
+                                    )?;
+                                    let seat = pane_title::Seat::from_launch(
+                                        &launch.kind,
+                                        Some(&launch.name),
+                                        &launch.launch,
+                                    );
+                                    (argv, seat)
                                 }
                             };
                             agent_index = agent_index.saturating_add(1);
-                            argv
+                            (argv, pane_title::title(seat, params.agents))
                         }
                     };
                     Ok(PaneCmd {

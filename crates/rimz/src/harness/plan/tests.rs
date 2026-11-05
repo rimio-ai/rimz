@@ -2428,6 +2428,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
             in_place: false,
             resume_seeds: None,
             launch_identities: &[],
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -3928,6 +3929,7 @@ fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
                 pick_session: false,
                 resume_seeds: None,
                 launch_identities: &[],
+                agents: &[],
                 fallback_channel: None,
                 reminder_section: None,
                 leader_run: bound.then_some(LayoutRunParams {
@@ -4019,6 +4021,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             in_place: false,
             resume_seeds: None,
             launch_identities: &identities,
+            agents: &[],
             fallback_channel: None,
             reminder_section: Some(&crate::harness::launch::ReminderSection::Loop(
                 "fired".into(),
@@ -4041,7 +4044,10 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             "fired".into()
         ))
     );
-    assert_eq!(panes.columns[0].panes[0].name.as_deref(), Some("claude"));
+    assert_eq!(
+        panes.columns[0].panes[0].name.as_deref(),
+        Some("claude (@first)")
+    );
     assert_request_field(
         &panes.columns[1].panes[1].argv,
         RequestField::Prompt,
@@ -4122,6 +4128,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 in_place: false,
                 resume_seeds: Some(&plan.seeds),
                 launch_identities: &[],
+                agents: &[],
                 fallback_channel: None,
                 reminder_section: None,
                 leader_run: None,
@@ -4188,6 +4195,7 @@ fn in_place_resume_layout_returns_to_the_existing_shell() {
             in_place: true,
             resume_seeds: Some(&seeds),
             launch_identities: &[],
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -4251,6 +4259,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             in_place: false,
             resume_seeds: Some(&seeds),
             launch_identities: &fresh,
+            agents: &[],
             fallback_channel: Some("fallback"),
             reminder_section: None,
             leader_run: None,
@@ -4260,13 +4269,13 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
     let panes = &panes.columns[0].panes;
     assert_request_field(&panes[0].argv, RequestField::Resume, "sess-resume");
-    assert_eq!(panes[0].name.as_deref(), Some("opus"));
+    assert_eq!(panes[0].name.as_deref(), Some("claude (@steady-beacon)"));
     assert_request_field(&panes[0].argv, RequestField::Channel, "fallback");
     assert_eq!(panes[1].argv, vec!["/usr/bin/watch"]);
     assert_eq!(panes[1].name.as_deref(), Some("watch"));
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
     assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
-    assert_eq!(panes[2].name.as_deref(), Some("coder"));
+    assert_eq!(panes[2].name.as_deref(), Some("codex (@bright-river)"));
     assert_eq!(exec_request(&panes[0].argv).identity.params.isolation, None);
     assert_eq!(
         exec_request(&panes[2].argv).identity.params.isolation,
@@ -4283,6 +4292,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             in_place: false,
             resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
             launch_identities: &[],
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -4304,6 +4314,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             in_place: false,
             resume_seeds: Some(&[CohortSeed::Fresh]),
             launch_identities: &fresh,
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -4323,6 +4334,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             in_place: false,
             resume_seeds: Some(&seeds),
             launch_identities: &surplus,
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -4390,6 +4402,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             in_place: false,
             resume_seeds: None,
             launch_identities: &launches,
+            agents: &[],
             fallback_channel: None,
             reminder_section: None,
             leader_run: None,
@@ -4432,6 +4445,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
                 in_place,
                 resume_seeds: None,
                 launch_identities: &launches,
+                agents: &[],
                 fallback_channel: None,
                 reminder_section: None,
                 leader_run: None,
@@ -4503,6 +4517,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
             in_place: false,
             resume_seeds: Some(&seeds),
             launch_identities: &[],
+            agents: &[],
             fallback_channel: Some("new-channel"),
             reminder_section: None,
             leader_run: None,

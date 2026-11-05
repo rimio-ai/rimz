@@ -1419,7 +1419,7 @@ pub fn resolve_room_channel(
 
 /// The default tab title for a launch. Worktree launches use the `#channel`
 /// spelling shared with agent addresses; a named-team launch uses
-/// `team:<name>`; otherwise the title lists up to three pane names in layout order.
+/// `team:<name>`; otherwise the title lists up to three short cell labels in layout order.
 pub fn default_tab_title(
     spec: &LayoutSpec,
     worktree_name: Option<&str>,

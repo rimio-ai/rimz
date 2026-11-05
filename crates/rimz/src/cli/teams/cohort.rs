@@ -206,6 +206,7 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
             &ctx,
             agent,
             &peers,
+            &snapshot.agents,
             focus,
             Some(rimz::launcher::trust::Unattended::Team),
             || Some(rimz::launcher::trust::Unattended::Team),

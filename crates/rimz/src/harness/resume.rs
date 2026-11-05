@@ -1988,6 +1988,7 @@ fn materialize_team_restore_tab(
             in_place: false,
             resume_seeds: Some(&planned.cohort.seeds),
             launch_identities: identities,
+            agents: &[],
             fallback_channel: planned.channel.as_deref(),
             reminder_section: None,
             leader_run: None,
@@ -2718,11 +2719,20 @@ fn plan_resume_candidates_detailed(
             candidate.identity.kind.clone(),
             candidate.identity.session_id.clone(),
         );
-        let pane_name = crate::agents::pane_title::short_label(
-            candidate.identity.profile.as_deref(),
-            &candidate.identity.kind,
-        )
-        .to_owned();
+        let launch = crate::agents::LaunchParams {
+            profile: candidate.identity.profile.clone(),
+            team: candidate.identity.team.clone(),
+            role: candidate.identity.role.clone(),
+            ..Default::default()
+        };
+        let pane_name = crate::agents::pane_title::title(
+            crate::agents::pane_title::Seat::from_launch(
+                &candidate.identity.kind,
+                candidate.identity.name.as_deref(),
+                &launch,
+            ),
+            &[],
+        );
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd {

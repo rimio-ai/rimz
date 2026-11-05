@@ -149,7 +149,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     let launch = batch.single_identity()?;
     let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
     invocation.identity.params.clone_from(&launch.launch);
-    let (title, pane_name) = molt_tab_names(&agent, &posture);
+    let (title, pane_name) = molt_tab_names(&agent, &posture, launch);
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
@@ -323,7 +323,11 @@ fn replacement_posture(
 
 /// The successor's tab title and pane name, named as a fresh launch of the
 /// same seat would be.
-fn molt_tab_names(agent: &AgentState, posture: &ResumePosture) -> (String, String) {
+fn molt_tab_names(
+    agent: &AgentState,
+    posture: &ResumePosture,
+    launch: &AgentLaunchIdentity,
+) -> (String, String) {
     let title = agent.channel.as_deref().map_or_else(
         || {
             rimz::harness::spec::default_tab_title(
@@ -334,10 +338,14 @@ fn molt_tab_names(agent: &AgentState, posture: &ResumePosture) -> (String, Strin
         },
         |channel| format!("#{channel}"),
     );
-    let pane_name = agent
-        .profile
-        .clone()
-        .unwrap_or_else(|| agent.kind.to_string());
+    let pane_name = rimz::agents::pane_title::title(
+        rimz::agents::pane_title::Seat::from_launch(
+            &launch.kind,
+            Some(&launch.name),
+            &launch.launch,
+        ),
+        &[],
+    );
     (title, pane_name)
 }
 
@@ -514,21 +522,37 @@ mod tests {
             agent.profile = profile.map(Into::into);
             agent.channel = channel.map(Into::into);
             agent.team = team.map(Into::into);
-            molt_tab_names(&agent, &posture)
+            let launch = AgentLaunchIdentity {
+                kind: agent.kind.clone(),
+                agent_id: "successor".into(),
+                name: "bright-river".into(),
+                name_explicit: false,
+                launch: rimz::agents::LaunchParams {
+                    profile: agent.profile.clone(),
+                    team: agent.team.clone(),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            };
+            molt_tab_names(&agent, &posture, &launch)
         };
         let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
         assert_eq!(
             names(Some("brainstormer"), None, None),
-            pair("brainstormer", "brainstormer")
+            pair("brainstormer", "brainstormer (@bright-river)")
         );
         assert_eq!(
             names(Some("brainstormer"), Some("lane"), None),
-            pair("#lane", "brainstormer")
+            pair("#lane", "brainstormer (@bright-river)")
         );
         assert_eq!(
             names(Some("worker"), None, Some("forge")),
-            pair("team:forge", "worker")
+            pair("team:forge", "forge · worker (@bright-river)")
         );
-        assert_eq!(names(None, None, None), pair("claude", "claude"));
+        assert_eq!(
+            names(None, None, None),
+            pair("claude", "claude (@bright-river)")
+        );
     }
 }

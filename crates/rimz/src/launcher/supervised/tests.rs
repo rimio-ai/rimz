@@ -12,9 +12,17 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert_eq!(run_exit_policy(false), (false, false));
 
     let run_id = rimz::RunId::new();
+    let mut parent =
+        crate::testkit::agent_state("claude", "parent-session", jiff::Timestamp::UNIX_EPOCH);
+    parent.launch_id = Some("parent-launch".into());
+    parent.name = Some("swift-otter".into());
+    parent.team = Some("recon".into());
+    parent.role = Some("planner".into());
     let launch = rimz::agents::LaunchParams {
         model: Some("gpt-5".to_owned()),
         profile: Some("reviewer".to_owned()),
+        parent_agent_id: parent.launch_id.clone(),
+        parent_agent_kind: Some(parent.kind.clone()),
         ..Default::default()
     };
     let launch_id = rimz::ids::AgentSessionId::from("child-id");
@@ -79,6 +87,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             pick_session: false,
             resume_seeds: None,
             launch_identities: &identities,
+            agents: &[parent],
             fallback_channel: None,
             reminder_section: None,
             leader_run: Some(crate::harness::plan::LayoutRunParams {
@@ -92,7 +101,10 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     )
     .unwrap();
     let pane = panes.columns.remove(0).panes.remove(0);
-    assert_eq!(pane.name.as_deref(), Some("codex"));
+    assert_eq!(
+        pane.name.as_deref(),
+        Some("recon · planner (@swift-otter) › reviewer subagent (@child)")
+    );
     let payload = std::fs::read_to_string(pane.argv.last().expect("exec request file"))
         .expect("exec request contents");
     let request =

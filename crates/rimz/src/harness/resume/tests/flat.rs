@@ -57,19 +57,21 @@ fn lane_resume_keeps_a_child_forks_profile_table_and_carries_its_scope() {
 #[test]
 fn flat_resume_names_a_profiled_pane_by_profile() {
     let saved = AgentState {
+        name: Some("brave-fox".into()),
         profile: Some("brainstormer".to_owned()),
         ..agent("claude", "saved", "/code/project", 0)
     };
     let plan = plan_profiled(saved, &profiles("brainstormer", profile("claude")));
     assert_eq!(
         plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
-        Some("brainstormer")
+        Some("brainstormer (@brave-fox)")
     );
 }
 
 #[test]
 fn flat_resume_keeps_the_profile_pane_name_when_posture_degrades() {
     let saved = AgentState {
+        name: Some("brave-fox".into()),
         profile: Some("brainstormer".to_owned()),
         ..agent("claude", "saved", "/code/project", 0)
     };
@@ -81,7 +83,7 @@ fn flat_resume_keeps_the_profile_pane_name_when_posture_degrades() {
     );
     assert_eq!(
         plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
-        Some("brainstormer")
+        Some("brainstormer (@brave-fox)")
     );
 }
 
@@ -97,10 +99,11 @@ fn flat_resume_names_an_unprofiled_pane_by_kind() {
 #[test]
 fn flat_resume_names_each_pane_in_a_shared_tab_by_its_identity() {
     for (profile_age, bare_age, expected) in [
-        (1, 10, ["brainstormer", "claude"]),
-        (10, 1, ["claude", "brainstormer"]),
+        (1, 10, ["brainstormer (@brave-fox)", "claude"]),
+        (10, 1, ["claude", "brainstormer (@brave-fox)"]),
     ] {
         let saved = AgentState {
+            name: Some("brave-fox".into()),
             profile: Some("brainstormer".to_owned()),
             ..agent("claude", "profiled", "/code/project", profile_age)
         };
@@ -145,6 +148,10 @@ fn provider_resume_adopts_one_session_with_profile_login_and_handle() {
         );
         assert_eq!(plan.tabs.len(), 1, "one flat resume tab");
         assert!(crate::agents::petname::valid_agent_name(&name));
+        assert_eq!(
+            plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
+            Some(format!("solo (@{name})").as_str())
+        );
         assert_eq!(plan.tabs[0].cwd, observation.workspace);
         let request = decode_exec_request(&first_argv(&plan.tabs[0]));
         assert_eq!(request.identity.name.as_deref(), Some(name.as_str()));

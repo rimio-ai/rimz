@@ -214,8 +214,9 @@ pub fn bind_child_panes(
             .filter(|line| line.contains("\tnew-pane\t"))
             .filter_map(|line| {
                 let args = line.split('\t').collect::<Vec<_>>();
-                let name = args.windows(2).find(|args| args[0] == "--name")?[1];
-                Some(name.to_owned())
+                let title = args.windows(2).find(|args| args[0] == "--name")?[1];
+                let (_, handle) = title.strip_suffix(')')?.rsplit_once("(@")?;
+                Some(handle.to_owned())
             })
             .filter(|name| !bound.contains(name))
             .collect::<Vec<_>>();

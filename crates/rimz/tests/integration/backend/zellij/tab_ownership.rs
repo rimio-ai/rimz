@@ -315,14 +315,16 @@ fn producer_holds_the_founder_name_then_follows_the_peer() {
     let ended = room.end(&peer_pid);
     room.wait_name(&founder, "sh", ended);
     assert!(!room.owners().contains_key(&tab));
-    assert_eq!(
-        room.native()
-            .iter()
-            .find(|pane| !pane.is_plugin && format!("terminal_{}", pane.id) == founder.raw())
-            .unwrap()
-            .title
-            .as_deref(),
-        Some("opus")
+    let title = room
+        .native()
+        .into_iter()
+        .find(|pane| !pane.is_plugin && format!("terminal_{}", pane.id) == founder.raw())
+        .unwrap()
+        .title
+        .unwrap_or_default();
+    assert!(
+        title.starts_with("opus (@") && title.ends_with(')'),
+        "{title}"
     );
 }
 
