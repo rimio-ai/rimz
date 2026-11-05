@@ -54,7 +54,8 @@ pub(crate) fn agent_pane_for_pane<'a>(
         }
         return Some(AgentPaneRow::Agent(agent));
     }
-    wired_kinds.iter().any(|wired| wired == kind).then(|| {
+    let wired = wired_kinds.iter().any(|wired| wired == kind);
+    (wired && !pane_has_untracked_frontend(pane, kind)).then(|| {
         AgentPaneRow::Idle(Box::new(idle_agent_row(
             pane,
             definition,
@@ -744,6 +745,13 @@ fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentSp
     agent_pane_identity_from_evidence(pane_binding_evidence(pane))
 }
 
+fn pane_has_untracked_frontend(pane: &PaneRef, kind: &str) -> bool {
+    pane.foreground_cmdline
+        .as_deref()
+        .or(pane.command.as_deref())
+        .is_some_and(|cmdline| crate::agents::is_untracked_frontend(kind, cmdline))
+}
+
 fn agent_pane_identity_from_evidence(
     evidence: PaneBindingEvidence<'_>,
 ) -> Option<(&'static str, &'static AgentSpec, &str)> {
@@ -807,6 +815,7 @@ pub(crate) fn row_from_frame_pane(
 ) -> Option<SidebarRow> {
     if let Some((kind, definition, worktree_path)) = agent_pane_identity(pane)
         && wired_kinds.iter().any(|wired| wired == kind)
+        && !pane_has_untracked_frontend(pane, kind)
     {
         return Some(idle_agent_row(
             pane,

@@ -2,6 +2,7 @@ use super::*;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId};
+use crate::store::snapshot::panes::{PaneBinder, PaneBindingDisposition};
 use crate::store::snapshot::testkit::{AgentStateFx, agent, ago, pane};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -118,6 +119,98 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
         }
         _ => panic!("wired sessionless Claude should synthesize idle row"),
     }
+}
+
+#[test]
+fn untracked_mini_panes_only_have_process_rows() {
+    let wired = vec!["opencode".to_owned()];
+    let models = BTreeMap::new();
+    let pairings = compute_lazy_agent_pairings(&[], &[]);
+    let cases = [
+        (MuxName::Tmux, "opencode", Some("opencode mini"), false),
+        (MuxName::Zellij, "opencode mini", None, false),
+        (MuxName::Zellij, "opencode mini --standalone", None, true),
+        (MuxName::Tmux, "opencode", None, true),
+        (MuxName::Zellij, "opencode run mini", None, true),
+        (
+            MuxName::Tmux,
+            "opencode",
+            Some("/usr/bin/opencode --quiet mini"),
+            false,
+        ),
+        (
+            MuxName::Tmux,
+            "opencode",
+            Some("/usr/bin/opencode mini --standalone"),
+            true,
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(mux, command, foreground, _)| {
+            let pane = PaneRef {
+                foreground_cmdline: foreground.map(str::to_owned),
+                hosted_agent_kind: Some(AgentKind::new_unchecked("opencode")),
+                ..match mux {
+                    MuxName::Tmux => pane("%1", command, "/repo/main"),
+                    MuxName::Zellij => pane_cmd("terminal_1", "tab_0", command, None),
+                }
+            };
+            let idle = matches!(
+                agent_pane_for_pane(
+                    &pane,
+                    &[],
+                    &pairings,
+                    &BTreeSet::new(),
+                    &wired,
+                    &models,
+                    ago(0),
+                ),
+                Some(AgentPaneRow::Idle(_))
+            );
+            let mut binder = PaneBinder::new(
+                PaneBindingIndex::new(&[]),
+                &pairings,
+                &wired,
+                &models,
+                None,
+                ago(0),
+            );
+            let process = matches!(binder.resolve(&pane), PaneBindingDisposition::Process);
+            let frame = row_from_frame_pane(&pane, &wired, &models, ago(0)).unwrap();
+            (idle, process, frame.as_agent().is_some())
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, _, _, tracked)| (*tracked, !*tracked, *tracked))
+        .collect();
+    assert_eq!(actual, expected, "{cases:?}");
+}
+
+#[test]
+fn a_real_mini_session_wins_over_the_process_fallback() {
+    let pane = PaneRef {
+        foreground_cmdline: Some("opencode mini".to_owned()),
+        ..pane("%1", "opencode", "/repo/main")
+    };
+    let agents =
+        vec![agent("opencode", "ses_live", AgentStatus::Running, 2_000).worktree("/repo/main")];
+    let pairings = compute_lazy_agent_pairings(std::slice::from_ref(&pane), &agents);
+    let row = agent_pane_for_pane(
+        &pane,
+        &agents,
+        &pairings,
+        &BTreeSet::new(),
+        &["opencode".to_owned()],
+        &BTreeMap::new(),
+        ago(0),
+    );
+    assert!(
+        matches!(row, Some(AgentPaneRow::Agent(agent)) if agent.agent_id == agents[0].agent_id),
+        "{:?}",
+        pairings.pairings
+    );
 }
 
 #[test]
