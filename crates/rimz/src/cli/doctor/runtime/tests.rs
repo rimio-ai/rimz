@@ -1129,6 +1129,50 @@ fn account_link_repeat_stays_investigate_when_quieter_upkeep_merges() {
 }
 
 #[test]
+fn model_catalog_baked_fallback_stays_investigate_when_cached_catalog_merges() {
+    use rimz::diag::record::ModelCatalogFallback::{Baked, CachedCatalog};
+    let catalog_failed = |rung| DiagEvent::ModelCatalogRefreshFailed {
+        agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        login: rimz::agents::ProviderLogin::default_for(rimz::ids::AgentKind::new_unchecked(
+            "codex",
+        ))
+        .key(),
+        alias: "sol".into(),
+        rung,
+        reason: "offline".into(),
+    };
+    for (first, state, impact) in [
+        (
+            Baked,
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            CachedCatalog,
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+    ] {
+        let incidents = diagnostic_incidents(
+            vec![
+                diag_record(1, catalog_failed(first)),
+                diag_record(10_001, catalog_failed(CachedCatalog)),
+            ],
+            12,
+            None,
+            0,
+        );
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].record_count, 2);
+        assert_eq!(
+            (incidents[0].state, incidents[0].impact),
+            (state, impact),
+            "first rung {first:?}"
+        );
+    }
+}
+
+#[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
     let retained_line = serde_json::to_string(&serde_json::json!({
         "v": "rimz.diag.v1",
