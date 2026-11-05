@@ -187,7 +187,7 @@ The reader joins the lane's `team.stage` flips (`harness::team_stage::stage_flip
 
 ## Asks and answers
 
-An agent holding a permission prompt, plan approval, or blocking question reserves its pane input: [delivery check 13](./messaging.md#the-ordered-check) holds queued text, and [model.md § Waiting and asks](../agents/model.md#waiting-and-asks) owns the `is_awaiting_input` guard that decides whether the ask holds. The ask records described here turn that reservation into structured data a script can read and answer. Codex async questions join them without reserving anything.
+An agent holding a permission prompt, plan approval, or blocking question reserves its pane input: [delivery check 14](./messaging.md#the-ordered-check) holds queued text, and [model.md § Waiting and asks](../agents/model.md#waiting-and-asks) owns the `is_awaiting_input` guard that decides whether the ask holds. The ask records described here turn that reservation into structured data a script can read and answer. Codex async questions join them without reserving anything.
 
 ### Recording an ask
 

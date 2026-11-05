@@ -130,6 +130,9 @@ pub enum DispatchOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParkReason {
+    TypingHeld {
+        until: Timestamp,
+    },
     Status(AgentStatus),
     WaitingOnPrompt,
     PaneHeld,
@@ -1206,6 +1209,11 @@ fn dispatch_one(
             label: handle,
             message_id,
             reason: None,
+        }),
+        deliver::AttemptOutcome::TypingHeld { until } => Ok(DispatchOutcome::Queued {
+            label: handle,
+            message_id,
+            reason: Some(ParkReason::TypingHeld { until }),
         }),
         deliver::AttemptOutcome::CompactionPending => Ok(DispatchOutcome::CompactionPending {
             label: handle,

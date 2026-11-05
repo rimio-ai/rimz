@@ -15,7 +15,8 @@ use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
 use crate::store::message::{
     AfterCondition, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
     MessageStatus, QUEUED_NOTICE_BUSY_DELAY, QUEUED_NOTICE_BUSY_ENV, QUEUED_NOTICE_IDLE_DELAY,
-    QUEUED_NOTICE_IDLE_ENV, WhenCondition, env_ms, older_ready_blocker, queue_head, sender_notice,
+    QUEUED_NOTICE_IDLE_ENV, TypingHold, TypingHoldReplay, WhenCondition, env_ms,
+    older_ready_blocker, queue_head, sender_notice,
 };
 use crate::store::run::RunStoreErr;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
@@ -55,6 +56,13 @@ pub enum DeliveryPolicy {
 }
 
 impl DeliveryPolicy {
+    fn from_typing_hold(hold: TypingHold) -> Option<Self> {
+        Some(match hold.replay? {
+            TypingHoldReplay::Steer => Self::Steer { force: hold.force },
+            TypingHoldReplay::Interrupt => Self::Interrupt { force: hold.force },
+        })
+    }
+
     fn kind(self) -> DeliveryKind {
         match self {
             Self::Boundary => DeliveryKind::Boundary,
@@ -109,6 +117,9 @@ pub(super) enum AttemptOutcome {
     Queued,
     CompactionPending,
     SkippedWaiting(super::InputWait),
+    TypingHeld {
+        until: Timestamp,
+    },
 }
 
 pub(super) struct Attempt<'a> {
@@ -125,6 +136,9 @@ pub(super) struct Attempt<'a> {
 pub enum DeliveryVerdict {
     Expired {
         expires_at: Timestamp,
+    },
+    TypingHeld {
+        until: Timestamp,
     },
     WaitingForRegistration {
         register_by: Timestamp,
@@ -185,7 +199,8 @@ impl DeliveryVerdict {
                 status: Some(AgentStatus::Running),
                 ..
             }
-            | Self::Compacting => Some(StallClass::Busy),
+            | Self::Compacting
+            | Self::TypingHeld { .. } => Some(StallClass::Busy),
             Self::NoPane { .. }
             | Self::ProviderStarting
             | Self::ResumeUnrecovered
@@ -206,6 +221,9 @@ impl DeliveryVerdict {
 
     pub(super) fn reason(&self) -> String {
         match self {
+            Self::TypingHeld { until } => {
+                format!("someone is using the receiver's pane; retry at {until}")
+            }
             Self::NoPane { pinned_pane_id } => no_pane_blocker(pinned_pane_id.as_ref()),
             Self::ProviderStarting => "provider is starting".to_owned(),
             Self::ResumeUnrecovered => "resuming".to_owned(),
@@ -363,7 +381,26 @@ fn attempt_delivery(
     let candidate =
         match delivery_candidate(pending, snapshot, message_id, policy, now, card_status) {
             Candidacy::Ready(candidate) => candidate,
-            Candidacy::Refused(verdict) => return Ok(DeliveryReport::Refused(verdict)),
+            Candidacy::Refused(verdict) => {
+                let replay = match (&verdict, policy) {
+                    (DeliveryVerdict::TypingHeld { .. }, DeliveryPolicy::Steer { force }) => {
+                        Some((TypingHoldReplay::Steer, force))
+                    }
+                    (DeliveryVerdict::TypingHeld { .. }, DeliveryPolicy::Interrupt { force }) => {
+                        Some((TypingHoldReplay::Interrupt, force))
+                    }
+                    _ => None,
+                };
+                if let Some((replay, force)) = replay {
+                    store.record_typing_hold_replay(
+                        message_id,
+                        replay,
+                        force,
+                        &workspace.session_name,
+                    )?;
+                }
+                return Ok(DeliveryReport::Refused(verdict));
+            }
             Candidacy::Gone => return Ok(DeliveryReport::Stopped),
         };
     #[cfg(feature = "testkit")]
@@ -432,6 +469,9 @@ fn attempt_delivery(
     )?;
     Ok(match outcome {
         AttemptOutcome::Sent { interrupt, .. } => DeliveryReport::Sent { interrupt },
+        AttemptOutcome::TypingHeld { until } => {
+            DeliveryReport::Refused(DeliveryVerdict::TypingHeld { until })
+        }
         _ => DeliveryReport::Stopped,
     })
 }
@@ -541,9 +581,17 @@ pub(super) fn execute_attempt(
             return Ok(AttemptOutcome::Queued);
         }
     }
-    match send::send_batch_to_live_pane(
-        workspace, store, snapshot, target, bound, records, live_send,
-    ) {
+    let receipt = if let Some(until) = live_send.typing_hold_until(workspace, &target.pane_id) {
+        Ok(send::Receipt::TypingHeld {
+            until,
+            compacted: false,
+        })
+    } else {
+        send::send_batch_to_live_pane(
+            workspace, store, snapshot, target, bound, records, live_send,
+        )
+    };
+    match receipt {
         Ok(send::Receipt::Sent {
             compacted,
             interrupt,
@@ -552,6 +600,39 @@ pub(super) fn execute_attempt(
             interrupt,
         }),
         Ok(send::Receipt::ClaimLost) => Ok(AttemptOutcome::Queued),
+        Ok(send::Receipt::TypingHeld { until, compacted }) => {
+            if matches!(
+                source,
+                AttemptSource::Fresh {
+                    durable_receiver: false
+                }
+            ) {
+                let error = send::SendErr::TypingHeld { until };
+                store.record_message_delivery_failures(
+                    records,
+                    crate::store::writer::DeliveryFailureDisposition::Terminal,
+                    &error.to_string(),
+                    &workspace.session_name,
+                )?;
+                return Err(error.into());
+            }
+            let replay = match live_send.kind {
+                DeliveryKind::Boundary => None,
+                DeliveryKind::Steer => Some(TypingHoldReplay::Steer),
+                DeliveryKind::Interrupt => Some(TypingHoldReplay::Interrupt),
+            };
+            store.hold_message_claims(
+                records,
+                TypingHold {
+                    until,
+                    replay,
+                    force: live_send.force,
+                },
+                compacted,
+                &workspace.session_name,
+            )?;
+            Ok(AttemptOutcome::TypingHeld { until })
+        }
         Ok(send::Receipt::SkippedWaiting(reason)) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
@@ -720,22 +801,40 @@ pub fn sweep(
     let pending = store.list_pending_messages()?;
     let snapshot = snapshot.as_ref();
     let mut heads_seen = std::collections::BTreeSet::new();
-    for message in pending.iter().filter(|message| message.is_deliverable(now)) {
-        let Some(head) = queue_head(
-            pending.iter(),
-            &message.kind,
-            &message.agent_id,
-            message.agent_name.as_deref(),
-            now,
-        ) else {
-            continue;
+    for message in pending.iter().filter(|message| {
+        message.is_deliverable(now)
+            || (message.status == MessageStatus::Queued
+                && message
+                    .typing_hold
+                    .is_some_and(|hold| hold.until <= now && hold.replay.is_some()))
+    }) {
+        let expired_hold = message.typing_hold.filter(|hold| hold.until <= now);
+        let (head, policy) = match expired_hold.and_then(DeliveryPolicy::from_typing_hold) {
+            Some(policy) => (message, policy),
+            None if message.gate == DeliveryGate::Resume && expired_hold.is_some() => {
+                (message, DeliveryPolicy::Boundary)
+            }
+            None => {
+                let Some(head) = queue_head(
+                    pending.iter(),
+                    &message.kind,
+                    &message.agent_id,
+                    message.agent_name.as_deref(),
+                    now,
+                ) else {
+                    continue;
+                };
+                (head, DeliveryPolicy::Boundary)
+            }
         };
         if heads_seen.insert(head.message_id.to_string()) {
             let snapshot = snapshot.expect("queued delivery requires a resolution snapshot");
-            let report = if older_ready_blocker(live.iter(), head, now, |message| {
-                message.is_deliverable(now)
-            })
-            .is_some()
+            let report = if policy == DeliveryPolicy::Boundary
+                && !head.typing_hold.is_some_and(|hold| hold.until > now)
+                && older_ready_blocker(live.iter(), head, now, |message| {
+                    message.is_deliverable(now)
+                })
+                .is_some()
             {
                 DeliveryReport::Stopped
             } else {
@@ -743,7 +842,7 @@ pub fn sweep(
                     workspace,
                     store,
                     &head.message_id,
-                    DeliveryPolicy::Boundary,
+                    policy,
                     &pending,
                     snapshot,
                     &card_status,
@@ -802,6 +901,10 @@ pub fn sweep(
                     now,
                 )?;
             }
+            let held_until = match &verdict {
+                Some(DeliveryVerdict::TypingHeld { until }) => Some(*until),
+                _ => None,
+            };
             let recorded = match verdict {
                 Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
                     Some(no_pane_blocker(pinned_pane_id.as_ref()))
@@ -812,12 +915,13 @@ pub fn sweep(
                 Some(sentence) => BlockerUpdate::Set(sentence),
                 None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
             };
-            let retry_at = head
-                .register_by
-                .filter(|deadline| *deadline > now)
-                .map_or(now + delivery_window, |deadline| {
-                    deadline.min(now + delivery_window)
-                });
+            let retry_at = held_until.unwrap_or_else(|| {
+                head.register_by
+                    .filter(|deadline| *deadline > now)
+                    .map_or(now + delivery_window, |deadline| {
+                        deadline.min(now + delivery_window)
+                    })
+            });
             store.defer_message_wake(&head.message_id, retry_at, blocker)?;
         }
     }
@@ -894,6 +998,8 @@ struct DeliveryCandidate<'a> {
 pub struct DeliveryCheck {
     pub expiry: ExpiryCheck,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub typing_hold: Option<TypingHold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub register_by: Option<Timestamp>,
     pub schedule: ScheduleCheck,
     pub after: Vec<AfterConditionCheck>,
@@ -929,6 +1035,9 @@ impl DeliveryCheck {
             && let Some(expires_at) = self.expiry.expires_at
         {
             return DeliveryVerdict::Expired { expires_at };
+        }
+        if let Some(hold) = self.typing_hold {
+            return DeliveryVerdict::TypingHeld { until: hold.until };
         }
         if (!self.agent.present || self.agent.ended)
             && let Some(register_by) = self.register_by
@@ -1184,11 +1293,17 @@ fn evaluate_delivery<'a>(
     let waiting = readiness.is_some_and(|readiness| readiness.waiting);
     let binding = agent
         .and_then(|agent| crate::address::bind_agent(snapshot, agent, message.pane_id.as_ref()));
-    let retry_at = after
-        .iter()
-        .filter_map(|evaluation| (!evaluation.check.met).then_some(now + delivery_window))
-        .chain(when.iter().filter_map(|evaluation| evaluation.retry_at))
-        .min();
+    let retry_at = message
+        .typing_hold
+        .filter(|hold| hold.until > now)
+        .map(|hold| hold.until)
+        .or_else(|| {
+            after
+                .iter()
+                .filter_map(|evaluation| (!evaluation.check.met).then_some(now + delivery_window))
+                .chain(when.iter().filter_map(|evaluation| evaluation.retry_at))
+                .min()
+        });
     let archive_reason = when
         .iter()
         .find_map(|evaluation| evaluation.archive_reason.clone());
@@ -1203,6 +1318,7 @@ fn evaluate_delivery<'a>(
         .filter_map(|(index, evaluation)| evaluation.stamp_needed.then_some(index))
         .collect();
     let check = DeliveryCheck {
+        typing_hold: message.typing_hold.filter(|hold| hold.until > now),
         register_by: message
             .register_by
             .filter(|_| message.awaiting_registration(&snapshot.agents)),
@@ -1376,8 +1492,14 @@ fn delivery_candidate<'a>(
     else {
         return Candidacy::Gone;
     };
-    let evaluation = evaluate_delivery(&message, pending, snapshot, now, card_status);
+    let mut evaluation = evaluate_delivery(&message, pending, snapshot, now, card_status);
+    if matches!(policy, DeliveryPolicy::Interrupt { force: true }) {
+        evaluation.check.typing_hold = None;
+    }
     let check = &evaluation.check;
+    if check.typing_hold.is_some() {
+        return Candidacy::Refused(check.verdict());
+    }
     if message.expired(now)
         || (matches!(policy, DeliveryPolicy::Boundary)
             && (!message.is_deliverable(now) || !check.passes()))

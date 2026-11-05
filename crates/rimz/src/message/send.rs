@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
+
 use crate::Store;
 use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
 use crate::message::{
@@ -42,6 +44,8 @@ pub enum SendErr {
         label: String,
         kind: crate::ids::AgentKind,
     },
+    #[error("someone is using the receiver's pane; retry at {until}")]
+    TypingHeld { until: Timestamp },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,12 +57,16 @@ pub(super) enum Receipt {
     SkippedWaiting(super::InputWait),
     CompactionPending,
     ClaimLost,
+    TypingHeld {
+        until: Timestamp,
+        compacted: bool,
+    },
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
 /// state.
 pub(super) struct LiveSend {
-    force: bool,
+    pub(super) force: bool,
     pub(super) kind: DeliveryKind,
     pacer: Pacer,
     command_submit_delay: Duration,
@@ -73,6 +81,35 @@ impl LiveSend {
             pacer: Pacer::from_env(),
             command_submit_delay: command_submit_delay_from_env(),
         }
+    }
+
+    pub(super) fn typing_hold_until(
+        &self,
+        workspace: &ResolvedWorkspace,
+        pane: &crate::ids::PaneId,
+    ) -> Option<Timestamp> {
+        if self.kind == DeliveryKind::Interrupt && self.force {
+            return None;
+        }
+        let hold = crate::config::MachineConfig::load_lenient()
+            .harness
+            .typing_hold?;
+        let view =
+            match crate::mux::backend_for(pane.mux()).client_view(crate::mux::ClientFocusOptions {
+                session_name: Some(workspace.session_name.clone()),
+                command_timeout: Some(Duration::from_millis(500)),
+            }) {
+                Ok(view) => view,
+                Err(error) => {
+                    tracing::debug!(%error, %pane, "cannot read typing hold; sending without it");
+                    return None;
+                }
+            };
+        let now = Timestamp::now();
+        let until = i64::try_from(view.attended_until(pane, hold)?).ok()?;
+        Timestamp::from_millisecond(until)
+            .ok()
+            .filter(|until| *until > now)
     }
 
     fn pause_raw_typing(&self, body: MessageBody) {
@@ -225,6 +262,10 @@ fn write_live(
                 },
                 PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
                 PaneWrite::ClaimLost => Receipt::ClaimLost,
+                PaneWrite::TypingHeld(until) => Receipt::TypingHeld {
+                    until,
+                    compacted: false,
+                },
             },
         );
     }
@@ -286,6 +327,17 @@ fn write_live(
                 )?;
                 return Ok(Receipt::ClaimLost);
             }
+            Ok(PaneWrite::TypingHeld(until)) => {
+                store.cancel_message(
+                    &command.message_id,
+                    &workspace.session_name,
+                    "compact-first command not written: someone is using the receiver's pane",
+                )?;
+                return Ok(Receipt::TypingHeld {
+                    until,
+                    compacted: false,
+                });
+            }
             Err(err) => {
                 store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
@@ -300,6 +352,7 @@ fn write_live(
             },
             PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
             PaneWrite::ClaimLost => Receipt::ClaimLost,
+            PaneWrite::TypingHeld(until) => Receipt::TypingHeld { until, compacted },
         },
     )
 }
@@ -375,6 +428,14 @@ fn write_batch(
         .first()
         .expect("write_batch requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
+    send.pacer.tick();
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
+    // Every delivery binds its claim to the pane before entering the write path.
+    let pane = head.pane_id.as_ref().expect("live send has a pane pin");
+    if let Some(until) = send.typing_hold_until(workspace, pane) {
+        return Ok(PaneWrite::TypingHeld(until));
+    }
     if !store.message_claims_held(batch)? {
         store.release_message_claims(
             batch,
@@ -391,7 +452,6 @@ fn write_batch(
             jiff::Timestamp::now(),
         )));
     }
-    send.pacer.tick();
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
@@ -482,6 +542,7 @@ enum PaneWrite {
     Sent,
     SkippedWaiting(super::InputWait),
     ClaimLost,
+    TypingHeld(Timestamp),
 }
 
 fn compact_message_for_target<'a>(

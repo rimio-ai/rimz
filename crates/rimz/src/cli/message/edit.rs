@@ -123,6 +123,21 @@ pub(super) fn push_queued_message(
         send::report_interrupt_confirmation(&label, interrupt);
         return Ok(());
     }
+    if let deliver::DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { until }) =
+        delivered
+    {
+        let outcome = rimz::message::dispatch::DispatchOutcome::Queued {
+            label,
+            message_id,
+            reason: Some(rimz::message::dispatch::ParkReason::TypingHeld { until }),
+        };
+        if let Some(line) =
+            send::render_dispatch_outcome(rimz::message::DeliveryKind::Steer, &outcome)
+        {
+            writeln!(render::out(), "{line}")?;
+        }
+        return Ok(());
+    }
     let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()

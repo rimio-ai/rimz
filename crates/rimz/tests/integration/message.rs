@@ -22,6 +22,7 @@ use crate::common::{
 };
 
 mod soft_compact;
+mod typing_hold;
 
 #[test]
 fn role_send_crosses_an_ended_molt_intermediate() {
@@ -531,7 +532,11 @@ fn auto_review_permission_refuses_steer_and_interrupt_with_review_wording() {
         );
         assert!(stderr.contains("retry shortly or pass --force"), "{stderr}");
         assert!(!stderr.contains("waiting on your input"), "{stderr}");
-        assert!(trace_lines(&trace).is_empty());
+        assert!(
+            trace_lines(&trace)
+                .iter()
+                .all(|line| is_client_view_read(line))
+        );
         if flag == "--interrupt" {
             assert!(env.store().list_messages().unwrap().is_empty());
             assert!(env.store().list_message_history().unwrap().is_empty());
@@ -6040,7 +6045,11 @@ fn turn_ended_reserved_pane_names_the_provider_error() {
     );
     assert!(!shown.contains("waiting in pane"), "{shown}");
     assert!(!shown.contains("asks show"), "{shown}");
-    assert!(trace_lines(&trace_log).is_empty());
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .all(|line| is_client_view_read(line))
+    );
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Queued
@@ -10927,7 +10936,7 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             );
             if changed == "waiting" {
                 assert!(
-                    lines.is_empty(),
+                    lines.iter().all(|line| is_client_view_read(line)),
                     "mode {mode:?}, line {line:?}: no write into an input prompt: {lines:?}"
                 );
                 assert_eq!(output.status.success(), mode.is_none(), "{output:?}");
@@ -13566,7 +13575,15 @@ fn is_compact_command(line: &str) -> bool {
     ))
 }
 
+fn is_client_view_read(line: &str) -> bool {
+    line.ends_with("\taction\tlist-clients")
+}
+
 fn assert_compact_segments_then_enter(lines: &[String], instruction: &str) {
+    let lines: Vec<_> = lines
+        .iter()
+        .filter(|line| !is_client_view_read(line))
+        .collect();
     let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
     let head_at = lines
         .iter()

@@ -274,6 +274,10 @@ pub(crate) fn render_dispatch_outcome(
             message_id,
             reason,
         } => Some(match reason {
+            Some(ParkReason::TypingHeld { until }) => format!(
+                "held for {label} ({message_id}) — {}",
+                typing_hold_detail(*until)
+            ),
             Some(ParkReason::Status(status)) => format!(
                 "queued for {label} ({message_id}) — {label} is {}; send now: rimz message steer {message_id}",
                 status.as_str()
@@ -318,6 +322,14 @@ pub(crate) fn render_dispatch_outcome(
         )),
         DispatchOutcome::SkippedWaiting { .. } => None,
     }
+}
+
+fn typing_hold_detail(until: jiff::Timestamp) -> String {
+    let local = until.to_zoned(crate::cli::machine_config().time_zone());
+    format!(
+        "someone is using the receiver's pane; retry at {}",
+        local.strftime("%Y-%m-%d %H:%M:%S %Z")
+    )
 }
 
 /// Present dispatch outcomes shared by direct messages and loop delivery.
@@ -405,9 +417,17 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
                 sent_labels.push(label.as_str());
             }
             DispatchOutcome::Queued {
-                label, message_id, ..
+                label,
+                message_id,
+                reason,
             } => {
-                queued.push(format!("{label} ({message_id})"));
+                queued.push(match reason {
+                    Some(ParkReason::TypingHeld { until }) => format!(
+                        "{label} ({message_id}; held: {})",
+                        typing_hold_detail(*until)
+                    ),
+                    _ => format!("{label} ({message_id})"),
+                });
             }
             DispatchOutcome::CompactionPending { label, message_id } => {
                 queued.push(format!("{label} ({message_id}; waiting for compaction)"));

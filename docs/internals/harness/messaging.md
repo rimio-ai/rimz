@@ -71,6 +71,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `idle_since` | Optional decision-row turn edge: the later of the receiver's `turn_started_at` and `turn_ended_at`. Delivery cancels the command after a later edge; omitted when absent and cleared by operator requeue |
 | `batch_id` | Shared by records written in one paste. A turn start without prompt text confirms the batch together |
 | `retry_after` | Wake hint set by the sweep. On a `Sent` record held for compaction, ingress, or provider start, the shared reconciliation and read-side deadline |
+| `typing_hold` | Optional `{ until, replay?, force? }`: the observed input-hold deadline, optional `steer` or `interrupt` replay and its force flag (omitted when false); omitted on unheld records and defaulted when reading old records |
 | `attempts`, `last_attempt_at` | Claim bookkeeping. The claim stamp is the hold a sender must still match |
 | `last_sent_at` | Last pane write. Survives a prompt requeue so a late acknowledgement can still settle it |
 | `unconfirmed_sends` | Prompt requeues after a write no hook confirmed |
@@ -198,6 +199,12 @@ Every mode resolves targets through the same parser, writes the same record shap
 
 Steer still writes a `Queued` record first and moves it to `Sent` when the paste lands. When the address resolves only to a durable card with no live pane, steer parks, prints `queued for @handle (msg_...)`, and the retry path delivers once a pane appears.
 
+All three live modes honour `[harness] typing_hold` (default `"30s"`, `"off"` disables). On tmux, a pane is held while an attached client views it and that same client's input is newer than the hold. Each read takes the latest `input + hold` over viewing clients, never the room-wide input maximum. A bounded failed client-view read logs at debug and sends without holding. Only an interrupt with force bypasses this hold; force alone still only bypasses an awaiting-input reservation.
+
+A hold leaves the records `Queued`, keeps the pane pin, undoes the claim's attempt, and persists `retry_after = typing_hold.until`. A held steer or interrupt saves its replay kind and force, including a push into an existing hold, and the sweep retries it as itself at the deadline even when it is not the card's head. Re-holds preserve the stronger replay (interrupt, then steer, then boundary) and force from either request. Hook-triggered delivery of such a head still uses the boundary policy without erasing its replay if new input re-holds it. Setting a new schedule clears the hold and restores boundary delivery at that time, with its own live input checks. A stored future deadline refuses candidacy without a client-view read; after it passes a live read can extend it. Moving focus away can therefore over-hold for at most one hold. An active draft left untouched longer than the hold remains an accepted gap.
+
+Retry-disposition synthetic sends wait too. Terminal cache-keepalive pings and soft-compaction wrap-ups instead keep their miss contracts: a hold terminalizes the ping or cancels the wrap-up with its reason, rather than sending stale automation after the person's prompt. A fresh pane-only target without a durable card fails with the hold reason because it has no retry lane. Explicit `pane send`, `answer`, and the budget-park Escape are exempt.
+
 Internal callers pick a mode too:
 
 - Self-only timer and watched-command waits steer. When a native prompt is open at the pane-write check, the `HarnessNotice::Wait` record stays `Queued` with gate `Any` and delivers at the turn boundary after the prompt is answered. Check-ins behave the same way.
@@ -260,6 +267,7 @@ A later end, the cancellation of every waiting follow-up, or the deadline itself
 The receipt follows the decision:
 
 - A live write prints `sent to @handle (msg_...)`. The record is `Sent`, and only the receiver's acknowledgment makes it `Delivered`.
+- A typing hold prints `held for @handle (msg_...)`, says someone is using the receiver's pane, and gives the local retry time. It exits 0; a reply wait continues through it.
 - A park names its first cause, in this precedence: the scheduled opening, then the first unmet `after` condition, then the first unmet `when` condition, then the receiver's readiness, then the blocking record id or the missing pane. Status and provider-starting parks keep their steer hints.
 - A native-input wait points to `rimz asks show` and `rimz answer`.
 - A resume follow-up says the child is resuming, that delivery follows its registration, and that failure follows a missed registration deadline in absolute UTC. It does not depend on the three-second bind check.
@@ -280,29 +288,30 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | # | Check | Verdict when it fails | What releases it |
 | --- | --- | --- | --- |
 | 1 | A queued automatic command is still within its validity window | `Expired` | Nothing. The next reconcile records the terminal outcome |
-| 2 | A queued follow-up with `register_by` has a live receiver row or one ended after enqueue | `WaitingForRegistration` | Registration, a later end (check 8), or registration expiry |
-| 3 | `not_before` has passed | `Scheduled` | The clock, through the host sweep |
-| 4 | Every `after` condition is met | `WaitingOnAfter` | The referenced agent reaching its gate with no deliverable queued work |
-| 5 | Every `when` condition is met | `WaitingOnWhen` | The watched agent completing its dwell in the raw status, after automatic review when waiting |
-| 6 | The record is the oldest holder of its card's lane | `BehindFifo` | The blocking record settling, or a blocking `Sent` prompt's acknowledgement or hold deadline |
-| 7 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
-| 8 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
-| 9 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
-| 10 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
-| 11 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation (normally `Registered`), or one delivery window. Lazy-registering providers skip this check |
-| 12 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting, or the overload marker clearing |
-| 13 | No open blocking prompt reserves the input, including a permission still under automatic review and a pane held after a provider error ended the turn | `AskWaiting`, or `PaneHeld` for the held pane | The ask clearing, the held agent's next activity, or `--force` |
-| 14 | A live pane can receive a paste | `NoPane` | A bindable pane appearing. A pinned record waits for its pinned pane |
+| 2 | No stored typing hold remains in the future | `TypingHeld` | The deadline, followed by a live input check; only forced interrupt bypasses it |
+| 3 | A queued follow-up with `register_by` has a live receiver row or one ended after enqueue | `WaitingForRegistration` | Registration, a later end (check 9), or registration expiry |
+| 4 | `not_before` has passed | `Scheduled` | The clock, through the host sweep |
+| 5 | Every `after` condition is met | `WaitingOnAfter` | The referenced agent reaching its gate with no deliverable queued work |
+| 6 | Every `when` condition is met | `WaitingOnWhen` | The watched agent completing its dwell in the raw status, after automatic review when waiting |
+| 7 | The record is the oldest holder of its card's lane | `BehindFifo` | The blocking record settling, or a blocking `Sent` prompt's acknowledgement or hold deadline |
+| 8 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
+| 9 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
+| 10 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
+| 11 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
+| 12 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation (normally `Registered`), or one delivery window. Lazy-registering providers skip this check |
+| 13 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting, or the overload marker clearing |
+| 14 | No open blocking prompt reserves the input, including a permission still under automatic review and a pane held after a provider error ended the turn | `AskWaiting`, or `PaneHeld` for the held pane | The ask clearing, the held agent's next activity, or `--force` |
+| 15 | A live pane can receive a paste | `NoPane` | A bindable pane appearing. A pinned record waits for its pinned pane |
 
-All fourteen pass and the verdict is `Ready`.
+All fifteen pass and the verdict is `Ready`.
 
-Checks 4 and 5 pass for a condition satisfied in the snapshot even before its stamp is written, so `message show` can read a record as past its conditions while it still waits. FIFO selection and the claim use the durable stamps (`MessageRecord::is_deliverable`), which the sweep writes.
+Checks 5 and 6 pass for a condition satisfied in the snapshot even before its stamp is written, so `message show` can read a record as past its conditions while it still waits. FIFO selection and the claim use the durable stamps (`MessageRecord::is_deliverable`), which the sweep writes.
 
-Check 14 honours the pin. A record pinned to a pane binds only to that pane (`address::pane_binding`), and a `NoPane` deferral keeps the pin (`Store::defer_message_wake`). Only a requeue after a failed attempt clears it (`MessageRecord::requeue`). A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate. A durable end lets the sweep archive the records.
+Check 15 honours the pin. A record pinned to a pane binds only to that pane (`address::pane_binding`), and a `NoPane` deferral keeps the pin (`Store::defer_message_wake`). Only a requeue after a failed attempt clears it (`MessageRecord::requeue`). A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate. A durable end lets the sweep archive the records.
 
 #### The FIFO hold
 
-Check 6 counts three kinds of holder in the same card and lane: a deliverable `Queued` record, an unexpired `Claimed` record, and a `Sent` prompt still inside its reconcile deadline. The selector and the explain scan share this rule (`crates/rimz/src/store/message.rs::delivery_batch_indices`, `older_ready_blocker`).
+Check 7 counts three kinds of holder in the same card and lane: a deliverable `Queued` record, an unexpired `Claimed` record, and a `Sent` prompt still inside its reconcile deadline. The selector and the explain scan share this rule (`crates/rimz/src/store/message.rs::delivery_batch_indices`, `older_ready_blocker`).
 
 A `Sent` prompt holds the slot while its turn-start acknowledgement is pending, even if the card still reads `Idle`: the store already knows a prompt was submitted before the hook commits. FIFO readers release an overdue hold without a sweep or a record transition, through `MessageRecord::sent_hold_expired`. A compaction, ingress, or provider-start deferral extends that deadline ([Reconciliation](#reconciliation)). Wake-in-flight readers additionally hold a card's `Sent` harness wake throughout its receiver's open compaction bracket, regardless of that deadline. Late acknowledgements stay valid while the record is `Sent`, or `Queued` after a requeue.
 
@@ -320,9 +329,9 @@ Ended launched children stay in runtime snapshots while their parent is visible 
 
 #### Compaction and gates
 
-The compaction window at check 9 closes every gate, `Resume` included. A receiver whose `compacting_since` marker is less than 90 seconds old (`COMPACTING_WINDOW_SECS`) takes nothing. The window expires so that a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation and wake-in-flight reads use the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
+The compaction window at check 10 closes every gate, `Resume` included. A receiver whose `compacting_since` marker is less than 90 seconds old (`COMPACTING_WINDOW_SECS`) takes nothing. The window expires so that a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation and wake-in-flight reads use the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
-`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 12 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked during a recoverable provider pause or a budget park. A displayed provider pause the card counts as spent reads `Failed`, opening only `Any`; `Done` still waits. An `Any` prompt can therefore resume an agent whose window just reset ahead of auto-continue's nudge, as direct pane input can. In the same gap, `evaluate_after_condition` can stamp an `--after` condition under `Any` on that agent, so the dependent message delivers while the upstream agent is about to resume. Both gates open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait. `Resume` does not open for `Sleeping`. Hibernation does not change the gate's status input, and delivery thaws the provider before writing to its pane.
+`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 13 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked during a recoverable provider pause or a budget park. A displayed provider pause the card counts as spent reads `Failed`, opening only `Any`; `Done` still waits. An `Any` prompt can therefore resume an agent whose window just reset ahead of auto-continue's nudge, as direct pane input can. In the same gap, `evaluate_after_condition` can stamp an `--after` condition under `Any` on that agent, so the dependent message delivers while the upstream agent is about to resume. Both gates open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait. `Resume` does not open for `Sleeping`. Hibernation does not change the gate's status input, and delivery thaws the provider before writing to its pane.
 
 ### What triggers a delivery
 
@@ -348,11 +357,11 @@ The same reactor nudges the sweep when the event's agent is referenced by an unm
 4. **Write.** Send through the [pane write](#writing-to-the-pane). If [smart compaction](#smart-compaction) fires, type the compact command alone and release the prompt batch back to `Queued` without an attempt penalty.
 5. **Record.** A successful write moves the batch to `Sent`, live until confirmed.
 
-A failure before any byte is written returns the record to `Queued` with `last_error` set and its pane pin cleared, so the next attempt re-resolves a pane. With `attempts` at its cap the record becomes `Abandoned` instead, and the failures with no retry path in the [terminal table](#terminal-states) become `Errored`.
+A failure before any byte is written returns the record to `Queued` with `last_error` set and its pane pin cleared, so the next attempt re-resolves a pane. With `attempts` at its cap the record becomes `Abandoned` instead, and the failures with no retry path in the [terminal table](#terminal-states) become `Errored`. A typing hold is not a failed attempt: it keeps the pane pin and undoes the claim's attempt.
 
-`rimz message steer <id>` runs the same helper with a steer policy. It still needs the named record, a receiver card, and a live pane, but ignores `not_before`, FIFO position, the gate, and the resume-recovery check. `claim_message_for_steer` claims only the named record, keeping the claim TTL guard and skipping the FIFO compare. It is the manual escape hatch for a dependency cycle or a vanished upstream agent. A waiting ask still defers it unless the record or the command carries `--force`.
+`rimz message steer <id>` runs the same helper with a steer policy. It still needs the named record, a receiver card, and a live pane, but ignores `not_before`, FIFO position, the gate, and the resume-recovery check. `claim_message_for_steer` claims only the named record, keeping the claim TTL guard and skipping the FIFO compare. It is the manual escape hatch for a dependency cycle or a vanished upstream agent. A waiting ask still defers it unless the record or the command carries `--force`. A typing hold defers even a forced steer; only a forced interrupt bypasses it.
 
-`rimz message interrupt <id>` runs `DeliveryPolicy::Interrupt { force }`, which shares steer's single-record claim, gate override, and retry handling and adds the key after the write. The record stores no delivery mode, so a parked `--interrupt` send delivers at its next checkpoint as an ordinary boundary send, without the key.
+`rimz message interrupt <id>` runs `DeliveryPolicy::Interrupt { force }`, which shares steer's single-record claim, gate override, and retry handling and adds the key after the write. A typing-held interrupt stores its replay mode for the sweep; one parked for another reason delivers at its next checkpoint as an ordinary boundary send, without the key.
 
 ### The subagent-digest join guard
 
@@ -470,6 +479,8 @@ A record whose agent has simply not reached a qualifying boundary is not failing
 
 The pane lock and the [FIFO hold](#the-fifo-hold) protect different things. The lock keeps two writers' bytes apart. The hold keeps a fresh boundary send from submitting while an earlier prompt's acknowledgement is pending.
 
+The typing hold reads `MuxBackend::client_view` before the hibernation wake and pane lock, and again after the pacer tick under that lock, before the first byte of each command or prompt. Pacing and the client-view read precede the final claim and awaiting-input checks. Each read has a short timeout, and samples `now` after the read returns. A read failure logs at debug and sends without holding. No pane capture participates. A hold before compact-first writes preserves the prompt's compaction intent; if the generated command itself is held before writing, it is canceled and the prompt retains that intent. A hold on the prompt after its compact command landed clears the intent, so the retry cannot compact twice.
+
 `PaneWriter::open` requires the session its writes address, and every writer passes the resolved room's session, so a write reaches that room's Zellij session from outside any pane. `rimz pane send` first checks that the room holds the pane, because a raw pane id reaches it with no lookup. `rimz message`, `rimz answer`, and the budget parker take their target from a fresh listing of that session. tmux ignores the session, because its pane ids are server-global.
 
 ### Paste, then submit
@@ -559,7 +570,7 @@ Four callers send a native compact command through a `Command` record: smart com
 
 The three standalone callers (idle, flip, operator) go through `crates/rimz/src/message/compact.rs::send_compact`, which queues a pane-pinned, `Done`-gated command and attempts boundary delivery at once through `crates/rimz/src/message/synthetic.rs::attempt_now`. A miss records the refusal verdict or delivery error. A retryable post-claim stop keeps the attempt's own reason, and only a terminal stop writes the caller's fallback. The store refreshes the host's wake stamp in each queue-changing commit, so a queued command's retry does not depend on later message traffic. The sweep defers a refused ready head one delivery window; deliverable followers do not pin the stamp in the past ([Scheduling and wakeups](#scheduling-and-wakeups)).
 
-A queued `Resume` record contributes no wake deadline: the sweep's `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. Claimed and sent resume records still arm recovery.
+A queued `Resume` record ordinarily contributes no wake deadline: the sweep's `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. A typing-held resume arms its future hold deadline, then its moved retry deadline after expiry, and the sweep retries it independently with its resume gate intact. Claimed and sent resume records still arm recovery.
 
 An automatic command (`body == Command && automated`) is perishable. While `Queued`, it is valid for ten minutes from `enqueued_at`. The window is derived, never stored, and `RIMZ_MESSAGE_COMMAND_VALIDITY_MS` shortens it for tests. `MessageRecord::is_deliverable` excludes an expired record at every FIFO head and blocker decision, even when no sweep runs. The next `Store::reconcile_stale_messages`, from the sweep or `rimz gc`, alone finalizes it as `Expired`, with the reason in `last_error` and `message.expired`. `message show` reports expiry before every other blocker, and steer and interrupt cannot bypass it. Prompts without a resume registration deadline, harness notices, operator commands (`automated: false`), and non-`Queued` records do not expire. A lapsed claim returns to `Queued` and ages by its original enqueue time, while a human requeue creates a new record with a fresh window. Smart compaction's released prompt can deliver on its own once its compact command expires.
 
@@ -616,7 +627,7 @@ The fold sets `AgentState.soft_compact` on the wrap-up's `Sent`: `steered_at`, t
 
 Pacing uses two replaceable cache files per card under runtime `live/soft-compact/`, written by `write_temp_then_rename_cache`. Each step has a one-minute retry window, keyed by `compaction_count` for wrap-up and `steered_at` for continue, so an old step never delays a new one. Spawn failures consume no window. This is best-effort pacing, not a claim: helpers have no overall deadline, and concurrent or stalled helpers can overlap; the fresh helper recheck bounds ordinary duplicates.
 
-Accepted races: observation costs at least the producer tick plus one base-snapshot pass; native compaction may win during that lag or the wrap-up. A steer just after turn end starts a short wrap-up turn, and continue follows that turn. Producer lag can put continue after a user-prompted turn. A watched pane's half-typed draft can be submitted by the steer. A member flipping its stage during wrap-up can receive continue after flip compaction. Whether Codex's summary preserves the agent's step-1 note remains a real-provider check, not a fallback implemented here.
+Accepted races: observation costs at least the producer tick plus one base-snapshot pass; native compaction may win during that lag or the wrap-up. A steer just after turn end starts a short wrap-up turn, and continue follows that turn. Producer lag can put continue after a user-prompted turn. A watched pane's draft left untouched longer than the typing hold can be submitted by the steer; recent viewing-client input on tmux instead cancels the wrap-up as a missed steer. A member flipping its stage during wrap-up can receive continue after flip compaction. Whether Codex's summary preserves the agent's step-1 note remains a real-provider check, not a fallback implemented here.
 
 ### Idle compaction
 
@@ -789,7 +800,7 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, in JSON
 
 The room's sidebar host notices when a parked message comes due, through a deliberately thin handoff:
 
-1. The store refreshes `lanes/message-wake.json` in its paired runtime after every live-queue file write, under the same workspace lock, from the records just written. The stamp is the earliest time worth a look: an ordinary-lane `not_before`, a `Queued` retry floor or ready-head backstop, a queued expiry or future registration deadline, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands). Deliverable ordinary queued followers contribute only their expiry and a future `register_by`; scheduled or condition-pending records keep their own wake deadlines. Queued `Resume` records arm nothing. A standalone compaction left `Queued` arms the stamp too, so its sweep does not depend on later message traffic.
+1. The store refreshes `lanes/message-wake.json` in its paired runtime after every live-queue file write, under the same workspace lock, from the records just written. The stamp is the earliest time worth a look: an ordinary-lane `not_before`, a `Queued` retry floor or ready-head backstop, a queued expiry or future registration deadline, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands). Deliverable ordinary queued followers contribute their expiry and a future `register_by`; scheduled or condition-pending records keep their own wake deadlines. Every queued typing-held record also contributes its future hold deadline, follower and `Resume` included. After expiry, a replay or `Resume` record contributes its moved `retry_after` instead, or its past `until` when an edit or a released claim has cleared `retry_after`, which the next sweep moves forward; an ordinary boundary follower adds nothing extra. Other queued `Resume` records arm nothing. A standalone compaction left `Queued` arms the stamp too, so its sweep does not depend on later message traffic.
 2. The host reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)). For an unchanged stamp value it waits one prompt delivery window from the last spawn's cache-refresh pass time before spawning again; a changed due stamp wakes immediately. The host does no store reads, store writes, or queue selection.
 3. The sweep finalizes expired automatic commands and unregistered resume follow-ups, reconciles stale `Sent` and expired `Claimed` records, evaluates unmet conditions, and delivers ready FIFO heads. It then calls `Store::rearm_message_wake` under the store's lock to refresh even an unchanged queue, since a queued record whose `not_before` passed contributes its retry floor instead. No-op queue commits alone do not refresh.
 
@@ -801,7 +812,7 @@ Condition evaluation inside a sweep is one transaction. It evaluates every unmet
 
 ### Back-off
 
-The sweep backs off because the host ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt, provider starting), it sets `retry_after` one delivery window ahead. A deliverable `Queued` non-`Resume` follower behind its card's head arms only its expiry and a future `register_by`, so it does not keep the stamp due, and the host retries an unchanged due stamp at most once per prompt delivery window. If a sweep dies or loses the single-flight lock without re-arming, that guard delays its next attempt by at most one window. Independent deadlines and changed due stamps still wake immediately. The deferred record stays `Queued` with its pane pin and its `attempts` untouched. On a `Queued` record, `retry_after` is only a wake hint: it does not affect readiness, FIFO position, claim leases, or hook-driven delivery.
+The sweep backs off because the host ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt, provider starting), it sets `retry_after` one delivery window ahead. A typing-hold refusal instead keeps `retry_after` at the exact `until`, never a fresh delivery window. A deliverable `Queued` non-`Resume` follower behind its card's head arms its expiry, a future `register_by`, and any future typing-hold deadline, but not its ordinary retry hint. An expired replay or `Resume` hold instead arms its moved retry hint, so a refused replay keeps waking without masking other deadlines with a past hold stamp. The host retries an unchanged due stamp at most once per prompt delivery window. If a sweep dies or loses the single-flight lock without re-arming, that guard delays its next attempt by at most one window. Independent deadlines and changed due stamps still wake immediately. The deferred record stays `Queued` with its pane pin and its `attempts` untouched. On a `Queued` record, `retry_after` is only a wake hint: it does not affect readiness, FIFO position, claim leases, or hook-driven delivery; the typed `typing_hold` is what refuses delivery until its deadline.
 
 A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. A defer on any other verdict clears a `last_error` that a `NoPane` back-off wrote, so a pane that returns while the receiver is busy leaves the gate as the only thing `show` reports. It clears that sentence and nothing else: a real send failure recorded by a requeue stays. That is why the recognizer (`message::deliver::no_pane_blocker` and its matcher) sits beside the formatter, and the store applies it without reading the words. The next claim clears the error.
 
@@ -824,7 +835,7 @@ An agent that sent a message gets one notice when the message ends undelivered a
 | Class | Delay | Verdicts |
 | --- | --- | --- |
 | NotWorking | 5 min | `NoPane`, `ProviderStarting`, `ResumeUnrecovered`, `AskWaiting`, `PaneHeld`, `ReceiverGone`, `ReceiverEnded` when not archived, and `GateClosed` with a status other than `Running` (absent status included) |
-| Busy | 20 min | `GateClosed` with `Running`, and `Compacting` |
+| Busy | 20 min | `GateClosed` with `Running`, `Compacting`, and `TypingHeld` |
 | No notice | none | `WaitingForRegistration`, `Scheduled`, `WaitingOnAfter`, `WaitingOnWhen`, `BehindFifo`, `Expired`, `Ready`, or a stop without a verdict |
 
 Each qualifying pending record on the refused head's card is measured from its own `enqueued_at`, not just the head, and its own schedule and conditions must be met. An unconfirmed-send requeue keeps that clock, while `message requeue` creates a fresh message. `Store::queue_still_queued_notice` rechecks `Queued` and an absent `queued_notice_at` under the workspace lock, then stamps that field and queues `MESSAGE_QUEUED` with its audit event together, so a second call changes nothing. The original message stays queued, and the notice names `rimz message cancel <id>` as the withdrawal path. The [millisecond overrides](../../reference/cli/message.md#the-message-header) for the two delays use the same `env_ms` convention as the delivery window, and are independent of it.
@@ -928,13 +939,15 @@ Every message timing in one place. The environment overrides take milliseconds t
 | Still-queued notice, busy | 20 min | `RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS` | [sender notices](#sender-notices) |
 | Claim lease (`CLAIM_TTL`) | 15 s | none | [claims](#claims-and-holds) |
 | Claim cap (`MAX_DELIVERY_ATTEMPTS`) | 5 | none | `Abandoned` |
-| Compaction window (`COMPACTING_WINDOW_SECS`) | 90 s | none | check 9 |
+| Compaction window (`COMPACTING_WINDOW_SECS`) | 90 s | none | check 10 |
 | Pane write lock wait | 30 s | none | [writing to the pane](#writing-to-the-pane) |
+| Typing hold | 30 s | `[harness] typing_hold`, or `off` | [delivery modes](#four-modes-on-one-timing-axis) |
+| Typing-hold client-view read | 500 ms | none | [writing to the pane](#writing-to-the-pane) |
 | Reply poll | 500 ms, guard every 10 ticks | none | [reply waits](#reply-waits) |
 
 ## Hazards
 
-- **Queued text can land on a half-typed human draft.** Delivery gates on store state, never on focused-pane state or captured composer contents, because a pane read is latency, not truth.
+- **A draft untouched longer than the typing hold can still be joined to queued text.** The hold uses the viewing client's input clock, never captured composer contents. A failed client-view read also sends without holding.
 - **Agent UIs can show dialogs no hook reports.** Delivery never captures the pane. A script that must inspect UI text captures before sending through the public `pane capture` primitive.
 - **Multiplexer writes are best-effort.** A pane can vanish or reject input after the claim. The record stores the error and retries to the cap.
 - **A pane write is not an acknowledgement.** Treat `Sent` as pending. Anything that assumes the agent read the text belongs after `Delivered`.

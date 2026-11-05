@@ -45,19 +45,22 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | Mode | Flag | Behaviour |
 | --- | --- | --- |
 | Park | default | Delivers now if the agent can take it, otherwise waits for the next turn boundary that `--on` allows. |
-| Steer | `--steer` | Writes into the live turn now. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
+| Steer | `--steer` | Writes into the live turn once the typing hold clears. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
 | Interrupt | `--interrupt` | Types the text into the live turn, then presses Escape three seconds later to stop it. Claude Code and Codex only; other agents are refused. Codex starts the text as a fresh turn only if it has not already taken it into the running turn; an expanded question editor takes the text as an answer instead. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar host wakes due messages.
 
+On tmux, someone using the receiving pane holds message writes until 30 seconds after their last input: the same attached client must be viewing that pane and have recent input. The held record stays queued, prints a receipt with its id and local retry time, and the room's sweep retries it after the pause. A held steer or interrupt retries in its original mode, even while the agent is running. `--steer --force` still waits; only `--interrupt --force` bypasses the typing hold. `[harness] typing_hold` changes the duration, or `"off"` disables it. A draft left untouched longer than the hold can still be joined to the message; RimZ never reads the composer to detect drafts. `pane send` and `answer` are explicit input and do not wait. `--wait` keeps waiting through a hold.
+
 A parked message delivers once all of these hold, checked in this order:
 
-1. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
-2. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
-3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A recoverable provider limit or overload reads [`paused`](./agents.md), which opens neither gate. The card shows a provider pause as `failed` once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset, even if auto-continue is about to resume it; that status opens only `any`. A RimZ budget park stays `paused`.
-4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
-5. A live pane can receive the text.
+1. Any observed typing hold has expired. The live input check can extend it before writing.
+2. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
+3. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
+4. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A recoverable provider limit or overload reads [`paused`](./agents.md), which opens neither gate. The card shows a provider pause as `failed` once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset, even if auto-continue is about to resume it; that status opens only `any`. A RimZ budget park stays `paused`.
+5. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
+6. A live pane can receive the text.
 
 Parking needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
 
@@ -74,6 +77,7 @@ The send prints one line per target:
 | Output | Meaning |
 | --- | --- |
 | `sent to @coder (msg_…)` | The text reached the pane: park mode found the agent free, `--steer` wrote into the live turn, or `--interrupt` wrote it and pressed Escape if the agent was mid-turn. This receipt alone proves neither a stop nor a fresh turn. The record is `sent` until the agent acknowledges it and it becomes [`delivered`](#message-statuses). |
+| `held for @coder (msg_…) — someone is using the receiver's pane; retry at <local time>` | The typing hold deferred the write, without spending a delivery attempt. Input can move the retry later. |
 | `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
 | `queued for @coder (msg_…) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_…` | Waiting for a resumed provider to start. |
@@ -240,7 +244,7 @@ The last seven are final. A final record keeps its text in `audit/messages/<buck
 
 ## Inbox and queue verbs
 
-`rimz message interrupt <id> [--force]` pushes a queued record with the interrupt policy above, overriding its delivery gate and conditions. Claimed and finished records are refused, as with `steer <id>`. The mode is selected at push time, not stored on the record; a parked interrupt follows ordinary delivery at the next boundary, without Escape.
+`rimz message interrupt <id> [--force]` pushes a queued record with the interrupt policy above, overriding its delivery gate and conditions. Claimed and finished records are refused, as with `steer <id>`. A typing-held interrupt retains its mode for the sweep; an interrupt parked for another reason follows ordinary delivery at the next boundary, without Escape.
 
 ### List messages
 
@@ -288,7 +292,7 @@ Trailing lines report what the view left out:
 
 ### Show one message
 
-`rimz message show <id>` (alias `status`) prints the record's fields, its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with one row each for `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
+`rimz message show <id>` (alias `status`) prints the record's fields, its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with rows for an active `typing hold`, `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
 
 ```text
 DELIVERY CHECK
@@ -298,6 +302,8 @@ DELIVERY CHECK
 ```
 
 A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. A pane held after a turn-ending provider error shows `ask: held after a provider error` and points to `rimz pane capture @coder` and `rimz message steer <id> --force` instead, since `rimz asks` lists no ask for it. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
+
+A typing-held record adds a `typing hold` delivery row naming the retry time; `delivery.check.typing_hold` in JSON carries `until` and, for held live sends, `replay` (`steer` or `interrupt`) and its `force` flag (omitted when false). It is omitted when no stored hold is active. `message steer <id>` during the hold prints the held receipt and exits 0 without writing, retaining the requested live mode and force for the retry.
 
 During automatic permission review, `delivery.check.ask.permission_review` is `true`; it is omitted otherwise. While a turn-ending provider error leaves pane input reserved, `delivery.check.ask.turn_ended` is `true`; it is omitted otherwise. The raw `ask.waiting` can therefore remain true while the gate's status reads `running` during review, or `paused` or `failed` after a provider error: the provider may still own pane input.
 
@@ -321,12 +327,12 @@ A follow-up waiting for a resumed child says `waiting for @child to register aft
 | --- | --- |
 | `--text <TEXT>`, `--file <PATH>` | The text. The two conflict. |
 | `--on done\|any` | The gate. |
-| `--schedule <DUR\|HH:MM>`, `--no-schedule` | Set or clear the earliest delivery time. |
+| `--schedule <DUR\|HH:MM>`, `--no-schedule` | Set or clear the earliest delivery time. Setting a new schedule replaces a typing-held live send with boundary delivery at the new time; fresh input can hold it again. |
 | `--force`, `--no-force` | Whether an open prompt blocks delivery. |
 | `--enter`, `--no-enter` | Whether the text is submitted. |
 | `--smart-compact <PCT\|TOKENS>`, `--no-smart-compact` | Set or clear the compaction threshold. |
 
-`steer` delivers now, past the schedule, conditions, queue order, and gate. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, and a final one points to `requeue`.
+`steer` delivers now, past the schedule, conditions, queue order, and gate, but still honours the typing hold. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, and a final one points to `requeue`.
 
 `requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A soft-compaction wrap-up is refused: it is steer-only and never requeued. Any other message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
 
