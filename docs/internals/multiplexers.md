@@ -197,8 +197,8 @@ A founder is a work pane the naming record credits with the tab's name. Every Ri
 
 While any founder hosts a live agent, the birth base stays. Once all founders leave, the base follows the surviving agents on every tick:
 
-1. Order work-pane titles by `first_seen_at_ms` ascending, missing stamps last, with the canonical pane id as tie-breaker.
-2. Join them through the same three-token label helper. An empty survivor label keeps the existing base, and status changes still apply.
+1. Order surviving agent panes by `first_seen_at_ms` ascending, missing stamps last, with the canonical pane id as tie-breaker.
+2. Read each pane's short label (profile, else kind) from the snapshot's `agent_panes` by pane id, falling back to `hosted_agent_kind` when no bound entry exists, and omitting panes with neither. Join these labels through the same three-token label helper, never reading pane titles. An empty survivor label keeps the existing base, and status changes still apply.
 3. Spell the base the way the view reads it back: tmux maps `:` and `.` to `-` and commas to `_`, and trims edge whitespace; Zellij keeps the raw label.
 4. With no surviving agent, release to the shell name, or only clear a glyph when the base already equals it.
 
@@ -245,11 +245,11 @@ Rebirth re-pins on both backends. Panes also carry a pane-scope pin ([`pane_pin_
 
 `RIMZ_WORKTREE_PATH` therefore marks more than agent panes, and code reading it cannot take it as proof of an agent. The pane-scope pin goes to agent launches (fresh, forked, restarted, resumed, and supervised runs), `rimz pane split` shells, and reborn tabs. Two non-pane processes set the key alone, without `RIMZ=1` or a channel: a loop check, where it names the task's run directory on top of the session pin, and a worktree hook, where it names the worktree the hook fired for. The room's first shell carries only the session pin.
 
-A pane's launch-name pin is separate from room identity. tmux stores it in the pane option `@rimz_title`, sanitized like window names (`:` and `.` become `-`), and removes it from every pane in a released window. Zellij uses the pane name and keeps it on release.
+A pane's display-title pin is separate from room identity and tab labels. `agents::pane_title` composes the seat, handle, and optional parent context at spawn ([pane-title shapes](../guide/multiplexer.md#everything-in-the-room-is-an-ordinary-pane-operation)). tmux stores it verbatim in the pane option `@rimz_title` and removes it from every pane in a released window; only window names keep the `:`/`.` sanitizer. Zellij uses the same title as its pane name and keeps it on release.
 
 ### Pane metadata
 
-`list_panes` reports each pane's id, view, foreground command, optional spawn command, optional title, cwd, and floating flag. The title is the pinned launch name when present, otherwise the multiplexer's pane title; the published pane frame keeps it for tab-name reconciliation.
+`list_panes` reports each pane's id, view, foreground command, optional spawn command, optional title, cwd, and floating flag. The title is the pinned display title when present, otherwise the multiplexer's pane title; the published pane frame keeps it as display metadata. Tab-name reconciliation reads short labels from the snapshot, not this title.
 
 The sidebar uses the foreground command for display, the spawn command for identity only while the pane root still runs the spawn program (or the foreground is briefly unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes a pane's historical agent argv. Foreground, title, and cwd exist on both backends. Spawn is optional because Zellij omits it for panes created with `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 

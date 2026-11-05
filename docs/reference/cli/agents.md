@@ -902,7 +902,7 @@ Other kinds, including OpenCode and plugins, cannot fork.
 
 #### `molt`
 
-`rimz agents molt [NOTE] [--stdin] [--agent <PROFILE|KIND>]` moves the calling agent into a fresh session in a new, unfocused tab, with the note as its first prompt. The new tab and pane are named as a fresh launch of the same seat would be: the tab reads `#<channel>`, else `team:<name>`, else the profile, else the provider, and the pane reads the profile, else the provider. It runs only inside an agent: only the session holding the context can write the note. From your shell, type `/rimz-molt` in that agent's pane, or send `rimz message @<agent> '/rimz-molt'`. Subagents cannot molt; they finish and report to their caller.
+`rimz agents molt [NOTE] [--stdin] [--agent <PROFILE|KIND>]` moves the calling agent into a fresh session in a new, unfocused tab, with the note as its first prompt. The new tab and pane are named as a fresh launch of the same seat would be: the tab reads `#<channel>`, else `team:<name>`, else the profile, else the provider; the pane identifies the successor's seat and new handle ([pane titles](../../guide/multiplexer.md#everything-in-the-room-is-an-ordinary-pane-operation)). It runs only inside an agent: only the session holding the context can write the note. From your shell, type `/rimz-molt` in that agent's pane, or send `rimz message @<agent> '/rimz-molt'`. Subagents cannot molt; they finish and report to their caller.
 
 The positional note and `--stdin` follow `rimz message`: either supplies the note, or the positional instruction comes first and stdin follows inside `<stdin>` tags. Empty notes are refused. A note may start with `-`; use `--` for a note that exactly equals a molt flag, including `-h` or `--help`.
 
