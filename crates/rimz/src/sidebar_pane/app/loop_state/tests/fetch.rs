@@ -827,7 +827,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     );
     assert!(records[1].get("selected_before").is_none());
     assert_eq!(rig.view().ui().selected_pane, Some(shell.pane_id));
-    assert_eq!(rig.view().ui().selected_index, Some(1));
+    assert_eq!(rig.view().ui().selected_index, Some(0));
     rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
     parser.process(&output.0.lock().unwrap());

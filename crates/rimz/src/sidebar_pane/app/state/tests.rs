@@ -1235,7 +1235,7 @@ fn staying_on_tab_does_not_sweep_new_unread() {
 }
 
 #[test]
-fn new_ranked_first_unread_appends_during_freeze() {
+fn new_ranked_first_unread_takes_its_live_place_during_freeze() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut painted, first, _) =
@@ -1274,8 +1274,8 @@ fn new_ranked_first_unread_appends_during_freeze() {
 
     assert_eq!(
         row_ids(a.state.views.mirror()),
-        vec!["sess-1", "sess-2", "sess-new"],
-        "fresh unread rows append within their frozen group"
+        vec!["sess-new", "sess-1", "sess-2"],
+        "fresh unread rows enter at their live rank within the frozen group"
     );
     assert!(row_unread_by_id(a.state.views.mirror(), "sess-new"));
     // The switch in has painted, which ends its arrival hold, and the freeze has run out.
