@@ -3,7 +3,7 @@
 use std::num::NonZeroU16;
 use std::path::Path;
 
-use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
+use crate::config::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus};
 use crate::ids::MuxName;
 use crate::mux::{SidebarPaneOptions, sidebar_serve_args};
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -25,10 +25,7 @@ pub(super) fn stack_hook_commands() -> Vec<Vec<String>> {
     );
     let restore = concat!(
         "if-shell -F '#{&&:#{!=:#{window_zoomed_flag},1},#{!=:#{P:#{?#{&&:#{@rimz_stack},#{!=:#{@rimz_stack_open},1}},1,}},}}' { ",
-        "run-shell -C '#{P:#{?#{&&:#{@rimz_stack},#{&&:#{==:#{@rimz_stack_open},1},#{!=:#{pane_floating_flag},1}}},resize-pane -t #{pane_id} -y #{window_height} ; ,}}' } ; ",
-        "if-shell -F '#{&&:#{@rimz_stack_borders_owned},#{==:#{P:#{?#{@rimz_stack},1,}},}}' { ",
-        "set-window-option -u pane-border-status ; set-window-option -u pane-border-format ; ",
-        "set-window-option -u @rimz_stack_borders_owned }",
+        "run-shell -C '#{P:#{?#{&&:#{@rimz_stack},#{&&:#{==:#{@rimz_stack_open},1},#{!=:#{pane_floating_flag},1}}},resize-pane -t #{pane_id} -y #{window_height} ; ,}}' }",
     );
     [
         ("window-pane-changed[240]", focus),
@@ -37,28 +34,6 @@ pub(super) fn stack_hook_commands() -> Vec<Vec<String>> {
     .into_iter()
     .map(|(event, body)| vec!["set-hook".into(), "-g".into(), event.into(), body])
     .collect()
-}
-
-pub(super) fn stack_window_options(
-    config: &TmuxConfig,
-    has_members: bool,
-) -> Vec<(&'static str, Option<String>)> {
-    let mut options = tmux_window_options(config);
-    let owns_borders = config.pane_border_status.is_none() && has_members;
-    if owns_borders {
-        for (key, value) in &mut options {
-            match *key {
-                "pane-border-status" => *value = Some("top".into()),
-                "pane-border-format" => *value = Some("#{?#{@rimz_stack}, #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} ,#{p999: }}".into()),
-                _ => {}
-            }
-        }
-    }
-    options.push((
-        "@rimz_stack_borders_owned",
-        owns_borders.then(|| "1".into()),
-    ));
-    options
 }
 
 pub(super) fn spawn_command_is_sidebar_serve(spawn: &str) -> bool {
@@ -317,15 +292,11 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
     opts
 }
 
-/// `pane-border-format` RimZ writes when it owns `pane-border-status`: titled
-/// frames on work panes, and a blank border line on the sidebar chrome pane so
-/// it reads frameless. `#{p999: }` floods the sidebar's border row with spaces
-/// (truncated to pane width), overwriting the glyphs tmux would otherwise draw.
-fn sidebar_blanking_border_format() -> String {
+fn pane_border_format() -> String {
     [
         "#{?#{==:#{pane_title},",
         SIDEBAR_CHROME_TITLE,
-        "},#{p999: }, #{pane_index} #{pane_current_command} }",
+        "}, rimz , #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} }",
     ]
     .concat()
 }
@@ -354,7 +325,7 @@ pub(super) fn window_option_argv(
 }
 
 pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Option<String>)> {
-    vec![
+    let mut options = vec![
         (
             "allow-passthrough",
             Some(tmux_bool(config.allow_passthrough)),
@@ -363,26 +334,24 @@ pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Opt
             "aggressive-resize",
             Some(tmux_bool(config.aggressive_resize)),
         ),
-        (
-            "pane-border-status",
-            config
-                .pane_border_status
-                .map(|status| status.as_str().to_owned()),
-        ),
-        (
-            "pane-border-format",
-            config
-                .pane_border_status
-                .filter(|status| *status != crate::config::TmuxPaneBorderStatus::Off)
-                .map(|_| sidebar_blanking_border_format()),
-        ),
-        (
-            "pane-border-lines",
-            config
-                .pane_border_lines
-                .map(|lines| lines.as_str().to_owned()),
-        ),
-    ]
+    ];
+    if config.pane_border_status != TmuxPaneBorderStatus::Inherit {
+        options.extend([
+            (
+                "pane-border-status",
+                Some(config.pane_border_status.as_str().to_owned()),
+            ),
+            ("pane-border-format", Some(pane_border_format())),
+            ("@rimz_borders", Some("1".into())),
+        ]);
+    }
+    options.push((
+        "pane-border-lines",
+        config
+            .pane_border_lines
+            .map(|lines| lines.as_str().to_owned()),
+    ));
+    options
 }
 
 #[cfg(test)]
@@ -393,6 +362,11 @@ mod tests {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::SidebarPaneOptions;
+
+    const BORDER_FORMAT: &str = concat!(
+        "#{?#{==:#{pane_title},rimz-sidebar}, rimz , ",
+        "#{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} }",
+    );
 
     #[test]
     fn stack_hooks_are_indexed_global_and_guard_zoom_and_floats() {
@@ -410,37 +384,34 @@ mod tests {
     }
 
     #[test]
-    fn stack_border_chooser_respects_explicit_config_and_membership() {
-        let mut config = TmuxConfig::default();
-        let owned = stack_window_options(&config, true);
-        assert!(owned.contains(&("pane-border-status", Some("top".into()))));
-        let format = owned
-            .iter()
-            .find(|(key, _)| *key == "pane-border-format")
-            .unwrap()
-            .1
-            .as_ref()
-            .unwrap();
-        assert!(
-            format.contains("@rimz_stack")
-                && format.contains("@rimz_title")
-                && format.contains("#{p999: }")
-        );
-        assert!(stack_window_options(&config, false).contains(&("pane-border-status", None)));
-        for status in [
-            crate::config::TmuxPaneBorderStatus::Off,
-            crate::config::TmuxPaneBorderStatus::Bottom,
-        ] {
-            config.pane_border_status = Some(status);
-            let options = stack_window_options(&config, true);
-            assert!(options.contains(&("pane-border-status", Some(status.as_str().into()))));
-            assert!(!options.iter().any(|(key, value)| {
-                *key == "pane-border-format"
-                    && value
-                        .as_ref()
-                        .is_some_and(|format| format.contains("@rimz_stack"))
-            }));
-        }
+    fn border_modes_own_all_windows_or_leave_them_untouched() {
+        let actual: Vec<_> = ["top", "bottom", "off", "inherit"]
+            .map(|status| {
+                toml::from_str::<TmuxConfig>(&format!("pane_border_status = '{status}'"))
+                    .ok()
+                    .map(|config| {
+                        tmux_window_options(&config)
+                            .into_iter()
+                            .filter(|(key, _)| *key != "pane-border-lines")
+                            .filter(|(key, _)| {
+                                key.starts_with("pane-border") || key.starts_with('@')
+                            })
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .into();
+        let expected = ["top", "bottom", "off"]
+            .map(|status| {
+                Some(vec![
+                    ("pane-border-status", Some(status.into())),
+                    ("pane-border-format", Some(BORDER_FORMAT.into())),
+                    ("@rimz_borders", Some("1".into())),
+                ])
+            })
+            .into_iter()
+            .chain([Some(Vec::new())])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -559,55 +530,40 @@ mod tests {
 
     #[test]
     fn after_new_window_hook_threads_refresh_override_width_option_and_options() {
-        let opts = sidebar_opts(Some(75));
+        let mut opts = sidebar_opts(Some(75));
         let command = after_new_window_hook_set_cmd(&opts);
         let serve = sidebar_serve_command(&opts).join(" ");
         let shell = crate::proc::user_shell_program();
 
         assert_eq!(
-            command,
-            vec![
-                "set-hook".to_owned(),
-                "-t".to_owned(),
-                "room".to_owned(),
-                "after-new-window".to_owned(),
-                format!(
-                    "set-window-option allow-passthrough on ; \
-                     set-window-option aggressive-resize on ; \
-                     set-window-option -u pane-border-status ; \
-                     set-window-option -u pane-border-format ; \
-                     set-window-option -u pane-border-lines ; \
-                     split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
-                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
-                ),
-            ],
+            &command[..4],
+            ["set-hook", "-t", "room", "after-new-window"]
         );
-
-        let mut opts = sidebar_opts(None);
-        opts.config.tmux.pane_border_status = Some(crate::config::TmuxPaneBorderStatus::Top);
-        opts.config.tmux.pane_border_lines = Some(crate::config::TmuxPaneBorderLines::Heavy);
-        let command = after_new_window_hook_set_cmd(&opts);
-        let serve = sidebar_serve_command(&opts).join(" ");
-
-        assert_eq!(
-            command,
-            vec![
-                "set-hook".to_owned(),
-                "-t".to_owned(),
-                "room".to_owned(),
-                "after-new-window".to_owned(),
-                format!(
-                    "set-window-option allow-passthrough on ; \
-                     set-window-option aggressive-resize on ; \
-                     set-window-option pane-border-status top ; \
-                     set-window-option pane-border-format '{}' ; \
-                     set-window-option pane-border-lines heavy ; \
-                     split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
-                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
-                    sidebar_blanking_border_format()
-                ),
-            ],
+        let body = &command[4];
+        assert!(
+            body.contains("set-window-option pane-border-status top"),
+            "{body}"
         );
+        assert!(body.contains("set-window-option @rimz_borders 1"), "{body}");
+        assert!(body.contains("#{@rimz_title}"), "{body}");
+        assert!(
+            body.contains(&format!("-l '#{{@rimz_sidebar_cols}}' '{serve}'")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!("'respawn-pane -k \"{shell}\"'")),
+            "{body}"
+        );
+        opts.config.tmux =
+            toml::from_str("pane_border_status = 'inherit'\npane_border_lines = 'heavy'").unwrap();
+        let body = &after_new_window_hook_set_cmd(&opts)[4];
+        assert!(
+            !body.contains("pane-border-status")
+                && !body.contains("pane-border-format")
+                && !body.contains("@rimz_borders"),
+            "{body}"
+        );
+        assert!(body.contains("pane-border-lines heavy"), "{body}");
     }
 
     #[test]
@@ -706,42 +662,12 @@ mod tests {
             vec![
                 ("allow-passthrough", Some("on".to_owned())),
                 ("aggressive-resize", Some("on".to_owned())),
-                ("pane-border-status", None),
-                ("pane-border-format", None),
-                ("pane-border-lines", None),
-            ],
-        );
-        let config = TmuxConfig {
-            pane_border_status: Some(crate::config::TmuxPaneBorderStatus::Top),
-            pane_border_lines: Some(crate::config::TmuxPaneBorderLines::Heavy),
-            ..TmuxConfig::default()
-        };
-        assert_eq!(
-            tmux_window_options(&config),
-            vec![
-                ("allow-passthrough", Some("on".to_owned())),
-                ("aggressive-resize", Some("on".to_owned())),
                 ("pane-border-status", Some("top".to_owned())),
-                ("pane-border-format", Some(sidebar_blanking_border_format())),
-                ("pane-border-lines", Some("heavy".to_owned())),
-            ],
-        );
-
-        let config = TmuxConfig {
-            pane_border_status: Some(crate::config::TmuxPaneBorderStatus::Off),
-            ..TmuxConfig::default()
-        };
-        assert_eq!(
-            tmux_window_options(&config),
-            vec![
-                ("allow-passthrough", Some("on".to_owned())),
-                ("aggressive-resize", Some("on".to_owned())),
-                ("pane-border-status", Some("off".to_owned())),
-                ("pane-border-format", None),
+                ("pane-border-format", Some(BORDER_FORMAT.into())),
+                ("@rimz_borders", Some("1".into())),
                 ("pane-border-lines", None),
             ],
         );
-
         let config = TmuxConfig {
             extended_keys: false,
             ..TmuxConfig::default()

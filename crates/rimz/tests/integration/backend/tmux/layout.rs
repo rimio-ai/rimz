@@ -179,9 +179,8 @@ fn companion_stack_preserves_processes_sidebar_and_focus_until_full() {
             (live_sidebar.left, live_sidebar.width),
             (sidebar.left, sidebar.width),
         );
-        // Stack border-status shifts content down a row, including chrome.
-        assert_eq!(live_sidebar.top, sidebar.top + u64::from(count > 1));
-        assert_eq!(live_sidebar.height, sidebar.height - u64::from(count > 1));
+        assert_eq!(live_sidebar.top, sidebar.top);
+        assert_eq!(live_sidebar.height, sidebar.height);
         let mut work = panes
             .iter()
             .filter(|pane| pane.id != sidebar.id)
@@ -2091,7 +2090,7 @@ fn lone_stack_member_restart_preserves_panes_above_the_caller() {
 }
 
 #[test]
-fn stack_borders_target_the_background_window() {
+fn rimz_borders_label_every_pane_in_a_background_stack_window() {
     require_tmux!();
     let server = TmuxServer::new();
     ensure_rimz_session(&server, "stacks", Some((160, 60)));
@@ -2106,6 +2105,7 @@ fn stack_borders_target_the_background_window() {
         "stacks",
         "sleep 600",
     ]);
+    ensure_rimz_session(&server, "stacks", Some((160, 60)));
     let new = stack_split(&server, &background, SplitPlacement::Stacked);
     assert_stack(
         &server,
@@ -2113,34 +2113,49 @@ fn stack_borders_target_the_background_window() {
         &background,
     );
     assert_eq!(server.display(&background, "#{pane-border-status}"), "top");
+    server.tmux(&[
+        "select-pane",
+        "-t",
+        &background,
+        "-T",
+        rimz::pane::SIDEBAR_CHROME_TITLE,
+    ]);
+    server.tmux(&["set-option", "-p", "-t", new.raw(), "@rimz_title", "@coder"]);
+    server.tmux(&["set-option", "-p", "-t", new.raw(), "@rimz_kind", "claude"]);
+    let border = |pane: &str| {
+        let output = server.output(&[
+            "display-message",
+            "-p",
+            "-t",
+            pane,
+            "#{E:pane-border-format}",
+        ]);
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_end_matches('\n')
+            .to_owned()
+    };
+    assert_eq!(border(&background), " rimz ");
+    assert_eq!(border(new.raw()), " @coder ");
     assert_eq!(
-        server.display(&background, "#{@rimz_stack_borders_owned}"),
-        "1"
+        border(&current),
+        format!(" {} ", server.display(&current, "#{pane_current_command}"))
     );
-    assert!(
-        server
-            .display(&background, "#{pane-border-format}")
-            .contains("@rimz_stack")
-    );
-    let local = server.stdout(&["show-options", "-w", "-t", &current]);
-    assert!(
-        !local.contains("pane-border-status")
-            && !local.contains("pane-border-format")
-            && !local.contains("@rimz_stack_borders_owned"),
-        "{local}"
-    );
+    for pane in [&background, &current] {
+        assert_eq!(server.display(pane, "#{@rimz_borders}"), "1");
+    }
     assert_eq!(server.display("stacks", "#{pane_id}"), current);
 }
 
 #[test]
-fn stack_borders_reapply_and_hand_back_without_touching_other_windows() {
+fn rimz_borders_reapply_and_survive_the_last_stack_member() {
     require_tmux!();
     let server = TmuxServer::new();
     let (caller, members) = stack_fixture(&server);
     assert_eq!(server.display(&caller, "#{pane-border-status}"), "top");
     let border = server.display(&caller, "#{pane-border-format}");
     assert!(
-        border.contains("@rimz_stack") && border.contains("@rimz_title"),
+        !border.contains("@rimz_stack") && border.contains("@rimz_title"),
         "{border}"
     );
     let other = server.stdout(&[
@@ -2155,19 +2170,16 @@ fn stack_borders_reapply_and_hand_back_without_touching_other_windows() {
     ]);
     ensure_rimz_session(&server, "stacks", Some((160, 60)));
     assert_eq!(server.display(&caller, "#{pane-border-status}"), "top");
-    assert_eq!(server.display(&other, "#{pane-border-status}"), "off");
+    assert_eq!(server.display(&other, "#{pane-border-status}"), "top");
     for pane in &members {
         server.tmux(&["kill-pane", "-t", pane]);
     }
-    let local = server.stdout(&["show-options", "-w", "-t", &caller]);
-    assert!(
-        !local.contains("pane-border-status") && !local.contains("pane-border-format"),
-        "{local}"
-    );
+    assert_eq!(server.display(&caller, "#{pane-border-status}"), "top");
+    assert_eq!(server.display(&caller, "#{@rimz_borders}"), "1");
 }
 
 #[test]
-fn explicit_border_off_wins_over_stack_defaults() {
+fn explicit_border_off_keeps_rimz_format_without_drawing_a_row() {
     require_tmux!();
     let server = TmuxServer::new();
     let cwd = TempDir::new().unwrap();
@@ -2193,10 +2205,11 @@ fn explicit_border_off_wins_over_stack_defaults() {
         second.raw(),
     );
     assert_eq!(server.display(&caller, "#{pane-border-status}"), "off");
+    assert_eq!(server.display(&caller, "#{@rimz_borders}"), "1");
     assert!(
-        !server
-            .stdout(&["show-options", "-w", "-t", &caller])
-            .contains("pane-border-format")
+        server
+            .display(&caller, "#{pane-border-format}")
+            .contains("@rimz_title")
     );
 }
 

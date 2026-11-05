@@ -449,6 +449,18 @@ const LEGACY_SET_KEYS: &[&str] = &[
 ];
 
 #[test]
+fn tmux_border_modes_are_editable() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("agents"),
+    ));
+    let results = ["top", "bottom", "off", "inherit"]
+        .map(|mode| editor.set("tmux.pane_border_status", mode).is_ok());
+    assert_eq!(results, [true; 4]);
+}
+
+#[test]
 fn validates_config_key_read_and_write_surfaces() {
     let dir = tempfile::tempdir().unwrap();
     let files =

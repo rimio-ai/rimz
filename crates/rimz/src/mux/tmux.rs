@@ -26,13 +26,13 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use options::{
-    stack_hook_commands, stack_window_options, tmux_extended_key_bindings, tmux_server_options,
-    tmux_session_options, tmux_terminal_features_commands, window_option_argv,
+    stack_hook_commands, tmux_extended_key_bindings, tmux_server_options, tmux_session_options,
+    tmux_terminal_features_commands, tmux_window_options, window_option_argv,
 };
 use parse::parse_terminal_features;
 
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
-use crate::config::{MultiplexerConfig, TmuxConfig};
+use crate::config::{MultiplexerConfig, TmuxConfig, TmuxPaneBorderStatus};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ScriptLine {
@@ -641,18 +641,6 @@ impl TmuxBackend {
         }
         commands.extend(tmux_extended_key_bindings(tmux));
         commands.extend(stack_hook_commands());
-        commands.push(vec![
-            "set-option".into(),
-            "-t".into(),
-            session.into(),
-            "@rimz_stack_borders".into(),
-            if tmux.pane_border_status.is_none() {
-                "1"
-            } else {
-                "0"
-            }
-            .into(),
-        ]);
         self.batch(&commands)?;
         self.apply_window_options(session, tmux)?;
         self.apply_status(session, config.status_bar);
@@ -663,7 +651,7 @@ impl TmuxBackend {
     /// keys, one independent line per window. A vanished window costs its line;
     /// room open fails only when windows were listed and none matched or applied.
     fn apply_window_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
-        let mut options = stack_window_options(config, false);
+        let mut options = tmux_window_options(config);
         // Keep the free-form format last in the script's option values.
         options.sort_by_key(|(key, _)| *key == "pane-border-format");
         // Formats resolve pane-capable options through the active pane first.
@@ -679,14 +667,17 @@ impl TmuxBackend {
             });
         let inherited_keys: Vec<_> = options
             .iter()
-            .filter(|(key, value)| value.is_none() && *key != "@rimz_stack_borders_owned")
+            .filter(|(_, value)| value.is_none())
             .map(|(key, _)| *key)
             .collect();
         let mut commands: Vec<Vec<String>> = inherited_keys
             .iter()
             .map(|key| vec!["show-options".into(), "-gwv".into(), (*key).into()])
             .collect();
-        let mut format = "#{window_id}|#{P:#{?#{@rimz_stack},1,}}".to_owned();
+        let mut format = "#{window_id}|".to_owned();
+        if config.pane_border_status == TmuxPaneBorderStatus::Inherit {
+            format.push_str("#{||:#{@rimz_borders},#{@rimz_stack_borders_owned}}");
+        }
         for key in &window_keys {
             format.push('|');
             if *key == "aggressive-resize" {
@@ -761,9 +752,7 @@ impl TmuxBackend {
             if current.len() != options.len() {
                 continue;
             }
-            let mut desired = stack_window_options(config, !fields[1].is_empty());
-            desired.sort_by_key(|(key, _)| *key == "pane-border-format");
-            let commands: Vec<_> = desired
+            let mut commands: Vec<_> = options
                 .iter()
                 .filter(|(key, value)| {
                     value
@@ -773,6 +762,17 @@ impl TmuxBackend {
                 })
                 .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(fields[0])))
                 .collect();
+            if config.pane_border_status == TmuxPaneBorderStatus::Inherit && fields[1] == "1" {
+                commands.extend(
+                    [
+                        "pane-border-status",
+                        "pane-border-format",
+                        "@rimz_borders",
+                        "@rimz_stack_borders_owned",
+                    ]
+                    .map(|key| window_option_argv(key, None, Some(fields[0]))),
+                );
+            }
             if commands.is_empty() {
                 applied += 1;
             } else {

@@ -186,9 +186,9 @@ escape_time_ms = 10                     # tmux 3.5+ default; 0 can misparse spli
 renumber_windows = true
 aggressive_resize = true
 
-# Optional: uncomment to override your ~/.tmux.conf. Left unset, RimZ leaves
-# pane borders to your tmux config or tmux's defaults.
-## pane_border_status = "top"          # "off", "top", or "bottom"
+# RimZ labels every pane; "inherit" hands borders back to your ~/.tmux.conf.
+pane_border_status = "top"           # "top" (default), "bottom", "off", or "inherit"
+# Optional: uncomment to override your ~/.tmux.conf's border line style.
 ## pane_border_lines = "heavy"         # "simple", "single", "double", or "heavy"
 
 [resume]
