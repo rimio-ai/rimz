@@ -3259,7 +3259,33 @@ upward-dependencies = [
 # with_read_memo shares proc evidence within each candidate or metrics pass (+1).
 # launched_script_command lets the resume walk read a JS launcher's argv as its script's (+1).
 # socket_inodes and socket_inodes_for_env share Linux fd ownership with remote discovery (+2).
-surface-budget = 149
+# pressure shares the cgroup-first PSI reader, Resource and its name, Pressure and PressureErr (+6).
+surface-budget = 155
+
+[[verdict]]
+kind = "item"
+key = "proc::pressure"
+reason = "Machine pressure-stall readings share one cgroup-first source rule."
+
+[[verdict]]
+kind = "item"
+key = "proc::pressure::Resource"
+reason = "The PSI reader and loop throttle share the kernel resource names."
+
+[[verdict]]
+kind = "item"
+key = "proc::pressure::Pressure"
+reason = "The PSI reader and loop throttle share the some-line averages."
+
+[[verdict]]
+kind = "item"
+key = "proc::pressure::PressureErr"
+reason = "Unreadable PSI names the last proc source and its read or parse failure."
+
+[[verdict]]
+kind = "item"
+key = "proc::pressure::read"
+reason = "Machine consumers share cgroup namespace PSI with per-resource proc fallback."
 
 [[verdict]]
 kind = "item"
