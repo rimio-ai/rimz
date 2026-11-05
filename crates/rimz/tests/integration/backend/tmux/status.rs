@@ -334,7 +334,10 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
     for mode in ["off", "compact", "full"] {
         std::fs::write(
             env.rimz_home().join("config.toml"),
-            format!("[mux]\nstatus_bar = {mode:?}\n[tmux]\nhistory_limit = 54321\n"),
+            format!(
+                "[mux]\nstatus_bar = {mode:?}\n[tmux]\nhistory_limit = 54321\n\
+                 [sidebar]\nfocus_key = 'Alt+x'\nzoom_key = 'Alt+y'\n"
+            ),
         )
         .unwrap();
         let result = env.rimz().arg("reload").output().unwrap();
@@ -347,6 +350,18 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
             server.show_option(&["-t", session], "history-limit"),
             "54321"
         );
+        let room_bin = env.store().paths().room_bin.clone();
+        let root_keys = server.list_keys("root");
+        for key in ["M-x", "M-y"] {
+            assert!(
+                root_keys.lines().any(|line| {
+                    line.split_whitespace().any(|token| token == key)
+                        && line.contains(room_bin.to_str().unwrap())
+                }),
+                "{key} must invoke the room's recorded binary {}: {root_keys}",
+                room_bin.display()
+            );
+        }
         match mode {
             "off" => assert_eq!(server.show_option(&["-t", session], "status"), "off"),
             "compact" => assert_strip(&server, session, 0, 0, 0),

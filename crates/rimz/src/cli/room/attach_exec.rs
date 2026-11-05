@@ -127,7 +127,7 @@ pub(super) fn run_attach_action(
     mode: AttachMode,
     mux: MuxName,
     session_name: &str,
-    workspace_id: Option<&WorkspaceId>,
+    context: Option<&rimz::room::RoomContext>,
 ) -> Result<()> {
     match attach_action(
         mode,
@@ -151,6 +151,7 @@ pub(super) fn run_attach_action(
             Ok(())
         }
         AttachAction::Launch => {
+            let workspace_id = context.map(|context| context.workspace_id());
             reap_remote_zellij_predecessors(mux, session_name, workspace_id);
             let supervised = std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV)
                 .is_some_and(|marker| !marker.is_empty());
@@ -160,6 +161,9 @@ pub(super) fn run_attach_action(
                 .attach_may_drop_early()
                 .then(|| backend.version().ok())
                 .flatten();
+            if let Some(context) = context {
+                context.record_attach();
+            }
             let outcome = launch_attach_command_with_bracket(
                 spec,
                 alternate_scroll_bracket_enabled(

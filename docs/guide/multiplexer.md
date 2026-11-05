@@ -59,7 +59,7 @@ On Zellij, `full` and `compact` look the same: both keep Zellij's one-row compac
 
 The sidebar's own keys fire only when the sidebar has focus, so RimZ registers two chords with the multiplexer itself. `Alt+p` focuses the sidebar and pressing it again returns you to the pane you left, which is the whole [jump loop](./sidebar.md#glance-jump-answer). `Alt+g` fullscreens the focused work pane, and picks a working sibling first when the sidebar is what has focus.
 
-tmux takes them as root-table bindings on RimZ's server; on Zellij the presence plugin installs them at runtime, so your `config.kdl` is unchanged. Either way they end with the session. `sidebar.focus_key` and `sidebar.zoom_key` change or disable them ([configuration](./configuration.md#sidebar-rendering)). Choose a chord your agents do not use, and on Zellij leave `Ctrl+g` alone unless some other chord still reaches Zellij's modes, because it is the default escape from locked mode.
+tmux takes them as root-table bindings on RimZ's server; on Zellij the presence plugin installs them at runtime, so your `config.kdl` is unchanged. `rimz reload` refreshes the chords on both backends. A changed tmux chord leaves its old root binding until the server ends, as reattach does. `sidebar.focus_key` and `sidebar.zoom_key` change or disable them ([configuration](./configuration.md#sidebar-rendering)). Choose a chord your agents do not use, and on Zellij leave `Ctrl+g` alone unless some other chord still reaches Zellij's modes, because it is the default escape from locked mode.
 
 ### Change what the room asserts
 

@@ -1347,7 +1347,7 @@ fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {
                 mode,
                 context.mux_name(),
                 context.session_name(),
-                Some(context.workspace_id()),
+                Some(&context),
             )
         }
         ReadyRoom::External {

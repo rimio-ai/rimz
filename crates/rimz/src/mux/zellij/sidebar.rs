@@ -186,6 +186,9 @@ impl ZellijBackend {
 
         let record_birth_owners = || -> Result<()> {
             let runtime = self.runtime_paths_for_workspace(opts.workspace_id.clone())?;
+            if let Err(err) = super::super::room_settings::record_birth(&runtime, &opts.config) {
+                tracing::warn!(error = %err, "recording room birth settings failed");
+            }
             super::tab_owner::clear(&runtime)?;
             self.record_layout_tab_owners(opts, daemon)
         };
@@ -208,8 +211,10 @@ impl ZellijBackend {
                  before dropping the temp layout",
             );
             self.delete_session(&opts.session_name)?;
-            spawn()?;
-            record_birth_owners()?;
+            let created = spawn()?;
+            if created {
+                record_birth_owners()?;
+            }
             self.ensure_birth_presence_plugin(&presence)?;
             if self.wait_for_sidebar_layout(&opts.session_name) {
                 self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);

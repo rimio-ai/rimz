@@ -348,6 +348,11 @@ impl ZellijBackend {
         };
         match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
             Ok(runtime) => {
+                if let Err(err) =
+                    super::super::room_settings::record_live(&runtime, &opts.session_options)
+                {
+                    tracing::debug!(error = %err, "recording live room settings failed");
+                }
                 if let Err(err) = write_presence_desired(&runtime, &desired) {
                     tracing::debug!(
                         session = %opts.session_name,

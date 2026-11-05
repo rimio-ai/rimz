@@ -1092,7 +1092,13 @@ upward-dependencies = [
 # Team::leader_role shares the declared-or-first-role fallback with launch reminders and nudges (+1).
 # KeepWarmSeat and declared_horizon share the declared hold rule with launch compilation (+2).
 # MuxStatusBar carries the backend-neutral status mode to room setup (+1).
-surface-budget = 269
+# MuxConfig lets the settings class table exhaustively account for backend selection (+1).
+surface-budget = 270
+
+[[verdict]]
+kind = "item"
+key = "config::mux::MuxConfig"
+reason = "The mux-owned settings class table destructures every field so new settings cannot go unclassified."
 
 [[verdict]]
 kind = "item"
@@ -3052,7 +3058,63 @@ path = "crates/rimz/src/mux"
 # TmuxBackend::set_pane_kind publishes the exec wrapper's provider for border coloring (+1).
 # ClientPresence::last_input_ms and ClientView::attended_until share per-client input clocks (+2).
 # write_client_input and ClientInputWriteError share plugin input publication with the host (+2).
-surface-budget = 305
+# Room settings expose their record writers, diff and vocabulary; key registration is shared (+12).
+surface-budget = 317
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings"
+reason = "One owner holds the session-lifetime settings record, apply classes and pending diff."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::AppliesWhen"
+reason = "Reload presents pending settings by their room-start or attach boundary."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::PendingSetting"
+reason = "The CLI renders configured and recorded scalar values without deciding drift."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::PendingSettings"
+reason = "Reload distinguishes tracked settings from rooms that predate the record."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::SettingsWriteErr"
+reason = "Birth, hand-off and attach report bounded record-lock and atomic-write failures."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::record_birth"
+reason = "Zellij creation records only sessions created by this process."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::record_live"
+reason = "Presence hand-offs preserve birth and client assertions while recording live keys."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::record_attach"
+reason = "Managed room attach records exactly the flags the Zellij client receives."
+
+[[verdict]]
+kind = "item"
+key = "mux::room_settings::pending"
+reason = "Crate-internal reload reads the mux-owned record rather than duplicating settings classification."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_key::register_room_keys"
+reason = "Birth and tmux reload bind configured chords through the same body."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::zellij_client_options"
+reason = "Attach argv and its record share one resolved list of client assertions."
 
 [[verdict]]
 kind = "item"
@@ -3141,7 +3203,8 @@ path = "crates/rimz/src/mux/zellij"
 # WidthMemo supplies cached per-pane geometry with live freshness checks (+1).
 # Stable tab identity, five ownership-cache operations, session runtime lookup and layout birth recording (+8).
 # write_client_input and ClientInputWriteError retain input independently of topology election (+2).
-surface-budget = 62
+# The settings record shares typed option values and the client option projection (+2).
+surface-budget = 64
 
 [[verdict]]
 kind = "item"
@@ -3390,7 +3453,8 @@ upward-dependencies = [
 # Account-switch receipts count only rooms following the machine default (+1).
 # BirthAdmission and standalone admit_birth replace context admission across startup prompts (+1 net).
 # RoomContext::with_agent_shell_persistence carries typed birth intent (+1).
-surface-budget = 70
+# RoomContext::record_attach stamps client assertions only at managed launch (+1).
+surface-budget = 71
 
 [[verdict]]
 kind = "item"
