@@ -154,7 +154,7 @@ Each room holds one home per run, `owned/workflows/<run-id>/`. All its paths com
 
 ```text
 record.json        current run, version 1 or 2
-journal.jsonl      append-only transition evidence
+journal.jsonl      append-only evidence: transitions, and a row per check evaluation, so a polling check grows it on every recheck
 workflow.toml      sealed specification bytes
 work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
