@@ -532,7 +532,7 @@ fn active_group_tiering_floats_attention_and_tails_external() {
 }
 
 #[test]
-fn git_rung_does_not_order_active_worktree_groups() {
+fn landed_active_groups_follow_unlanded_groups() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("unknown", "/repo/unknown", AgentStatus::Idle, 1_000),
         agent_in("merged", "/repo/merged", AgentStatus::Idle, 1_000),
@@ -558,13 +558,13 @@ fn git_rung_does_not_order_active_worktree_groups() {
 
     assert_eq!(
         labels(&snapshot),
-        vec!["clean", "dirty", "merged", "unknown"],
-        "equal launch times use labels, not git rungs"
+        vec!["clean", "dirty", "unknown", "merged"],
+        "unlanded groups use labels at equal launch times, ahead of landed work"
     );
 }
 
 #[test]
-fn newest_registration_precedes_git_for_working_and_success_groups() {
+fn unlanded_success_precedes_newer_landed_working_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("success", "/repo/success", AgentStatus::Success, 1_000),
         agent_in("running", "/repo/working", AgentStatus::Running, 2_000),
@@ -582,9 +582,9 @@ fn newest_registration_precedes_git_for_working_and_success_groups() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["working", "success"]);
+    assert_eq!(labels(&snapshot), vec!["success", "working"]);
     assert!(
-        snapshot.worktree_groups[0].inactive.is_none(),
+        snapshot.worktree_groups[1].inactive.is_none(),
         "a running member revives a git-finished line of work"
     );
 }
@@ -604,10 +604,10 @@ fn equal_registration_times_use_labels_not_git_or_calm_state() {
 }
 
 #[test]
-fn newer_success_group_leads_without_folding_a_fresh_merge() {
+fn unlanded_success_leads_without_folding_a_newer_fresh_merge() {
     let mut snapshot = ranked_snapshot(vec![
-        agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
-        agent_in("clean", "/repo/clean", AgentStatus::Success, 2_000),
+        agent_in("merged", "/repo/merged", AgentStatus::Success, 2_000),
+        agent_in("clean", "/repo/clean", AgentStatus::Success, 1_000),
     ]);
     for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
@@ -781,10 +781,10 @@ fn landed_group_folds_by_engagement_and_attention_revives_it() {
 }
 
 #[test]
-fn pristine_and_freshly_merged_groups_follow_registration_order() {
+fn pristine_group_precedes_a_newer_freshly_merged_group() {
     let mut snapshot = ranked_snapshot(vec![
-        agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
-        agent_in("pristine", "/repo/pristine", AgentStatus::Success, 2_000),
+        agent_in("merged", "/repo/merged", AgentStatus::Success, 2_000),
+        agent_in("pristine", "/repo/pristine", AgentStatus::Success, 1_000),
     ]);
     for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
@@ -821,7 +821,7 @@ fn process_only_group_tails_calm_agent_groups() {
 }
 
 #[test]
-fn fresh_merged_pr_does_not_sink_worktree_group() {
+fn fresh_merged_pr_sinks_worktree_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
@@ -837,7 +837,7 @@ fn fresh_merged_pr_does_not_sink_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["done", "working"]);
+    assert_eq!(labels(&snapshot), vec!["working", "done"]);
     assert!(
         snapshot
             .worktree_groups
@@ -847,7 +847,7 @@ fn fresh_merged_pr_does_not_sink_worktree_group() {
 }
 
 #[test]
-fn fresh_closed_pr_does_not_sink_worktree_group() {
+fn fresh_closed_pr_sinks_worktree_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
@@ -863,7 +863,7 @@ fn fresh_closed_pr_does_not_sink_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["done", "working"]);
+    assert_eq!(labels(&snapshot), vec!["working", "done"]);
     assert!(
         snapshot
             .worktree_groups
@@ -891,11 +891,11 @@ fn open_pr_does_not_sink_calm_worktree_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["done", "open", "working"]);
+    assert_eq!(labels(&snapshot), vec!["open", "working", "done"]);
 }
 
 #[test]
-fn fresh_merged_pr_does_not_sink_git_backed_channel_group() {
+fn fresh_merged_pr_sinks_git_backed_channel_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done-idle", "/repo/done-channel", AgentStatus::Idle, 1_000),
         agent_in(
@@ -917,13 +917,90 @@ fn fresh_merged_pr_does_not_sink_git_backed_channel_group() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), vec!["done-channel", "working-channel"]);
+    assert_eq!(labels(&snapshot), vec!["working-channel", "done-channel"]);
     assert!(
         snapshot
             .worktree_groups
             .iter()
             .all(|g| g.inactive.is_none())
     );
+}
+
+#[test]
+fn inactive_groups_ignore_landedness_and_keep_recency_order() {
+    for landed_is_newer in [false, true] {
+        let mut agents = vec![
+            agent_in("landed", "/repo/landed", AgentStatus::Success, 0),
+            agent_in("unlanded", "/repo/unlanded", AgentStatus::Idle, 0),
+        ];
+        for agent in &mut agents {
+            agent.registered_at = Some(ago(100_000));
+            agent.last_activity = ago(if (agent.agent_id == "landed") == landed_is_newer {
+                90_001
+            } else {
+                90_002
+            });
+        }
+        let mut snapshot = ranked_snapshot(agents);
+        for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+            group.clean = Some(true);
+            if group.label == "landed" {
+                group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+            }
+        }
+        snapshot.sort_groups_for_presentation();
+
+        let expected = if landed_is_newer {
+            ["landed", "unlanded"]
+        } else {
+            ["unlanded", "landed"]
+        };
+        assert_eq!(labels(&snapshot), expected);
+        assert!(
+            snapshot
+                .worktree_groups
+                .iter()
+                .all(|group| group.inactive.is_some())
+        );
+    }
+}
+
+#[test]
+fn landed_ask_keeps_urgency_ahead_of_unlanded_and_root_groups() {
+    let mut snapshot = ranked_snapshot_in(
+        vec![
+            agent_in("root", "/repo", AgentStatus::Idle, 1_000),
+            agent_in("calm", "/repo/calm", AgentStatus::Idle, 1_000),
+            agent_in("fresh-ask", "/repo/fresh", AgentStatus::Waiting, 1_000),
+            agent_in("landed-ask", "/repo/landed", AgentStatus::Waiting, 1_000).active_ago(1800),
+        ],
+        Some("/repo"),
+    );
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        if group.label == "landed" {
+            group.clean = Some(true);
+            group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), ["landed", "fresh", "repo", "calm"]);
+    assert!(snapshot.worktree_groups[2].root_lane);
+}
+
+#[test]
+fn dirty_merged_group_is_unlanded() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("dirty", "/repo/dirty", AgentStatus::Success, 1_000),
+        agent_in("clean", "/repo/clean", AgentStatus::Success, 2_000),
+    ]);
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        group.clean = Some(group.label == "clean");
+        group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), ["dirty", "clean"]);
 }
 
 #[test]

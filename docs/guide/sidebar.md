@@ -238,7 +238,7 @@ Everything else comes below in the calm zone: running, done, idle, sleeping, and
 
 Within a band, prompts, clean finishes, entering or leaving a provider pause, and read receipts do not reshuffle calm cards. A second ask, or a question becoming a failure, keeps its place among the attention cards. Read state affects emphasis and the jump inbox, not this order.
 
-Between groups, any project group holding an ask or failure leads, ranked by urgency. The main checkout's group stays directly below those groups, including when it holds only a shell. With its own ask or failure it ranks among the actionable groups instead. A named channel merely called `main` gets no pin. The remaining active groups sort by their newest agent's launch, newest first, whether working, idle or parked.
+Between groups, any project group holding an ask or failure leads, ranked by urgency. The main checkout's group stays directly below those groups, including when it holds only a shell. With its own ask or failure it ranks among the actionable groups instead. A named channel merely called `main` gets no pin. The remaining active groups put unlanded work before landed work, then sort by their newest agent's launch within each set, newest first, whether working, idle or parked.
 
 ### Time reshapes the order
 
@@ -258,7 +258,7 @@ Cards launched together stay together in layout order, including roleless cells,
 
 ### Newest groups first
 
-Groups holding an ask or failure lead, followed by the main checkout. Other active groups sort by their newest agent's launch, newest first; a new agent lifts an older group. Groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by their latest agent activity, newest first. Process activity counts only in groups without agents. Landed means a merged or closed pull request, or work the trunk already contains, with a clean or unknown tree state. A dirty merged checkout uses the unlanded window; a pristine fork is not landed.
+Groups holding an ask or failure lead by urgency, followed by the main checkout. Other active groups put unlanded work before landed work; running members do not exempt landed work. Within each set, groups sort by their newest agent's launch, newest first; a new agent lifts an older group. Groups without agents follow by newest pane creation. At equal urgency within an active tier, unlanded groups lead landed ones, and groups with rows precede rowless workflow groups within each set. Rowless groups sort by newest node entry. Inactive groups with rows sort by their latest agent activity, newest first, regardless of landedness. Process activity counts only in groups without agents. Landed means a merged or closed pull request, or work the trunk already contains, with a clean or unknown tree state. A dirty merged checkout is unlanded; a pristine fork is not landed.
 
 Newly inactive work with cards waits outside the fold while the layout is held or you are viewing one of its cards; a rowless workflow group has no viewed members to defer. It folds on the first pass after you move away and the hold releases. A new launch or prompt revives it immediately, even during a hold. Viewing work already inside the fold opens its cards where they are, without changing its position or the count.
 

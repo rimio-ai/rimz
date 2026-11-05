@@ -1,9 +1,41 @@
-//! `rimz agents list` roster grouping: the same worktree pods and attention-first
-//! order the sidebar paints, but uncapped over the whole roster.
+//! `rimz agents list` roster grouping: shared group ranks and snapshot attention
+//! order, uncapped and without renderer-only cohort or workflow-owner sections.
 
 use super::*;
 
 use crate::store::snapshot::group_live_agents_by_worktree;
+
+#[test]
+fn listing_roster_sinks_landed_groups_using_published_identity_keys() {
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("landed", "/repo/landed", AgentStatus::Success, 2_000).branch("feature"),
+        agent_in("unlanded", "/repo/unlanded", AgentStatus::Idle, 1_000).branch("feature"),
+    ]);
+    let landed = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|group| group.key == "/repo/landed")
+        .expect("published landed group");
+    landed.clean = Some(true);
+    landed.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
+    let refs = snapshot.agents.iter().collect::<Vec<_>>();
+
+    let listing = group_live_agents_by_worktree(&refs, &snapshot);
+
+    assert_eq!(
+        listing
+            .iter()
+            .map(|group| group.label.as_str())
+            .collect::<Vec<_>>(),
+        ["feature", "feature"]
+    );
+    assert_eq!(
+        listing
+            .iter()
+            .map(|group| group.key.as_str())
+            .collect::<Vec<_>>(),
+        ["/repo/unlanded", "/repo/landed"]
+    );
+}
 
 #[test]
 fn listing_roster_mirrors_newest_first_groups_independent_of_working_state() {
