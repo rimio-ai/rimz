@@ -55,7 +55,7 @@ The two ask tools ride the broad `PreToolUse` hook and classify from `tool_name`
 
 ### Native keys
 
-Every signal derived from a `PreToolUse` or a `PostToolUse` carries that payload's `tool_use_id` as its [native key](./model.md#waiting-and-asks). Claude stamps one id per tool call, identical on the call's two edges and distinct across parallel calls (observed on Claude Code 2.1.278). A question the user has not answered therefore survives the tool calls Claude runs in parallel with the picker, and clears on its own `PostToolUse`. A build that omits the field degrades to the keyless behaviour, where any tool edge clears the wait.
+Every signal derived from a `PreToolUse` or a `PostToolUse` carries that payload's `tool_use_id` as its [native key](./model.md#waiting-and-asks). Claude stamps one id per tool call, identical on the call's two edges and distinct across parallel calls (observed on Claude Code 2.1.278). A question the user has not answered therefore survives the tool calls Claude runs in parallel with the picker, and clears on its own `PostToolUse`. An ask whose payload omits the field degrades to the keyless behaviour, where any tool edge clears the wait. A tool payload without the field cannot clear an already keyed ask.
 
 `PermissionRequest` has no `tool_use_id` on the wire and stays keyless. Its clearing edge is the approved tool's own keyed `PostToolUse`. That edge still clears it, because the sibling rule holds only a wait whose open ask is keyed.
 

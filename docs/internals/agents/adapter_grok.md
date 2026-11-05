@@ -84,6 +84,8 @@ An ask opens only on an exact pair of `notificationType` and label, where the la
 
 A near match opens nothing. An `agent_error` notification opens no ask and records no turn error, because Grok can recover within the same turn. An unrecovered failure reaches `StopFailure`, which records the turn error. Human answers stay in Grok's native pane, and a `Notification` reply is always empty.
 
+An ask carries `promptId` as its native key, while tools carry `toolUseId`. Those keys do not match, so a keyed ask holds until a turn boundary; a tool without a key also leaves it open ([waiting and asks](./model.md#waiting-and-asks)).
+
 A root `idle_prompt` notification with a parseable timestamp writes an `Interrupted` context settle marker and no lifecycle report. The card rests only when that timestamp is newer than its last activity, so a delayed older notification cannot settle a newer prompt. A child notification, or one with a missing or invalid timestamp, attaches nothing. Local context refresh preserves the marker, and later hook activity clears it. The comparison holds because Grok and its feed child read the same host clock. One race remains: when Grok builds the envelope after a new prompt has already reached ingress, the card reads idle until the next hook.
 
 ### Hook stdout

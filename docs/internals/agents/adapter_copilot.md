@@ -59,7 +59,7 @@ Every `postToolUse` and `postToolUseFailure` clears Waiting, even for a read-onl
 
 No Copilot hook carries a tool call ID, and a `permissionRequest` narrows `toolInput` to `{command}` while the same call's post-tool `toolArgs` adds more fields. `NormalizedToolCalls::command_key` therefore keys a call by the tool name plus a SHA-256 digest of the `command` argument. It returns no key for a batch or for a call without a `command` string.
 
-A `permissionRequest` with a key opens a keyed ask. While it is open, a post-tool edge with a different key leaves the row Waiting (`agents/lifecycle.rs`, "sibling tool completed while a keyed ask is open"). A post-tool edge with the same key, or with no key, clears it. The key is the command text, so two calls that run a byte-identical command clear each other's asks.
+A `permissionRequest` with a key opens a keyed ask. While it is open, a tool edge with a different key or no key leaves the row Waiting (`crates/rimz/src/agents/lifecycle.rs::step`). A post-tool edge with the same key clears it. The key is the command text, so two calls that run a byte-identical command clear each other's asks. A denied call fires no post-tool hook and holds attention, `rimz asks`, and parked messages until `agentStop`, `preCompact`, `sessionEnd`, or the next prompt.
 
 ### Turn errors
 
@@ -82,7 +82,7 @@ The first join happens in `cli/hooks/lifecycle/observe.rs::correlate_subagent_ob
 
 Once joined, the stored parent carries every later child edge, and the child's `postToolUse` updates the child card. The child's `agentStop` precedes `subagent.completed`. The parent's next `postToolUse` or `agentStop` reads the completed records (`CopilotAdapter::spawned_subagents`) and reconciles the completion model and exact `totalTokens` onto the established child. That pass never changes the child's parent, task, verdict, or pane, and a repeated pass is a no-op.
 
-A child's `permissionRequest` carries the parent `sessionId`, so the wait lands on the parent card. When the child's post-tool edge carries that ask's command key, Store appends a derived `SubagentAskAnswered` edge to the parent and clears the wait (`store/writer/lifecycle.rs`). Any other child call leaves it open. A denied child call fires no post-tool hook, so that wait clears at the parent's next hook, normally the `task` call's `postToolUse`.
+A child's `permissionRequest` carries the parent `sessionId`, so the wait lands on the parent card. When the child's post-tool edge carries that ask's command key, Store appends a derived `SubagentAskAnswered` edge to the parent and clears the wait (`store/writer/lifecycle.rs`). Any other child call leaves it open. A denied child call fires no post-tool hook, so that keyed wait holds until a parent turn boundary, not the `task` call's unrelated `postToolUse`.
 
 ## Install
 
@@ -263,7 +263,7 @@ A finalized session's cached entries keep their dollars until a `SPENDING_CACHE_
 - The batch matcher is unverified. A `toolCalls` batch has no top-level `toolName`, so the `ask_user` matcher may miss a batch that contains a question.
 - Copilot's sandbox is unverified. If it blocks RimZ's home, the `|| true` guard keeps the tool from being denied, but card edges can be lost. A `sandbox.userPolicy` grant is a likely fix, not a verified one.
 - Account dollars are unavailable. RimZ does not read keychains or browser cookies, write plaintext `copilotTokens`, query billing budgets, or synthesize extra-credit balances. An account on the legacy premium-request platform is billed per request, so its credit-based dollars are a list-rate figure.
-- A child's permission ask can hold the parent. An approved call with a `command` argument clears at the child's matching post-tool edge. A denied call, or an approved tool without a `command`, holds the parent Waiting until the parent's next hook.
+- A child's permission ask can hold the parent. An approved call with a `command` argument clears at the child's matching post-tool edge. A denied keyed call holds the parent Waiting until a parent turn boundary. A keyless ask cannot clear from a child edge and waits for the parent's own activity.
 - Yolo has no policy preflight. Managed `permissions.disableBypassPermissionsMode = "disable"` suppresses `--allow-all`, so a `copilot-yolo` launch under that policy runs with normal permission prompts instead of failing at entry. The fail-fast fix resolves the merged policy at launch and refuses an unavailable bypass, and it waits on a merged-policy read.
 - Native `-p` is not adopted. Copilot's non-interactive mode would add a second supervised-run backend and remove the pane's interactive answer surface.
 - There is no default context window. `default_context_window` is `None` because the window depends on the live model and the `--context` tier, and the statusline's window size is authoritative.

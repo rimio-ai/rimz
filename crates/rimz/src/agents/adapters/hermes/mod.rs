@@ -262,7 +262,7 @@ impl HookCapability for HermesAdapter {
                 mutates: self.spec().tool_mutates(payload),
                 edits: self.spec().tool_edits_files(payload),
                 name: optional_payload_string(payload, &["tool_name"]),
-                // Keyless tools clear keyed asks. Only the human-input resolve
+                // This key never names a human-input request; only its resolve
                 // bracket may close Hermes's native prompt, not a sibling tool.
                 native_key: Some("hermes:post_tool_call".into()),
                 turn_id: None,

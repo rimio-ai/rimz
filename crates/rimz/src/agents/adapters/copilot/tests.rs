@@ -187,6 +187,55 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
 }
 
 #[test]
+fn keyed_permission_waits_for_its_command_or_the_turn_end() {
+    let ask = observation(
+        "permissionRequest",
+        json!({"sessionId":"s","toolName":"bash","toolInput":{"command":"cargo test"}}),
+    );
+    let LifecycleSignal::AwaitingInput {
+        native_key: Some(key),
+        ..
+    } = &ask.signal
+    else {
+        panic!("keyed permission: {:?}", ask.signal);
+    };
+    let waiting = step(None, None, PriorTurnIds::default(), &ask.signal).next;
+    let signals = [
+        observation("preToolUse", json!({"sessionId":"s","toolName":"view"})).signal,
+        observation(
+            "postToolUse",
+            json!({
+                "sessionId": "s",
+                "toolCalls": [
+                    {"name":"bash","args":{"command":"cargo test"}},
+                    {"name":"view"}
+                ]
+            }),
+        )
+        .signal,
+        observation(
+            "postToolUse",
+            json!({"sessionId":"s","toolName":"bash","toolArgs":{"command":"cargo test"}}),
+        )
+        .signal,
+        observation("agentStop", json!({"sessionId":"s"})).signal,
+    ];
+    let actual = signals.map(|signal| {
+        let transition = step(Some(&waiting), Some(key), PriorTurnIds::default(), &signal);
+        (transition.next.status, transition.waiting_cleared)
+    });
+    assert_eq!(
+        actual,
+        [
+            (AgentStatus::Waiting, false),
+            (AgentStatus::Waiting, false),
+            (AgentStatus::Running, true),
+            (AgentStatus::Success, true),
+        ]
+    );
+}
+
+#[test]
 fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
     let mut state = step(
         None,
