@@ -437,7 +437,7 @@ jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,l
 rz sidebar mark-read '@coder#probe'
 ```
 
-After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the stub's cache clock away for the unresolved-lifetime case.
+After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` keeps the token-bearing stub's age muted, without a cache line or expired meter, for the unresolved-lifetime case.
 
 ### Hold a card in the compaction gap with an estimate
 
@@ -666,7 +666,7 @@ A card's cache-age pin and its `cache expires in Nm` line move with the agent's 
 rz config set harness.prompt_cache_ttl.claude 24m
 ```
 
-With a 24-minute lifetime the band starts at 12 minutes quiet (half the lifetime, which comes before its last ten minutes) and the cache expires at 24. Prime the agent as that section does: a SessionStart, then `UserPromptSubmit` and `Stop` for the same session. Select the card with the sidebar's Click command so its stats and cache line show. Confirm that the card's row reads `cache.ceiling_secs` 1440 ([Inspect the data behind a card](#inspect-the-data-behind-a-card)), then run Look and Capture from a detached script at each quiet age you check, as the time rules there say. The pin stays muted before 12 minutes. From 12 it turns yellow and the countdown line appears, it is orange near 18 and red near 24, and past 24 it keeps its hour-scale face in greyed red, with `◉ cache expired` on the cache line.
+With a 24-minute lifetime the band starts at 12 minutes quiet (half the lifetime, which comes before its last ten minutes) and the cache expires at 24. Prime the agent as that section does: a SessionStart, then `UserPromptSubmit`, the statusline feed with context tokens, and `Stop` for the same session. Without the statusline feed the stub draws `▢` and shows no cache clock. Select the card with the sidebar's Click command so its stats and cache line show. Confirm that the card's row reads `cache.ceiling_secs` 1440 ([Inspect the data behind a card](#inspect-the-data-behind-a-card)), then run Look and Capture from a detached script at each quiet age you check, as the time rules there say. The pin stays muted before 12 minutes. From 12 it turns yellow and the countdown line appears, it is orange near 18 and red near 24, and past 24 it keeps its hour-scale face in greyed red, with `◉ cache expired` on the cache line.
 
 ## Capture a CLI frame at a chosen size
 

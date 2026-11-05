@@ -342,13 +342,14 @@ fn assert_cache_notice_anchor(
     snapshot.theme.display.card_density = density;
     let row = snapshot.rows_mut().find(|row| row.id == "codex-0").unwrap();
     row.last_activity = fixed_now() - Duration::from_secs(1801);
-    row.as_agent_mut().unwrap().cache =
-        expired_cache.then_some(crate::store::snapshot::CacheClock {
-            ceiling_secs: 1800,
-            last_request_at: Some(fixed_now() - Duration::from_secs(1801)),
-            warm_until: Some(fixed_now() - Duration::from_secs(1)),
-            rewarm_cost_usd: None,
-        });
+    let card = row.as_agent_mut().unwrap();
+    card.usage.context_pct = Some(1);
+    card.cache = expired_cache.then_some(crate::store::snapshot::CacheClock {
+        ceiling_secs: 1800,
+        last_request_at: Some(fixed_now() - Duration::from_secs(1801)),
+        warm_until: Some(fixed_now() - Duration::from_secs(1)),
+        rewarm_cost_usd: None,
+    });
     let mut ui = ViewState {
         scroll_offset: offset,
         ..Default::default()

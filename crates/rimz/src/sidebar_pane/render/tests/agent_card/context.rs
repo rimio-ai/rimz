@@ -57,6 +57,22 @@ fn half_hour_cache() -> CacheClock {
     }
 }
 
+fn empty_cache_snapshot(
+    quiet_secs: u64,
+    cache: Option<CacheClock>,
+    measured: bool,
+) -> SidebarSnapshot {
+    let mut snapshot = cache_meter_snapshot(quiet_secs, cache);
+    let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.context.as_mut().unwrap().tokens = measured.then_some(AgentTokenUsage {
+        context_window_size: Some(100_000),
+        used_percentage: Some(0),
+        current_context_tokens: Some(0),
+        ..Default::default()
+    });
+    snapshot
+}
+
 #[test]
 fn compaction_gap_hides_cache_guidance_at_every_density_and_tier() {
     let theme = Theme::fixed(false);
@@ -87,10 +103,71 @@ fn compaction_gap_hides_cache_guidance_at_every_density_and_tier() {
 }
 
 #[test]
-fn compaction_gap_mutes_age_without_resetting_elapsed_time_or_overriding_a_hold() {
+fn compaction_gap_hides_age_even_during_a_hold() {
     let theme = Theme::fixed(false);
-    for minutes in [20, 40] {
-        let snapshot = cache_meter_snapshot_with_gap(
+    for unmeasured in [false, true] {
+        for held in [false, true] {
+            let mut snapshot = cache_meter_snapshot_with_gap(
+                40 * 60,
+                Some(CacheClock {
+                    warm_until: held.then_some(fixed_now() + Duration::from_secs(600)),
+                    ..half_hour_cache()
+                }),
+                true,
+            );
+            let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+            card.compacted_unmeasured = unmeasured;
+            if unmeasured {
+                card.context
+                    .as_mut()
+                    .unwrap()
+                    .tokens
+                    .as_mut()
+                    .unwrap()
+                    .current_usage = None;
+                card.usage.context_pct = Some(40);
+                card.usage.total_tokens = Some(40_000);
+            }
+            for width in [32, 45, 46, 47, 58] {
+                let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                let text = line_texts(&lines).join("\n");
+                assert!(!text.contains("40m"), "width {width}, held {held}: {text}");
+                if unmeasured && width < 46 {
+                    let meter = lines
+                        .iter()
+                        .find(|line| {
+                            line.to_string()
+                                .contains(theme.glyph(GlyphRole::MeterCompacted))
+                        })
+                        .unwrap();
+                    let reference = cache_meter_snapshot(40 * 60, None);
+                    let reference = group_lines_at_width(&reference, &theme, 0, width);
+                    let reference = reference
+                        .iter()
+                        .find(|line| {
+                            line.to_string()
+                                .contains(theme.glyph(GlyphRole::MeterContextFull))
+                        })
+                        .unwrap();
+                    let percent_column = |line: &Line<'_>| {
+                        line.to_string().chars().position(|ch| ch == '%').unwrap()
+                    };
+                    assert_eq!(
+                        percent_column(meter),
+                        percent_column(reference),
+                        "a no-cache gap gives the age slot back to the bar"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compaction_gap_mutes_the_stale_identity_age() {
+    let theme = Theme::fixed(false);
+    for minutes in [20, 40, 80] {
+        let mut snapshot = cache_meter_snapshot_with_gap(
             80 * 60,
             Some(CacheClock {
                 last_request_at: Some(fixed_now() - Duration::from_secs(minutes * 60)),
@@ -98,51 +175,21 @@ fn compaction_gap_mutes_age_without_resetting_elapsed_time_or_overriding_a_hold(
             }),
             true,
         );
+        snapshot.theme.display.stale_after_secs = 600;
         for width in [32, 45, 46, 47, 58] {
-            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
-            let pin = lines
+            let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+            let age = if minutes == 80 {
+                "1h".to_owned()
+            } else {
+                format!("{minutes}m")
+            };
+            let identity_age = lines
                 .iter()
                 .flat_map(|line| &line.spans)
-                .find(|span| span.content.contains(&format!("{minutes}m")))
-                .expect("the age pin keeps the later cache-request anchor");
-            assert_eq!(pin.style.fg, theme.muted().fg, "width {width}: {pin:?}");
-            assert!(
-                !pin.content.contains(theme.glyph(GlyphRole::ClockOver)),
-                "{pin:?}"
-            );
+                .find(|span| span.content.trim() == age)
+                .expect("the stale identity age keeps the later cache-request anchor");
+            assert_eq!(identity_age.style.fg, theme.muted().fg, "width {width}");
         }
-    }
-    let held = cache_meter_snapshot_with_gap(
-        50 * 60,
-        Some(CacheClock {
-            warm_until: Some(fixed_now() + Duration::from_secs(600)),
-            last_request_at: Some(fixed_now() - Duration::from_secs(600)),
-            ..half_hour_cache()
-        }),
-        true,
-    );
-    let lines = group_lines_at_width(&held, &theme, 0, 58);
-    let pin = lines
-        .iter()
-        .flat_map(|line| &line.spans)
-        .find(|span| span.content.contains("10m"))
-        .expect("a held gap counts from the latest cache ping");
-    assert_eq!(pin.style.fg, theme.good(Modifier::empty()).fg);
-}
-
-#[test]
-fn compaction_gap_mutes_the_stale_identity_age() {
-    let theme = Theme::fixed(false);
-    let mut snapshot = cache_meter_snapshot_with_gap(80 * 60, Some(half_hour_cache()), true);
-    snapshot.theme.display.stale_after_secs = 600;
-    for width in [32, 45, 46, 47, 58] {
-        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
-        let identity_age = lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .find(|span| span.content.trim() == "1h")
-            .expect("the stale identity line keeps its own activity age");
-        assert_eq!(identity_age.style.fg, theme.muted().fg, "width {width}");
     }
 }
 
@@ -675,49 +722,160 @@ fn lapsed_hold_uses_the_latest_cache_request_and_live_hold_needs_only_its_horizo
 }
 
 #[test]
-fn expired_empty_context_meter_stays_empty() {
+fn empty_context_meter_has_no_cache_clock() {
     let theme = Theme::fixed(false);
-    let mut expired = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
-    let card = std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut expired.worktree_groups)[0].rows,
-    )[0]
-    .as_agent_mut()
-    .unwrap();
-    let tokens = card.context.as_mut().unwrap().tokens.as_mut().unwrap();
-    tokens.used_percentage = Some(0);
-    tokens.current_usage = Some(AgentCurrentUsage::default());
-    let empty = cache_meter_line(&expired, &theme);
-    assert!(
-        empty
-            .to_string()
-            .contains(theme.glyph(GlyphRole::MeterContextEmpty))
-    );
-    assert!(
-        !empty
-            .to_string()
-            .contains(theme.glyph(GlyphRole::MeterBarFilled))
-    );
-    assert!(
-        !empty
-            .to_string()
-            .contains(theme.glyph(GlyphRole::MeterBarHalf))
-    );
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut expired.worktree_groups)[0].rows)
-        [0]
-    .as_agent_mut()
-    .unwrap()
-    .cache = None;
-    let mut expected = meter_fill(&cache_meter_line(&expired, &theme));
-    expected
-        .iter_mut()
-        .find(|span| span.content == theme.glyph(GlyphRole::MeterContextEmpty))
-        .unwrap()
-        .style = theme.style(theme.component(Component::CacheExpired), Modifier::empty());
-    assert_eq!(
-        meter_fill(&empty),
-        expected,
-        "only the hollow head changes tone"
-    );
+    for measured in [true, false] {
+        for minutes in [20, 40] {
+            for cache in [
+                Some(half_hour_cache()),
+                Some(CacheClock {
+                    warm_until: Some(fixed_now() + Duration::from_secs(600)),
+                    ..half_hour_cache()
+                }),
+                None,
+            ] {
+                let mut snapshot = empty_cache_snapshot(minutes * 60, cache, measured);
+                for density in [
+                    crate::config::CardDensityMode::Auto,
+                    crate::config::CardDensityMode::Expanded,
+                    crate::config::CardDensityMode::Compact,
+                ] {
+                    snapshot.theme.display.card_density = density;
+                    for width in [32, 45, 46, 47, 58] {
+                        let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                        let text = line_texts(&lines).join("\n");
+                        assert!(
+                            !text.contains(&format!("{minutes}m")),
+                            "width {width}: {text}"
+                        );
+                        assert!(!text.contains("expire"), "width {width}: {text}");
+                        let meter = lines
+                            .iter()
+                            .find(|line| {
+                                line.to_string()
+                                    .contains(theme.glyph(GlyphRole::MeterContextEmpty))
+                            })
+                            .unwrap();
+                        assert!(
+                            meter.spans.iter().all(|span| span.style.fg
+                                != Some(theme.component(Component::CacheExpired))),
+                            "{meter:?}"
+                        );
+                        let meter = meter.to_string();
+                        let percent = meter.chars().position(|ch| ch == '%').unwrap();
+                        assert_eq!(percent, width - if width >= 46 { 8 } else { 2 }, "{meter}");
+                        if width >= 46 {
+                            assert!(
+                                meter
+                                    .chars()
+                                    .skip(percent + 1)
+                                    .take(6)
+                                    .all(char::is_whitespace),
+                                "the wide age slot stays blank: {meter}"
+                            );
+                        }
+                        assert!(
+                            !meter.contains(theme.glyph(GlyphRole::MeterBarFilled)),
+                            "{meter}"
+                        );
+                        assert!(
+                            !meter.contains(theme.glyph(GlyphRole::MeterBarHalf)),
+                            "{meter}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_context_mutes_the_stale_identity_age() {
+    let theme = Theme::fixed(false);
+    for measured in [true, false] {
+        let mut snapshot = empty_cache_snapshot(40 * 60, Some(half_hour_cache()), measured);
+        snapshot.theme.display.stale_after_secs = 600;
+        for width in [32, 45, 46, 47, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+            let age = lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content.trim() == "40m")
+                .unwrap();
+            assert_eq!(age.style.fg, theme.muted().fg, "width {width}");
+        }
+    }
+}
+
+#[test]
+fn empty_glyph_and_cache_pin_follow_the_same_meter_scale() {
+    let theme = Theme::fixed(false);
+    for used in [None, Some(0), Some(1)] {
+        for window in [None, Some(100_000)] {
+            let mut snapshot = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
+            snapshot
+                .rows_mut()
+                .next()
+                .unwrap()
+                .as_agent_mut()
+                .unwrap()
+                .context
+                .as_mut()
+                .unwrap()
+                .tokens = Some(AgentTokenUsage {
+                current_context_tokens: used,
+                context_window_size: window,
+                ..Default::default()
+            });
+            for scale in [
+                crate::config::ContextMeterScale::Window,
+                crate::config::ContextMeterScale::Compaction,
+            ] {
+                snapshot.theme.display.context_meter.scale = scale;
+                for width in [32, 45, 46, 47, 58] {
+                    let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                    let text = line_texts(&lines).join("\n");
+                    let empty = text.contains(theme.glyph(GlyphRole::MeterContextEmpty));
+                    assert_eq!(
+                        empty,
+                        !text.contains("40m"),
+                        "{scale:?}, {used:?}, {window:?}: {text}"
+                    );
+                    if !empty {
+                        assert!(text.contains("<0.1%"), "{text}");
+                        let head = lines
+                            .iter()
+                            .flat_map(|line| &line.spans)
+                            .find(|span| {
+                                span.content
+                                    .contains(theme.glyph(GlyphRole::MeterContextFull))
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            head.style.fg,
+                            Some(theme.component(Component::CacheExpired))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cache_off_with_tokens_keeps_a_muted_age_pin() {
+    let theme = Theme::fixed(false);
+    let snapshot = cache_meter_snapshot(40 * 60, None);
+    for width in [32, 45, 46, 47, 58] {
+        let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+        let pin = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content.contains("40m"))
+            .unwrap();
+        assert_eq!(pin.style.fg, theme.muted().fg);
+        assert!(!line_texts(&lines).join("\n").contains("expire"));
+    }
 }
 
 #[test]
@@ -2580,7 +2738,7 @@ fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
         snapshot_to_screen(&snapshot, 58, 17),
     );
 
-    // With the stats line hidden, the gap meter keeps the age on either side of L2.
+    // With stats hidden, a prompted gap with a cache keeps the age on either side of L2.
     let mut quiet = claude.clone();
     quiet.last_activity = fixed_now() - Duration::from_secs(12 * 60);
     quiet.last_seen = quiet.last_activity;

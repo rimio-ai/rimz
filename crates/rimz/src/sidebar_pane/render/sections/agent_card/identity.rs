@@ -273,7 +273,7 @@ pub(super) fn stale_line(
     let mut right = vec![
         // The pin supplies the other cell of the two-cell gap before the age.
         Span::raw(" "),
-        Span::styled(age, cache_age_style(theme, row, ctx.now)),
+        Span::styled(age, cache_age_style(ctx, row)),
         Span::raw(" ".repeat(2 + STALE_COST_SLOT.saturating_sub(spans_width(&cost)))),
     ];
     right.extend(cost);
