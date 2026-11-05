@@ -318,9 +318,17 @@ fn keyed_open_ask_survives_a_parallel_sibling_completion() {
             },
         }),
     );
-    let matching = raw_lifecycle_at(
+    let keyless = raw_lifecycle_at(
         "pi",
         4,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": { "signal": "tool_used", "mutates": true, "edits": false },
+        }),
+    );
+    let matching = raw_lifecycle_at(
+        "pi",
+        5,
         serde_json::json!({
             "agent_id": "sess-1",
             "signal": {
@@ -332,7 +340,7 @@ fn keyed_open_ask_survives_a_parallel_sibling_completion() {
         }),
     );
 
-    let open = reduce_agent_states(&[start.clone(), waiting.clone(), sibling]);
+    let open = reduce_agent_states(&[start.clone(), waiting.clone(), sibling, keyless]);
     assert_eq!(open[0].status, AgentStatus::Waiting);
     assert_eq!(open[0].waiting_since, Some(waiting.timestamp));
     assert_eq!(

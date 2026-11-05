@@ -610,8 +610,8 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
             Some("ask-call"),
             tool(Some("ask-call")),
         ),
-        ("keyless tool", Some("ask-call"), tool(None)),
         ("keyless ask", None, tool(Some("sibling-call"))),
+        ("keyless ask and tool", None, tool(None)),
     ] {
         let transition = step(
             Some(&waiting),
@@ -623,6 +623,80 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
         assert!(transition.waiting_cleared, "{label}");
         assert!(!transition.opened_turn, "{label}");
     }
+}
+
+#[test]
+fn keyed_wait_ignores_a_keyless_tool() {
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let transition = step(
+        Some(&waiting),
+        Some("ask-call"),
+        PriorTurnIds::default(),
+        &tool(true),
+    );
+    assert_eq!(transition.next, waiting);
+    assert!(matches!(transition.kind, TransitionKind::Ignored { .. }));
+    assert!(!transition.waiting_cleared);
+    assert!(!transition.opened_turn);
+}
+
+#[test]
+fn ignored_keyless_tool_preserves_the_compaction_bracket() {
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, true);
+    let transition = step(
+        Some(&waiting),
+        Some("ask-call"),
+        PriorTurnIds::default(),
+        &tool(false),
+    );
+    assert_eq!(transition.next, waiting);
+    assert!(matches!(transition.kind, TransitionKind::Ignored { .. }));
+    assert!(!transition.compaction_closed);
+    assert!(!transition.waiting_cleared);
+}
+
+#[test]
+fn keyed_wait_closes_at_each_turn_boundary() {
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let boundaries = [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        turn_end(false, false),
+        turn_end(true, false),
+        turn_end(false, true),
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+        LifecycleSignal::Registered,
+        LifecycleSignal::Compacting,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+        },
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: true,
+        },
+        LifecycleSignal::Ended,
+    ];
+    let cleared = boundaries.map(|signal| {
+        let transition = step(
+            Some(&waiting),
+            Some("ask-call"),
+            PriorTurnIds::default(),
+            &signal,
+        );
+        (
+            transition.waiting_cleared,
+            transition.next.status != AgentStatus::Waiting,
+        )
+    });
+    assert_eq!(cleared, [(true, true); 12]);
 }
 
 #[test]
@@ -642,6 +716,15 @@ fn ask_resolved_closes_only_its_own_waiting_ask() {
     assert!(answered.waiting_cleared);
     assert!(!answered.opened_turn);
 
+    let keyless = step(
+        Some(&waiting),
+        Some("ask-call"),
+        PriorTurnIds::default(),
+        &LifecycleSignal::AskResolved { native_key: None },
+    );
+    assert_eq!(keyless.next.status, AgentStatus::Running);
+    assert!(keyless.waiting_cleared);
+
     let other = step(
         Some(&waiting),
         Some("ask-call"),
@@ -659,8 +742,13 @@ fn ask_resolved_closes_only_its_own_waiting_ask() {
         )
     );
 
-    let settled = [AgentStatus::Success, AgentStatus::Idle, AgentStatus::Failed]
-        .map(|status| Some(state(status, TurnPhase::Idle, false)));
+    let settled = [
+        AgentStatus::Success,
+        AgentStatus::Idle,
+        AgentStatus::Failed,
+        AgentStatus::Running,
+    ]
+    .map(|status| Some(state(status, TurnPhase::Idle, false)));
     for prev in settled.into_iter().chain([None]) {
         let transition = step(
             prev.as_ref(),

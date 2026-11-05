@@ -173,10 +173,10 @@ pub enum LifecycleSignal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
     },
-    /// The native prompt behind a waiting row was answered (Hermes
-    /// `on_human_input_resolved`). It closes the wait whose key it carries and
-    /// is no proof of activity: on any status but `Waiting` it is ignored, so a
-    /// close that arrives after its turn settled leaves the row settled.
+    /// The native prompt behind a waiting row was answered or dismissed. It
+    /// closes the wait whose key it carries and is no proof of activity: on any
+    /// status but `Waiting` it is ignored, so a close that arrives after its turn
+    /// settled leaves the row settled.
     AskResolved {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
@@ -459,6 +459,12 @@ pub(crate) fn step(
         Some("session lost (legacy replay marker)")
     } else if let LifecycleSignal::AskResolved { native_key } = signal {
         stale_ask_close(prior_status, open_ask_key, native_key.as_deref())
+    } else if let LifecycleSignal::ToolUsed { native_key, .. } = signal
+        && prior_status == Some(AgentStatus::Waiting)
+        && open_ask_key.is_some()
+        && open_ask_key != native_key.as_deref()
+    {
+        Some("sibling tool completed while a keyed ask is open")
     } else if let LifecycleSignal::ToolUsed {
         turn_id: Some(turn_id),
         ..
@@ -493,7 +499,7 @@ pub(crate) fn step(
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-    let status = map_status(signal, prior_status, open_ask_key, &mut kind);
+    let status = map_status(signal, prior_status, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
     let waiting_cleared =
@@ -598,7 +604,6 @@ fn opened_turn(
 fn map_status(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
-    open_ask_key: Option<&str>,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
     match signal {
@@ -641,27 +646,14 @@ fn map_status(
             }
         }
         LifecycleSignal::TurnInterrupted { .. } => AgentStatus::Idle,
-        LifecycleSignal::ToolUsed { native_key, .. } => {
-            if prior_status == Some(AgentStatus::Waiting)
-                && open_ask_key.is_some()
-                && native_key.as_deref().is_some()
-                && open_ask_key != native_key.as_deref()
-            {
-                *kind = TransitionKind::Ignored {
-                    reason: "sibling tool completed while a keyed ask is open",
-                };
-                AgentStatus::Waiting
-            } else {
-                reconcile_activity(
-                    prior_status,
-                    prior_status.map_or(
-                        "tool used before session registered",
-                        |_| "tool used outside a running turn",
-                    ),
-                    kind,
-                )
-            }
-        }
+        LifecycleSignal::ToolUsed { .. } => reconcile_activity(
+            prior_status,
+            prior_status.map_or(
+                "tool used before session registered",
+                |_| "tool used outside a running turn",
+            ),
+            kind,
+        ),
         // Status preserved; only the head is stamped. Waiting is the one status
         // compaction resolves rather than preserves: a compaction runs only once
         // the native prompt has released the pane, so the signal is proof the ask

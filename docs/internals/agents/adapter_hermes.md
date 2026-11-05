@@ -109,7 +109,7 @@ Hermes sends each hook one JSON object on stdin and runs the command with `shell
 
 The human-input bracket is the only native-prompt signal, and three choices keep it intact:
 
-- A keyless `ToolUsed` clears any keyed wait. `post_tool_call` therefore carries the constant key `hermes:post_tool_call`, which matches no request id, so a sibling tool that finishes during an open prompt leaves the wait open.
+- A `ToolUsed` clears a keyed wait only when its key matches. `post_tool_call` carries the constant key `hermes:post_tool_call`, which matches no request id, so a sibling tool that finishes during an open prompt leaves the wait open. A keyless tool would also leave it open.
 - Hermes emits the resolution in a `finally` block ([reference](../../externals/agent-adapter/hermes-reference.md#native-prompts-and-permissions)), so it can arrive after `on_session_end` has settled the row. A `ToolUsed` there would move the settled row back to running. The close is therefore its own signal, [`LifecycleSignal::AskResolved`](../../../crates/rimz/src/agents/lifecycle.rs), which the state machine ignores outside `waiting` and when its key names a different open ask (`crates/rimz/src/agents/lifecycle.rs::stale_ask_close`).
 - The brackets stay lifecycle signals and never become actionable asks. Hermes has no structured answer route, so the user answers in the pane.
 
