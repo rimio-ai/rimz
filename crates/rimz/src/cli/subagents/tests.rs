@@ -73,6 +73,22 @@ fn tier_flag_and_fanout_field_are_accepted() {
     assert!(task.is_ok(), "{task:?}");
 }
 
+#[test]
+fn empty_directory_is_accepted_in_both_launch_forms_and_fanout() {
+    let actual = [false, true].map(|explicit| {
+        let mut argv = vec!["subagents"];
+        if explicit {
+            argv.push("launch");
+        }
+        argv.extend(["claude", "Task", "--cwd", "/target", "--empty-dir"]);
+        Harness::try_parse_from(argv).is_ok()
+    });
+    let task = serde_json::from_str::<FanoutTask>(
+        r#"{"profile":"claude","prompt":"Task","cwd":"/target","empty_dir":true}"#,
+    );
+    assert_eq!((actual, task.is_ok()), ([true, true], true), "{task:?}");
+}
+
 #[derive(Debug, Parser)]
 struct AgentsHarness {
     #[command(flatten)]
@@ -264,6 +280,7 @@ fn fanout_task_matches_the_single_launch_surface() {
         "review this",
         "--cwd",
         "/tmp/clean",
+        "--empty-dir",
         "--add-dir",
         "/one",
         "--add-dir",
@@ -277,6 +294,7 @@ fn fanout_task_matches_the_single_launch_surface() {
         single.launch.cwd.as_deref(),
         Some(std::path::Path::new("/tmp/clean"))
     );
+    assert!(single.launch.empty_dir);
     let fanout = parse(&[
         "rimz",
         "fanout",
@@ -299,6 +317,7 @@ fn fanout_task_matches_the_single_launch_surface() {
             "prompt": "review this",
             "cwd": "/tmp/clean",
             "add_dirs": ["/one", "/two"],
+            "empty_dir": true,
             "model": "opus",
             "agent": "reviewer",
             "effort": "high",
@@ -339,6 +358,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
     agents.launch.add_dirs = vec!["/one".into(), "/two".into()];
+    agents.launch.empty_dir = true;
     assert!(launches[0].subagent);
     assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;

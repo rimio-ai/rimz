@@ -415,6 +415,8 @@ pub(crate) struct AgentLaunchArgs {
     pub(crate) cwd: Option<PathBuf>,
     #[arg(skip)]
     pub(crate) add_dirs: Vec<PathBuf>,
+    #[arg(skip)]
+    pub(crate) empty_dir: bool,
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
     #[arg(
         value_name = "SPEC",
@@ -1284,6 +1286,7 @@ fn into_supervised_request(
     request.fresh = args.launch.cohort.fresh;
     request.cwd = args.launch.cwd;
     request.add_dirs = args.launch.add_dirs;
+    request.empty_dir = args.launch.empty_dir;
     request.from_pr = args.launch.cohort.from_pr;
     request.channel = args.launch.cohort.channel;
     request.name = args.launch.name;

@@ -400,6 +400,15 @@ fn prepare(
     if cwd.is_some() {
         launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
     }
+    if request.empty_dir {
+        crate::agents::preflight_launch_dir(
+            adapter,
+            &launch.cwd,
+            launch.repo_root.as_deref(),
+            &login.env(&crate::agents::ambient_env()),
+            crate::agents::LaunchDirMode::Displaced,
+        )?;
+    }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
@@ -411,14 +420,21 @@ fn prepare(
         request.name.as_deref(),
         agent_cell,
         &login,
-        layout
+        if request.empty_dir {
+            EmptyDirRequest::Required
+        } else if layout
             .columns
             .iter()
             .map(|column| column.rows.len())
             .sum::<usize>()
             == 1
             && !worktree_launch
-            && request.cwd.is_none(),
+            && request.cwd.is_none()
+        {
+            EmptyDirRequest::Profile
+        } else {
+            EmptyDirRequest::Disabled
+        },
         interaction,
     )? {
         checkout = Some(launch.cwd.display().to_string());
