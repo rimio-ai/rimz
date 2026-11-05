@@ -3,13 +3,14 @@
 //! The view module owns focused cards' held rank keys. This module reapplies
 //! the last painted order for the settling window. Arrivals enter before their
 //! first frozen successor in their group's live order; new groups follow live
-//! groups. Content keeps updating.
+//! active groups. The shared partition keeps external above inactive groups.
+//! Content keeps updating.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ids::PaneId;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, ViewState};
-use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, group_partition};
 
 pub(super) fn arm_freeze(ui: &mut ViewState, now_ms: i64) {
     ui.freeze = Some(LayoutFreeze {
@@ -134,8 +135,7 @@ pub(super) fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOr
         .collect();
     let group_key = |group: &SidebarWorktreeGroup| {
         (
-            group.kind == SidebarWorktreeKind::External,
-            group.inactive.is_some(),
+            group_partition(group.kind, group.inactive.is_some()),
             group_pos
                 .get(group.key.as_str())
                 .copied()

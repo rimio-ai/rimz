@@ -626,7 +626,7 @@ No selection, compact cards:
    ▢ ──────────────────────────────────────  0.0%
 ```
 
-Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
+Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, after active project groups and before the inactive chip. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
 
 A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold header with the directory's name, with no glyph or git figures, because a plain directory has no trunk to compare against.
 
@@ -703,15 +703,25 @@ The first line lists the team name when the members share one, each member's fin
 
 Click a member's name or status glyph on a folded group's first receipt line to show the cards and focus that member's live pane, bringing its card into view. Clicking anywhere else on the receipt, or its folded header, does the same for the first receipt member. A member without a live pane opens the cards without moving focus. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
-Inactive groups follow all active project work and precede `external`. At 54 columns, the closed inactive chip replaces their headers and receipts:
+Inactive groups follow all active project work and `external`, at the very bottom. At 54 columns, the closed inactive chip replaces their headers and receipts:
 
 ```
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ✓ external
+   task-external
+   ▢ ────────────────────────────────────  0.0%
+
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
 Click anywhere on the chip, or press `i`, to peek at the first 10 inactive groups in presented order, most recent activity first, without hiding active work. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it and bring the chip back into view; the selection never moves. Closing resets the page count and folds the inactive cards opened through receipts, except those still focused or held. Under `NO_COLOR` the chip is reverse video. The peek changes only when you click the chip or press `i`. Focus changes, receipt jumps, and tab switches keep its pages and unfolded receipts, with the destination showing it open from the first frame. Clients sharing a view share the toggle; splitting across tabs copies it, after which each copy toggles independently. Returning to a continuing viewer rejoins their view. It starts closed for a new view or host restart. Open groups remain collapsed to receipts until revealed:
 
 ```
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ✓ external
+   task-external
+   ▢ ────────────────────────────────────  0.0%
+
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 25 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
  ↩ old-01
@@ -756,7 +766,7 @@ Click anywhere on the chip, or press `i`, to peek at the first 10 inactive group
    +15 older
 ```
 
-If more inactive groups remain undrawn, a muted `+K older` line follows the last drawn one, before `external`. Click it to reveal the next 10 without moving the viewport or selection. Focused, held, individually expanded, and process-only groups also draw beyond the page, and K counts only undrawn groups. Closing and reopening starts at 10 again.
+If more inactive groups remain undrawn, a muted `+K older` line follows the last drawn one at the end of the body. Click it to reveal the next 10 without moving the viewport or selection. Focused, held, individually expanded, and process-only groups also draw beyond the page, and K counts only undrawn groups. Closing and reopening starts at 10 again.
 
 The counts are groups, not agents. `M unlanded` is information, not a filter, and is omitted when M is zero. Every cell of the line toggles the same peek. A focused or held group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card without a page cut or older tail. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
 

@@ -3969,7 +3969,9 @@ path = "crates/rimz/src/store"
 # TypingHold, TypingHoldReplay and Store::hold_message_claims share durable input deferral (+3).
 # Store::record_typing_hold_replay retains live delivery intent during an existing hold (+1).
 # SidebarStallResource, SidebarStallPhase and SidebarStallItem carry classified host PSI (+3).
-surface-budget = 552
+# group_partition shares active/external/inactive ordering with frozen layouts (+1).
+# GroupPartition types that shared order (+1).
+surface-budget = 554
 
 [[verdict]]
 kind = "item"
@@ -3995,6 +3997,16 @@ reason = "Snapshot publication classifies active and fading stalls before projec
 kind = "item"
 key = "store::snapshot::view::model::SidebarStallItem"
 reason = "Whole-percent notice content repaints only when a displayed stall changes."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::layout::group_partition"
+reason = "Presentation ranking and timed freezes share the active, external, inactive partition."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::layout::GroupPartition"
+reason = "The ordered partition value group_partition returns to ranking and timed freezes."
 
 [[verdict]]
 kind = "item"
