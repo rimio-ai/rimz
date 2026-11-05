@@ -309,25 +309,28 @@ const OPENCODE_HOOKS: &[HookEventSpec] = &[
     .progress(),
     HookEventSpec::blocking(
         "permission_ask",
-        r#"{"session_id":"ses_1","tool_name":"bash"}"#,
+        r#"{"session_id":"ses_1","request_id":"r","tool_name":"bash"}"#,
         AskKind::Permission,
     )
     .synchronous(),
     HookEventSpec::blocking(
         "question_ask",
-        r#"{"session_id":"ses_1","title":"Which database?"}"#,
+        r#"{"session_id":"ses_1","request_id":"r","title":"Which database?"}"#,
         AskKind::Question,
     )
     .synchronous(),
     HookEventSpec::lifecycle(
         "permission_replied",
-        r#"{"session_id":"ses_1","reply":"once"}"#,
+        r#"{"session_id":"ses_1","request_id":"r","reply":"once"}"#,
     ),
     HookEventSpec::lifecycle(
         "question_replied",
-        r#"{"session_id":"ses_1","answers":[["Postgres"]]}"#,
+        r#"{"session_id":"ses_1","request_id":"r","answers":[["Postgres"]]}"#,
     ),
-    HookEventSpec::lifecycle("question_rejected", r#"{"session_id":"ses_1"}"#),
+    HookEventSpec::lifecycle(
+        "question_rejected",
+        r#"{"session_id":"ses_1","request_id":"r"}"#,
+    ),
     HookEventSpec::lifecycle(
         "session_ended",
         r#"{"session_id":"ses_1","reason":"deleted"}"#,
@@ -620,13 +623,13 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: parsed.title.clone(),
-                native_key: None,
+                native_key: parsed.request_id.clone(),
             }),
             "question_ask" => Some(LifecycleSignal::AwaitingInput {
                 kind: AskKind::Question,
                 ask_id: None,
                 detail: parsed.title.clone(),
-                native_key: None,
+                native_key: parsed.request_id.clone(),
             }),
             "chat_message" | "client_running" => {
                 Some(LifecycleSignal::TurnStarted { turn_id: None })
@@ -650,12 +653,8 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 turn_id: None,
             }),
             "permission_replied" | "question_replied" | "question_rejected" => {
-                Some(LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    name: None,
-                    native_key: None,
-                    turn_id: None,
+                Some(LifecycleSignal::AskResolved {
+                    native_key: parsed.request_id.clone(),
                 })
             }
             "tool_after" => Some(LifecycleSignal::ToolUsed {

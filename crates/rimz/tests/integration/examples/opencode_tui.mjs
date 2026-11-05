@@ -196,6 +196,21 @@ await test("serial feeds and current stamp after queued spawn", async () => {
   while (held.length) { held.shift()(); await flush(); }
   await cleanup?.();
 });
+for (const kind of ["permission", "form"]) await test("execution snapshots preserve pending " + kind, async () => {
+  const f = fixture(); const cleanup = await f.start();
+  const requests = kind === "permission" ? f.permissions : f.forms;
+  const request = kind === "permission" ? permission("pending", "A") : form("pending", "A");
+  requests.set("A", [request]);
+  await f.emit(kind === "permission" ? "permission.asked" : "form.created", kind === "permission" ? request : { form: request });
+  const before = records.length;
+  await f.emit("session.execution.started", { sessionID: "A" });
+  assert.equal(records.length, before, "execution snapshot must not clear a pending ask");
+  requests.set("A", []);
+  await f.emit(kind === "permission" ? "permission.replied" : "form.cancelled", { id: "pending", requestID: "pending", sessionID: "A", reply: "once" });
+  await f.emit("session.execution.started", { sessionID: "A" });
+  assert.equal(last().hook_event_name, "client_running");
+  await cleanup?.();
+});
 await test("step usage and mapped native events", async () => {
   const f = fixture(); const cleanup = await f.start();
   await f.emit("session.step.started", { sessionID: "A", assistantMessageID: "step", model, agent: "plan" });

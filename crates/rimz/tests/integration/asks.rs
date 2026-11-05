@@ -578,6 +578,50 @@ fn asks_lists_and_shows_structured_question_json() {
 }
 
 #[test]
+fn opencode_parallel_tool_keeps_the_ask_until_its_reply_or_turn_end() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut actual = Vec::new();
+    for close in ["question_replied", "question_rejected", "session_idle"] {
+        for payload in [
+            json!({"hook_event_name":"chat_message","session_id":"ses_ask","prompt":"search"}),
+            json!({
+                "hook_event_name":"question_ask", "session_id":"ses_ask", "request_id":close,
+                "questions":[{"question":"Which route?","options":[{"label":"Safe"}]}]
+            }),
+            json!({"hook_event_name":"tool_after","session_id":"ses_ask","tool_name":"webfetch"}),
+        ] {
+            let output = env.run_hook("opencode", &payload.to_string());
+            assert!(
+                output.status.success(),
+                "{payload}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let asks = listed_asks(&env);
+        let reserves_input = env.store().snapshot_cached().unwrap().agents[0].is_awaiting_input();
+        let payload = json!({
+            "hook_event_name":close, "session_id":"ses_ask", "request_id":close,
+            "answers":[["Safe"]]
+        });
+        let output = env.run_hook("opencode", &payload.to_string());
+        assert!(
+            output.status.success(),
+            "{payload}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        actual.push((
+            asks.as_array().unwrap().len(),
+            asks[0]["questions"][0]["question"].clone(),
+            reserves_input,
+            listed_asks(&env).as_array().unwrap().len(),
+            env.store().snapshot_cached().unwrap().agents[0].is_awaiting_input(),
+        ));
+    }
+    assert_eq!(actual, vec![(1, json!("Which route?"), true, 0, false); 3]);
+}
+
+#[test]
 fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
     let env = Env::new();
     env.record(&env.project_root);

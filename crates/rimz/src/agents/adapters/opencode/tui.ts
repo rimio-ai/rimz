@@ -325,7 +325,7 @@ function activate(ctx: Context, rimz: string): Cleanup {
         if (data.item.type === "user") send(base("chat_message", sessionID, { prompt: data.item.payload.text }));
         break;
       case "session.execution.started":
-        send(base("client_running", sessionID));
+        if (!pendingAsks(sessionID).length) send(base("client_running", sessionID));
         break;
       case "session.step.started":
         state.steps.set(data.assistantMessageID, data.model);

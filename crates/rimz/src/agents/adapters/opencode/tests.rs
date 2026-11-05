@@ -946,6 +946,55 @@ fn opencode_records_native_permission_and_question_answers() {
 }
 
 #[test]
+fn opencode_asks_carry_native_request_ids() {
+    let actual = ["question_ask", "permission_ask"].map(|event| {
+        hook_lifecycle(
+            &OpencodeAdapter,
+            event,
+            &json!({"session_id":"ses_1","request_id":"request-1"}),
+        )
+        .signal
+    });
+    assert_eq!(
+        actual,
+        [AskKind::Question, AskKind::Permission].map(|kind| {
+            LifecycleSignal::AwaitingInput {
+                kind,
+                ask_id: None,
+                detail: None,
+                native_key: Some("request-1".to_owned()),
+            }
+        })
+    );
+}
+
+#[test]
+fn opencode_replies_resolve_their_native_request_ids() {
+    let actual = [
+        "permission_replied",
+        "question_replied",
+        "question_rejected",
+    ]
+    .map(|event| {
+        hook_lifecycle(
+            &OpencodeAdapter,
+            event,
+            &json!({"session_id":"ses_1","request_id":"request-1"}),
+        )
+        .signal
+    });
+    assert_eq!(
+        actual.to_vec(),
+        vec![
+            LifecycleSignal::AskResolved {
+                native_key: Some("request-1".to_owned()),
+            };
+            3
+        ]
+    );
+}
+
+#[test]
 fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     for (tool_name, expected) in [
         (
@@ -982,30 +1031,21 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         let observed = hook_observation(
             &OpencodeAdapter,
             "tool_after",
-            &json!({ "session_id": "ses_1", "tool_name": tool_name }),
+            &json!({ "session_id": "ses_1", "tool_name": tool_name, "request_id": "request-1" }),
         );
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
 
-    for event in [
+    let replies = [
         "permission_replied",
         "question_replied",
         "question_rejected",
-    ] {
-        let observed = hook_observation(&OpencodeAdapter, event, &json!({ "session_id": "ses_1" }))
-            .unwrap_or_else(|| panic!("{event} observation"));
-        assert_eq!(
-            observed.signal,
-            LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
-                name: None,
-                native_key: None,
-                turn_id: None,
-            },
-            "{event}"
-        );
-    }
+    ]
+    .map(|event| hook_lifecycle(&OpencodeAdapter, event, &json!({ "session_id": "ses_1" })).signal);
+    assert_eq!(
+        replies.to_vec(),
+        vec![LifecycleSignal::AskResolved { native_key: None }; 3]
+    );
 
     let compacting = hook_lifecycle(
         &OpencodeAdapter,
