@@ -1,48 +1,14 @@
-use std::collections::BTreeMap;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
 use rimz::config::GlyphRole;
 use rimz::harness::schedule::when::WhenExpr;
 use rimz::harness::workflow::{
-    CheckKind, Edge, EdgeSource, Fireability, Hop, HopKind, StepKind, WalkNode, WorkflowSpec,
+    CheckKind, Edge, EdgeSource, Fireability, Hop, StepKind, WalkNode, WorkflowSpec, reached,
 };
-use rimz::store::workflow::{JournalEntry, JournalEvent, RunRecord, RunState, StepLifecycle};
+use rimz::store::workflow::{JournalEntry, RunRecord, RunState, StepLifecycle};
 
 use super::render;
-
-pub(super) fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a str, u64> {
-    let mut counts = BTreeMap::new();
-    let mut position = None;
-    for hop in hops {
-        if hop.kind == HopKind::VisitsReset {
-            continue;
-        }
-        let node = hop.node.as_str();
-        if position != Some(node) || hop.kind == HopKind::Resume {
-            *counts.entry(node).or_default() += 1;
-        }
-        position = Some(node);
-        if hop.kind == HopKind::Route
-            && let Some(target) = hop
-                .target
-                .as_deref()
-                .filter(|target| !target.starts_with('@'))
-        {
-            *counts.entry(target).or_default() += hop.count;
-            position = Some(target);
-        }
-    }
-    for entry in journal {
-        if matches!(
-            entry.event,
-            JournalEvent::Attempt { .. } | JournalEvent::Evaluation { .. }
-        ) {
-            counts.entry(entry.node.as_str()).or_insert(1);
-        }
-    }
-    counts
-}
 
 struct TrackNode {
     name: String,

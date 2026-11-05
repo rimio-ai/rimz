@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::io::IsTerminal;
 
 use rimz::harness::schedule::when::WhenExpr;
-use rimz::harness::workflow::{CaseMark, Hop};
+use rimz::harness::workflow::{CaseMark, Hop, reached};
 use serde_json::Value;
 
-use super::super::rail::{Rail, Row, horizontal, reached};
+use super::super::rail::{Rail, Row, horizontal};
 use super::*;
 
 impl View<'_> {

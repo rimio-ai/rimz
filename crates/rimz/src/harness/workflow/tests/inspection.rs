@@ -3,6 +3,31 @@ use crate::store::workflow::{
     EvaluationOrigin, JournalEntry, JournalEvent, Key, RunState, StepVisits,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+#[test]
+fn reached_counts_entries_not_repeated_wait_answers() {
+    let route = |node: &str, outcome: &str, target: &str| Hop {
+        at: jiff::Timestamp::UNIX_EPOCH,
+        node: node.into(),
+        outcome: Some(outcome.into()),
+        target: Some(target.into()),
+        count: 1,
+        kind: HopKind::Route,
+    };
+    let mut wait = route("watch", "pending", "@wait");
+    wait.count = 3;
+    let hops = [
+        route("begin", "pass", "sweep"),
+        route("sweep", "ended", "watch"),
+        wait,
+        route("watch", "green", "clean"),
+    ];
+    assert_eq!(
+        reached(&hops, &[]),
+        BTreeMap::from([("begin", 1), ("sweep", 1), ("watch", 1), ("clean", 1),])
+    );
+}
 
 fn spec() -> WorkflowSpec {
     toml::from_str(

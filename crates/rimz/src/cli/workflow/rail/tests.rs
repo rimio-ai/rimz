@@ -1,4 +1,6 @@
 use super::*;
+use rimz::harness::workflow::HopKind;
+use std::collections::BTreeMap;
 
 const LAND: &str = r#"
 [workflow]
@@ -97,22 +99,6 @@ fn horizontal_text(record: &RunRecord, hops: &[Hop], width: Option<usize>) -> St
     let mut out = anstream::StripStream::new(Vec::new());
     horizontal(&mut out, &spec, record, hops, &[], width, 6).unwrap();
     String::from_utf8(out.into_inner()).unwrap()
-}
-
-#[test]
-fn reached_counts_entries_not_repeated_wait_answers() {
-    let mut wait = route("watch", "pending", "@wait");
-    wait.count = 3;
-    let hops = [
-        route("begin", "pass", "sweep"),
-        route("sweep", "ended", "watch"),
-        wait,
-        route("watch", "green", "clean"),
-    ];
-    assert_eq!(
-        reached(&hops, &[]),
-        BTreeMap::from([("begin", 1), ("sweep", 1), ("watch", 1), ("clean", 1),])
-    );
 }
 
 #[test]

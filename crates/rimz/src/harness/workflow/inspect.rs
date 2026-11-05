@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 
 use super::WorkflowSpec;
@@ -95,6 +97,40 @@ pub fn routing_hop(spec: &WorkflowSpec, journal: &[JournalEntry], node: &str) ->
         }
     }
     None
+}
+
+/// Count node entries from routing history, retaining attempted and evaluated nodes.
+pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a str, u64> {
+    let mut counts = BTreeMap::new();
+    let mut position = None;
+    for hop in hops {
+        if hop.kind == HopKind::VisitsReset {
+            continue;
+        }
+        let node = hop.node.as_str();
+        if position != Some(node) || hop.kind == HopKind::Resume {
+            *counts.entry(node).or_default() += 1;
+        }
+        position = Some(node);
+        if hop.kind == HopKind::Route
+            && let Some(target) = hop
+                .target
+                .as_deref()
+                .filter(|target| !target.starts_with('@'))
+        {
+            *counts.entry(target).or_default() += hop.count;
+            position = Some(target);
+        }
+    }
+    for entry in journal {
+        if matches!(
+            entry.event,
+            JournalEvent::Attempt { .. } | JournalEvent::Evaluation { .. }
+        ) {
+            counts.entry(entry.node.as_str()).or_insert(1);
+        }
+    }
+    counts
 }
 
 /// Whether a route repeats the immediately preceding evaluation's non-null answer.
