@@ -492,6 +492,7 @@ fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
         &ViewState {
             selected_index: Some(0),
             expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
+            inactive_peek: Some(Default::default()),
             ..Default::default()
         },
         &UiState::default(),

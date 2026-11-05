@@ -666,7 +666,12 @@ pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) 
 }
 
 fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_key: String) {
-    if !ui.expanded_groups.remove(&group_key) {
+    if !ui.expanded_groups.remove(&group_key)
+        && !snapshot
+            .worktree_groups
+            .iter()
+            .any(|group| group.key == group_key && group.collapses())
+    {
         ui.expanded_groups.insert(group_key);
     }
     anchor_selection(ui, snapshot);

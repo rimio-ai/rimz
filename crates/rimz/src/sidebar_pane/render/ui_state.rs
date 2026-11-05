@@ -207,10 +207,13 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
     pub(in crate::sidebar_pane) make_up_filter: BodyLens,
     pub(in crate::sidebar_pane) search_draft: Option<String>,
-    /// Worktree groups expanded through `+K more` in this client view.
-    /// Expansion is presentation state only: the snapshot carries the full
-    /// roster, and a group drops from this set once it no longer has a capped
-    /// tail to reveal.
+    /// Worktree groups unfolded by the user in this client view.
+    /// Presentation state only: the snapshot carries the full roster. A user
+    /// fold clears the key, as does closing the section for inactive groups.
+    /// The prune clears keys when a group leaves the roster or has nothing
+    /// left to fold, measured without focus, and a collapsing inactive group's
+    /// key while the section is closed, such as a `+K more` key carried from
+    /// active work.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
     /// Open pages of inactive groups' receipts, `None` while closed. It travels
     /// with the view across tab moves, mirrors and forks. It opens and closes
