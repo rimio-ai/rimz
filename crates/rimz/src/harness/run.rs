@@ -1112,7 +1112,7 @@ fn read_spend(store: &Store, record: &RunRecord, agent: Option<&AgentDefinition>
             .zip(record.transcript_path.as_deref())
             .and_then(|(agent_id, transcript_path)| {
                 let prices = crate::agents::pricing::cached_book(
-                    &store.runtime_paths().shared_pricing_cache_path(),
+                    &store.runtime_paths().shared_pricing_table_path(),
                 );
                 crate::agents::spending::session_token_totals(
                     agent,
@@ -1135,7 +1135,7 @@ fn read_session_spend(
     agent: Option<&AgentDefinition>,
 ) -> RunSpend {
     let prices =
-        crate::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_cache_path());
+        crate::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_table_path());
     let bindings = record
         .earlier_sessions
         .iter()

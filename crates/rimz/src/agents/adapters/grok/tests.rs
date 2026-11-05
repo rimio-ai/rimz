@@ -634,7 +634,7 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session-1");
     let updates = session.join("updates.jsonl");
-    let pricing = dir.path().join("pricing-cache.json");
+    let pricing = dir.path().join("pricing.v1.sqlite");
     std::fs::create_dir(&session).unwrap();
     let lines = [
         json!({

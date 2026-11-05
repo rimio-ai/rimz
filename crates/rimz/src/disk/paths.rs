@@ -35,7 +35,7 @@ use crate::ids::{
 use crate::sock::SockBudget;
 
 const EVENTS_LOG_FILE: &str = "events.log.jsonl";
-const PRICING_CACHE_VERSION: u32 = 1;
+pub(crate) const PRICING_CACHE_VERSION: i64 = 1;
 /// The per-agent directory of a launch or reader without a handle; `_` never
 /// occurs in a handle, so it cannot collide.
 const UNNAMED_DIR: &str = "_unnamed";
@@ -1438,10 +1438,6 @@ impl RuntimePaths {
 
     pub fn shared_spending_cursor_path(&self) -> PathBuf {
         self.persistent_shared_root.join("spending.json")
-    }
-
-    pub fn shared_pricing_cache_path(&self) -> PathBuf {
-        self.persistent_shared_root.join("pricing-cache.json")
     }
 
     pub fn shared_pricing_table_path(&self) -> PathBuf {

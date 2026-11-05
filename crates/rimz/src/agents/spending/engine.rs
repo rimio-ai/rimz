@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::RuntimePaths;
@@ -500,12 +499,9 @@ fn walk_fleet_spending_files(
     // only the producer refreshes it while holding the spending lock.
     let prices = if publish {
         let unknowns = walker.recorded_unknown_models(&cache_path, files, now_secs);
-        Arc::new(pricing::load_for_spending(
-            &runtime.shared_pricing_cache_path(),
-            &unknowns,
-        ))
+        pricing::load_for_spending(runtime, &unknowns)
     } else {
-        pricing::cached_book(&runtime.shared_pricing_cache_path())
+        pricing::cached_book(&runtime.shared_pricing_table_path())
     };
     let user_inputs = user_input::load();
     let req = WalkRequest {

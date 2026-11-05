@@ -816,7 +816,7 @@ fn slot_lifetime_effort(
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
     let records = slot_lifetime_records(&refs, agent);
-    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
     let effort = rimz::agents::spending::slot_effort(
         &records
             .iter()
@@ -868,7 +868,7 @@ fn session_cost(
 ) -> Option<rimz::agents::AgentCost> {
     let adapter = rimz::agents::find_definition(agent.kind.as_str())?;
     let transcript = Path::new(agent.transcript_path.as_deref()?);
-    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
     rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
 }
 

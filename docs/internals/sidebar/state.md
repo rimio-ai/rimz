@@ -440,7 +440,7 @@ The project-root trunk lane publishes `lanes/trunk-state.json` separately from p
 | `lanes/keep-warm.json` | Room | Version 1: TTL- and stage-condition-admitted keep-warm horizon seconds by `<kind>:<agent_id>`. Published by `refresh/keep_warm.rs` every heavy pass only when content changes, through `write_temp_then_rename_cache`. A version mismatch reads as empty. Projected onto `AgentCard.cache`. |
 | `provider-spending.json` | Account-global | Fleet and provider spend totals plus the walk stamp ([spending.md](../agents/spending.md)). |
 | `spending.json` | Account-global | The incremental transcript parse cache behind the spend walk ([spending.md](../agents/spending.md#the-incremental-cache)). |
-| `pricing-cache.json` | Account-global | The remote token-price refresh over the embedded snapshot ([spending.md](../agents/spending.md#token-pricing)). |
+| `pricing.v1.sqlite`, `pricing-refresh.v1.json` | Account-global | The immutable token-price table and separate refresh/chase state; the snapshot seeds only a missing table ([spending.md](../agents/spending.md#token-pricing)). |
 | `accounts.json` | Account-global | Per-login account state, including the credential classifications used by Pi panel alternates ([providers.md → The shared caches](../agents/providers.md#the-shared-caches)). |
 | `rate_limits.v<N>.json` | Account-global, per format version | Fused budget windows per (login, scope); `N` is `RATE_LIMITS_CACHE_VERSION` (7). |
 | `credits.json` | Account-global | Provider-reported paid and extra usage, and direct-query claims per (login, scope); `logins` holds kind-wide entries and the additive `scoped` map holds sub-provider entries. |

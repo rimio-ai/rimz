@@ -1351,13 +1351,10 @@ fn claude_launch_seeds_do_not_replace_observed_identity() {
 fn claude_price_book_capacity_does_not_replace_an_established_window() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"claude-sonnet-native":{"input":0.000003,"output":0.000015,"cache_read":0.0000003,"cache_create":0.00000375,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":200000}}}"#,
-    )
-    .unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"claude-sonnet-native":{"input_cost_per_token":0.000003,"output_cost_per_token":0.000015,"cache_read_input_token_cost":0.0000003,"cache_creation_input_token_cost":0.00000375,"max_input_tokens":200000}}"#,
+    );
     let transcript = env.project_root.join("claude-native-window.jsonl");
     std::fs::write(
         &transcript,
@@ -1510,13 +1507,10 @@ fn kimi_durable_children_surface_and_child_stops_leave_parent_running() {
 fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"gpt-5-mini":{"input":0.000001,"output":0.000005}}}"#,
-    )
-    .unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"gpt-5-mini":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0,"cache_creation_input_token_cost":0.0}}"#,
+    );
     env.install_agent_hooks("copilot");
     assert!(env.agent_hooks_installed("copilot"));
 
@@ -4215,13 +4209,10 @@ fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
 fn qwen_statusline_and_hook_fold_into_snapshot() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"qwen3-coder-plus":{"input":0.000001,"output":0.000005,"cache_read":0.0000002,"cache_create":0.0,"cache_read_explicit":true,"fast_multiplier":1.0}}}"#,
-    )
-    .unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"qwen3-coder-plus":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0000002,"cache_creation_input_token_cost":0.0}}"#,
+    );
     env.install_agent_hooks("qwen");
     assert!(env.agent_hooks_installed("qwen"));
 
@@ -4378,13 +4369,10 @@ fn statusline_feed_captures_claude_turn_interruption() {
 fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"child-model":{"input":0.000001,"output":0.000005,"cache_read":0.0000001,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0}}}"#,
-    )
-    .unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"child-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0000001,"cache_creation_input_token_cost":0.00000125}}"#,
+    );
     env.install_agent_hooks("claude");
 
     let parent_transcript = env.project_root.join("claude-session/chat.jsonl");

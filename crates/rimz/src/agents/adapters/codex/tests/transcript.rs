@@ -991,7 +991,7 @@ fn turn_error_detector_marks_only_turn_ending_records() {
 fn capacity_task_complete_refresh_keeps_the_turn_end_fact() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let output = json!({
         "timestamp": "2026-11-03T07:36:00.000Z",
         "type": "response_item",
@@ -1608,7 +1608,7 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-interrupted.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     std::fs::write(&path, format!("{interrupted}\n")).unwrap();
     let refresh = refresh_transcript_context(
         "sess-1",
@@ -1663,7 +1663,7 @@ fn messageless_task_complete_refreshes_as_unknown_death() {
     for last_agent_message in [serde_json::Value::Null, json!("")] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout-session.jsonl");
-        let pricing_cache_path = dir.path().join("pricing-cache.json");
+        let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
         std::fs::write(
             &path,
             format!(
@@ -1726,7 +1726,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         "payload": { "type": "task_started" }
     });
     let dir = tempfile::tempdir().unwrap();
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let path = dir.path().join("rollout-compaction.jsonl");
     std::fs::write(&path, format!("{compaction_complete}\n{task_started}\n")).unwrap();
     let refresh = refresh_transcript_context(
@@ -2056,7 +2056,7 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
 fn refresh_transcript_context_tracks_fast_toggles_across_resumed_folds() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let path_string = path.to_string_lossy().into_owned();
     std::fs::write(
         &path,
@@ -2105,7 +2105,7 @@ fn refresh_transcript_context_tracks_fast_toggles_across_resumed_folds() {
 fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     std::fs::write(
         &path,
         "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"xhigh\"}}\n",
@@ -2217,7 +2217,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
 fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     std::fs::write(
         &path,
         concat!(
@@ -2284,7 +2284,7 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
 fn refresh_transcript_context_prices_model_from_shared_cache() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     std::fs::write(
         &transcript_path,
         "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-9.9-nova\"}}\n\
@@ -2295,11 +2295,10 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
          \"output_tokens\":10},\"model_context_window\":1000}}}\n",
     )
     .unwrap();
-    std::fs::write(
+    crate::agents::pricing::testkit::seed_cache_at(
         &pricing_cache_path,
-        r#"{"schema":4,"models":{"gpt-9.9-nova":{"input":0.000001,"output":0.000002,"cache_read":0.0000005}}}"#,
-    )
-    .unwrap();
+        r#"{"gpt-9.9-nova":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000005,"cache_creation_input_token_cost":0.0}}"#,
+    );
 
     let refresh = refresh_transcript_context(
         "sess-1",
@@ -2333,7 +2332,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
 fn refresh_transcript_context_publishes_plan_burn_matching_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-plan.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let lines = [
         json!({"type":"turn_context", "payload":{"model":"gpt-5.6-sol"}}),
         json!({"type":"event_msg", "payload":{"type":"thread_settings_applied",
@@ -2390,7 +2389,7 @@ fn refresh_transcript_context_publishes_plan_burn_matching_history() {
 fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("rollout-session.jsonl");
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     std::fs::write(
         &transcript_path,
         concat!(

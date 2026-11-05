@@ -242,14 +242,10 @@ fn attribution_scopes_to_the_checkout_branch() {
 fn attribution_credits_exited_team_members_and_transcript_spend() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().expect("pricing cache parent"))
-        .expect("mkdir pricing cache parent");
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"gpt-5.5":{"input":0.000005,"output":0.00003,"cache_read":0.0000005,"cache_create":0.000005,"cache_read_explicit":true,"fast_multiplier":1.0}}}"#,
-    )
-    .expect("write pricing cache");
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"gpt-5.5":{"input_cost_per_token":0.000005,"output_cost_per_token":0.00003,"cache_read_input_token_cost":0.0000005,"cache_creation_input_token_cost":0.000005,"provider_specific_entry":{"fast":1.0}}}"#,
+    );
     let sessions = env.home_root.join("codex-sessions");
     let day = sessions.join("2026").join("07").join("23");
     std::fs::create_dir_all(&day).expect("mkdir rollout tree");

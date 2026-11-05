@@ -106,7 +106,7 @@ fn rewarm_uses_the_hour_tier_only_for_an_observed_hour_write() {
     )
     .unwrap();
     runtime.ensure_dirs().unwrap();
-    crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_cache_path());
+    crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_table_path());
     let actual: Vec<_> = [
         ("claude", Some(CacheWriteRetention::OneHour)),
         ("claude", None),
@@ -159,8 +159,8 @@ fn cache_clock_estimates_rewarm_from_the_api_model_and_context_tokens() {
     )
     .unwrap();
     runtime.ensure_dirs().unwrap();
-    crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_cache_path());
-    assert!(runtime.shared_pricing_cache_path().is_file());
+    crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_table_path());
+    assert!(runtime.shared_pricing_table_path().is_file());
     let mut snapshot = snapshot(
         &runtime,
         vec![

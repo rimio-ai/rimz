@@ -2127,9 +2127,10 @@ fn crash_redo_records_the_keyed_native_answer() {
 fn crash_redo_merges_a_keyed_locally_priced_cursor_turn() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(pricing, json!({"schema": 4, "models": {"gpt-5.4": {"input": 0.000001, "output": 0.000005, "cache_read": 0.0000002, "cache_create": 0.0, "cache_read_explicit": true, "fast_multiplier": 1.0}}}).to_string()).unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"gpt-5.4":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0000002,"cache_creation_input_token_cost":0.0,"provider_specific_entry":{"fast":1.0}}}"#,
+    );
     let mut frame = stop_frame(&env);
     frame.source = AgentKind::new_unchecked("cursor");
     frame.event = Some("stop".into());

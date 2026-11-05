@@ -110,7 +110,7 @@ pub(super) fn attribution(
         transcript: &transcript,
         me: me.as_ref(),
         active_secs: &active_secs,
-        pricing_cache_path: &ctx.runtime().shared_pricing_cache_path(),
+        pricing_cache_path: &ctx.runtime().shared_pricing_table_path(),
         require_contribution: md,
         scope: report_scope,
         now,

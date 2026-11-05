@@ -1109,10 +1109,6 @@ fn runtime_paths_share_user_scoped_cache_files() {
         second_paths.shared_spending_cursor_path()
     );
     assert_eq!(
-        first_paths.shared_pricing_cache_path(),
-        second_paths.shared_pricing_cache_path()
-    );
-    assert_eq!(
         first_paths.shared_pricing_table_path(),
         second_paths.shared_pricing_table_path()
     );

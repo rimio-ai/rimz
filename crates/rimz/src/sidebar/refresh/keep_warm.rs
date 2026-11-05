@@ -71,7 +71,7 @@ pub(in crate::sidebar) fn project_cache_clocks(
     runtime: &RuntimePaths,
 ) {
     let now = snapshot.now;
-    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
     let clocks = snapshot
         .agents
         .iter()

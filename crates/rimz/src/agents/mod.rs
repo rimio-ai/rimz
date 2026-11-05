@@ -1002,7 +1002,7 @@ pub struct LocalContextRefreshCtx<'a> {
     /// (`AgentState::settleable_permission_since`), when the caller knows the row.
     pub open_permission_since: Option<Timestamp>,
     pub prior_permission_settle: Option<context::PermissionSettle>,
-    /// Persistent shared `pricing-cache.json`, for adapters that price token
+    /// Persistent shared `pricing.v1.sqlite`, for adapters that price token
     /// counts into card dollars. The spending producer owns writes.
     pub shared_pricing_cache_path: &'a Path,
 }

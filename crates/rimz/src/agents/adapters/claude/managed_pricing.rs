@@ -294,7 +294,7 @@ fn apply(book: &PriceBook, managed: &ManagedPricing) -> PriceBook {
         (model.clone(), price)
     });
     book.derive_with_exact_overrides(
-        |mut price| {
+        move |mut price| {
             scale_rates(&mut price, multiplier);
             price
         },
@@ -484,6 +484,46 @@ mod tests {
             }),
             3.75,
             "managed cacheWrite prices both cache-write durations"
+        );
+    }
+
+    #[test]
+    fn sqlite_overlay_scales_fuzzy_rates_without_lending_exact_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.sqlite");
+        crate::agents::pricing::testkit::seed_cache_at(
+            &path,
+            r#"{"claude-base":{"input_cost_per_token":0.00001,"output_cost_per_token":0.00002,"max_input_tokens":1000000}}"#,
+        );
+        assert!(fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"));
+        let base = crate::agents::pricing::cached_book(&path);
+        let overlaid = apply(
+            &base,
+            &ManagedPricing {
+                multiplier: Some(0.5),
+                overrides: BTreeMap::from([(
+                    "contract-only".to_owned(),
+                    ManagedRates {
+                        input: 6.0,
+                        output: 12.0,
+                        cache_read: 0.6,
+                        cache_write: 7.5,
+                    },
+                )]),
+            },
+        );
+        assert_eq!(
+            overlaid.price("claude-base-via-gateway").unwrap().input,
+            0.000005
+        );
+        assert_eq!(overlaid.price("contract-only").unwrap().input, 0.000003);
+        assert!(overlaid.price("contract-only-via-gateway").is_none());
+        assert_eq!(
+            overlaid
+                .exact_price("claude-base")
+                .unwrap()
+                .max_input_tokens,
+            Some(1_000_000)
         );
     }
 

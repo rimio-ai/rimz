@@ -30,7 +30,7 @@ pub(super) fn history_agent(
     let path = Path::new(transcript);
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
+    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_table_path());
     let messages = adapter
         .read_transcript_messages(path, Some(&agent.agent_id))
         .with_context(|| format!("reading agent transcript `{}`", path.display()))?;

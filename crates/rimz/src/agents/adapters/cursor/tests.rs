@@ -1606,7 +1606,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
     let path = dir.path().join("conv-1.jsonl");
     std::fs::write(&path, format!("{terminal}\n{{\"role\":\"user\"")).unwrap();
     let path_string = path.to_string_lossy().into_owned();
-    let pricing = dir.path().join("pricing-cache.json");
+    let pricing = dir.path().join("pricing.v1.sqlite");
     let refresh = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         open_permission_since: None,
         prior_permission_settle: None,
@@ -1652,7 +1652,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     let path = dir.path().join("conv-1.jsonl");
     std::fs::write(&path, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n").unwrap();
     let path_string = path.to_string_lossy().into_owned();
-    let pricing = dir.path().join("pricing-cache.json");
+    let pricing = dir.path().join("pricing.v1.sqlite");
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         open_permission_since: None,
         prior_permission_settle: None,
@@ -1741,7 +1741,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     );
     std::fs::write(&path, one_turn).unwrap();
     let path_string = path.to_string_lossy().into_owned();
-    let pricing = dir.path().join("pricing-cache.json");
+    let pricing = dir.path().join("pricing.v1.sqlite");
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         open_permission_since: None,
         prior_permission_settle: None,

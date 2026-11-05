@@ -1008,7 +1008,7 @@ mod tests {
     fn turn_end_reconciles_resumed_claude_cost_upward() {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
-        let pricing_cache_path = dir.path().join("pricing-cache.json");
+        let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
         let mut file = std::fs::File::create(&transcript).unwrap();
         writeln!(
             file,
@@ -1083,7 +1083,7 @@ mod tests {
     fn opencode_wal_commit_refreshes_realtime_cost() {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("opencode.db");
-        let pricing_cache_path = dir.path().join("pricing-cache.json");
+        let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
         let connection = rimz::testkit::opencode::OpenCodeDb::new(&transcript, true, false);
         let initial = r#"{"cost":1.25,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
         let updated = r#"{"cost":9.75,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;

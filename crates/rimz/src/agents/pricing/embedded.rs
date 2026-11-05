@@ -1,10 +1,11 @@
-//! Tier 1: the build-time pricing snapshot embedded into the binary.
+//! Fresh-install seed and shared parser for upstream pricing projections.
 //!
 //! `build.rs` gzips the generated, compact LiteLLM-shaped snapshot into
 //! `OUT_DIR/litellm-pricing.json.gz`; it is included as compressed bytes here.
 //! The same [`parse`] turns a LiteLLM-shaped document into a price table,
 //! including 200k tiers, cache defaults, and fast multipliers, so the runtime
 //! refresh and the embedded snapshot share one parser.
+//! A usable shared table replaces the snapshot entirely, without layering.
 
 use std::collections::HashMap;
 use std::io::Read;

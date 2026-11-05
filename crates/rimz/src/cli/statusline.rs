@@ -119,7 +119,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime = runtime_paths_for_root(&workspace.project_root)?;
-    let prices = || pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = || pricing::cached_book(&runtime.shared_pricing_table_path());
     attach_context_cost(agent, &payload, &prices, &mut observation.context);
     rimz::store::agent_context::write(
         &runtime,
@@ -193,7 +193,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime = runtime_paths_for_root(&workspace.project_root)?;
     let (prices, book_fingerprint) =
-        pricing::cached_book_with_fingerprint(&runtime.shared_pricing_cache_path());
+        pricing::cached_book_with_fingerprint(&runtime.shared_pricing_table_path());
     for observation in &observations {
         rimz::store::subagent_context::update(
             &runtime,
@@ -329,17 +329,10 @@ mod tests {
             root: Some(workspace.project_root.clone()),
             color: crate::cli::ColorWhen::Never,
         };
-        let cache = runtime.shared_pricing_cache_path();
-        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-        std::fs::write(
-            cache,
-            json!({"schema": 4, "models": {"qwen-test-model": {
-                "input": 0.000001, "output": 0.000002, "cache_read": 0.0000001,
-                "cache_create": 0.0, "cache_read_explicit": true, "fast_multiplier": 1.0,
-            }}})
-            .to_string(),
-        )
-        .unwrap();
+        pricing::testkit::seed_cache(
+            &runtime,
+            r#"{"qwen-test-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000001,"cache_creation_input_token_cost":0.0}}"#,
+        );
         let before = pricing::testkit::book_loads();
         persist_context(
             "claude",

@@ -120,7 +120,7 @@ fn run(
             },
         )
         .map_err(|error| error.to_string())?;
-        let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+        let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
         let response = form.read_result(
             &output.stdout,
             &output.stderr,

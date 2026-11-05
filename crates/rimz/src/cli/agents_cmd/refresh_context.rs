@@ -63,7 +63,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         model: request.model.as_deref(),
         server_url: request.server_url.as_deref(),
         prior: prior.as_ref(),
-        pricing_cache_path: &runtime.shared_pricing_cache_path(),
+        pricing_cache_path: &runtime.shared_pricing_table_path(),
         broker_socket: broker_socket.as_deref(),
     }) else {
         return Ok(());
