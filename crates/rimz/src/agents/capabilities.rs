@@ -886,6 +886,11 @@ pub trait SessionCapability: CoreCapability {
     ) -> Option<crate::ids::AgentSessionId> {
         None
     }
+
+    /// Whether an unbound interactive frontend has no session integration.
+    fn is_untracked_frontend(&self, _cmdline: &str) -> bool {
+        false
+    }
 }
 
 #[doc(hidden)]

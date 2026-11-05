@@ -12,7 +12,9 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
-OpenCode 2.1.4 plain shared-service clients show one card for the conversation on screen, including its title and usage. A background tab's permission or form ask takes the card until answered. The home route keeps the last conversation's card unless it is deleted; explicit `--server` clients stay silent. Messaging and advanced controls require a RimZ-launched agent. See [OpenCode's mapping and limits](../internals/agents/adapter_opencode.md#known-gaps).
+OpenCode 2.1.4 plain full-TUI shared-service clients show one card for the conversation on screen, including its title and usage. A background tab's permission or form ask takes the card until answered. The home route keeps the last conversation's card unless it is deleted; explicit `--server` clients stay silent. Messaging and advanced controls require a RimZ-launched agent. See [OpenCode's mapping and limits](../internals/agents/adapter_opencode.md#known-gaps).
+
+Plain `opencode mini` on the shared service is untracked and shows a process row rather than an idle agent card. For mini started by hand, use `opencode mini --standalone`. Alternatively, disable OpenCode's service machine-wide with `opencode service set disabled true`; undo with `opencode service unset disabled`. RimZ never changes that setting. Mini's native footer keys differ from the full TUI; answer in its pane. `rimz answer` remains unsupported for all OpenCode frontends.
 
 ## Check coverage on your machine
 

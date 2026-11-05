@@ -352,7 +352,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::added_dirs_unloaded_files keeps target reminder wording in the adapter (+1).
 # LaunchFrontend carries provider frontend placement and extension auto-approval (+1).
 # LaunchCapability::take_frontend finalizes frontend arguments before compilation (+1).
-surface-budget = 1250
+# SessionCapability::is_untracked_frontend identifies frontends without session feeds (+1).
+# is_untracked_frontend shares the per-kind display fallback with the pane fold (+1).
+surface-budget = 1252
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -527,6 +529,11 @@ reason = "The session step returns argv and notices; only the CLI prints and rec
 kind = "item"
 key = "agents::capabilities::LaunchFrontend"
 reason = "Adapters return frontend placement and extension permission handling to the process compiler after all other argument edits."
+
+[[verdict]]
+kind = "item"
+key = "agents::is_untracked_frontend"
+reason = "Read-only pane projections ask the kind's session adapter whether an unbound frontend should remain a process row."
 
 [[verdict]]
 kind = "item"

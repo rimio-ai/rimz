@@ -15,7 +15,7 @@
 //! succession hands pane and card ownership to the new conversation.
 //! `session.deleted` and the activation cleanup sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
-//! Plain shared-service clients use `tui.ts` instead: the selected conversation
+//! Full-TUI shared-service clients use `tui.ts` instead: the selected conversation
 //! carries an on-screen stamp, arrivals report state without lifecycle edges,
 //! and background tabs report native asks, replies and deletion of an ask's session.
 
@@ -202,7 +202,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "in-process plugin session metadata + model catalog",
     },
     hook_install: ConcernCoverage::Wired {
-        via: "~/.config/opencode/plugins/rimz/{index.ts,tui.ts}; plain clients follow the screen",
+        via: "~/.config/opencode/plugins/rimz/{index.ts,tui.ts}; full-tui clients follow the screen",
     },
     account_spend: ConcernCoverage::Wired {
         via: "SQLite session_message + credential OAuth usage probe",
@@ -217,7 +217,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
 
 const OPENCODE_USER_COVERAGE: UserCoverage = UserCoverage {
     state: CapabilityLevel::Full {
-        note: "plain shared-service clients follow the on-screen conversation; background asks take the card until answered; home keeps the last card unless deleted",
+        note: "full-tui shared-service clients follow the on-screen conversation; background asks take the card until answered; home keeps the last card unless deleted; shared-service mini stays a process row",
     },
     live: CapabilityLevel::Full {
         note: "the selected conversation's token split and session dollars; off-screen cost waits for its next on-screen turn end",
@@ -1210,10 +1210,30 @@ fn opencode_config_home(
         .map(|home| home.join("opencode"))
 }
 
+impl crate::agents::capabilities::SessionCapability for OpencodeAdapter {
+    fn is_untracked_frontend(&self, cmdline: &str) -> bool {
+        let Some(args) = shlex::split(cmdline) else {
+            return false;
+        };
+        let Some(index) = args
+            .iter()
+            .position(|arg| Path::new(arg).file_name() == Some(std::ffi::OsStr::new("opencode")))
+        else {
+            return false;
+        };
+        let args = &args[index + 1..];
+        if args.iter().any(|arg| arg == "--standalone") {
+            return false;
+        }
+        args.iter()
+            .find(|arg| !arg.starts_with('-'))
+            .is_some_and(|arg| arg == MINI_SUBCOMMAND)
+    }
+}
+
 // Capabilities this agent has no behavior for; every method keeps its
 // default from `agents::capabilities`.
 impl crate::agents::capabilities::RuntimeControlCapability for OpencodeAdapter {}
-impl crate::agents::capabilities::SessionCapability for OpencodeAdapter {}
 
 #[cfg(test)]
 mod tests;

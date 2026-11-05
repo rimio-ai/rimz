@@ -1285,6 +1285,11 @@ pub enum LaunchDirMode {
     Displaced,
 }
 
+/// Keep an unbound, untracked frontend as a process rather than an idle agent.
+pub(crate) fn is_untracked_frontend(kind: &str, cmdline: &str) -> bool {
+    find_definition(kind).is_some_and(|adapter| adapter.is_untracked_frontend(cmdline))
+}
+
 fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Option<&'static str> {
     match need {
         TurnLifecycleNeed::None => None,
