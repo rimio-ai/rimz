@@ -23,6 +23,7 @@ type Cleanup = () => Promise<void>;
 
 const activations = new WeakMap<Context, Promise<Cleanup>>();
 const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
+const LAUNCH_AUTO_APPROVE = Symbol.for("rimz.launch-auto-approve");
 const DEFAULT_SESSION_TITLE = /^(?:New session|Child session) - /;
 
 function claimLaunchReminders(): string | undefined {
@@ -32,6 +33,15 @@ function claimLaunchReminders(): string | undefined {
     delete process.env.RIMZ_LAUNCH_REMINDERS;
   }
   return claimed[LAUNCH_REMINDERS];
+}
+
+function claimLaunchAutoApprove(): boolean {
+  const claimed = globalThis as Record<symbol, boolean | undefined>;
+  if (!(LAUNCH_AUTO_APPROVE in claimed)) {
+    claimed[LAUNCH_AUTO_APPROVE] = process.env.RIMZ_LAUNCH_AUTO_APPROVE === "1";
+    delete process.env.RIMZ_LAUNCH_AUTO_APPROVE;
+  }
+  return claimed[LAUNCH_AUTO_APPROVE] === true;
 }
 
 function executable(): string | undefined {
@@ -67,6 +77,9 @@ function setup(ctx: Context): Promise<Cleanup> | undefined {
 
 async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const reminders = claimLaunchReminders();
+  const autoApprove = claimLaunchAutoApprove();
+  // Request ids stay deduplicated until this activation is disposed.
+  const autoReplies = new Set<string>();
   const controller = new AbortController();
   const children = new Map<string, string>();
   const childModels = new Map<string, string>();
@@ -308,12 +321,14 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
       case "session.compaction.failed":
         void send(base("session_compacted", sessionID, { is_error: event.type === "session.compaction.failed" }));
         break;
-      case "permission.asked":
-        void send(base("permission_ask", sessionID, {
+      case "permission.asked": {
+        const feed = send(base("permission_ask", sessionID, {
           request_id: data.id, tool_name: data.action, patterns: data.resources,
           title: data.message || data.action,
         }));
+        if (autoApprove) await feed;
         break;
+      }
       case "permission.replied":
         void send(base("permission_replied", sessionID, { request_id: data.requestID, reply: data.reply }));
         break;
@@ -330,6 +345,25 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
         forms.delete(data.id);
         void send(base("question_rejected", sessionID, { request_id: data.id }));
         break;
+    }
+  }
+
+  async function permissionAsked(event: any): Promise<void> {
+    const { sessionID, id } = event.data;
+    const first = !autoReplies.has(id);
+    autoReplies.add(id);
+    try {
+      await onEvent(event);
+    } catch {
+      // A failed feed must not prevent the native permission decision.
+    }
+    if (!first || disposed) return;
+    try {
+      await ctx.permission.reply({ sessionID, requestID: id, decision: "once" });
+    } catch (error) {
+      if (typeof error === "object" && error !== null
+        && "_tag" in error && error._tag === "PermissionNotFoundError") return;
+      console.error("rimz: OpenCode permission reply failed:", error);
     }
   }
 
@@ -358,7 +392,13 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         if (disposed) break;
         try {
-          await onEvent(event);
+          if (autoApprove && event.type === "permission.asked") {
+            const done = permissionAsked(event);
+            pending.add(done);
+            void done.then(() => pending.delete(done));
+          } else {
+            await onEvent(event);
+          }
         } catch {
           // A failed enrichment or handler must not end event delivery.
         }
