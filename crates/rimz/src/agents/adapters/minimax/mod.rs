@@ -32,7 +32,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
     brand: Brand {
         emblem: None,
         color: 203,
-        color_rgb: (0xff, 0x55, 0x77),
+        color_rgb: (0xff, 0x37, 0x63),
     },
     plan_label: PlanLabel::Prefixed { prefix: "MiniMax" },
     plan_capacities: None,

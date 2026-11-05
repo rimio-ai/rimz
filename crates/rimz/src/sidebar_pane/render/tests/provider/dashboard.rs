@@ -484,7 +484,7 @@ fn copilot_art_spans_use_catalog_tints_over_the_brand_tone() {
 
     assert_eq!(tint("╭─╮╭─╮"), Some(Color::Indexed(33)), "goggle");
     assert_eq!(tint("▘▝"), Some(Color::Indexed(84)), "eyes");
-    assert_eq!(tint("█"), Some(Color::Indexed(140)), "head");
+    assert_eq!(tint("█"), Some(Color::Indexed(99)), "head");
 }
 
 #[test]

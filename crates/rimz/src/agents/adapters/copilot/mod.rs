@@ -60,8 +60,8 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     display_name: "Copilot",
     brand: Brand {
         emblem: None,
-        color: 140,
-        color_rgb: (0x89, 0x57, 0xe5),
+        color: 99,
+        color_rgb: (0x85, 0x34, 0xf3),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Copilot" },
     plan_capacities: None,

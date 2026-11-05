@@ -283,7 +283,7 @@ indexed = 4
 
 ## Provider styling
 
-`[theme.providers.<kind>]` restyles one provider's dashboard block over the built-in defaults: its display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code orange `#ff8700`). The brand color also styles agent titles in RimZ-owned tmux pane borders. Border colors update on the next room open, reattach, or `rimz reload`; newly opened windows take a changed theme after open, reattach, or sidebar reconcile refreshes their defaults. Set `[tmux] pane_border_status = "inherit"` to keep your tmux theme's labels instead.
+`[theme.providers.<kind>]` restyles one provider's dashboard block over the built-in defaults: its display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code grey `#a0a0a0`). The brand color also styles agent titles in RimZ-owned tmux pane borders. Border colors update on the next room open, reattach, or `rimz reload`; newly opened windows take a changed theme after open, reattach, or sidebar reconcile refreshes their defaults. Set `[tmux] pane_border_status = "inherit"` to keep your tmux theme's labels instead.
 
 ```toml
 [theme.providers.claude]
