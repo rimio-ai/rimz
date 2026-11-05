@@ -144,6 +144,20 @@ pub(crate) enum Component {
     ThrottleNotice,
     /// Parked workflow runs needing the user, above the footer.
     ParkNotice,
+    /// The stall glyph and word while any resource is active.
+    StallLeadActive,
+    /// The stall glyph and word once every resource is fading.
+    StallLeadFading,
+    /// An active stall's resource word, distinct from its caution figure.
+    StallWord,
+    /// An active resource's current whole-percent stall.
+    StallFigure,
+    /// A fading resource's word, figure and downward marker.
+    StallFading,
+    /// The seam between stall items.
+    StallSeparator,
+    /// The named or counted overflow of hidden stall items.
+    StallOverflow,
 }
 
 #[cfg(test)]
@@ -204,6 +218,13 @@ impl Component {
         Component::FastMode,
         Component::ThrottleNotice,
         Component::ParkNotice,
+        Component::StallLeadActive,
+        Component::StallLeadFading,
+        Component::StallWord,
+        Component::StallFigure,
+        Component::StallFading,
+        Component::StallSeparator,
+        Component::StallOverflow,
     ];
 }
 
@@ -214,8 +235,9 @@ impl Component {
         tone_color(match self {
             Sessions | Output | HelpKey | WindowHuge => palette.accent,
             LaneSpine | EntrySpine => palette.selection,
-            WorktreeHeader | BranchDelta | WorkflowState => palette.body,
-            WorktreePristine | WindowSmall | WorkflowDetour => palette.faint,
+            WorktreeHeader | BranchDelta | WorkflowState | StallWord => palette.body,
+            WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator => palette.faint,
+            StallLeadActive | StallFigure => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }
@@ -231,7 +253,9 @@ impl Component {
             CacheExpired => palette.cache_expired,
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
-            | ContextCompacted | WorkflowVisits => palette.muted,
+            | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow => {
+                palette.muted
+            }
         })
     }
 }

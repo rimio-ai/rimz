@@ -4,7 +4,7 @@ use crate::sidebar_pane::render::labels::value_seam;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
     HookDrainerOutageAgent, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
-    SidebarSnapshot, TruthNotice,
+    SidebarSnapshot, SidebarStallItem, SidebarStallPhase, SidebarStallResource, TruthNotice,
 };
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -346,93 +346,204 @@ pub(super) fn footer_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    vec![footer_line(footer_parts(snapshot, theme, width), width)]
+    vec![footer_line(footer_parts(snapshot, theme), width)]
 }
 
 #[derive(Clone)]
 pub(super) struct FooterParts {
-    left_options: Vec<Vec<Span<'static>>>,
+    link: Option<FooterLink>,
+    stall: Option<FooterStall>,
+    presence: Option<Span<'static>>,
     help: Span<'static>,
 }
 
-pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> FooterParts {
-    const HELP_TEXT: &str = "? for help";
+#[derive(Clone)]
+struct FooterLink {
+    full: Span<'static>,
+    bare: Span<'static>,
+    keep_figure: bool,
+}
 
-    let presence = presence_badge(snapshot.presence, snapshot.now, theme, width);
-    let link = snapshot
-        .link
-        .as_ref()
-        .map(|link| link_badge(link, theme, width));
-    let has_presence = presence.is_some();
-    let help = Span::styled(HELP_TEXT, theme.faint());
+#[derive(Clone)]
+struct FooterStall {
+    lead: Span<'static>,
+    glyph: Span<'static>,
+    items: Vec<(&'static str, Vec<Span<'static>>)>,
+    separator: Span<'static>,
+    overflow: Style,
+}
 
-    let mut left_options = vec![footer_left_spans(presence.clone(), link.clone())];
-    if has_presence {
-        left_options.push(footer_left_spans(presence, None));
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FooterStep {
+    Full,
+    NoPresence,
+    ShortHelp,
+    BareLink,
+    NoHelp,
+    NamedOverflow,
+    CountOverflow,
+    GlyphOnly,
+}
+
+pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme) -> FooterParts {
+    FooterParts {
+        link: snapshot.link.as_ref().map(|link| link_badge(link, theme)),
+        stall: (!snapshot.stall.is_empty()).then(|| stall_badge(&snapshot.stall, theme)),
+        presence: presence_badge(snapshot.presence, snapshot.now, theme),
+        help: Span::styled("? for help", theme.faint()),
     }
-    left_options.push(Vec::new());
-    FooterParts { left_options, help }
 }
 
 pub(super) fn footer_line(parts: FooterParts, width: usize) -> Line<'static> {
-    let help = Span::styled(layout::clip(&parts.help.content, width), parts.help.style);
-    let help_start = width.saturating_sub(help.width());
-    let mut left = Vec::new();
-    for option in parts.left_options {
-        left = option;
-        if footer_left_fits(&left, help_start) {
-            break;
+    use FooterStep::*;
+    for step in [
+        Full,
+        NoPresence,
+        ShortHelp,
+        BareLink,
+        NoHelp,
+        NamedOverflow,
+        CountOverflow,
+        GlyphOnly,
+    ] {
+        let mut left = parts.left(step);
+        let left_width = layout::spans_width(&left);
+        let fits = |help_width| {
+            let gap = if left_width > 0 && help_width > 0 {
+                2
+            } else {
+                0
+            };
+            left_width + gap + help_width <= width
+        };
+        let mut help = parts.help.clone();
+        if step >= ShortHelp {
+            help.content = "?".into();
         }
+        if step >= NoHelp && !fits(help.width()) {
+            help.content = "".into();
+        }
+        if !fits(help.width()) {
+            continue;
+        }
+        if help.width() > 0 {
+            left.push(Span::raw(" ".repeat(width - left_width - help.width())));
+            left.push(help);
+        }
+        return Line::from(left);
     }
-    let left = layout::trim_spans_to_width(left, help_start.saturating_sub(1));
-    positioned_footer_line(left, Some((help_start, help)))
-        .unwrap_or_else(|| Line::from(Vec::<Span<'static>>::new()))
+    Line::from(layout::trim_spans_to_width(parts.left(GlyphOnly), width))
 }
 
-fn footer_left_fits(left: &[Span<'static>], help_start: usize) -> bool {
-    let mut cursor = 0;
-    for span in left {
-        let width = span.width();
-        if width == 0 {
-            return false;
+impl FooterParts {
+    fn left(&self, step: FooterStep) -> Vec<Span<'static>> {
+        let mut left = Vec::new();
+        if let Some(link) = &self.link {
+            left.push(if step >= FooterStep::BareLink && !link.keep_figure {
+                link.bare.clone()
+            } else {
+                link.full.clone()
+            });
         }
-        cursor += width;
+        if let Some(stall) = &self.stall {
+            if !left.is_empty() {
+                left.push(Span::raw("  "));
+            }
+            left.extend(stall.spans(step));
+        }
+        if step == FooterStep::Full
+            && let Some(presence) = &self.presence
+        {
+            if !left.is_empty() {
+                left.push(Span::raw("  "));
+            }
+            left.push(presence.clone());
+        }
+        left
     }
-    help_start > cursor || left.is_empty()
 }
 
-fn positioned_footer_line(
-    left: Vec<Span<'static>>,
-    help: Option<(usize, Span<'static>)>,
-) -> Option<Line<'static>> {
-    let mut cursor = 0;
-    let mut spans = Vec::new();
-    for span in left {
-        if span.width() == 0 {
-            return None;
+impl FooterStall {
+    fn spans(&self, step: FooterStep) -> Vec<Span<'static>> {
+        let lead = if step == FooterStep::GlyphOnly {
+            &self.glyph
+        } else {
+            &self.lead
+        };
+        let mut spans = vec![lead.clone(), Span::raw(" ")];
+        let visible = if step >= FooterStep::NamedOverflow {
+            self.items.len().min(1)
+        } else {
+            self.items.len()
+        };
+        for (index, (_, item)) in self.items[..visible].iter().enumerate() {
+            if index > 0 {
+                spans.push(self.separator.clone());
+            }
+            spans.extend(item.iter().cloned());
         }
-        cursor += span.width();
-        spans.push(span);
+        let overflow = match &self.items[visible..] {
+            [] => return spans,
+            [(name, _)] if step == FooterStep::NamedOverflow => format!(" +{name}"),
+            hidden => format!(" +{}", hidden.len()),
+        };
+        spans.push(Span::styled(overflow, self.overflow));
+        spans
     }
-    if let Some((start, span)) = help {
-        if start <= cursor && !spans.is_empty() {
-            return None;
-        }
-        spans.push(Span::raw(" ".repeat(start.saturating_sub(cursor))));
-        spans.push(span);
-    }
-    Some(Line::from(spans))
 }
 
-fn footer_left_spans(
-    presence: Option<Span<'static>>,
-    link: Option<Span<'static>>,
-) -> Vec<Span<'static>> {
-    match (presence, link) {
-        (Some(presence), Some(link)) => vec![presence, Span::raw("  "), link],
-        (Some(presence), None) => vec![presence],
-        (None, Some(link)) => vec![link],
-        (None, None) => Vec::new(),
+fn stall_badge(items: &[SidebarStallItem], theme: &Theme) -> FooterStall {
+    let quiet = theme.muted().add_modifier;
+    let lead_style = if items
+        .iter()
+        .any(|item| item.phase == SidebarStallPhase::Active)
+    {
+        theme.styled(Component::StallLeadActive, Modifier::BOLD)
+    } else {
+        theme.styled(Component::StallLeadFading, quiet)
+    };
+    FooterStall {
+        lead: Span::styled(
+            format!("{} stall", theme.glyph(GlyphRole::ChromeStall)),
+            lead_style,
+        ),
+        glyph: Span::styled(theme.glyph(GlyphRole::ChromeStall).to_owned(), lead_style),
+        items: items
+            .iter()
+            .map(|item| {
+                let name = match item.resource {
+                    SidebarStallResource::Memory => "mem",
+                    SidebarStallResource::Cpu => "cpu",
+                    SidebarStallResource::Io => "io",
+                };
+                let spans = match item.phase {
+                    SidebarStallPhase::Active => vec![
+                        Span::styled(
+                            format!("{name} "),
+                            theme.styled(Component::StallWord, Modifier::empty()),
+                        ),
+                        Span::styled(
+                            format!("{}%", item.percent),
+                            theme.styled(Component::StallFigure, Modifier::BOLD),
+                        ),
+                    ],
+                    SidebarStallPhase::Fading => vec![Span::styled(
+                        format!(
+                            "{name} {}%{}",
+                            item.percent,
+                            theme.glyph(GlyphRole::ChromeStallFading)
+                        ),
+                        theme.styled(Component::StallFading, quiet),
+                    )],
+                };
+                (name, spans)
+            })
+            .collect(),
+        separator: Span::styled(
+            value_seam(theme),
+            theme.styled(Component::StallSeparator, theme.faint().add_modifier),
+        ),
+        overflow: theme.styled(Component::StallOverflow, quiet),
     }
 }
 
@@ -440,11 +551,10 @@ fn presence_badge(
     presence: Option<SidebarPresence>,
     now: jiff::Timestamp,
     theme: &Theme,
-    width: usize,
 ) -> Option<Span<'static>> {
     let presence = presence.filter(|presence| presence.shows_badge())?;
     let glyph = theme.glyph(GlyphRole::ChromePresenceAway);
-    let mut text = match presence {
+    let text = match presence {
         SidebarPresence::Active => return None,
         SidebarPresence::Idle { last_input_ms } => {
             let minutes =
@@ -457,30 +567,21 @@ fn presence_badge(
         }
         SidebarPresence::Detached => format!("{glyph} away"),
     };
-    text = layout::clip(&text, width);
     Some(Span::styled(text, theme.muted()))
 }
 
-fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'static> {
+fn link_badge(link: &SidebarLinkHealth, theme: &Theme) -> FooterLink {
+    let glyph = theme.glyph(GlyphRole::ChromeRemoteLink);
     let mut text = match link.freshness {
-        SidebarLinkFreshness::Stale => {
-            format!("{} remote ?", theme.glyph(GlyphRole::ChromeRemoteLink))
-        }
+        SidebarLinkFreshness::Stale => format!("{glyph} stale"),
         SidebarLinkFreshness::Fresh => match link.rtt_ms {
-            Some(rtt) => format!(
-                "{} remote {rtt}ms",
-                theme.glyph(GlyphRole::ChromeRemoteLink)
-            ),
-            None => format!("{} remote …", theme.glyph(GlyphRole::ChromeRemoteLink)),
+            Some(rtt) => format!("{glyph} {rtt}ms"),
+            None => format!("{glyph} …"),
         },
     };
     if link.freshness == SidebarLinkFreshness::Fresh && link.miss_pct > 10 {
-        let loss = format!(" {}%", link.miss_pct);
-        if layout::text_width(&text) + layout::text_width(&loss) <= width {
-            text.push_str(&loss);
-        }
+        text.push_str(&format!(" {}%", link.miss_pct));
     }
-    let text = layout::clip(&text, width);
     let style = match link.freshness {
         SidebarLinkFreshness::Stale => theme.muted(),
         SidebarLinkFreshness::Fresh => {
@@ -496,7 +597,12 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
             })
         }
     };
-    Span::styled(text, style)
+    FooterLink {
+        full: Span::styled(text, style),
+        bare: Span::styled(glyph.to_owned(), style),
+        keep_figure: link.freshness == SidebarLinkFreshness::Stale
+            || link.tier == crate::ids::LinkTier::Bad,
+    }
 }
 
 /// The `?` popup: a which-key style block with action keys, status filters, and

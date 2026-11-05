@@ -439,6 +439,10 @@ fn render_truth_degraded_notice_keeps_room_chrome() {
 #[test]
 fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
     let mut snapshot = snapshot_with(Vec::new());
+    snapshot.stall = serde_json::from_value(serde_json::json!([
+        {"resource":"memory", "percent":34, "phase":"active"}
+    ]))
+    .unwrap();
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",
@@ -458,6 +462,7 @@ fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
     assert!(!text.contains("Claude"), "{text}");
     assert!(!text.contains("W:"), "{text}");
     assert!(!text.contains("? for help"), "{text}");
+    assert!(!text.contains("stall"), "{text}");
     assert!(hits.is_empty());
 }
 

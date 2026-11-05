@@ -80,9 +80,9 @@ Save either choice with the same flags on `rimz remote add` or `rimz remote upda
 
 A supervised connection carries a health probe alongside your session: a small ping travels the same SSH link every two seconds, and its round trip drives a badge in the sidebar footer. The probe rides the real connection rather than ICMP, so the badge reflects what your session actually feels. A `--no-reconnect` run skips the probe and shows no badge.
 
-- `⇄ remote 210ms` is the round trip to the host. It warms from `⇄ remote …` on the first samples, then shades from green at or under 100ms, through gold and amber, to red at 400ms and above.
-- `⇄ remote 210ms 15%` appends probe loss once it passes 10 percent, measured over the last thirty probes as the share with no answer inside two seconds. A clean link shows no percentage, and that color climbs from green to red across 0 to 30 percent loss.
-- `⇄ remote ?` means the reading went stale: no fresh sample for ten seconds, usually a struggling link or a reconnect in flight. Past two minutes the badge disappears.
+- `⇄ 210ms` is the round trip to the host. It warms from `⇄ …` on the first samples, then shades from green at or under 100ms, through gold and amber, to red at 400ms and above.
+- `⇄ 210ms 15%` appends probe loss once it passes 10 percent, measured over the last thirty probes as the share with no answer inside two seconds. A clean link shows no percentage, and that color climbs from green to red across 0 to 30 percent loss.
+- `⇄ stale` means the reading went stale: no fresh sample for ten seconds, usually a struggling link or a reconnect in flight. Past two minutes the badge disappears.
 
 The badge shows the worse of its two axes, so a link with a fast round trip and heavy loss still reads hot.
 

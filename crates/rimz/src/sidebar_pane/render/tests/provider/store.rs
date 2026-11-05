@@ -352,7 +352,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     let lines = rendered.lines().collect::<Vec<_>>();
     let footer_index = lines
         .iter()
-        .position(|line| line.contains("⇄ remote 210ms"))
+        .position(|line| line.contains("⇄ 210ms"))
         .expect("folded remote footer");
     let footer = lines[footer_index];
 
@@ -385,5 +385,51 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
             .count(),
         1,
         "footer is not duplicated below the pet dashboard:\n{rendered}"
+    );
+}
+
+#[test]
+fn pets_footer_degrades_at_the_provider_block_width_not_the_pane_width() {
+    let mut snapshot = tabbed_provider_snapshot();
+    snapshot.theme.pets.enabled = true;
+    snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
+        rtt_ms: Some(210),
+        miss_pct: 0,
+        tier: crate::ids::LinkTier::Good,
+        freshness: crate::store::snapshot::SidebarLinkFreshness::Fresh,
+        sampled_at_ms: 1_700_000_000_000,
+    });
+    snapshot.stall = serde_json::from_value(serde_json::json!([
+        {"resource":"memory", "percent":34, "phase":"active"}
+    ]))
+    .unwrap();
+    let pane_ui = UiState {
+        pet: Some(cell_pet(8, 12, "ready")),
+        ..Default::default()
+    };
+    let actual = [49, 50, 51].map(|width| {
+        let screen = snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &selected_ui(),
+            &pane_ui,
+            width,
+            34,
+        );
+        let footer = screen.lines().last().unwrap().trim_end();
+        (
+            footer.contains("⇄ 210ms"),
+            footer.contains("⧗ stall mem 34%"),
+            footer.contains("? for help"),
+            footer.ends_with('?'),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (true, true, false, true),
+            (true, true, false, true),
+            (true, true, true, false)
+        ]
     );
 }

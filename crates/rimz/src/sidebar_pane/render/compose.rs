@@ -581,9 +581,7 @@ pub(super) fn build_bottom_chrome(
         header.push_inert(Line::from(""));
     }
     let mut bottom = RenderedBlock::default();
-    let folded_footer = plan
-        .folded_footer
-        .then(|| footer_parts(snapshot, theme, inner));
+    let folded_footer = plan.folded_footer.then(|| footer_parts(snapshot, theme));
     bottom.append(dashboard_chrome(
         snapshot,
         theme,

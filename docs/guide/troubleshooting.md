@@ -403,7 +403,7 @@ Every room link lands in the session manager instead of its room when RimZ could
 
 ### The remote link keeps dropping
 
-A remote room is plain SSH under a supervisor that reconnects itself when the link drops, and the sidebar footer carries a `⇄ remote` badge that reads link health at a glance. A link that will not hold usually fails the underlying SSH prerequisites. Confirm you can `ssh` to the target unattended (key-based auth, a reachable host), then reconnect. Saved aliases and the reconnect model are in [remote](./remote.md).
+A remote room is plain SSH under a supervisor that reconnects itself when the link drops, and the sidebar footer carries a `⇄` badge that reads link health at a glance. A link that will not hold usually fails the underlying SSH prerequisites. Confirm you can `ssh` to the target unattended (key-based auth, a reachable host), then reconnect. Saved aliases and the reconnect model are in [remote](./remote.md).
 
 ## Scheduled and scripted work isn't running
 

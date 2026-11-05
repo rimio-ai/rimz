@@ -96,7 +96,7 @@ fn active_and_unknown_presence_render_no_badge() {
 }
 
 #[test]
-fn presence_badge_precedes_remote_link_when_both_fit() {
+fn remote_anchor_precedes_presence_badge_when_both_fit() {
     let mut snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Detached));
     snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms: Some(42),
@@ -108,12 +108,12 @@ fn presence_badge_precedes_remote_link_when_both_fit() {
 
     let text = footer_text(&snapshot, 44);
 
-    assert!(text.starts_with("zᶻ away  ⇄ remote 42ms"));
+    assert!(text.starts_with("⇄ 42ms  zᶻ away"));
     assert!(text.ends_with("? for help"));
 }
 
 #[test]
-fn presence_badge_drops_remote_link_when_footer_is_narrow() {
+fn presence_badge_drops_before_remote_anchor_when_footer_is_narrow() {
     let mut snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Detached));
     snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms: Some(42),
@@ -125,13 +125,13 @@ fn presence_badge_drops_remote_link_when_footer_is_narrow() {
 
     let text = footer_text(&snapshot, 24);
 
-    assert!(text.starts_with("zᶻ away"));
-    assert!(!text.contains("remote"));
+    assert!(text.starts_with("⇄ 42ms"));
+    assert!(!text.contains("away"));
     assert!(text.ends_with("? for help"));
 }
 
 #[test]
-fn link_badge_does_not_replace_presence_when_only_link_fits() {
+fn stale_anchor_outlasts_presence_when_only_the_anchor_fits() {
     let mut snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
         last_input_ms: 3_600_000 - 17 * 60_000,
     }));
@@ -145,6 +145,6 @@ fn link_badge_does_not_replace_presence_when_only_link_fits() {
 
     let text = footer_text(&snapshot, 22);
 
-    assert_eq!(text, "            ? for help");
-    assert!(!text.contains("remote"));
+    assert_eq!(text, "⇄ stale     ? for help");
+    assert!(!text.contains("idle"));
 }

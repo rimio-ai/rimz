@@ -167,6 +167,8 @@ glyph_roles! {
         ChromeAlert => "alert",
         ChromePresenceAway => "presence_away",
         ChromeRemoteLink => "remote_link",
+        ChromeStall => "stall",
+        ChromeStallFading => "stall_fading",
         ChromeRemoteControl => "remote_control",
         ChromeHairline => "hairline",
         ChromeBoxTopLeft => "box_top_left",
