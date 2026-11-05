@@ -935,6 +935,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         true
     }
 
+    fn added_dirs_unloaded_files(&self) -> &'static str {
+        "hooks, settings, and CLAUDE.md/AGENTS.md"
+    }
+
     fn allow_added_dirs_args(
         &self,
         dirs: &[String],

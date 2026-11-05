@@ -601,6 +601,11 @@ pub trait LaunchCapability: CoreCapability {
         false
     }
 
+    /// Files not loaded from added directories, named in the empty-directory reminder.
+    fn added_dirs_unloaded_files(&self) -> &'static str {
+        "project configuration and instruction files"
+    }
+
     /// Grant file access through launch settings, independent of routine RimZ permissions.
     fn allow_added_dirs_args(
         &self,

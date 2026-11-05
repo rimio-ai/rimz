@@ -400,6 +400,15 @@ fn prepare(
     if cwd.is_some() {
         launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
     }
+    let home_fix = if request.workflow.is_some() {
+        "start the workflow from a project directory"
+    } else if request.loop_task.is_some() {
+        "re-add the loop task from a project directory"
+    } else if request.subagent {
+        "pass `--cwd <DIR>`, or launch the parent agent from a project directory"
+    } else {
+        "run it from a project directory, or pass `--cwd <DIR>`"
+    };
     if request.empty_dir {
         crate::agents::preflight_launch_dir(
             adapter,
@@ -409,18 +418,49 @@ fn prepare(
             crate::agents::LaunchDirMode::Displaced,
         )?;
     }
+    let fallback = if request.subagent
+        && cwd.is_some()
+        && !request.empty_dir
+        && adapter.supports_added_dirs()
+    {
+        match crate::agents::preflight_launch_dir(
+            adapter,
+            &launch.cwd,
+            launch.repo_root.as_deref(),
+            &login.env(&crate::agents::ambient_env()),
+            crate::agents::LaunchDirMode::Supervised,
+        ) {
+            Err(crate::agents::LaunchDirRefusal::Untrusted(refusal)) if refusal.is_undecided() => {
+                Some(refusal)
+            }
+            Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => {
+                bail!("{error}; {home_fix}")
+            }
+            Err(error) => bail!("`rimz agents -p` supervised launch refused: {error}"),
+            Ok(()) => None,
+        }
+    } else {
+        None
+    };
     let mut preflight_launch = agent_cell.launch.clone();
+    if fallback.is_some() {
+        let target = launch.cwd.display().to_string();
+        if !preflight_launch.add_dirs.contains(&target) {
+            preflight_launch.add_dirs.push(target);
+        }
+        preflight_launch.untrusted_checkout = true;
+    }
     preflight_launch.channel.clone_from(&request.channel);
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
     let mut checkout = None;
     let mut empty_dir_name = None;
-    if let Some(prepared) = prepare_empty_dir(
+    let prepared = prepare_empty_dir(
         store.paths(),
         &projection.agents,
         request.name.as_deref(),
         agent_cell,
         &login,
-        if request.empty_dir {
+        if request.empty_dir || fallback.is_some() {
             EmptyDirRequest::Required
         } else if layout
             .columns
@@ -436,7 +476,14 @@ fn prepare(
             EmptyDirRequest::Disabled
         },
         interaction,
-    )? {
+    );
+    let prepared = match fallback.as_ref() {
+        Some(refusal) => {
+            prepared.with_context(|| format!("supervised launch refused: {refusal}"))?
+        }
+        None => prepared?,
+    };
+    if let Some(prepared) = prepared {
         checkout = Some(launch.cwd.display().to_string());
         launch.cwd = prepared.cwd;
         launch.repo_root = None;
@@ -468,15 +515,6 @@ fn prepare(
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
-    let home_fix = if request.workflow.is_some() {
-        "start the workflow from a project directory"
-    } else if request.loop_task.is_some() {
-        "re-add the loop task from a project directory"
-    } else if request.subagent {
-        "pass `--cwd <DIR>`, or launch the parent agent from a project directory"
-    } else {
-        "run it from a project directory, or pass `--cwd <DIR>`"
-    };
     preflight_agent(adapter, &launch, &login, home_fix)?;
     preflight_program(adapter, &process, &launch.cwd)?;
     if !request.subagent {
@@ -534,6 +572,41 @@ fn prepare(
         )?;
         preflighted_logins.push(login);
         managed_launches.push(managed);
+    }
+    let mut fallback_assist = None;
+    if fallback.is_some() {
+        // Required placement can return neither Skip nor a successful Fallback.
+        let target = Path::new(
+            checkout
+                .as_deref()
+                .expect("a fallback requires empty placement"),
+        );
+        interaction.notice(Notice::UntrustedCwdFallback {
+            provider: adapter.spec().display_name,
+            profile: &request.spec,
+            agent: request.agent.as_deref(),
+            target,
+            cwd: &launch.cwd,
+        })?;
+        fallback_assist = Some(crate::harness::assist_log::Assist::UntrustedCwdFallback {
+            kind: agent_cell.kind.clone(),
+            login: login.key(),
+            target: target.to_path_buf(),
+            cwd: launch.cwd.clone(),
+            profile: Some(request.spec.clone()),
+        });
+        for row in layout
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.rows)
+        {
+            if let Cell::Agent(cell) = row {
+                cell.launch
+                    .add_dirs
+                    .clone_from(&launch_invocation.identity.params.add_dirs);
+                cell.launch.untrusted_checkout = true;
+            }
+        }
     }
     let entry = run_layout
         .as_ref()
@@ -608,6 +681,7 @@ fn prepare(
             entry,
             soft_name: false,
             throttle_turn: request.throttle_turn.clone(),
+            fallback_assist,
         })),
         leader_run: Some(leader),
     })))

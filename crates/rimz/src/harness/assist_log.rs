@@ -26,6 +26,14 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    UntrustedCwdFallback {
+        kind: AgentKind,
+        login: crate::ids::LoginKey,
+        target: PathBuf,
+        cwd: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     SpendRebuild {
         days: Vec<jiff::civil::Date>,
         files: usize,

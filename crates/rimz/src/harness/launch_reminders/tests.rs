@@ -2,6 +2,50 @@ use super::*;
 use crate::config::Team;
 
 #[test]
+fn empty_directory_target_explains_the_recorded_reason_for_each_kind() {
+    let cwd = crate::disk::paths::empty_dir_root().join("room/child");
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (kind, files) in [
+        ("claude", "hooks, settings, and CLAUDE.md/AGENTS.md"),
+        ("codex", ".codex config, hooks, and AGENTS.md"),
+    ] {
+        for untrusted in [true, false] {
+            let mut request =
+                ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+            request.identity.params = serde_json::from_value(serde_json::json!({
+                "checkout": "/target", "add_dirs": ["/target", "/other"],
+                "untrusted_checkout": untrusted
+            }))
+            .unwrap();
+            let text = render(&request, &LaunchReminders::default(), &cwd, None);
+            let provider = if kind == "claude" { "Claude" } else { "Codex" };
+            let reason = if untrusted {
+                format!("{provider} has no trust decision for this folder, so you started")
+            } else {
+                "Your caller started you".to_owned()
+            };
+            let sentence = format!(
+                "(Your caller asked you to work here. {reason} in an empty directory of your \
+                 own, {}its {files} were not loaded. Read, search, and cd into it freely; \
+                 read its instruction files yourself if the task needs them. If the task \
+                 needs code run inside it, stop and say so in your report.)",
+                if untrusted { "and " } else { "so " }
+            );
+            actual.push((
+                text.contains(&format!(
+                    "- cwd: {}\n- target: /target\n  {sentence}\n- added dir: /other",
+                    cwd.display()
+                )),
+                text.contains("- added dir: /target"),
+            ));
+            expected.push((true, false));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn added_directories_render_without_the_environment_switch_and_escape_paths() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());

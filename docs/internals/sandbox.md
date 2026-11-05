@@ -14,7 +14,7 @@ The code lives in `crates/rimz/src/sandbox/`:
 | `rewrite.rs` | User-only skill copies and system SSH-config mirrors: capture, digest, rewrite, atomic apply. |
 | `bind_guard.rs` | `BindGuard`, the [live repair](#live-protected-bind-repair) of protected binds that a host rename detached. |
 
-`harness/launch_plan.rs` is the one caller that plans and applies a view. Two other places read a view back to host paths: `cli::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `crates/rimz/src/cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
+`harness/launch_plan.rs` is the one caller that plans and applies a view. Two other places read a view back to host paths: `launcher::checkout::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `crates/rimz/src/cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
 
 ## Choosing the isolation
 
@@ -197,11 +197,11 @@ A child launched with `parent_agent_id` uses its parent's unit at every level. `
 
 The room's `shared/` (`StatePaths.room_shared_dir`) is the one directory every agent in the room reaches, and `$RIMZ_SHARED` names it at its host path at every level. RimZ's result files live in the state `out/` class and print as host paths.
 
-An applied `empty-dir` profile moves only the process cwd, to its directory under `~/.rimz/empty/`. The temp-unit owner and `RIMZ_SHARED` stay, since a child's unit comes from its parent's durable row and never from a process cwd. `RIMZ_WORKTREE_PATH` carries the recorded checkout for lane-aware commands, while provider argv, bubblewrap `--chdir`, hooks, and language-server leases use the process cwd.
+An applied `empty-dir` profile, explicit child `--empty-dir`, or undecided-cwd fallback moves only the process cwd, to its directory under `~/.rimz/empty/`. The temp-unit owner and `RIMZ_SHARED` stay, since a child's unit comes from its parent's durable row and never from a process cwd. `RIMZ_WORKTREE_PATH` carries the recorded checkout for lane-aware commands, while provider argv, bubblewrap `--chdir`, hooks, and language-server leases use the process cwd.
 
 ### Paths a caller names
 
-`cli::caller_host_path` turns a path a scoped caller names into the host path a launch needs, for an explicit launch `--cwd`, `--system-prompt-file`, or `--append-system-prompt-file`. The prompt files need it because the exec wrapper reads them in the new pane, outside the caller's view. The caller's ambient isolation selects the mapping, never machine policy, so a host shell keeps its paths. A relative path resolves against the caller's cwd before mapping and canonicalization.
+`launcher::checkout::caller_host_path` turns a path a scoped caller names into the host path a launch needs, for an explicit launch `--cwd`, subagent `--add-dir`, `--system-prompt-file`, or `--append-system-prompt-file`. The prompt files need it because the exec wrapper reads them in the new pane, outside the caller's view. The caller's ambient isolation selects the mapping, never machine policy, so a host shell keeps its paths. A relative path resolves against the caller's cwd before mapping and canonicalization.
 
 The mapping is `sandbox::TmpView::host_path` for the caller's own handle: `/tmp/...` and `/var/tmp/...` become `tmp/<caller handle>/...`. Two cases map wrong. A scoped subagent sees its parent's unit at `/tmp`, but its paths map into a unit under its own handle, which does not exist. A host path rebound under `/tmp` ([reachable host paths](#reachable-host-paths)) also maps into the unit, since this path does not consult the host-bound roots that [hook mapping](#hook-frames) honours. Both are known defects.
 

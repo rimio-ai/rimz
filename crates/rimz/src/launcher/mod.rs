@@ -174,6 +174,13 @@ pub enum Notice<'a> {
         clamp: &'a crate::harness::plan::PermissionClamp,
     },
     YoloSandbox(&'a str),
+    UntrustedCwdFallback {
+        provider: &'a str,
+        profile: &'a str,
+        agent: Option<&'a str>,
+        target: &'a Path,
+        cwd: &'a Path,
+    },
     RoomReset {
         session: &'a str,
         report: &'a crate::room::RoomResetReport,
@@ -1046,6 +1053,7 @@ fn settle_layout(
         entry: RoomEntry::Live,
         soft_name: false,
         throttle_turn: None,
+        fallback_assist: None,
     })))
 }
 
@@ -1344,7 +1352,7 @@ fn prepare_empty_dir(
     request: EmptyDirRequest,
     interaction: &mut dyn Interaction,
 ) -> Result<Option<crate::agents::empty_dir::Prepared>> {
-    match crate::agents::empty_dir::decide(
+    let decision = crate::agents::empty_dir::decide(
         paths,
         agents,
         requested,
@@ -1355,7 +1363,12 @@ fn prepare_empty_dir(
             EmptyDirRequest::Profile => cell.empty_dir == Some(true),
             EmptyDirRequest::Required => true,
         },
-    )? {
+    );
+    let decision = match request {
+        EmptyDirRequest::Required => decision.context("empty-dir ignored")?,
+        _ => decision?,
+    };
+    match decision {
         crate::agents::empty_dir::Decision::Applied(prepared) => Ok(Some(prepared)),
         crate::agents::empty_dir::Decision::Granted {
             key,

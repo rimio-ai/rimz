@@ -80,6 +80,8 @@ A reason that ends the server leaves the broker dormant, and the next agent quer
 
 A subagent launch never admits. It joins whatever broker its checkout already has, dormant or running, which by default is its parent's ([subagents.md § The child works where its parent works](./harness/subagents.md#the-child-works-where-its-parent-works)). A child sent with `--cwd` into a checkout with no broker gets exit 3 from its queries.
 
+An undecided-cwd fallback child starts in an empty directory, so it has no shared language server for the target added directory; adding file access does not acquire that checkout's broker.
+
 Admission for a live key joins it without starting another server. The wrapper takes its lease separately, after launch-plan application ([Leases and shutdown](#leases-and-shutdown)). Admission reuses the launcher's lenient machine config and skips effective config loading when neither machine nor project declares servers. Recovery is the one caller that never fails on admission: a config, registry, or memory-sampling error only warns there. Every other path keeps its strict effective-config checks.
 
 ### Admission

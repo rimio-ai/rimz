@@ -348,7 +348,9 @@ upward-dependencies = ["address"]
 # LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
 # pane_title, Seat, Seat::from_launch, short_label and title share pane and tab identity (+5).
 # LaunchCapability::supports_added_dirs and allow_added_dirs_args expose non-trusting file access (+2).
-surface-budget = 1246
+# LaunchDirUntrusted::is_undecided distinguishes a fallback from a saved refusal (+1).
+# LaunchCapability::added_dirs_unloaded_files keeps target reminder wording in the adapter (+1).
+surface-budget = 1248
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -697,7 +699,12 @@ reason = "The process compiler delegates provider-native host room permission pr
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::LaunchCapability::supports_added_dirs"
-reason = "Supervised entry and launch inspection warn when a provider cannot grant non-trusting file access."
+reason = "Supervised entry selects non-trusting fallback support and launch inspection warns on unsupported grants."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::added_dirs_unloaded_files"
+reason = "Launch reminders take provider-specific unloaded-file wording from the adapter."
 
 [[verdict]]
 kind = "item"

@@ -158,6 +158,7 @@ pub(super) fn render(
             cwd,
             team_context.as_ref(),
             params,
+            request.kind.as_str(),
         ));
     }
     if request.subagent {
@@ -184,16 +185,47 @@ fn env_paragraph(
     cwd: &Path,
     team: Option<&launch_context::TeamLaunchContext>,
     params: &LaunchParams,
+    kind: &str,
 ) -> String {
     let env = reminders.env;
     let mut lines = vec!["### Environment\n".to_owned()];
-    if env || team.is_some() {
+    if env || team.is_some() || !params.add_dirs.is_empty() {
         lines.push(format!(
             "- cwd: {}",
             escape_reminder_text(&cwd.to_string_lossy())
         ));
     }
-    for dir in &params.add_dirs {
+    let target = params.checkout.as_deref().filter(|target| {
+        params.add_dirs.iter().any(|dir| dir == target)
+            && crate::disk::paths::is_under_root(cwd, &crate::disk::paths::empty_dir_root())
+    });
+    if let Some(target) = target {
+        // Launch compilation resolves the kind before rendering its reminder.
+        let adapter = crate::agents::find_definition(kind)
+            .expect("the launch kind was resolved before rendering reminders");
+        let provider = adapter.spec().display_name;
+        let files = adapter.added_dirs_unloaded_files();
+        let reason = if params.untrusted_checkout {
+            format!(
+                "{provider} has no trust decision for this folder, so you started in an empty \
+                 directory of your own, and"
+            )
+        } else {
+            "Your caller started you in an empty directory of your own, so".to_owned()
+        };
+        lines.push(format!(
+            "- target: {}\n  (Your caller asked you to work here. {reason} its {files} were \
+             not loaded. Read, search, and cd into it freely; read its instruction files \
+             yourself if the task needs them. If the task needs code run inside it, stop \
+             and say so in your report.)",
+            escape_reminder_text(target)
+        ));
+    }
+    for dir in params
+        .add_dirs
+        .iter()
+        .filter(|dir| Some(dir.as_str()) != target)
+    {
         lines.push(format!("- added dir: {}", escape_reminder_text(dir)));
     }
     if (env || team.is_some())
