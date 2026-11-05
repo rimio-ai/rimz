@@ -22,6 +22,7 @@ pub mod read_marks;
 pub mod refresh;
 #[cfg(feature = "testkit")]
 pub mod scenario;
+pub mod stall;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod timing;

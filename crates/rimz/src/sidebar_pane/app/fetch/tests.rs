@@ -471,6 +471,100 @@ fn throttle_notices_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn stall_is_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut value = serde_json::to_value(&left).unwrap();
+    value["stall"] = serde_json::json!([
+        {"resource": "memory", "percent": 34, "phase": "active"}
+    ]);
+    let right = serde_json::from_value(value.clone()).unwrap();
+    let mut changes = vec![!same_snapshot_content(&left, &right)];
+    for (field, changed) in [
+        ("resource", serde_json::json!("cpu")),
+        ("percent", serde_json::json!(35)),
+        ("phase", serde_json::json!("fading")),
+    ] {
+        let mut updated = value.clone();
+        updated["stall"][0][field] = changed;
+        changes.push(!same_snapshot_content(
+            &right,
+            &serde_json::from_value(updated).unwrap(),
+        ));
+    }
+    changes.push(!same_snapshot_content(&right, &left));
+    assert_eq!(
+        changes,
+        vec![true; 5],
+        "every visible stall change must publish"
+    );
+}
+
+fn stalled_memory() -> Vec<crate::store::snapshot::SidebarStallItem> {
+    serde_json::from_value(serde_json::json!([
+        {"resource":"memory", "percent":34, "phase":"active"}
+    ]))
+    .unwrap()
+}
+
+#[test]
+fn one_cycle_reads_pressure_once_without_the_host_lock_and_projects_it() {
+    thread_local! {
+        static HOST: std::cell::RefCell<Option<Arc<Mutex<HostData>>>> = const {
+            std::cell::RefCell::new(None)
+        };
+        static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    let fixture = FetchFixture::new();
+    fixture.write_pane_frame();
+    let mut worker = fixture.worker();
+    HOST.set(Some(fixture.host_data.clone()));
+    worker.read_stall = || {
+        HOST.with_borrow(|host| assert!(host.as_ref().unwrap().try_lock().is_ok()));
+        READS.set(READS.get() + 1);
+        stalled_memory()
+    };
+    let updates = fixture.run_with(FetchRequest::default(), &mut worker);
+    let actual: Vec<_> = updates
+        .iter()
+        .map(|update| serde_json::to_value(snapshot(update)).unwrap()["stall"].clone())
+        .collect();
+    assert_eq!(
+        (READS.get(), actual),
+        (1, vec![serde_json::to_value(stalled_memory()).unwrap()])
+    );
+}
+
+#[test]
+fn both_publication_phases_stamp_the_cycle_stall_before_projection() {
+    let fixture = FetchFixture::new();
+    let mut worker = fixture.worker();
+    let (mut sink, reader) = single_sink(fixture.host_data.clone(), wake_channel().0);
+    sink.begin_cycle();
+    sink.inputs = Arc::new(FoldInputs {
+        stall: stalled_memory(),
+        ..Default::default()
+    });
+    let mut actual = Vec::new();
+    for phase in [FetchPhase::Interim, FetchPhase::Final] {
+        let mut fold = frameless(crate::sidebar_pane::app::fixtures::snapshot(&workspace()));
+        fold.workspace.0.display_name = format!("{phase:?}");
+        worker.publish_fold(
+            &fixture.state,
+            fold,
+            phase,
+            SnapshotSource::Cached,
+            &mut sink,
+        );
+        let update = reader.wait_first_unseen().unwrap();
+        actual.push(serde_json::to_value(snapshot(&update)).unwrap()["stall"].clone());
+    }
+    assert_eq!(
+        actual,
+        vec![serde_json::to_value(stalled_memory()).unwrap(); 2]
+    );
+}
+
+#[test]
 fn parked_workflows_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();

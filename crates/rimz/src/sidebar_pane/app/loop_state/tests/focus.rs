@@ -592,6 +592,7 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
                 sampled_at: Instant::now(),
                 anchor: Some(anchor.clone()),
                 filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+                stall: Vec::new(),
             }));
             assert!(crate::mux::focus_anchor::clear_matching(
                 &rig.runtime,
@@ -801,6 +802,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         sampled_at: Instant::now(),
         anchor: Some(anchor),
         filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+        stall: Vec::new(),
     }));
 
     // A backend mismatch fails before spawning, but runs real dispatch-error cleanup.
@@ -843,6 +845,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
             sampled_at: Instant::now(),
             anchor: None,
             filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+            stall: Vec::new(),
         }),
     );
     rig.state
@@ -1800,6 +1803,7 @@ fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
         sampled_at,
         anchor: Some(anchor),
         filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+        stall: Vec::new(),
     }));
     assert!(
         matches!(

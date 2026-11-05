@@ -2878,6 +2878,7 @@ impl PaneState {
                 sampled_at,
                 anchor: Some(anchor),
                 filter: v.state.make_up_filter.clone(),
+                stall: Vec::new(),
             }));
         self.fold_fused_now(v, prepared);
         v.context.fold_inputs = previous;

@@ -1643,6 +1643,7 @@ impl Rig {
                     sampled_at: self.state.pane.clock.now(),
                     anchor: crate::mux::focus_anchor::load(&self.runtime),
                     filter: crate::sidebar::body_filter::load(&self.runtime),
+                    stall: Vec::new(),
                 }),
                 ..Default::default()
             }),

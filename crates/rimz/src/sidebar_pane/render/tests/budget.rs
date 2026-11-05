@@ -271,6 +271,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         fleet_day_spend_epoch_secs: None,
         fleet_budget: None,
         link: None,
+        stall: Vec::new(),
         reflects_log: None,
         fenced_sessions: Default::default(),
         resume_outcomes: Some(Default::default()),
