@@ -147,12 +147,15 @@ To stop using the view, run `rimz config set agents.isolation host` and restart 
 
 ## The Zellij presence plugin
 
-On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant is four permissions:
+On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant is five permissions:
 
 - **Access Zellij state.** The plugin watches pane and tab shape.
 - **Run commands.** It runs the RimZ-owned `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` calls, and nothing else.
 - **Reconfigure.** It applies the room's mouse options and binds the configured [room keys](./configuration.md#sidebar-rendering), both at runtime, without writing your `config.kdl`.
 - **Change application state.** It applies a host-selected pane's mechanical fullscreen toggle; sidebar-aware target selection stays in the host command.
+- **Intercept input (`InterceptInput`).** It observes when its own client acts so messages [wait while you type](./messaging.md#park-steer-interrupt-or-schedule) and the sidebar can show input idle. CLI actions and buttonless mouse motion do not count. It reads only the client identity, CLI tag, and whether a mouse action is buttonless motion; it never stores or forwards the action's payload, keys, or pasted text.
+
+The input permission is requested even with `harness.typing_hold = "off"`: one stable grant avoids a fresh prompt whenever you toggle the hold. `rimz doctor` lists the seeded grant. Existing grants are extended before a new plugin build loads, including on reattach and reload.
 
 The vendored plugin is reproducibly built from the checked-in source on the repository's pinned Rust toolchain. Its source digest, wasm digest, and producing toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.
 

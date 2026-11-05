@@ -6,7 +6,7 @@ To hand work to an agent that is already running, you switch to its pane and typ
 
 Every send becomes a durable record before a byte reaches the pane. A busy agent, a room you close and reopen, or a failed write all leave a record you can read back, with the outcome on it, so nothing you send disappears quietly.
 
-On tmux, messages also wait while someone is using the receiving pane, until 30 seconds after that viewing client's last input. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
+Messages also wait while someone is using the receiving pane, until 30 seconds after that viewing client's last input. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
 
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"     # parks: lands when @claude's turn ends
