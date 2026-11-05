@@ -84,7 +84,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut viewed = Vec::new();
     let mut clients = Vec::new();
     let mut human_clients = 0;
-    let mut last_input_ms: Option<u64> = None;
+    let mut client_input_ms = std::collections::BTreeMap::new();
     for line in String::from_utf8_lossy(stdout).lines() {
         let mut cols = line.splitn(4, '|');
         let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
@@ -103,15 +103,16 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
 
         human_clients += 1;
         let pane = PaneId::from_parts(MuxName::Tmux, raw_pane);
+        let client_id = MuxClientId::Tmux(raw_client.to_owned());
         clients.push(ClientPaneView {
-            client_id: MuxClientId::Tmux(raw_client.to_owned()),
+            client_id: client_id.clone(),
             pane_id: pane.clone(),
         });
         let activity_ms = activity_s
             .and_then(|activity| activity.parse::<u64>().ok())
             .map(|activity| activity.saturating_mul(1_000));
         if let Some(activity_ms) = activity_ms {
-            last_input_ms = Some(last_input_ms.map_or(activity_ms, |known| known.max(activity_ms)));
+            client_input_ms.insert(client_id, activity_ms);
         }
         viewed.push((pane, activity_ms));
     }
@@ -129,7 +130,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
         viewed_panes,
         presence: ClientPresence {
             human_clients,
-            last_input_ms,
+            client_input_ms,
         },
     }
 }
@@ -346,7 +347,15 @@ mod tests {
             ]
         );
         assert_eq!(view.presence.human_clients, 3);
-        assert_eq!(view.presence.last_input_ms, Some(1_700_000_001_000));
+        assert_eq!(
+            view.presence.client_input_ms,
+            [
+                (MuxClientId::Tmux("client-a".to_owned()), 1_700_000_000_000),
+                (MuxClientId::Tmux("client-b".to_owned()), 1_700_000_001_000),
+            ]
+            .into()
+        );
+        assert_eq!(view.presence.last_input_ms(), Some(1_700_000_001_000));
         assert_eq!(
             view.clients,
             vec![
@@ -369,7 +378,7 @@ mod tests {
 
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);
-        assert_eq!(view.presence.last_input_ms, None);
+        assert_eq!(view.presence.last_input_ms(), None);
     }
 
     #[test]

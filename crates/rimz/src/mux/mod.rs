@@ -437,9 +437,14 @@ pub struct ClientFocusOptions {
 #[derive(Clone, Debug, Default)]
 pub struct ClientPresence {
     pub human_clients: usize,
-    /// Freshest client input timestamp in Unix milliseconds. `None` means the
-    /// backend cannot report per-client input idle.
-    pub last_input_ms: Option<u64>,
+    /// Last input in Unix milliseconds, omitting clients without a known clock.
+    pub client_input_ms: BTreeMap<crate::ids::MuxClientId, u64>,
+}
+
+impl ClientPresence {
+    pub fn last_input_ms(&self) -> Option<u64> {
+        self.client_input_ms.values().copied().max()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -450,6 +455,16 @@ pub struct ClientView {
 }
 
 impl ClientView {
+    pub fn attended_until(&self, pane: &PaneId, hold: Duration) -> Option<u64> {
+        let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
+        self.clients
+            .iter()
+            .filter(|client| client.pane_id == *pane)
+            .filter_map(|client| self.presence.client_input_ms.get(&client.client_id))
+            .map(|input| input.saturating_add(hold_ms))
+            .max()
+    }
+
     /// Resolve fresh attached-client evidence only when every observation names
     /// the same live pane. Detailed client rows outrank summarized pane ids;
     /// dead summarized panes do not invalidate one distinct live pane.
@@ -1463,6 +1478,38 @@ pub(crate) fn capture_tail(raw_text: String, max_lines: Option<u16>) -> (String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attended_until_uses_only_the_viewing_clients_clocks() {
+        use crate::ids::MuxClientId;
+
+        let pane = PaneId::from_parts(MuxName::Tmux, "%1");
+        let other = PaneId::from_parts(MuxName::Tmux, "%2");
+        let a = MuxClientId::Tmux("a".to_owned());
+        let b = MuxClientId::Tmux("b".to_owned());
+        let mut view = ClientView {
+            clients: vec![
+                ClientPaneView {
+                    client_id: a.clone(),
+                    pane_id: pane.clone(),
+                },
+                ClientPaneView {
+                    client_id: b.clone(),
+                    pane_id: other.clone(),
+                },
+            ],
+            ..ClientView::default()
+        };
+        let hold = Duration::from_secs(30);
+        let mut deadlines = vec![view.attended_until(&pane, hold)];
+        view.presence.client_input_ms.insert(b.clone(), 200_000);
+        deadlines.push(view.attended_until(&pane, hold));
+        view.presence.client_input_ms.insert(a, 100_000);
+        deadlines.push(view.attended_until(&pane, hold));
+        view.clients[1].pane_id = pane.clone();
+        deadlines.push(view.attended_until(&pane, hold));
+        assert_eq!(deadlines, [None, None, Some(130_000), Some(230_000)]);
+    }
 
     #[test]
     fn capture_trim_keeps_last_requested_lines() {

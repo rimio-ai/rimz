@@ -340,7 +340,7 @@ fn client_view(mux: MuxName, session: &str) -> Result<crate::mux::ClientView> {
 fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> PresenceSample {
     PresenceSample {
         human_clients: view.presence.human_clients,
-        last_input_ms: view.presence.last_input_ms,
+        last_input_ms: view.presence.last_input_ms(),
         sampled_at_ms: unix_now_ms(),
     }
 }

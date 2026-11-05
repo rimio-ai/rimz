@@ -2539,7 +2539,10 @@ exit 1
     );
     let client = listing.client_view.expect("client view");
     assert_eq!(
-        (client.presence.human_clients, client.presence.last_input_ms),
+        (
+            client.presence.human_clients,
+            client.presence.last_input_ms()
+        ),
         (2, None)
     );
     assert_eq!(client.viewed_panes, vec![pane.pane_id.clone()]);

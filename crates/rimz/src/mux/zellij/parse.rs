@@ -152,7 +152,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> Option<ClientView> {
         viewed_panes,
         presence: ClientPresence {
             human_clients: client_ids.len(),
-            last_input_ms: None,
+            client_input_ms: Default::default(),
         },
     })
 }
