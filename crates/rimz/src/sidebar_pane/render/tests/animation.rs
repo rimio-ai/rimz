@@ -264,6 +264,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: Timestamp::now(),
             card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
                 crate::store::snapshot::AgentCard {
@@ -1138,6 +1139,7 @@ fn selected_pet_action_follows_process_cards() {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: fixed_now(),
             card: crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard {
                 state: crate::store::snapshot::ProcessState::Busy,

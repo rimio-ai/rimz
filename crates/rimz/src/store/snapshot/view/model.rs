@@ -914,6 +914,7 @@ mod tests {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: jiff::Timestamp::now(),
             card: if agent {
                 crate::store::snapshot::RowCard::Agent(std::sync::Arc::default())

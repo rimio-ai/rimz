@@ -360,6 +360,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: agent.last_activity,
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 description: Some(format!("reading {lane}.rs")),
@@ -565,6 +566,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: agent.last_activity,
         card: RowCard::Agent(std::sync::Arc::default()),
     });
@@ -1135,6 +1137,7 @@ fn live_instances_use_the_published_unit_in_the_matching_cohort() {
                 inactive: false,
                 archived: false,
                 attention_score: 0,
+                attention_at_ms: None,
                 last_activity: jiff::Timestamp::UNIX_EPOCH,
             })
             .collect::<Vec<_>>();

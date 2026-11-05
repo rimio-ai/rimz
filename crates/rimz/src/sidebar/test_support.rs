@@ -156,6 +156,7 @@ pub(crate) fn activity_row(
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity,
         card: if is_agent {
             crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(

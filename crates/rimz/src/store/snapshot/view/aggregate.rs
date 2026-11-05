@@ -360,6 +360,7 @@ mod tests {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status: AgentStatus::Idle,
@@ -444,6 +445,7 @@ mod tests {
                 inactive: false,
                 archived: false,
                 attention_score: 0,
+                attention_at_ms: None,
                 last_activity: aged,
                 card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                     status: AgentStatus::Idle,
@@ -462,6 +464,7 @@ mod tests {
                 inactive: false,
                 archived: false,
                 attention_score: 0,
+                attention_at_ms: None,
                 last_activity: aged,
                 card: RowCard::Process(ProcessCard::default()),
             },

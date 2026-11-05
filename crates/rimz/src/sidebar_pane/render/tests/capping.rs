@@ -1220,6 +1220,7 @@ fn agent_row(id: &str, status: AgentStatus) -> crate::store::snapshot::SidebarRo
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: fixed_now(),
         card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
             crate::store::snapshot::AgentCard {
@@ -1254,6 +1255,7 @@ fn process_row(id: &str) -> crate::store::snapshot::SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: fixed_now(),
         card: crate::store::snapshot::RowCard::Process(
             crate::store::snapshot::ProcessCard::default(),

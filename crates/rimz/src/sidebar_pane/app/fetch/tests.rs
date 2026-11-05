@@ -1753,13 +1753,7 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     );
     let younger = younger_rx.wait_first_unseen().unwrap();
     assert_eq!(
-        snapshot(&younger)
-            .rows()
-            .next()
-            .unwrap()
-            .as_agent()
-            .unwrap()
-            .attention_at_ms,
+        snapshot(&younger).rows().next().unwrap().attention_at_ms,
         Some(birth_ms)
     );
     let FetchUpdate::Shared { context, .. } = &younger else {

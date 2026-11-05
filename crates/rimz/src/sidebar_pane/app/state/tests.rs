@@ -108,6 +108,7 @@ fn row_snapshot_at(
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity,
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status,
@@ -211,6 +212,7 @@ fn snapshot_in_group(
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
         card: crate::store::snapshot::RowCard::Process(
             crate::store::snapshot::ProcessCard::default(),

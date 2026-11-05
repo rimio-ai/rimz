@@ -220,6 +220,7 @@ mod tests {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: now,
             card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
                 crate::store::snapshot::AgentCard::from_agent(child, now),

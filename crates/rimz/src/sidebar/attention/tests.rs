@@ -38,11 +38,7 @@ fn order(snapshot: &SidebarSnapshot) -> Vec<String> {
 }
 
 fn stamp(snapshot: &SidebarSnapshot, id: &str) -> Option<i64> {
-    snapshot
-        .rows()
-        .find(|row| row.id == id)?
-        .as_agent()?
-        .attention_at_ms
+    snapshot.rows().find(|row| row.id == id)?.attention_at_ms
 }
 
 fn reconcile(stamps: &mut AttentionStamps, snapshot: &mut SidebarSnapshot) {

@@ -149,6 +149,7 @@ mod tests {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: Timestamp::now(),
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status,

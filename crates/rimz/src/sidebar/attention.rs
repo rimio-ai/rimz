@@ -101,17 +101,18 @@ impl AttentionStamps {
         };
         for index in 0..snapshot.worktree_groups.len() {
             let group = &snapshot.worktree_groups[index];
-            if !group.rows.iter().any(|row| {
-                row.as_agent()
-                    .is_some_and(|agent| agent.attention_at_ms != stamp(row))
-            }) {
+            if !group
+                .rows
+                .iter()
+                .any(|row| row.is_agent() && row.attention_at_ms != stamp(row))
+            {
                 continue;
             }
             let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[index];
             for row in std::sync::Arc::make_mut(&mut group.rows) {
                 let at_ms = stamp(row);
-                if let Some(agent) = row.as_agent_mut() {
-                    agent.attention_at_ms = at_ms;
+                if row.is_agent() {
+                    row.attention_at_ms = at_ms;
                 }
             }
         }

@@ -394,7 +394,7 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
         archived: row.archived,
         status,
         score: row.attention_score,
-        attention_at_ms: row.as_agent().and_then(|agent| agent.attention_at_ms),
+        attention_at_ms: row.attention_at_ms,
         last_activity: row.last_activity,
         registered_at: row.as_agent().and_then(|agent| agent.registered_at),
         pane_ordinal: row_ordinal(row),
@@ -712,12 +712,8 @@ pub fn group_live_agents_by_worktree<'a>(
     let windows = AttentionWindows::from_config(&snapshot.attention);
     let stamps: BTreeMap<_, _> = snapshot
         .rows()
-        .filter_map(|row| {
-            Some((
-                (row.name.as_str(), row.id.as_str()),
-                row.as_agent()?.attention_at_ms?,
-            ))
-        })
+        .filter(|row| row.is_agent())
+        .filter_map(|row| Some(((row.name.as_str(), row.id.as_str()), row.attention_at_ms?)))
         .collect();
     let resolver = GroupResolver::new(
         snapshot,

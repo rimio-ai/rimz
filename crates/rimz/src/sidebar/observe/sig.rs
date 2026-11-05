@@ -270,10 +270,10 @@ pub fn extract_sig(
                     .is_some_and(crate::agents::AgentStatus::is_actionable),
                 inactive: row.inactive,
                 archived: row.archived,
-                attention_at_ms: row.as_agent().and_then(|agent| {
-                    agent
-                        .attention_at_ms
-                        .or_else(|| agent.registered_at.map(|birth| birth.as_millisecond()))
+                attention_at_ms: row.attention_at_ms.or_else(|| {
+                    row.as_agent()?
+                        .registered_at
+                        .map(|birth| birth.as_millisecond())
                 }),
                 sub_agent_ids: row
                     .sub_agents()

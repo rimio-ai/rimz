@@ -33,6 +33,7 @@ fn card_row(card: AgentCard) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: Timestamp::UNIX_EPOCH,
         card: RowCard::Agent(std::sync::Arc::new(card)),
     }
@@ -416,6 +417,7 @@ fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: now,
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Paused,
@@ -516,6 +518,7 @@ fn report_cost_includes_delegated_spend() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: now,
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             context: Some(context),
@@ -589,6 +592,7 @@ fn full_entry_has_a_stable_projection() {
         inactive: false,
         archived: false,
         attention_score: 42,
+        attention_at_ms: None,
         last_activity: now,
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Running,

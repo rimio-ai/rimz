@@ -99,6 +99,7 @@ fn every_coviewer_holds_its_card_and_a_release_freezes_without_a_selection_chang
             .collect();
         for group in Arc::make_mut(&mut snapshot.worktree_groups) {
             for row in Arc::make_mut(&mut group.rows) {
+                row.attention_at_ms = Some(30);
                 row.card = crate::store::snapshot::RowCard::Agent(Arc::new(
                     crate::store::snapshot::AgentCard {
                         status: if row.pane.as_ref().unwrap().pane_id == q {
@@ -107,7 +108,6 @@ fn every_coviewer_holds_its_card_and_a_release_freezes_without_a_selection_chang
                             crate::agents::AgentStatus::Running
                         },
                         registered_at: Some(snapshot.now),
-                        attention_at_ms: Some(30),
                         ..Default::default()
                     },
                 ));
@@ -2644,11 +2644,11 @@ fn working_focus_without_a_client_sample_does_not_create_a_rank_hold() {
     set_agent_status(&mut before, crate::agents::AgentStatus::Running);
     let rows = Arc::make_mut(&mut Arc::make_mut(&mut before.worktree_groups)[0].rows);
     let focused = rows[0].pane.as_ref().unwrap().pane_id.clone();
-    rows[0].as_agent_mut().unwrap().attention_at_ms = Some(10);
+    rows[0].attention_at_ms = Some(10);
     let mut other = rows[0].clone();
     other.id = "agent-2".into();
     other.pane = Some(pane("terminal_1", "tab_0", false));
-    other.as_agent_mut().unwrap().attention_at_ms = Some(20);
+    other.attention_at_ms = Some(20);
     rows.push(other);
     before.focused_pane = Some(focused.clone());
     before.viewed_panes = vec![rig.state.pane.config.own_pane.clone()];
@@ -2664,7 +2664,7 @@ fn working_focus_without_a_client_sample_does_not_create_a_rank_hold() {
         .find(|row| row.id == "agent-1")
         .unwrap();
     row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
-    row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+    row.attention_at_ms = Some(30);
     rig.fold(after, SnapshotSource::Produced);
     assert_eq!(
         rig.view()

@@ -194,6 +194,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: Timestamp::now(),
         card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
             crate::store::snapshot::AgentCard {
@@ -223,6 +224,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: Timestamp::now(),
         card: crate::store::snapshot::RowCard::Process(
             crate::store::snapshot::ProcessCard::default(),
@@ -358,6 +360,7 @@ fn filter_row(
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: Timestamp::now(),
         card: if is_agent {
             crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
