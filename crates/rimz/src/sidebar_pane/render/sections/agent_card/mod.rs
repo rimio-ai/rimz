@@ -43,7 +43,7 @@ use entry::{Entry, push_entry};
 use identity::{identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
 
-use super::process::{process_detail_line, process_row_line};
+use super::process::{not_tracked_lines, process_detail_line, process_row_line};
 use super::{
     CardExpansion, Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter,
 };
@@ -229,7 +229,12 @@ pub(super) fn row_lines(
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
-    if row.is_process() {
+    if let Some(note) = row
+        .as_process()
+        .and_then(|process| process.not_tracked.as_ref())
+    {
+        inner.extend(not_tracked_lines(ctx, row, &note.fix).map(CardLine::from));
+    } else if row.is_process() {
         inner.push(CardLine::from(identity_line(ctx, row, attention, cost_usd)));
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
             inner.push(line.into());

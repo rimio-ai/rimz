@@ -2,6 +2,45 @@ use super::*;
 use crate::mux::WidthAdjust;
 use std::time::Duration;
 
+#[test]
+fn clicking_not_tracked_tip_focuses_its_pane() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
+    row.name = "codex".to_owned();
+    row.as_process_mut().unwrap().not_tracked = Some(crate::agents::NotTracked {
+        reason: crate::agents::NotTrackedReason::HooksMissing,
+        fix: "rimz hooks install codex, then restart".to_owned(),
+    });
+    let target = pane_of(&snapshot, 1);
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &view, &ui, theme.as_ref(), 54, 64);
+    let tip = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("tip:"));
+    assert!(tip.is_some(), "the not-tracked row must have a second line");
+    let tip = tip.unwrap() as u16;
+    ui.interactions = composed.interactions;
+    remember_roster(&mut view, &mut ui, &snapshot);
+    for line in [tip - 1, tip] {
+        for column in [0, 10, 53] {
+            assert_eq!(
+                handle_mouse_click(column, line, &mut view, &mut ui, &snapshot),
+                InputOutcome {
+                    redraw: true,
+                    effects: vec![InputEffect::Focus(target.clone())],
+                },
+            );
+            assert_eq!(view.selected_pane, Some(target.clone()));
+            assert_eq!(view.selected_index, Some(1));
+        }
+    }
+}
+
 fn assert_no_selection_move(action: KeyAction, target: usize) {
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = ViewState::default();

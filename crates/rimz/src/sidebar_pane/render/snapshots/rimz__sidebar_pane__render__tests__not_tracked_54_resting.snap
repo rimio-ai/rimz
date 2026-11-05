@@ -1,0 +1,20 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                            $0.00
+ ────────────────────────────────────────────────────
+
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ○ untracked-agent-pane · not tracked
+   tip: rimz hooks install codex, then restart
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

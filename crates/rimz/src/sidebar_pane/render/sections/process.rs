@@ -1,5 +1,5 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
-//! and the full-command detail line.
+//! the full-command detail line, and known reporting gaps.
 
 use crate::agents::AgentStatus;
 use crate::config::{AnimationRole, GlyphRole};
@@ -9,9 +9,10 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{fmt_cpu, fmt_io, fmt_rss};
 use crate::sidebar_pane::render::labels::{role_glyph, status_glyph, status_style, working_style};
+use crate::sidebar_pane::render::layout::{ellipsize, ellipsize_words, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{Tier, pin_right, trim_spans_to_width};
+use super::{RowCtx, Tier, content_width, pin_right, trim_spans_to_width};
 
 pub(super) fn process_row_line(
     theme: &Theme,
@@ -20,13 +21,44 @@ pub(super) fn process_row_line(
     animation_phase: u64,
     head_step: u64,
 ) -> Line<'static> {
+    let state = row.process_state().unwrap_or(ProcessState::Idle);
+    let foreign_user = row
+        .as_process()
+        .and_then(|process| process.foreign_user.as_deref());
+    let mut left = vec![
+        process_lead(theme, row, animation_phase, head_step),
+        Span::raw(" "),
+        Span::styled(row.name.clone(), theme.body()),
+    ];
+    if let Some(user) = foreign_user {
+        left.push(Span::raw(" "));
+        left.push(Span::styled(format!("({user})"), theme.muted()));
+    }
+    // At L2 width, active process rows pin resource stats right:
+    // `C  11%  M 1.1G  ⇅   3M/s`. Idle shells and editors stay bare; the
+    // whole cluster also drops at L0/L1, or until every metric has reported.
+    if Tier::for_width(width) == Tier::L2 && !state.is_idle() {
+        let right = proc_stats_spans(theme, row);
+        if !right.is_empty() {
+            return pin_right(left, right, width);
+        }
+    }
+    Line::from(trim_spans_to_width(left, width))
+}
+
+fn process_lead(
+    theme: &Theme,
+    row: &SidebarRow,
+    animation_phase: u64,
+    head_step: u64,
+) -> Span<'static> {
     // The row speaks the agent cards' vocabulary one step down: an active
     // pane (a build, a test, a script) gets the running braille spinner in
     // the same work clay a running agent wears, an idle shell or a TUI rests
-    // on the neutral hollow `○` of an idle agent — the lead DIM-weighted, the
-    // name at the soft tier. That slight step — not a seam line — is what
-    // sets process rows apart from the agent cards sharing their order, and
-    // under `NO_COLOR` it survives as the soft tier's DIM weight.
+    // on the neutral hollow `○` of an idle agent, the lead DIM-weighted. That
+    // slight step — not a seam line — is what sets process rows apart from
+    // the agent cards sharing their order, and under `NO_COLOR` it survives as
+    // the lead's DIM weight. A stuck process keeps the bold failure glyph.
     let state = row.process_state().unwrap_or(ProcessState::Idle);
     let foreign_user = row
         .as_process()
@@ -52,25 +84,41 @@ pub(super) fn process_row_line(
             ),
         }
     };
-    let mut left = vec![
-        Span::styled(lead, lead_style),
+    Span::styled(lead, lead_style)
+}
+
+pub(super) fn not_tracked_lines(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    fix: &str,
+) -> [Line<'static>; 2] {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
+    let lead = process_lead(theme, row, ctx.animation_phase, ctx.head_step);
+    let suffix = format!(" {} not tracked", theme.glyph(GlyphRole::Seam));
+    let label_width = width.saturating_sub(lead.width() + 1 + text_width(&suffix));
+    let title = Line::from(vec![
+        lead,
         Span::raw(" "),
-        Span::styled(row.name.clone(), theme.body()),
-    ];
-    if let Some(user) = foreign_user {
-        left.push(Span::raw(" "));
-        left.push(Span::styled(format!("({user})"), theme.muted()));
+        Span::styled(ellipsize(&row.name, label_width), theme.body()),
+        Span::styled(
+            suffix,
+            theme.styled(Component::NotTrackedSuffix, theme.muted().add_modifier),
+        ),
+    ]);
+    let mut tip = vec![Span::raw("  ")];
+    let label = if ctx.tier == Tier::L0 { "" } else { "tip: " };
+    if !label.is_empty() {
+        tip.push(Span::styled(
+            label,
+            theme.styled(Component::NotTrackedTip, theme.muted().add_modifier),
+        ));
     }
-    // At L2 width, active process rows pin resource stats right:
-    // `C  11%  M 1.1G  ⇅   3M/s`. Idle shells and editors stay bare; the
-    // whole cluster also drops at L0/L1, or until every metric has reported.
-    if Tier::for_width(width) == Tier::L2 && !state.is_idle() {
-        let right = proc_stats_spans(theme, row);
-        if !right.is_empty() {
-            return pin_right(left, right, width);
-        }
-    }
-    Line::from(trim_spans_to_width(left, width))
+    tip.push(Span::styled(
+        ellipsize_words(fix, width.saturating_sub(2 + text_width(label))),
+        theme.styled(Component::NotTrackedFix, theme.body().add_modifier),
+    ));
+    [title, Line::from(tip)]
 }
 
 /// The figure slot widths of the fixed stats grid: each figure right-aligns

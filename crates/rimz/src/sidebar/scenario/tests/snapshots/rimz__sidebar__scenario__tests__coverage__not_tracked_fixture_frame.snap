@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
+expression: rendered
+---
+ ⌘ query-engine                /srv/code/query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                            $0.00
+ ────────────────────────────────────────────────────
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌○ qoder · not tracked                               ▐
+▌  tip: rimz hooks install qoder, then restart       ▐
+▎○ hermes · not tracked                              🮇
+▎  tip: launch hermes in a terminal and answer y to… 🮇
+▎○ custom-agent · not tracked                        🮇
+▎  tip: start in an interactive mode                 🮇
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

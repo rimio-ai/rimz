@@ -71,7 +71,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 
 An auto-launched Codex permission stays Running during its first 60 seconds of automatic review. A rollout showing that the asking Code Mode cell finished closes the ask and keeps the card Running. Otherwise, if still open, it becomes `?` on the next refresh, with a fresh unread episode at the 60-second visibility instant rather than the hook time. Questions and plan approvals remain immediate ([Codex asks](../internals/agents/adapter_codex.md#asks-and-answers)).
 
-On a process row, `!` means the process is stuck ([process rows](#process-rows)).
+On a process row, `!` means the process is stuck ([process rows](#process-rows)). On a [not-tracked row](#not-tracked-rows), `○` means RimZ reads nothing from that agent, not that the agent is idle.
 
 A running agent can show a head in place of `⢿`. Whichever head it shows, it counts as working in the cockpit.
 
@@ -104,6 +104,9 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
 | `C 34%` `M 512M` `⇅ 8M/s` | a working process row's CPU, resident memory, and I/O rate |
+| `· not tracked` | a recognized agent pane whose reporting is known to be unavailable |
+| `tip:` | how to enable reporting; the label drops below 32 pane columns |
+| `…` on a not-tracked row | the label or fix has been shortened to fit |
 
 Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` cyan, `◌` green, `◍` violet.
 
@@ -230,7 +233,7 @@ The `⑃ N` colour reads each worktree's own pull request, since stacked pull re
 
 ### The make-up line
 
-The make-up line counts units: a team's members within one worktree group, or one solo agent. Process rows are no unit. The left cluster is `?` waiting, `!` failed, `⏸︎` paused, `✓` done; the right is `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results.
+The make-up line counts units: a team's members within one worktree group, or one solo agent. Process rows, including not-tracked rows, are no unit. The left cluster is `?` waiting, `!` failed, `⏸︎` paused, `✓` done; the right is `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results.
 
 Any member can add `?`, `!`, or `⏸︎`. A staged board at `Done` gives `✓`, even without an owner. Otherwise a visible owner's displayed status decides `⢿`, `☾`, or `○` (an owner showing `✓` also gives `○` until the board reaches `Done`). Other members add attention only. Without a usable pipeline and owner, the team's calm bucket is working first, otherwise sleeping, idle, or done. A solo unit follows its row. The calm bucket counts beside attention only when it is `⢿`. Only `✓` excludes inactive groups. For example, a working team with idle teammates is `⢿ 1`, `○ 0`; a team with a waiting member and working owner is `? 1`, `⢿ 1`. The same team name in two worktree groups counts twice; cards in `external` count solo. `¤` still counts agents, so the buckets need not sum to it.
 
@@ -536,7 +539,7 @@ Hibernation does not change a card's state, glyph, ranking, or unread result. A 
 
 ### Process rows
 
-A pane that no agent runs in, such as a shell, an editor, or a build, shows as a process row, drawn dimmer than a card. It shares the calm cards' newest-first order below asks and failures, and keeps the card's place when an agent exits back to the shell.
+A pane with no tracked agent, such as a shell, an editor, or a build, shows as a process row. Its ordinary lead glyph dims; the program name keeps the normal body tone. It shares the calm cards' newest-first order below asks and failures, and keeps the card's place when an agent exits back to the shell.
 
 ```
 ▌○ codex                                   ▐
@@ -556,7 +559,22 @@ Here the shell was first seen between the two agents' launches, so it sits betwe
    cargo build --release
 ```
 
-An idle row is `○` and the program's name. A working row spins, shows the running command on a second line, and shows CPU, memory, and I/O on the right once all three have values. A process stuck in uninterruptible sleep for ten seconds, or left as a zombie, shows `!`. The name is the program the pane really runs: RimZ reads past `env`, `sudo`, `timeout`, `sh -c`, and `node` or `npx` launchers, so `sudo npm install -g @openai/codex` reads as `npm`. Process rows are never counted in the cockpit. They are jump targets, and when an agent starts in the pane the row becomes that agent's card.
+An idle row is `○` and the program's name. A working row spins, shows the running command on a second line, and shows CPU, memory, and I/O on the right once all three have values. A process stuck in uninterruptible sleep for ten seconds, or left as a zombie, shows `!`. The name is the program the pane really runs: RimZ reads past `env`, `sudo`, `timeout`, `sh -c`, and `node` or `npx` launchers, so `sudo npm install -g @openai/codex` reads as `npm`. Process rows are never counted in the cockpit. They are jump targets, and when a tracked agent starts in the pane the row becomes that agent's card.
+
+### Not-tracked rows
+
+A recognized agent pane with no bound session gets two lines when RimZ knows why it cannot read the agent. This [54-column frame](../../crates/rimz/src/sidebar/scenario/tests/snapshots/rimz__sidebar__scenario__tests__coverage__not_tracked_fixture_frame.snap) shows missing hooks:
+
+```text
+▌○ qoder · not tracked                               ▐
+▌  tip: rimz hooks install qoder, then restart       ▐
+```
+
+The cause is missing hooks, installed hooks blocked by trust or policy, or a reporting mode the integration explicitly cannot follow. The tip gives the fix for that cause. A bound session takes precedence; a pane with working reporting and no known blocker keeps its idle card before the first prompt. If RimZ cannot inspect the integration's reporting, it leaves an ordinary process row rather than guessing a cause.
+
+The suffix `· not tracked` stays visible: a long program label shortens first with `…`. The fix stays on one line, cut at the last whole word that fits, dropping a trailing comma before `…`; a first word wider than the line is cut within the word. Below 32 pane columns, only the `tip: ` label drops. Neither selection nor a stuck `!` adds a third line, a command detail, or resource stats. Clicking either line jumps to the pane.
+
+Not-tracked rows sort as process rows do, never count in the cockpit, and fold under `+K more` like other process rows. After applying the tip and restarting where requested, normal reporting can replace the row with an agent card.
 
 ### Worktree headers
 
@@ -678,7 +696,7 @@ A live workflow blocks folding while its checkout is unlanded. Once landed, the 
 
 ### Row cap and inactive groups
 
-A group shows at most six rows in their section order, folding excess idle cards and process rows behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. When only process panes remain hot, the first hot process row is also exempt, but cooled shells are not. While a filter is active the cap is off, and rows and groups that do not match are hidden.
+A group shows at most six rows in their section order, folding excess idle cards and process rows, including not-tracked rows, behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. When only process panes remain hot, the first hot process row is also exempt, but cooled shells are not. While a filter is active the cap is off, and rows and groups that do not match are hidden.
 
 ```
  ⑂ main
@@ -1111,7 +1129,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 
 | mouse | action |
 |-------|--------|
-| click a card or process row | select the card immediately and focus its pane |
+| click a card or process row, including either line of a not-tracked row | select the row immediately and focus its pane |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a workflow strip | focus its current step's visible card, otherwise do nothing |
 | click a make-up bucket or `⑃ N` | filter the cards |

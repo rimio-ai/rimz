@@ -96,6 +96,17 @@ pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
     format!("{}…", clip(text, max_cells - 1))
 }
 
+pub(super) fn ellipsize_words(text: &str, max_cells: usize) -> String {
+    if text_width(text) <= max_cells {
+        return text.to_owned();
+    }
+    if max_cells == 0 {
+        return String::new();
+    }
+    let lines = wrap_words(text, max_cells - 1);
+    format!("{}…", lines[0].trim_end_matches([',', ' ']))
+}
+
 /// Greedy word wrap to `width` columns. Words longer than the budget are hard-cut.
 pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();

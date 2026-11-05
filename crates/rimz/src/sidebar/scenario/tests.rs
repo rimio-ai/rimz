@@ -14,6 +14,35 @@ fn parse(source: &str) -> Scenario {
 }
 
 #[test]
+fn not_tracked_preset_keeps_all_reasons_as_process_rows() {
+    let scenario = parse("preset not-tracked");
+    let snapshot = scenario.at(Duration::ZERO);
+    let reasons = snapshot
+        .rows()
+        .filter_map(|row| {
+            row.as_process()?
+                .not_tracked
+                .as_ref()
+                .map(|note| note.reason)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reasons,
+        [
+            crate::agents::NotTrackedReason::HooksMissing,
+            crate::agents::NotTrackedReason::HooksBlocked,
+            crate::agents::NotTrackedReason::ModeNotFollowed,
+        ]
+    );
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .all(|group| group.status_counts.is_empty())
+    );
+}
+
+#[test]
 fn refusals_name_clause_position_and_fix() {
     for (source, expected) in [
         (

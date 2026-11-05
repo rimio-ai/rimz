@@ -1,6 +1,141 @@
 use super::*;
 use crate::sidebar_pane::render::theme::Component;
 
+fn not_tracked_snapshot(label: &str, fix: &str) -> SidebarSnapshot {
+    let mut snapshot =
+        snapshot_with(Vec::new()).with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    row.name = label.to_owned();
+    let process = row.as_process_mut().unwrap();
+    process.not_tracked = Some(crate::agents::NotTracked {
+        reason: crate::agents::NotTrackedReason::HooksMissing,
+        fix: fix.to_owned(),
+    });
+    process.command_detail = Some("hidden command detail".to_owned());
+    process.cpu_pct = Some(34);
+    process.rss_kb = Some(512 * 1_024);
+    process.io_bps = Some(8 * 1_048_576);
+    snapshot
+}
+
+#[test]
+fn not_tracked_rows_keep_two_lines_across_widths_and_selection() {
+    let snapshot = not_tracked_snapshot(
+        "untracked-agent-pane",
+        "rimz hooks install codex, then restart",
+    );
+    for width in [24, 30, 31, 32, 33, 54] {
+        for selected in [false, true] {
+            let view = if selected {
+                selected_ui()
+            } else {
+                ViewState::default()
+            };
+            let screen = snapshot_to_screen_with_alert_and_ui(
+                &snapshot,
+                None,
+                &view,
+                &UiState::default(),
+                width,
+                16,
+            );
+            assert!(
+                screen.contains(" · not tracked"),
+                "width={width}:\n{screen}"
+            );
+            let lines = screen.lines().collect::<Vec<_>>();
+            let title = lines
+                .iter()
+                .position(|line| line.contains("not tracked"))
+                .unwrap();
+            assert!(lines[title + 1].contains("rimz hooks install"), "{screen}");
+            assert_eq!(lines[title + 1].contains("tip:"), width >= 32, "{screen}");
+            assert!(!screen.contains("hidden command detail"), "{screen}");
+            assert!(!screen.contains("512M"), "{screen}");
+            if width == 24 {
+                assert!(lines[title].contains("○ untra… · not tracked"), "{screen}");
+            }
+            assert_snapshot(
+                &format!(
+                    "not_tracked_{width}_{}",
+                    if selected { "selected" } else { "resting" }
+                ),
+                screen,
+            );
+        }
+    }
+}
+
+#[test]
+fn not_tracked_fix_cuts_words_commas_and_overwide_first_words() {
+    for (name, width, fix, expected) in [
+        (
+            "words",
+            30,
+            "rimz hooks install codex, then restart",
+            "rimz hooks install codex…",
+        ),
+        (
+            "comma",
+            24,
+            "allow reporting, then restart",
+            "allow reporting…",
+        ),
+        (
+            "long_word",
+            30,
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+            "abcdefghijklmnopqrstuvwxy…",
+        ),
+        (
+            "wide_word",
+            24,
+            "設定設定設定設定設定設定設定設定",
+            "設定設定設定設定設…",
+        ),
+    ] {
+        let snapshot = not_tracked_snapshot("codex", fix);
+        let screen = snapshot_to_screen(&snapshot, width, 16);
+        assert!(screen.contains(expected), "{name}:\n{screen}");
+        assert_snapshot(&format!("not_tracked_fix_{name}"), screen);
+    }
+}
+
+#[test]
+fn not_tracked_stuck_row_keeps_tip_without_stats_in_color_and_plain() {
+    let mut snapshot = not_tracked_snapshot("codex", "allow reporting, then restart");
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_process_mut()
+    .unwrap()
+    .state = crate::store::snapshot::ProcessState::Stuck;
+    for plain in [false, true] {
+        let pane_ui = UiState {
+            theme_cache: Some((snapshot.theme.clone(), Rc::new(Theme::fixed(plain)))),
+            ..Default::default()
+        };
+        let screen =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), &pane_ui, 54, 16);
+        assert!(screen.contains("! codex · not tracked"), "{screen}");
+        assert!(
+            screen.contains("tip: allow reporting, then restart"),
+            "{screen}"
+        );
+        assert!(!screen.contains("512M"), "{screen}");
+        assert!(!screen.contains("hidden command detail"), "{screen}");
+        assert_snapshot(
+            &format!(
+                "not_tracked_stuck_{}",
+                if plain { "plain" } else { "color" }
+            ),
+            screen,
+        );
+    }
+}
+
 #[test]
 fn remote_control_host_pane_is_filtered_not_rendered() {
     // A `claude remote-control` pane is host infrastructure, not a coding
