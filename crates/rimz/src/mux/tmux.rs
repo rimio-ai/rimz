@@ -296,6 +296,8 @@ const MANAGED_SERVER_CWD: &str = "/";
 const BIRTH_CWD_POLL_TIMEOUT: Duration = Duration::from_secs(3);
 const BIRTH_CWD_POLL_STEP: Duration = Duration::from_millis(25);
 
+const PANE_KIND_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug)]
 pub struct TmuxBackend {
     /// The tmux server socket every command addresses. Always set: the managed
@@ -443,6 +445,25 @@ impl TmuxBackend {
             spec
         };
         spec
+    }
+
+    /// Publish the provider kind used by RimZ-owned border labels.
+    ///
+    /// The agent launch waits on this cosmetic write, so a wedged server costs
+    /// it at most `PANE_KIND_TIMEOUT`.
+    pub fn set_pane_kind(&self, pane: &crate::PaneId, kind: &crate::ids::AgentKind) -> Result<()> {
+        super::ensure_pane_backend(pane, crate::MuxName::Tmux)?;
+        self.cmd()
+            .args([
+                "set-option",
+                "-p",
+                "-t",
+                pane.raw(),
+                "@rimz_kind",
+                kind.as_str(),
+            ])
+            .run_with_timeout(PANE_KIND_TIMEOUT)?;
+        Ok(())
     }
 
     /// Fail fast when the managed endpoint cannot be addressed.

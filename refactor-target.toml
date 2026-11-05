@@ -3005,7 +3005,8 @@ path = "crates/rimz/src/mux"
 # CompanionAppendErr distinguishes pre-spawn fallback from an uncertain spawn (+1).
 # SidebarTarget::zellij_step shares the bounded grid with controllers and live tests (+1).
 # TmuxBackend::apply_room_options shares the existing-session apply with reload (+1).
-surface-budget = 300
+# TmuxBackend::set_pane_kind publishes the exec wrapper's provider for border coloring (+1).
+surface-budget = 301
 
 [[verdict]]
 kind = "item"

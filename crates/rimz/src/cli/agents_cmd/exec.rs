@@ -331,6 +331,12 @@ fn launch_and_supervise(
     ) {
         tracing::debug!(%error, "language-server lease registration failed");
     }
+    if let Some(pane) =
+        rimz::mux::ambient_pane_id().filter(|pane| pane.mux() == rimz::MuxName::Tmux)
+        && let Err(error) = rimz::mux::TmuxBackend::default().set_pane_kind(&pane, &request.kind)
+    {
+        tracing::debug!(%pane, %error, "provider kind publication failed");
+    }
     repair_own_launch_winsize(workspace, &diag);
     if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
         let (program, rest) = argv
