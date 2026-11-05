@@ -67,11 +67,7 @@ pub(super) fn attention_facts(
     status: Option<AgentStatus>,
     age_secs: u32,
     windows: AttentionWindows,
-    is_process: bool,
 ) -> (bool, bool, u32) {
-    if is_process {
-        return (false, false, 0);
-    }
     let held = status.is_some_and(AgentStatus::is_actionable);
     let inactive = !held && age_secs > windows.inactive_after_secs;
     let archived = !held && age_secs > windows.archive_after_secs;
@@ -208,7 +204,7 @@ mod tests {
                 1_000
             );
             assert_eq!(
-                attention_facts(Some(status), ARCHIVE + 1, WINDOWS, false).2,
+                attention_facts(Some(status), ARCHIVE + 1, WINDOWS).2,
                 status_weight(status)
             );
         }
@@ -223,7 +219,7 @@ mod tests {
                     2_000
                 );
                 assert_eq!(
-                    attention_facts(Some(status), age, WINDOWS, false),
+                    attention_facts(Some(status), age, WINDOWS),
                     (false, false, status_weight(status) * 2)
                 );
             }

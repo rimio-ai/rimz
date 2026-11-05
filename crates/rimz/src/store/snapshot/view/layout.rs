@@ -339,18 +339,13 @@ fn presentation_group_key(
 pub(super) fn sort_rows_in_order<'a>(
     groups: &mut Arc<Vec<SidebarWorktreeGroup>>,
     order: impl Iterator<Item = &'a str>,
-    held: &BTreeMap<String, &HeldRank>,
 ) {
     let positions: HashMap<_, _> = order.enumerate().map(|(index, id)| (id, index)).collect();
     let key = |row: &SidebarRow| {
-        (
-            held.get(&row.id)
-                .map_or_else(|| row.is_process(), |held| held.row.is_process),
-            positions
-                .get(row.id.as_str())
-                .copied()
-                .unwrap_or(usize::MAX),
-        )
+        positions
+            .get(row.id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
     };
     for index in 0..groups.len() {
         if groups[index].rows.iter().is_sorted_by_key(key) {
@@ -382,7 +377,8 @@ struct RankFacts<'a> {
     last_activity: jiff::Timestamp,
     registered_at: Option<jiff::Timestamp>,
     pane_ordinal: Option<u64>,
-    launch_ordinal: Option<u32>,
+    /// `None` for a process row, so every agent precedes one at an equal stamp.
+    launch_ordinal: Option<Option<u32>>,
     id: &'a str,
 }
 
@@ -394,11 +390,13 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
         archived: row.archived,
         status,
         score: row.attention_score,
-        attention_at_ms: row.attention_at_ms,
+        attention_at_ms: row
+            .attention_at_ms
+            .or_else(|| row.is_process().then(|| row.last_activity.as_millisecond())),
         last_activity: row.last_activity,
         registered_at: row.as_agent().and_then(|agent| agent.registered_at),
         pane_ordinal: row_ordinal(row),
-        launch_ordinal: row.launch_ordinal(),
+        launch_ordinal: row.as_agent().map(|agent| agent.launch_ordinal),
         id: row.id.as_str(),
     }
 }
@@ -415,8 +413,7 @@ fn agent_rank_facts(
         agent.status
     };
     let age_secs = score::age_secs(now, agent.last_activity);
-    let (inactive, archived, score) =
-        score::attention_facts(Some(status), age_secs, windows, false);
+    let (inactive, archived, score) = score::attention_facts(Some(status), age_secs, windows);
     RankFacts {
         is_process: false,
         inactive,
@@ -427,18 +424,17 @@ fn agent_rank_facts(
         last_activity: agent.last_activity,
         registered_at: agent.registered_at,
         pane_ordinal: agent_ordinal(agent),
-        launch_ordinal: agent.launch_ordinal,
+        launch_ordinal: Some(agent.launch_ordinal),
         id: agent.agent_id.as_str(),
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct RankKey {
-    is_process: bool,
     calm: bool,
     band: u8,
     stamp: StartKey<Reverse<i64>>,
-    launch_ordinal: StartKey<u32>,
+    launch_ordinal: StartKey<StartKey<u32>>,
     pane_ordinal: StartKey<u64>,
     id: String,
 }
@@ -478,27 +474,24 @@ impl<T: Ord> PartialOrd for StartKey<T> {
     }
 }
 
-/// Each card ranks alone: newest top-zone stamp, then calm band and newest
-/// stamp. Process rows retain pane-creation order at the tail.
+/// Asks and failures lead by newest stamp; calm cards and process rows share
+/// the remaining bands, newest stamp first within each.
 fn rank_key(facts: RankFacts<'_>) -> RankKey {
     let top = facts.status.is_some_and(AgentStatus::is_actionable);
     RankKey {
-        is_process: facts.is_process,
         calm: !top,
-        band: if top || facts.is_process {
+        band: if top {
             0
         } else {
             band(facts.inactive, facts.archived)
         },
-        stamp: StartKey::from(if facts.is_process {
-            None
-        } else {
+        stamp: StartKey::from(
             facts
                 .attention_at_ms
                 .or_else(|| facts.registered_at.map(|birth| birth.as_millisecond()))
-                .map(Reverse)
-        }),
-        launch_ordinal: StartKey::from(facts.launch_ordinal.filter(|_| !facts.is_process)),
+                .map(Reverse),
+        ),
+        launch_ordinal: StartKey::from(facts.launch_ordinal.map(StartKey::from)),
         pane_ordinal: StartKey::from(facts.pane_ordinal),
         id: facts.id.to_owned(),
     }
@@ -670,8 +663,8 @@ fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {
 
 /// Macro bands: hot work, warm work past the inactive window, and archived work
 /// past the archive window. Read state never changes the band. Actionable rows
-/// stay hot while alive; calm and parked rows cool with age. The `external` partition is group-only
-/// ([`compare_groups`]).
+/// stay hot while alive; calm cards and process rows cool with age. The
+/// `external` partition is group-only ([`compare_groups`]).
 fn band(inactive: bool, archived: bool) -> u8 {
     if archived {
         2

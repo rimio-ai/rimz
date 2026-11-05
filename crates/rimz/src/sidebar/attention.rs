@@ -1,4 +1,5 @@
-//! Launch-keyed attention-zone crossings, retained for the room's lifetime.
+//! Launch-keyed attention crossings and pane-keyed slots, retained for the room's lifetime.
+//! Slots follow a pane's first sighting, independent of its tenant's order stamp.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -26,6 +27,7 @@ pub(crate) fn reconcile_snapshot(runtime: &RuntimePaths, snapshot: &mut SidebarS
 #[derive(Default)]
 pub(super) struct AttentionStamps {
     cards: BTreeMap<String, CardStamp>,
+    panes: BTreeMap<String, PaneStamp>,
 }
 
 impl AttentionStamps {
@@ -50,7 +52,10 @@ impl AttentionStamps {
         serde_json::from_slice::<AttentionFile>(bytes)
             .ok()
             .filter(|file| file.v == ATTENTION_VERSION)
-            .map(|file| Self { cards: file.cards })
+            .map(|file| Self {
+                cards: file.cards,
+                panes: file.panes,
+            })
             .unwrap_or_default()
     }
 
@@ -60,6 +65,7 @@ impl AttentionStamps {
             &AttentionFile {
                 v: ATTENTION_VERSION.to_owned(),
                 cards: self.cards.clone(),
+                panes: self.panes.clone(),
             },
         )
     }
@@ -70,58 +76,101 @@ impl AttentionStamps {
         }
         let launches = launch_keys(&snapshot.agents);
         let now_ms = snapshot.now.as_millisecond();
-        let mut present = BTreeSet::new();
+        let mut present_cards = BTreeSet::new();
+        let mut present_panes = BTreeSet::new();
         let mut changed = false;
-        for row in snapshot.rows().filter(|row| row.is_agent()) {
-            let key = card_key(row, &launches);
-            present.insert(key);
-            if let Some(next) = next_stamp(self.cards.get(key), row, now_ms) {
-                self.cards.insert(key.to_owned(), next);
+        for row in snapshot.rows() {
+            let card_at_ms = if row.is_agent() {
+                let key = card_key(row, &launches);
+                present_cards.insert(key);
+                let next = next_stamp(self.cards.get(key), row, now_ms);
+                let at_ms = next.at_ms;
+                if self.cards.get(key) != Some(&next) {
+                    self.cards.insert(key.to_owned(), next);
+                    changed = true;
+                }
+                Some(at_ms)
+            } else {
+                None
+            };
+            let Some(pane) = &row.pane else {
+                continue;
+            };
+            let key = pane.pane_id.as_str();
+            present_panes.insert(key);
+            let stored = self.panes.get(key);
+            let next = if let Some(at_ms) = card_at_ms {
+                PaneStamp {
+                    at_ms,
+                    seen_ms: pane.first_seen_at_ms,
+                    tenant: PaneTenant::Agent {
+                        active_ms: (row.inactive || row.archived)
+                            .then_some(row.last_activity.as_millisecond()),
+                    },
+                }
+            } else {
+                let (at_ms, active_ms) = process_stamp(stored, row, now_ms);
+                PaneStamp {
+                    at_ms,
+                    seen_ms: pane
+                        .first_seen_at_ms
+                        .or(stored.and_then(|stamp| stamp.seen_ms)),
+                    tenant: PaneTenant::Process { active_ms },
+                }
+            };
+            if self.panes.get(key) != Some(&next) {
+                self.panes.insert(key.to_owned(), next);
                 changed = true;
             }
         }
-        let before = self.cards.len();
+        let before = (self.cards.len(), self.panes.len());
         let oldest_ms = now_ms.saturating_sub(DEFAULT_RETENTION.as_millis() as i64);
         self.cards
-            .retain(|key, stamp| present.contains(key.as_str()) || stamp.at_ms >= oldest_ms);
-        changed || before != self.cards.len()
+            .retain(|key, stamp| present_cards.contains(key.as_str()) || stamp.at_ms >= oldest_ms);
+        self.panes
+            .retain(|key, stamp| present_panes.contains(key.as_str()) || stamp.at_ms >= oldest_ms);
+        changed || before != (self.cards.len(), self.panes.len())
     }
 
-    /// Ranks every card as the next reconcile will stamp it: a fold that does not reconcile
-    /// (an interim publication, a published-cache reader) derives a pending crossing at the
-    /// snapshot clock without persisting it.
+    /// Derive the next reconciliation's stamps and process sinks without writing:
+    /// interim publications and published-cache readers see pending crossings and exits.
     pub(super) fn derive(&self, snapshot: &mut SidebarSnapshot) {
         let launches = launch_keys(&snapshot.agents);
         let now_ms = snapshot.now.as_millisecond();
-        let stamp = |row: &SidebarRow| {
-            let stored = self.cards.get(card_key(row, &launches));
-            next_stamp(stored, row, now_ms)
-                .or_else(|| stored.cloned())
-                .map(|stamp| stamp.at_ms)
-        };
-        for index in 0..snapshot.worktree_groups.len() {
-            let group = &snapshot.worktree_groups[index];
-            if !group
-                .rows
-                .iter()
-                .any(|row| row.is_agent() && row.attention_at_ms != stamp(row))
-            {
-                continue;
-            }
-            let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[index];
-            for row in std::sync::Arc::make_mut(&mut group.rows) {
-                let at_ms = stamp(row);
-                if row.is_agent() {
-                    row.attention_at_ms = at_ms;
+        for group_index in 0..snapshot.worktree_groups.len() {
+            for row_index in 0..snapshot.worktree_groups[group_index].rows.len() {
+                let row = &snapshot.worktree_groups[group_index].rows[row_index];
+                let (at_ms, facts) = if row.is_agent() {
+                    let stored = self.cards.get(card_key(row, &launches));
+                    (
+                        next_stamp(stored, row, now_ms).at_ms,
+                        (row.inactive, row.archived, row.attention_score),
+                    )
+                } else {
+                    let Some(pane) = &row.pane else {
+                        continue;
+                    };
+                    let (at_ms, active_ms) =
+                        process_stamp(self.panes.get(pane.pane_id.as_str()), row, now_ms);
+                    (at_ms, snapshot.process_attention_facts(active_ms))
+                };
+                if row.attention_at_ms == Some(at_ms)
+                    && (row.inactive, row.archived, row.attention_score) == facts
+                {
+                    continue;
                 }
+                let group =
+                    &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[group_index];
+                let row = &mut std::sync::Arc::make_mut(&mut group.rows)[row_index];
+                row.attention_at_ms = Some(at_ms);
+                (row.inactive, row.archived, row.attention_score) = facts;
             }
         }
     }
 }
 
-/// The stamp a framed fold records for `row`, or `None` while its displayed zone is unchanged:
-/// birth on first sighting, the fold's clock on a top/calm crossing.
-fn next_stamp(stored: Option<&CardStamp>, row: &SidebarRow, now_ms: i64) -> Option<CardStamp> {
+/// Birth on first sighting, the fold's clock on a top/calm crossing.
+fn next_stamp(stored: Option<&CardStamp>, row: &SidebarRow, now_ms: i64) -> CardStamp {
     let zone = if row
         .attention_status()
         .is_some_and(AgentStatus::is_actionable)
@@ -131,14 +180,42 @@ fn next_stamp(stored: Option<&CardStamp>, row: &SidebarRow, now_ms: i64) -> Opti
         Zone::Calm
     };
     let at_ms = match stored {
-        Some(stamp) if stamp.zone == zone => return None,
+        Some(stamp) if stamp.zone == zone => return stamp.clone(),
         Some(_) => now_ms,
         None => row
             .as_agent()
             .and_then(|agent| agent.registered_at)
             .map_or(now_ms, |birth| birth.as_millisecond()),
     };
-    Some(CardStamp { zone, at_ms })
+    CardStamp { zone, at_ms }
+}
+
+fn process_stamp(stored: Option<&PaneStamp>, row: &SidebarRow, now_ms: i64) -> (i64, i64) {
+    let seen_ms = row.pane.as_ref().and_then(|pane| pane.first_seen_at_ms);
+    let birth_ms = row
+        .pane
+        .as_ref()
+        .filter(|pane| pane.pane_process_start.is_some() || pane.first_seen_at_ms.is_some())
+        .map(|_| row.last_activity.as_millisecond());
+    match stored.filter(|stamp| match (stamp.seen_ms, seen_ms) {
+        (Some(stored), Some(current)) => stored == current,
+        _ => true,
+    }) {
+        Some(PaneStamp {
+            at_ms,
+            tenant: PaneTenant::Process { active_ms },
+            ..
+        }) => (*at_ms, *active_ms),
+        Some(PaneStamp {
+            at_ms,
+            tenant: PaneTenant::Agent { active_ms },
+            ..
+        }) => (*at_ms, active_ms.unwrap_or(now_ms)),
+        None => {
+            let birth_ms = birth_ms.unwrap_or(now_ms);
+            (birth_ms, birth_ms)
+        }
+    }
 }
 
 fn launch_keys(agents: &[AgentState]) -> BTreeMap<(&str, &str), &str> {
@@ -164,12 +241,35 @@ fn card_key<'a>(row: &'a SidebarRow, launches: &BTreeMap<(&str, &str), &'a str>)
 struct AttentionFile {
     v: String,
     cards: BTreeMap<String, CardStamp>,
+    #[serde(default)]
+    panes: BTreeMap<String, PaneStamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CardStamp {
     zone: Zone,
     at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct PaneStamp {
+    at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seen_ms: Option<u64>,
+    #[serde(flatten)]
+    tenant: PaneTenant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "tenant", rename_all = "snake_case")]
+enum PaneTenant {
+    Agent {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_ms: Option<i64>,
+    },
+    Process {
+        active_ms: i64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

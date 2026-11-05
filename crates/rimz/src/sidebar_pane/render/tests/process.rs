@@ -154,10 +154,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     assert!(plain.iter().all(|span| span.style.fg.is_none()));
 }
 #[test]
-fn render_process_rows_below_agents_without_a_seam() {
-    // A worktree group holding both agent cards and bare process rows spends
-    // no chrome line on the boundary: rows sort agents-first and the command
-    // tail reads apart by its DIM weight.
+fn render_process_rows_between_calm_cards_without_a_seam() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -166,12 +163,26 @@ fn render_process_rows_below_agents_without_a_seam() {
         Some("main"),
         Some("db migrate"),
     );
+    claude.registered_at = Some(fixed_now() - Duration::from_secs(20));
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
-    let shell = pane("%2", "zsh", "/repo/main");
-    let snapshot = snapshot_with(vec![claude]).with_live_panes(vec![stamped, shell], None);
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    codex.registered_at = Some(fixed_now() - Duration::from_secs(1));
+    let codex_pane = pane("%3", "codex", "/repo/main");
+    codex.pane = Some(codex_pane.clone());
+    let mut shell = pane("%2", "zsh", "/repo/main");
+    shell.first_seen_at_ms = Some((fixed_now().as_millisecond() - 10_000) as u64);
+    let snapshot =
+        snapshot_with(vec![claude, codex]).with_live_panes(vec![stamped, shell, codex_pane], None);
 
-    let rendered = snapshot_to_screen(&snapshot, 44, 18);
+    let rendered = snapshot_to_screen(&snapshot, 44, 24);
 
     assert!(
         !rendered.contains("┄ commands"),
@@ -179,11 +190,13 @@ fn render_process_rows_below_agents_without_a_seam() {
     );
     assert!(
         rendered.contains("○ zsh"),
-        "the process row renders below the agent card:\n{rendered}"
+        "the process row renders:\n{rendered}"
     );
-    assert_snapshot("agents_process_tail", rendered);
+    assert!(rendered.find("codex").unwrap() < rendered.find("zsh").unwrap());
+    assert!(rendered.find("zsh").unwrap() < rendered.find("claude").unwrap());
+    assert_snapshot("agents_process_interleaved", rendered);
 }
-/// The command tail reads one step below the agent cards: the lead glyph
+/// A process row reads quieter than an agent card: the lead glyph
 /// carries the DIM modifier over its status style (neutral idle, work-clay
 /// active) and the program name wears the soft middle tier — which
 /// itself falls back to the bare DIM weight under `NO_COLOR`, so the

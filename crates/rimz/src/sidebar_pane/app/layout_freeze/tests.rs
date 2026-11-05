@@ -21,7 +21,7 @@ fn rowless_workflow_fold_is_not_deferred_by_another_groups_hold() {
 }
 
 #[test]
-fn arrivals_append_within_the_agent_and_process_partitions() {
+fn arrivals_append_after_frozen_rows() {
     let mut ui = ViewState::default();
     let mut current = snapshot_with_groups(vec![group(
         "a",
@@ -41,10 +41,10 @@ fn arrivals_append_within_the_agent_and_process_partitions() {
         row("build", "terminal_3"),
     ]
     .into();
-    apply_freeze(&mut ui, &mut current, false, 1_001, false, &HashMap::new());
+    apply_freeze(&mut ui, &mut current, false, 1_001, false);
     assert_eq!(
         row_ids(&current, "a"),
-        ["agent-a", "agent-b", "shell", "build", "new-process"]
+        ["agent-a", "shell", "build", "agent-b", "new-process"]
     );
 }
 
@@ -64,26 +64,12 @@ fn freeze_releases_at_the_deadline_including_parked_ties() {
         let mut ui = ViewState::default();
         let mut current = snapshot_with_groups(vec![group("a", vec![row("a1", "terminal_1")])]);
         arm_freeze(&mut ui, 1_000);
-        apply_freeze(
-            &mut ui,
-            &mut current,
-            false,
-            deadline - 1,
-            parked,
-            &HashMap::new(),
-        );
+        apply_freeze(&mut ui, &mut current, false, deadline - 1, parked);
         assert!(
             ui.freeze.is_some(),
             "holds through deadline - 1 (parked={parked})"
         );
-        apply_freeze(
-            &mut ui,
-            &mut current,
-            false,
-            deadline,
-            parked,
-            &HashMap::new(),
-        );
+        apply_freeze(&mut ui, &mut current, false, deadline, parked);
         assert!(
             ui.freeze.is_none(),
             "releases at the exact deadline (parked={parked})"
@@ -213,7 +199,7 @@ fn already_frozen_order_keeps_groups_and_rows_shared() {
     ]);
     let frozen = capture_order(&original, &ViewState::default());
     let mut current = original.clone();
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
     assert!(std::sync::Arc::ptr_eq(
         &current.worktree_groups,
         &original.worktree_groups
@@ -236,7 +222,7 @@ fn frozen_reorder_detaches_only_changed_rows() {
     let mut frozen = capture_order(&original, &ViewState::default());
     frozen.rows.swap(0, 1);
     let mut current = original.clone();
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
     assert_eq!(row_ids(&current, "a"), ["a1", "a2"]);
     assert!(!std::sync::Arc::ptr_eq(
         &current.worktree_groups,
@@ -253,79 +239,34 @@ fn frozen_reorder_detaches_only_changed_rows() {
 }
 
 #[test]
-fn frozen_reorder_matches_stable_sort_across_partitions_and_arrivals() {
-    for reverse_groups in [false, true] {
-        for reverse_rows in [false, true] {
-            let mut groups = Vec::new();
-            for (key, finished, external) in [
-                ("live", false, false),
-                ("finished", true, false),
-                ("external", false, true),
-                ("external-finished", true, true),
-                ("arrival-1", false, false),
-                ("arrival-2", false, false),
-            ] {
-                let mut rows = vec![
-                    agent_row("known-agent", "terminal_1", AgentStatus::Running),
-                    agent_row("arrival-a", "terminal_2", AgentStatus::Running),
-                    agent_row("arrival-b", "terminal_3", AgentStatus::Running),
-                    row("known-process", "terminal_4"),
-                    row("arrival-c", "terminal_5"),
-                    row("arrival-d", "terminal_6"),
-                ];
-                if reverse_rows {
-                    rows.reverse();
-                }
-                let mut group = group(key, rows);
-                group.inactive =
-                    (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
-                if external {
-                    group.kind = SidebarWorktreeKind::External;
-                }
-                groups.push(group);
-            }
-            if reverse_groups {
-                groups.reverse();
-            }
-            let mut current = snapshot_with_groups(groups);
-            let frozen = FrozenOrder {
-                groups: ["external-finished", "external", "finished", "live"]
-                    .map(str::to_owned)
-                    .into(),
-                rows: vec![
-                    frozen_paneless_row("known-process"),
-                    frozen_paneless_row("known-agent"),
-                ],
-                ..FrozenOrder::default()
-            };
-            let mut expected = current.clone();
-            std::sync::Arc::make_mut(&mut expected.worktree_groups).sort_by_key(|group| {
-                (
-                    group.kind == SidebarWorktreeKind::External,
-                    group.inactive.is_some(),
-                    frozen
-                        .groups
-                        .iter()
-                        .position(|key| key == &group.key)
-                        .unwrap_or(usize::MAX),
-                )
-            });
-            for group in std::sync::Arc::make_mut(&mut expected.worktree_groups) {
-                std::sync::Arc::make_mut(&mut group.rows).sort_by_key(|row| {
-                    (
-                        row.is_process(),
-                        frozen
-                            .rows
-                            .iter()
-                            .position(|known| known.id == row.id)
-                            .unwrap_or(usize::MAX),
-                    )
-                });
-            }
-            reorder_to_frozen(&mut current, &frozen, &HashMap::new());
-            assert_eq!(current.worktree_groups, expected.worktree_groups);
-        }
-    }
+fn frozen_positions_preserve_interleaved_rows_and_stable_unknowns() {
+    let mut current = snapshot_with_groups(vec![group(
+        "a",
+        vec![
+            agent_row("arrival-agent", "terminal_1", AgentStatus::Running),
+            row("known-process", "terminal_2"),
+            agent_row("known-agent", "terminal_3", AgentStatus::Running),
+            row("arrival-process", "terminal_4"),
+        ],
+    )]);
+    let frozen = FrozenOrder {
+        groups: vec!["a".to_owned()],
+        rows: vec![
+            frozen_paneless_row("known-process"),
+            frozen_paneless_row("known-agent"),
+        ],
+        ..FrozenOrder::default()
+    };
+    reorder_to_frozen(&mut current, &frozen);
+    assert_eq!(
+        row_ids(&current, "a"),
+        [
+            "known-process",
+            "known-agent",
+            "arrival-agent",
+            "arrival-process",
+        ]
+    );
 }
 
 #[test]
@@ -486,13 +427,21 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
 }
 
 #[test]
-fn a_focused_shell_becoming_an_agent_stays_in_the_process_tail_even_during_a_freeze() {
+fn a_focused_old_shell_becoming_an_agent_keeps_its_rank_even_during_a_freeze() {
     let previous = hold_snapshot(vec![group(
         "a",
         vec![
             stamped_row("agent", "terminal_3", AgentStatus::Running, 10),
-            row("shell", "terminal_1"),
-            row("focused", "terminal_2"),
+            {
+                let mut row = row("shell", "terminal_1");
+                row.attention_at_ms = Some(5);
+                row
+            },
+            {
+                let mut row = row("focused", "terminal_2");
+                row.attention_at_ms = Some(1);
+                row
+            },
         ],
     )]);
     let focused = pane("terminal_2", "tab_0", false).pane_id;
@@ -762,7 +711,7 @@ fn reorder_pipeline_appends_unknowns_after_frozen_items() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
 
     assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
@@ -789,7 +738,7 @@ fn mid_hold_group_churn_keeps_new_last_ranked_group_last() {
     };
 
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
 
     assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
     assert_eq!(frozen.groups, vec!["a", "b", "new"]);
@@ -813,7 +762,7 @@ fn new_row_appends_after_frozen_neighbors() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
 
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a3", "a2"]);
     assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a3", "a2"]);
@@ -833,7 +782,7 @@ fn new_first_ranked_row_appends_at_tail() {
 
     migrate_frozen_order(&current, &mut frozen);
     admit_new_items(&current, &mut frozen);
-    reorder_to_frozen(&mut current, &frozen, &HashMap::new());
+    reorder_to_frozen(&mut current, &frozen);
 
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a-new"]);
     assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a-new"]);
@@ -886,7 +835,7 @@ fn apply_freeze_arms_holds_and_expires() {
     )]);
     let now_ms = 1_000;
 
-    apply_freeze(&mut ui, &mut current, true, now_ms, false, &HashMap::new());
+    apply_freeze(&mut ui, &mut current, true, now_ms, false);
 
     let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     assert_eq!(
@@ -897,26 +846,12 @@ fn apply_freeze_arms_holds_and_expires() {
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_freeze(
-        &mut ui,
-        &mut current,
-        false,
-        expires_ms - 1,
-        false,
-        &HashMap::new(),
-    );
+    apply_freeze(&mut ui, &mut current, false, expires_ms - 1, false);
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_freeze(
-        &mut ui,
-        &mut current,
-        false,
-        expires_ms,
-        false,
-        &HashMap::new(),
-    );
+    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
     assert!(ui.freeze.is_none());
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
 }
@@ -1241,7 +1176,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     let now_ms = 1_000;
     let mut current = snapshot_with_groups(groups());
 
-    apply_freeze(&mut ui, &mut current, true, now_ms, false, &HashMap::new());
+    apply_freeze(&mut ui, &mut current, true, now_ms, false);
 
     assert_eq!(
         group_keys(&current),
@@ -1258,14 +1193,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
 
     let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     let mut current = snapshot_with_groups(groups());
-    apply_freeze(
-        &mut ui,
-        &mut current,
-        false,
-        expires_ms,
-        false,
-        &HashMap::new(),
-    );
+    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
 
     assert!(ui.freeze.is_none());
     assert_eq!(
@@ -1343,7 +1271,7 @@ fn freeze_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
         ],
     )]);
 
-    apply_freeze(&mut ui, &mut current, true, 1_000, false, &HashMap::new());
+    apply_freeze(&mut ui, &mut current, true, 1_000, false);
 
     assert_eq!(
         row_ids(&current, "team"),

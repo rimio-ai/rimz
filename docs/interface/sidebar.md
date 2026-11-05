@@ -534,7 +534,19 @@ Hibernation does not change a card's state, glyph, ranking, or unread result. A 
 
 ### Process rows
 
-A pane that no agent runs in, such as a shell, an editor, or a build, shows as a process row below the group's agent cards, drawn dimmer than a card.
+A pane that no agent runs in, such as a shell, an editor, or a build, shows as a process row, drawn dimmer than a card. It shares the calm cards' newest-first order below asks and failures, and keeps the card's place when an agent exits back to the shell.
+
+```
+▌○ codex                                   ▐
+▌  .                                       ▐
+▌  ▢ ────────────────────────────────  0.0%▐
+▎○ zsh                                     🮇
+▎⣾ claude                                  🮇
+▎  db migrate                              🮇
+▎  ▢ ────────────────────────────────  0.0%🮇
+```
+
+Here the shell was first seen between the two agents' launches, so it sits between their cards.
 
 ```
  ○ zsh
@@ -664,7 +676,7 @@ A live workflow blocks folding while its checkout is unlanded. Once landed, the 
 
 ### Row cap and inactive groups
 
-A group shows at most six idle and process rows. The rest fold behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. While a filter is active the cap is off, and rows and groups that do not match are hidden.
+A group shows at most six rows in their section order, folding excess idle cards and process rows behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. When only process panes remain hot, the first hot process row is also exempt, but cooled shells are not. While a filter is active the cap is off, and rows and groups that do not match are hidden.
 
 ```
  ⑂ main
@@ -754,7 +766,7 @@ A folded inactive group hides its pipeline line and puts the stage after the tea
                                                    0s
 ```
 
-Expanding the group restores the pipeline line. Within each section, asks and failures lead, newest attention first. Calm and parked cards follow in hot, cooling, and archived bands, newest birth or recovery first within each. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Within each section, asks and failures lead, newest attention first. Calm cards and process rows follow together in hot, cooling, and archived bands, newest birth or recovery first within each. Process rows cool from the pane's first sighting; after an agent exits, they keep its last-activity clock if its card had cooled or archived, otherwise they age from the exit. Busy work never renews this clock. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 

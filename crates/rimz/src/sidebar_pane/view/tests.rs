@@ -132,6 +132,42 @@ fn roster_projects_cap_expansion_filter_hold_and_control_counts_once() {
 }
 
 #[test]
+fn a_newer_shell_takes_a_calm_slot_without_folding_working_or_unread_cards() {
+    let mut rows = idle_rows(6);
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.attention_at_ms = Some(6 - index as i64);
+    }
+    let mut shell = process_row("shell");
+    shell.attention_at_ms = Some(100);
+    rows.push(shell);
+    let mut snapshot = snapshot(vec![group(rows)]);
+    snapshot.sort_groups_for_presentation();
+    let roster = VisibleRoster::baseline(&snapshot);
+    assert_eq!(
+        ids(&roster),
+        ["shell", "idle-0", "idle-1", "idle-2", "idle-3", "idle-4"]
+    );
+    assert_eq!(roster.groups()[0].hidden_count(), 1);
+    for working in [true, false] {
+        let mut snapshot = snapshot.clone();
+        let oldest = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )
+        .iter_mut()
+        .find(|row| row.id == "idle-5")
+        .unwrap();
+        if working {
+            oldest.as_agent_mut().unwrap().status = AgentStatus::Running;
+        } else {
+            oldest.unread = true;
+        }
+        let roster = VisibleRoster::baseline(&snapshot);
+        assert!(ids(&roster).contains(&"idle-5"));
+        assert_eq!(roster.groups()[0].hidden_count(), 0);
+    }
+}
+
+#[test]
 fn roster_keeps_attention_focus_unread_and_only_live_process_beyond_cap() {
     let mut rows = idle_rows(9);
     rows[6].unread = true;

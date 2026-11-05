@@ -598,16 +598,7 @@ impl ViewContext {
         }
         let interacted = cleared || ui.selected_pane != selected || focus_released;
         let held = ui.freeze.is_some();
-        let mut frozen_ranks = self.released_ranks.clone();
-        frozen_ranks.extend(self.held_ranks.clone());
-        layout_freeze::apply_freeze(
-            ui,
-            &mut self.current,
-            interacted,
-            now_ms,
-            parked,
-            &frozen_ranks,
-        );
+        layout_freeze::apply_freeze(ui, &mut self.current, interacted, now_ms, parked);
         if ui.freeze.is_none() {
             self.released_ranks.clear();
         }
@@ -620,7 +611,7 @@ impl ViewContext {
         );
         if deferred {
             if let Some(hold) = &ui.freeze {
-                layout_freeze::reorder_to_frozen(&mut self.current, &hold.frozen, &frozen_ranks);
+                layout_freeze::reorder_to_frozen(&mut self.current, &hold.frozen);
             } else {
                 self.current.sort_presented_groups(&self.held_ranks);
             }

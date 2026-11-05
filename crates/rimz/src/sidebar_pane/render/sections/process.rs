@@ -25,7 +25,7 @@ pub(super) fn process_row_line(
     // the same work clay a running agent wears, an idle shell or a TUI rests
     // on the neutral hollow `○` of an idle agent — the lead DIM-weighted, the
     // name at the soft tier. That slight step — not a seam line — is what
-    // sets the group's command tail apart from the agent cards above it, and
+    // sets process rows apart from the agent cards sharing their order, and
     // under `NO_COLOR` it survives as the soft tier's DIM weight.
     let state = row.process_state().unwrap_or(ProcessState::Idle);
     let foreign_user = row
