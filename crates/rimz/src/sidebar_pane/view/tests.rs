@@ -5,6 +5,149 @@ use crate::store::snapshot::{AgentCard, RowCard, SidebarWorktreeKind, WorktreePr
 use jiff::Timestamp;
 
 #[test]
+fn unstaged_cohort_keeps_layout_order_ahead_of_solo_cards_and_shells() {
+    let roleless = cohort_row("roleless", "crew", None, Some(4));
+    let mut waiting = cohort_row("waiting", "crew", Some(1), Some(2));
+    waiting.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+    let snapshot = snapshot(vec![group(vec![
+        agent_row("solo", AgentStatus::Idle),
+        roleless,
+        waiting,
+        process_row("shell"),
+        cohort_row("first", "crew", Some(0), Some(3)),
+    ])]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        ["first", "waiting", "roleless", "solo", "shell"]
+    );
+}
+
+#[test]
+fn inline_cohort_keeps_layout_order_without_a_team() {
+    let mut rows = vec![
+        agent_row("solo", AgentStatus::Running),
+        cohort_row("last", "inline", Some(1), Some(1)),
+        cohort_row("first", "inline", Some(0), Some(2)),
+    ];
+    for row in &mut rows[1..] {
+        let card = row.as_agent_mut().unwrap();
+        card.launch_group = card.team.take();
+    }
+    let snapshot = snapshot(vec![group(rows)]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        ["first", "last", "solo"]
+    );
+}
+
+#[test]
+fn cohort_blocks_follow_their_earliest_pane_then_name_with_missing_last() {
+    let snapshot = snapshot(vec![group(vec![
+        cohort_row("missing-z", "z", None, None),
+        cohort_row("later-first", "later", Some(0), Some(8)),
+        cohort_row("earlier-last", "earlier", Some(1), Some(7)),
+        cohort_row("earlier-first", "earlier", Some(0), Some(2)),
+        cohort_row("later-last", "later", Some(1), Some(3)),
+        cohort_row("missing-a", "a", None, None),
+    ])]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        [
+            "earlier-first",
+            "earlier-last",
+            "later-first",
+            "later-last",
+            "missing-a",
+            "missing-z"
+        ]
+    );
+}
+
+#[test]
+fn cohort_members_use_panes_then_ids_for_missing_layout_ordinals() {
+    let snapshot = snapshot(vec![group(vec![
+        cohort_row("missing-z", "crew", None, None),
+        cohort_row("pane-b", "crew", None, Some(2)),
+        cohort_row("pane-first", "crew", None, Some(1)),
+        cohort_row("numbered", "crew", Some(0), None),
+        cohort_row("pane-a", "crew", None, Some(2)),
+        cohort_row("missing-a", "crew", None, None),
+    ])]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        [
+            "numbered",
+            "pane-first",
+            "pane-a",
+            "pane-b",
+            "missing-a",
+            "missing-z"
+        ]
+    );
+}
+
+#[test]
+fn staged_cohort_leads_an_earlier_inline_cohort() {
+    let mut inline = cohort_row("inline", "inline", Some(0), Some(1));
+    let card = inline.as_agent_mut().unwrap();
+    card.launch_group = card.team.take();
+    let mut group = group(vec![
+        inline,
+        cohort_row("last", "crew", Some(1), Some(3)),
+        cohort_row("first", "crew", Some(0), Some(2)),
+    ]);
+    group.team = Some("crew".to_owned());
+    group.pipeline = Some(crate::store::snapshot::SidebarPipeline {
+        stages: vec![],
+        stage: "Build".to_owned(),
+        owner: None,
+        started_at: None,
+        stage_started_at: None,
+        stage_prior_secs: 0,
+        visited: Default::default(),
+        done_at: None,
+    });
+    let snapshot = snapshot(vec![group]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        ["first", "last", "inline"]
+    );
+}
+
+#[test]
+fn external_cohort_rows_keep_their_incoming_order() {
+    let mut group = group(vec![
+        cohort_row("last", "crew", Some(1), Some(2)),
+        process_row("shell"),
+        cohort_row("first", "crew", Some(0), Some(1)),
+    ]);
+    group.kind = SidebarWorktreeKind::External;
+    let snapshot = snapshot(vec![group]);
+    assert_eq!(
+        ids(&VisibleRoster::baseline(&snapshot)),
+        ["last", "shell", "first"]
+    );
+}
+
+#[test]
+fn idle_cohort_members_fill_the_cap_before_solo_cards_but_not_solo_asks() {
+    let mut rows = vec![agent_row("solo", AgentStatus::Idle)];
+    rows.extend(
+        (0..6).map(|index| cohort_row(&format!("member-{index}"), "crew", Some(index), None)),
+    );
+    rows.push(agent_row("waiting", AgentStatus::Waiting));
+    let snapshot = snapshot(vec![group(rows)]);
+    let roster = VisibleRoster::baseline(&snapshot);
+    assert_eq!(
+        ids(&roster),
+        [
+            "member-0", "member-1", "member-2", "member-3", "member-4", "member-5", "waiting"
+        ]
+    );
+    assert_eq!(roster.groups()[0].hidden_count(), 1);
+}
+
+#[test]
 fn workflow_sections_partition_before_the_cap_and_survive_held_order() {
     let mut rows = idle_rows(10);
     for row in &mut rows[6..9] {
@@ -12,6 +155,7 @@ fn workflow_sections_partition_before_the_cap_and_survive_held_order() {
     }
     let step = &mut rows[9];
     step.name = "codex".to_owned();
+    step.as_agent_mut().unwrap().team = Some("crew".to_owned());
     let mut group = group(rows);
     let mut run = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
         .unwrap()
@@ -509,6 +653,15 @@ fn process_row(id: &str) -> SidebarRow {
     let mut row = agent_row(id, AgentStatus::Idle);
     row.name = "zsh".to_owned();
     row.card = RowCard::Process(crate::store::snapshot::ProcessCard::default());
+    row
+}
+
+fn cohort_row(id: &str, cohort: &str, ordinal: Option<u32>, pane_id: Option<u64>) -> SidebarRow {
+    let mut row = agent_row(id, AgentStatus::Idle);
+    row.pane = pane_id.map(|id| pane(&format!("%{id}"), "codex", "/repo/main"));
+    let card = row.as_agent_mut().unwrap();
+    card.team = Some(cohort.to_owned());
+    card.launch_ordinal = ordinal;
     row
 }
 

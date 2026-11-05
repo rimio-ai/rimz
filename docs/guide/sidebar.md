@@ -75,7 +75,7 @@ The peek stays as you left it in every tab until you click the chip or press `i`
 
 Panes with no channel and no known place fold into a dim `external` divider at the very bottom, which keeps its own `? n` and `! n` tally so their asks still surface. A shell under another repository where an agent works joins that agent's group instead.
 
-A live workflow keeps its worktree group even between steps with no pane. A [workflow strip](../interface/sidebar.md#workflow-strips) heads its own section above the team: workflow badge, rail with the current node named, a state word only without a step card, its duration, and the run total pinned right. The step card follows, then the team strip and team cards, then other rows; ranking within each section is preserved. Clicking the workflow strip reaches its step card when present. A rowless group has no jump target, but keeps its PR, CI, queue facts and cockpit PR count, including while parked. Search can match the workflow name. Ending the run removes its strip and any rowless group.
+A live workflow keeps its worktree group even between steps with no pane. A [workflow strip](../interface/sidebar.md#workflow-strips) heads its own section above the team: workflow badge, rail with the current node named, a state word only without a step card, its duration, and the run total pinned right. The step card follows, then the team strip and team cards, then other cohort blocks and solo rows. Cohorts keep layout order; solo cards and process rows keep attention rank. Clicking the workflow strip reaches its step card when present. A rowless group has no jump target, but keeps its PR, CI, queue facts and cockpit PR count, including while parked. Search can match the workflow name. Ending the run removes its strip and any rowless group.
 
 A live run blocks folding on an unlanded checkout. Once landed, its node entry joins the group's quiet clock, or supplies it alone when rowless. A folded live run replaces the member roster with `▸ land · triage held`, always ending with the strip's word, since the fold hides the cards; totals draw only when members supply them. With no rows the receipt is inert and counts as one group in the inactive chip and its paged peek, hidden while closed. Dismissing the park notice leaves the strip's yellow `parked` word in place. Rowless checkout churn follows the quiet five-minute refresh; PR and CI keep their normal probe schedule.
 
@@ -232,7 +232,7 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 ### What outranks what
 
-Inside a group, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
+Inside a group, the workflow card and [cohort blocks](#teams-read-as-one) lead. Among the remaining rows, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
 
 Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
 
@@ -248,13 +248,13 @@ Within a group, time is measured from each card's last activity, in three window
 2. **Between one hour and twenty-four, calm cards and process rows cool.** They sink below hot calm rows, still newest first within the cooling band.
 3. **Past twenty-four hours, a calm card or process row archives.** It parks at the back, still newest first within that band. This band is about age; it is unrelated to an agent sleeping on a wait.
 
-Asks and failures are exempt from cooling and archiving while the agent is alive: an unanswered question still leads fresh running or idle work tomorrow.
+Asks and failures are exempt from cooling and archiving while the agent is alive: an unanswered solo card still leads fresh running or idle solo work tomorrow, while cohort members keep their layout slots.
 
 A group's fold clock instead measures launches and prompts, including delivered agent and harness prompts. Resume and keep-warm pings do not reset it. A new launch or prompt revives an inactive group. The main checkout and external groups never fold.
 
 ### Teams read as one
 
-A co-launched team's cards share one birth instant and start in launch layout order, including roleless cells. Each card then follows its own attention history: a teammate asking or failing moves only that card into the attention zone, not the whole team. Existing cohorts keep their stored role-order ties until relaunched. The make-up line still counts a team as one unit, and the [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) still reports the team's combined state. A pending one-shot wait keeps a team from emitting `team.idle`.
+Cards launched together stay together in layout order, including roleless cells, even when a member asks or fails. This holds for teams without a board and for inline layouts too, including a cohort's lone remaining member. The workflow step card leads; the staged team's block follows, then other cohorts by their earliest pane creation, then solo cards and process rows in attention order. Missing layout or pane ordinals sort last, and external rows are not gathered. Existing cohorts keep their stored role order until relaunched. The make-up line still counts a team as one unit, and the [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) still reports the team's combined state. A pending one-shot wait keeps a team from emitting `team.idle`.
 
 ### Newest groups first
 
@@ -266,12 +266,12 @@ Newly inactive work with cards waits outside the fold while the layout is held o
 
 Four partitions hold regardless of any score, so the column keeps one stable outline:
 
-- The workflow step's card leads, followed by team members when a team strip draws, then other rows. Within each section, asks and failures lead, followed by calm cards and process rows in one order. A focused shell becoming an agent keeps its held rank through the launch.
+- The workflow step's card leads, followed by cohort blocks in layout order, then solo cards and process rows in attention order. A staged team's block leads the other cohorts. A focused shell becoming an agent keeps its held attention rank through the launch.
 - The main checkout's group stays below groups holding asks or failures and above the rest, even without an agent. Its own ask or failure puts it among the attention groups instead.
 - Inactive project groups follow every active project group, behind the inactive chip. The whole line and `i` toggle a paged peek without filtering; `+K older` loads the next 10. It follows your view across tabs and focus changes until you toggle it, and starts closed after a host restart. Opening reveals the first receipt, closing returns to the chip, and neither moves the selection.
 - Project worktrees lead and out-of-project panes tail, so the `external` divider always sorts last whatever it holds.
 
-Inside an active group, the six-row cap folds idle cards and process rows behind `+K more` after section ordering, preserving their shared rank; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. When only process panes remain hot, the first hot process row stays visible as a liveness anchor; cooled shells are not exempt.
+Inside an active group, the six-row cap fills in section order, so idle cohort members take slots before idle solo cards and process rows; overflow folds behind `+K more`. An agent card that is working, blocked, parked, finished, unread, or selected is never folded. When only process panes remain hot, the first hot process row stays visible as a liveness anchor; cooled shells are not exempt.
 
 The card in a pane you have focused keeps its place in the order, and its group keeps its place, until you leave that pane. Prompting it, answering its ask, or waking cooled work does not move it. Clients sharing a view can focus different panes: both cards hold. Other cards can still arrive or ask for attention above them.
 

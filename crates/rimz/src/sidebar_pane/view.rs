@@ -1,12 +1,14 @@
 //! Sidebar body membership and stable row ordinals.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::body_filter::GroupFacts;
-use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup};
+use crate::store::snapshot::{
+    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 
 pub(crate) use crate::sidebar::body_filter::BodyFilter;
 pub(super) use crate::sidebar::body_filter::BodyLens;
@@ -205,20 +207,50 @@ fn project_group<'a>(
     let facts = lens.filter.map(|_| GroupFacts::new(group));
     let owner = group.workflow_owner();
     let mut rows = group.rows.iter().collect::<Vec<_>>();
-    rows.sort_by_key(|row| {
-        if owner.is_some_and(|owner| owner.id == row.id) {
-            0
-        } else if group.pipeline.is_some()
-            && group
-                .team
-                .as_deref()
-                .is_some_and(|team| row.team() == Some(team))
-        {
-            1
-        } else {
-            2
+    if group.kind != SidebarWorktreeKind::External {
+        let pane_ordinal = |row: &SidebarRow| {
+            row.pane
+                .as_ref()
+                .and_then(|pane| pane.pane_id.creation_ordinal())
+        };
+        let mut cohorts: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let mut solo = Vec::new();
+        for row in rows {
+            if let Some(cohort) = row.launch_cohort() {
+                cohorts.entry(cohort).or_default().push(row);
+            } else {
+                solo.push(row);
+            }
         }
-    });
+        let staged = group.pipeline.as_ref().and(group.team.as_deref());
+        let mut cohorts = cohorts.into_iter().collect::<Vec<_>>();
+        cohorts.sort_by_key(|(cohort, members)| {
+            let first = members.iter().filter_map(|row| pane_ordinal(row)).min();
+            (Some(*cohort) != staged, first.is_none(), first, *cohort)
+        });
+        rows = Vec::with_capacity(group.rows.len());
+        for (_, mut members) in cohorts {
+            members.sort_by_key(|&row| {
+                let ordinal = row.as_agent().and_then(|agent| agent.launch_ordinal);
+                let pane = pane_ordinal(row);
+                (
+                    ordinal.is_none(),
+                    ordinal,
+                    pane.is_none(),
+                    pane,
+                    row.id.as_str(),
+                )
+            });
+            rows.extend(members);
+        }
+        rows.extend(solo);
+    }
+    if let Some(index) = rows
+        .iter()
+        .position(|row| owner.is_some_and(|owner| owner.id == row.id))
+    {
+        rows[..=index].rotate_right(1);
+    }
     let mut projection = project_rows(
         &rows,
         group.collapses(),

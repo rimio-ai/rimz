@@ -82,7 +82,7 @@ Two siblings ship beside forge and work exactly the same way. `mill` leads with 
 
 ## See and drive your teams
 
-A team is one line of work, so the room treats it as one. The sidebar names the group with `· forge` and gives it a single derived state. Members born together start in layout order; only a member asking for you moves to the top zone ([the sidebar guide](./sidebar.md#teams-read-as-one)).
+A team is one line of work, so the room treats it as one. The sidebar names the group with `· forge` and gives it a single derived state. Members stay together in layout order, even when one asks for you or fails ([the sidebar guide](./sidebar.md#teams-read-as-one)).
 
 `rimz teams list` opens with who needs you, including a stage owner who is not live, then lists live cohorts in attention order with stage and activity ages. Definitions with no live cohort share a trailing line. A live copy is a cohort, and its address is `team#channel`. For a team launched with `-w NAME`, that channel is its worktree's name:
 

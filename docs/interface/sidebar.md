@@ -641,7 +641,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
  ○ zsh
 ```
 
-A group with one staged team and a readable worktree `.rimz/team/blackboard.md` containing a `Stage:` line gets a pipeline line heading the team's own section. It follows the workflow section, when present, and precedes the team's cards; other rows follow the team section. Ranked order is preserved within each section, before the six-row cap. The team's members must identify one worktree:
+A group with one staged team and a readable worktree `.rimz/team/blackboard.md` containing a `Stage:` line gets a pipeline line heading the team's own block. It follows the workflow section, when present, and precedes the team's cards; other cohort blocks follow, then solo cards and process rows. Cohort members keep launch layout order, even when asking or failing; other rows keep attention rank. Blocks without a pipeline sort by earliest pane creation, missing last, then cohort name. This partition fills the six-row cap before idle solo rows. The team's members must identify one worktree:
 
 ```
 ▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
@@ -659,7 +659,7 @@ The stage duration sits immediately after the stage name, such as `Implement 4h1
 
 ### Workflow strips
 
-An Active or Parked workflow keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, then other rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it. If several workflows share a checkout, the newest run supplies the strip.
+An Active or Parked workflow keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, other cohort blocks, then solo cards and process rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it. If several workflows share a checkout, the newest run supplies the strip.
 
 ```text
  ⑂ merge-lane ✓ #91                            ⇉ main
@@ -768,7 +768,7 @@ A folded inactive group hides its pipeline line and puts the stage after the tea
                                                    0s
 ```
 
-Expanding the group restores the pipeline line. Within each section, asks and failures lead, newest attention first. Calm cards and process rows follow together in hot, cooling, and archived bands, newest birth or recovery first within each. Process rows cool from the pane's first sighting; after an agent exits, they keep its last-activity clock if its card had cooled or archived, otherwise they age from the exit. Busy work never renews this clock. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+Expanding the group restores the pipeline line. Cohort blocks keep layout order, including asks and failures. Among other rows, asks and failures lead, newest attention first. Calm solo cards and process rows follow together in hot, cooling, and archived bands, newest birth or recovery first within each. Process rows cool from the pane's first sighting; after an agent exits, they keep its last-activity clock if its card had cooled or archived, otherwise they age from the exit. Busy work never renews this clock. Groups holding asks or failures lead by urgency, then the main checkout, including when it has no agent. Other active groups sort by their newest agent launch, newest first; groups without agents follow by newest pane creation. Within each tier, groups with rows precede rowless workflow groups, which sort by newest node entry. Inactive groups with rows sort by latest agent activity, newest first. Read state never changes row order. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 

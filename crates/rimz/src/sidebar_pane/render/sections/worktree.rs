@@ -195,7 +195,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     }
     debug_assert!(
         workflow_owner.is_none_or(|index| index == 0),
-        "project_group sorts the step card first, so the team strip follows it"
+        "project_group keeps the step card before cohort blocks and their pipeline strip"
     );
     let pipeline_offset = usize::from(workflow_owner.is_some());
     for offset in 0..=passing {
