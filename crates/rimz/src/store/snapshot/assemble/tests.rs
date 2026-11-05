@@ -585,6 +585,21 @@ fn pre_workflow_snapshot_is_not_a_fresh_view() {
     );
 }
 
+#[test]
+fn pre_reached_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(75);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "a snapshot without journal-derived reached flags must be refolded"
+    );
+}
+
 /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
 /// cache: the reader a new binary starts with, for a check whose
 /// production path is always a cold-cache event.

@@ -7,7 +7,8 @@ use std::sync::Arc;
 fn workflow(path: &str, state: RunState) -> SidebarWorkflow {
     serde_json::from_value(serde_json::json!({
         "run": crate::ids::WorkflowRunId::new(), "workflow": "land", "scope_path": path,
-        "state": state, "track": [], "current": {"name": "watch", "kind": "check"},
+        "state": state, "track": [],
+        "current": {"name": "watch", "kind": "check", "reached": false},
         "detour_parent": null, "visits": 0, "capped": false, "word": "queued",
         "since": ago(3601), "hold_limit": null, "entered_at": ago(3601),
         "created_at": ago(7200), "agent": null

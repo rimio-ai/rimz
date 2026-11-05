@@ -441,6 +441,7 @@ pub enum WorkflowNodeKind {
 pub struct SidebarWorkflowNode {
     pub name: String,
     pub kind: WorkflowNodeKind,
+    pub reached: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

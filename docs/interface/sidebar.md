@@ -650,7 +650,7 @@ An Active or Parked workflow keeps its worktree group, header, PR, CI and queue 
    land ● ◉ watch queued 23m ○ ◇ ○ ◇              25m
 ```
 
-The workflow badge leads the main rail in walk order: reached steps and checks are `●` and `◆`, future ones `○` and `◇`. Only the current node is named, in bold after `◉`. A current detour keeps its parent named (`◆ watch ╰─ ◉ fix ×2`); past detours do not draw. `×N` appears from the second visit, yellow when a visit cap is used up. Reached means earlier in the rail, not journal-confirmed, so resuming past a node can mark it reached without visiting it. An unreadable sealed definition draws the current node without a track.
+The workflow badge leads the main rail in walk order: reached steps and checks are `●` and `◆`, future ones `○` and `◇`. Only the current node is named, in bold after `◉`. A current detour keeps its parent named (`◆ watch ╰─ ◉ fix ×2`); past detours do not draw. `×N` appears from the second visit, yellow when a visit cap is used up. Reached follows the run's history, as on the rail in `rimz workflow show`, so nodes skipped by `resume --at` stay `○`/`◇`. An unreadable sealed definition draws the current node without a track.
 
 With a current step card, the mark and name use its status tone and animation phase and omit the state word. Otherwise Active uses a static running tone, Parked a waiting tone, followed by the check outcome, `held`, `takeover`, `running` for a step, `checking`, or `parked`. The parked word is yellow. A hold reads `holding <outcome> <age>/<limit>`, using `?` for an unreadable limit. The duration is the outcome's age at a check, node-entry age at a step, or time since parking; the whole run's age pins right. A held session names its step, not the check holding it.
 

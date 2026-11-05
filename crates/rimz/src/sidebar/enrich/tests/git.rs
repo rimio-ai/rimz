@@ -253,7 +253,8 @@ fn pr_state_projection_uses_the_given_map() {
         group.workflow = Some(
             serde_json::from_value(serde_json::json!({
                 "run": crate::ids::WorkflowRunId::new(), "workflow":"land", "scope_path":worktree,
-                "state":state, "track":[], "current":{"name":"watch", "kind":"check"},
+                "state":state, "track":[],
+                "current":{"name":"watch", "kind":"check", "reached":false},
                 "detour_parent":null, "visits":0, "capped":false, "word":"queued",
                 "since":rowless.now, "hold_limit":null, "entered_at":rowless.now,
                 "created_at":rowless.now, "agent":null

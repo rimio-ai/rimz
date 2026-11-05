@@ -43,7 +43,7 @@ pub(super) fn workflow_line(
                     }
                     left.extend(current.iter().cloned());
                 } else {
-                    left.push(node_mark(ctx.theme, node, index < position));
+                    left.push(node_mark(ctx.theme, node, node.reached));
                 }
             }
         } else {
