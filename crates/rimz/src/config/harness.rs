@@ -423,6 +423,9 @@ impl<'de> Deserialize<'de> for KeepWarmPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HarnessConfig {
+    /// Hold message writes while a viewing client has recent input; `off` disables it.
+    #[serde(with = "typing_hold_serde")]
+    pub typing_hold: Option<Duration>,
     /// Keep waiting agents' provider prompt caches warm.
     pub cache_keepalive: bool,
     /// Nudge a resting unfinished team once per stage visit after 55 minutes.
@@ -478,6 +481,7 @@ pub struct HarnessConfig {
 impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
+            typing_hold: Some(Duration::from_secs(30)),
             cache_keepalive: true,
             stall_nudge: false,
             cache_keepalive_max: Some(Duration::from_secs(6 * 3600)),
@@ -694,6 +698,28 @@ mod prompt_cache_margin_serde {
         S: Serializer,
     {
         serializer.serialize_str(&crate::utils::time::format_duration_compact(*margin))
+    }
+}
+
+mod typing_hold_serde {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        parse_off_or_duration(&String::deserialize(deserializer)?).ok_or_else(|| {
+            serde::de::Error::custom(
+                "harness.typing_hold must be off or a non-zero duration such as 30s",
+            )
+        })
+    }
+
+    pub fn serialize<S>(hold: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format_off_or_duration(*hold))
     }
 }
 

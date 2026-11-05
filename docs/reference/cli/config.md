@@ -110,6 +110,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.smart_compact` | `off`, a token count (`258k`, the default), or a percentage (`70%`); fallback for [mid-turn soft compaction and compact-first delivery](../../guide/configuration.md#smart-compaction), overridden per role or profile |
 | `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
+| `harness.typing_hold` | a non-zero duration (default `30s`), or `off`; holds message writes while a viewing client has recent input; invalid values warn at entry and use built-in defaults |
 | `harness.idle_compact` | `off` or a token floor such as `100k` (default); see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every static prompt-cache lifetime (settings, defaults, fallback) and `harness.cache_keepalive_max`; observed writes may be shorter; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.prompt_cache_ttl.<kind>[.<subscription\|api-key>]` | `off` or a duration longer than the margin; plain or split provider settings |
