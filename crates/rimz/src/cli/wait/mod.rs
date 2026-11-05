@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
 
 use rimz::config::{CheckOn, TaskTarget, WatchSpec};
@@ -120,11 +120,28 @@ fn caller(ctx: &Ctx) -> Result<Option<CallerIdentity>> {
 fn caller_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     caller: Option<&CallerIdentity>,
+    action: Option<&str>,
 ) -> Result<Option<&'a rimz::agents::AgentState>> {
     let Some(caller) = caller else {
         return Ok(None);
     };
-    let agent = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller)?;
+    let agent =
+        rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller).map_err(|_| {
+            let identity = match (&caller.launch_id, &caller.pane_id) {
+                (Some(launch_id), _) => format!("launch id `{launch_id}`"),
+                (None, Some(pane_id)) => format!("pane `{pane_id}`"),
+                (None, None) => "no launch id or pane".into(),
+            };
+            let unchanged = action
+                .map(|action| format!("nothing was {action}: "))
+                .unwrap_or_default();
+            anyhow!(
+                "{unchanged}RimZ could not find the calling agent's live session from this \
+                 process (looked for kind `{}`, {identity}). If this ran inside a provider's \
+                 command sandbox: {SANDBOX_REMEDY}",
+                caller.kind
+            )
+        })?;
     if agent.ended_at.is_some() {
         bail!("RimZ identified the calling agent but its live session is unavailable");
     }
@@ -140,6 +157,12 @@ fn parse_on(raw: Option<&str>) -> CheckOn {
     }
 }
 
+const SANDBOX_REMEDY: &str = "Run `rimz wait …` as its own command, without a chain, \
+    pipe, redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
+    `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine rules \
+    predate this RimZ, refresh them with `rimz hooks install codex` from a user shell and \
+    restart the agent";
+
 fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
     if !error.chain().any(|cause| {
         cause
@@ -150,11 +173,7 @@ fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
     }
     error.context(format!(
         "nothing was {action}: this command cannot write the RimZ home, for example inside a \
-         provider's command sandbox. Run `rimz wait …` as its own command, without a chain, pipe, \
-         redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
-         `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine rules \
-         predate this RimZ, refresh them with `rimz hooks install codex` from a user shell and \
-         restart the agent"
+         provider's command sandbox. {SANDBOX_REMEDY}"
     ))
 }
 

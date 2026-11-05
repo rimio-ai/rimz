@@ -16,7 +16,7 @@ pub(super) fn run(
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    let agent = caller_agent(&snapshot, caller.as_ref())?.context(
+    let agent = caller_agent(&snapshot, caller.as_ref(), Some("canceled"))?.context(
         "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
     )?;
     let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;

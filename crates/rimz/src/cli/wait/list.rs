@@ -18,7 +18,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    let agent = caller_agent(&snapshot, caller.as_ref())?;
+    let agent = caller_agent(&snapshot, caller.as_ref(), None)?;
     let rows = if agent.is_some() {
         pending_rows(&ctx, agent, &snapshot)?
     } else {
