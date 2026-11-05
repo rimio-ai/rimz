@@ -114,6 +114,36 @@ fn paths() -> (tempfile::TempDir, StatePaths, RuntimePaths) {
     (dir, state, runtime)
 }
 
+#[test]
+fn input_wakes_ignore_topology_authority_and_keep_the_newest_clock() {
+    let (_dir, state, runtime) = paths();
+    let _held = crate::disk::lock::WorkspaceLock::acquire(&runtime.topology_writer_lock()).unwrap();
+    let mut observations = Vec::new();
+    for stamp in [1_000, 900, 1_100] {
+        let mut incoming = wake(ZellijWakeReason::Input {
+            client_id: 7,
+            last_input_ms: stamp,
+        });
+        incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
+        let result = ingest_zellij_wake(&state, &runtime, &incoming);
+        let stamp = std::fs::read(runtime.zellij_client_input_paths("rimz-test", 7).0)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|record| record["last_input_ms"].as_u64());
+        observations.push((matches!(result, Ok(ZellijWakeOutcome::Accepted { ref events, panes_observed_at_ms: None }) if events.is_empty()), stamp));
+    }
+    assert_eq!(
+        observations,
+        [
+            (true, Some(1_000)),
+            (true, Some(1_000)),
+            (true, Some(1_100))
+        ]
+    );
+    assert!(!crate::sidebar::cache::presence_stamp_path(&runtime).exists());
+    assert!(read_pane_topology_cache(&runtime, "rimz-test").is_none());
+}
+
 fn boundary_topology(produced_at_ms: u64) -> PaneTopologyCache {
     let mut cache = topology(produced_at_ms, Some(writer(1, 100)));
     cache.panes = vec![

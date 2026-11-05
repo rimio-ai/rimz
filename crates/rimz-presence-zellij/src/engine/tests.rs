@@ -60,6 +60,85 @@ fn config() -> EngineConfig {
     }
 }
 
+#[test]
+fn input_filters_clients_cli_and_hover_and_publishes_the_leading_edge() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 0, &host);
+    let observed = [
+        (18, None, false),
+        (17, Some(2), false),
+        (17, None, true),
+        (17, None, false),
+    ]
+    .map(|(client, cli, hover)| {
+        reasons(&engine.on_user_action(client, cli, hover, 100, &host))
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(observed, [vec![], vec![], vec![], vec!["input".to_owned()]]);
+    let effects = engine.on_timer(1_100, &host);
+    assert!(!reasons(&effects).contains(&"input"), "{effects:?}");
+}
+
+#[test]
+fn input_burst_publishes_one_trailing_wake_with_the_latest_action_time() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 0, &host);
+    let first = engine.on_user_action(17, None, false, 100, &host);
+    let mut observations = vec![reasons(&first).contains(&"input")];
+    for now in [200, 400, 900] {
+        let effects = engine.on_user_action(17, None, false, now, &host);
+        observations.push(reasons(&effects).contains(&"input"));
+    }
+    observations.push(reasons(&engine.on_timer(1_099, &host)).contains(&"input"));
+    let trailing = engine.on_timer(1_100, &host);
+    observations.push(reasons(&trailing).contains(&"input"));
+    assert_eq!(observations, [true, false, false, false, false, true]);
+    let commands = run_commands(&trailing);
+    let argv = commands
+        .iter()
+        .find(|argv| arg_after(argv, "--reason") == Some("input"))
+        .unwrap();
+    assert_eq!(arg_after(argv, "--last-input-ms"), Some("900"));
+    assert_eq!(arg_after(argv, "--client-id"), Some("17"));
+    assert!(arg_after(argv, "--topology").is_none());
+    assert!(!reasons(&engine.on_timer(2_100, &host)).contains(&"input"));
+    assert!(reasons(&engine.on_user_action(17, None, false, 2_101, &host)).contains(&"input"));
+}
+
+#[test]
+fn input_is_independent_of_topology_writer_muting_and_is_not_rebroadcast() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    assert!(!reasons(&engine.on_user_action(17, None, false, 0, &host)).contains(&"input"));
+    grant(&mut engine, 1, &host);
+    for now in 2..5 {
+        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(now), now, &host);
+    }
+    assert!(engine.muted);
+    let first = engine.on_user_action(17, None, false, 10, &host);
+    let next = engine.on_user_action(17, None, false, 20, &host);
+    let trailing = engine.on_timer(1_010, &host);
+    assert_eq!(
+        [
+            reasons(&first).contains(&"input"),
+            reasons(&next).contains(&"input"),
+            reasons(&trailing).contains(&"input")
+        ],
+        [true, false, true]
+    );
+    for effects in [
+        engine.on_dump_topology_pipe(1_020, &host),
+        engine.on_timer(KEEPALIVE_MS, &host),
+        engine.on_dump_topology_pipe(KEEPALIVE_MS + 1, &host),
+    ] {
+        assert!(!reasons(&effects).contains(&"input"), "{effects:?}");
+    }
+}
+
 fn reconfigure_config() -> EngineConfig {
     EngineConfig {
         focus_key: Some("Alt+p".to_owned()),

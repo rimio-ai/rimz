@@ -12,6 +12,43 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
+#[test]
+fn input_wake_carries_only_the_client_clock_not_topology() {
+    let request = WakeRequest::Input {
+        client_id: 17,
+        last_input_ms: 1_234,
+    };
+    assert_eq!(
+        wake_argv(&ctx(), request.clone(), Some("{\"topology\":true}")),
+        Some(strings(&[
+            "/bin/rimz",
+            "sidebar",
+            "wake",
+            "--reason",
+            "input",
+            "--session-name",
+            "session-1",
+            "--workspace-id",
+            "workspace-1",
+            "--client-id",
+            "17",
+            "--last-input-ms",
+            "1234",
+        ]))
+    );
+    assert!(
+        wake_argv(
+            &WakeContext {
+                session_name: None,
+                ..ctx()
+            },
+            request,
+            None
+        )
+        .is_none()
+    );
+}
+
 fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,

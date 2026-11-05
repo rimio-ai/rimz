@@ -28,11 +28,12 @@ use crate::utils::time::unix_now_ms;
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
-const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 4] = [
+const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 5] = [
     "ReadApplicationState",
     "RunCommands",
     "Reconfigure",
     "ChangeApplicationState",
+    "InterceptInput",
 ];
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
@@ -339,7 +340,6 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        self.seed_presence_permissions(opts);
         let identity = presence_plugin_identity(opts);
         let desired = PresenceDesired {
             build: presence_plugin_build().to_owned(),
@@ -544,6 +544,7 @@ impl ZellijBackend {
         pipe_name: &str,
         payload: &str,
     ) -> Result<()> {
+        self.seed_presence_permissions(opts);
         // The owner pipe remains the birth safety net and the load route for
         // re-entry and convergence: it launches a missing identity without an
         // attached client and otherwise routes to the live instance. Skip-cache

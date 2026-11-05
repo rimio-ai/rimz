@@ -81,6 +81,18 @@ fn permission_children(document: &KdlDocument, key: &str) -> Vec<String> {
 }
 
 #[test]
+fn seeded_permissions_match_the_shell_and_include_input_interception() {
+    let shell = include_str!("../../../../../rimz-presence-zellij/src/main.rs");
+    let requested = shell
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("PermissionType::"))
+        .map(|line| line.trim_end_matches(','))
+        .collect::<Vec<_>>();
+    assert_eq!(requested, PRESENCE_PLUGIN_BASE_PERMISSIONS);
+    assert!(requested.contains(&"InterceptInput"), "{requested:?}");
+}
+
+#[test]
 fn seed_presence_permissions_adds_node_to_empty_document() {
     let key = "/tmp/rimz-presence-zellij.wasm";
     let mut document = KdlDocument::new();
@@ -111,6 +123,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     ReadApplicationState
     RunCommands
     Reconfigure
+    ChangeApplicationState
 }
 "#
     .parse()
@@ -132,7 +145,8 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
             "ReadApplicationState",
             "RunCommands",
             "Reconfigure",
-            "ChangeApplicationState"
+            "ChangeApplicationState",
+            "InterceptInput",
         ]
     );
 }
@@ -312,6 +326,36 @@ fn current_presence_cleanup_retires_a_stale_loaded_id() {
     assert!(
         log.contains("--name rimz_presence_boot -- load"),
         "cleanup should heal any accepted writer closed with a same-id clone:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retire_boot_seeds_input_permission_before_loading() {
+    let (temp, shim) = super::super::tests::support::zellij_shim(
+        r#"#!/bin/sh
+case " $* " in
+  *" action list-panes --all --json "*) printf '[]\n' ;;
+  *" --name rimz_presence_boot -- load "*)
+    if [ -s "$HOME/zellij/permissions.kdl" ]; then
+      cp "$HOME/zellij/permissions.kdl" "$HOME/boot-grant"
+    fi ;;
+esac
+exit 0
+"#,
+    );
+    let runtime = temp.path().join("runtime");
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, &runtime);
+    let opts = presence_opts("rimz-test", "/bin/rimz");
+    backend.retire_accepted_presence_plugin_for(&opts, &current_writer(2, 100));
+    let observed = std::fs::read_to_string(runtime.join("boot-grant")).unwrap_or_default();
+    let grant: KdlDocument = observed.parse().unwrap();
+    assert!(
+        grant
+            .get(opts.wasm.to_str().unwrap())
+            .and_then(|node| node.children())
+            .is_some_and(|permissions| permissions.get("InterceptInput").is_some()),
+        "boot loader observed an incomplete grant: {observed}",
     );
 }
 

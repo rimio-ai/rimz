@@ -1429,7 +1429,8 @@ allowed-dependencies = [
 # paths::workflow_runs_under_strict preserves required protection facts across rooms (+1).
 # paths::loop_throttle_start_stamps names the machine, workflow and step launch stamps.
 # RuntimePaths::attention_path owns the host's attention-stamp lane (+1).
-surface-budget = 320
+# RuntimePaths::zellij_client_input_paths owns per-session/client cache and lock paths (+1).
+surface-budget = 321
 
 [[verdict]]
 kind = "item"
@@ -3032,7 +3033,8 @@ path = "crates/rimz/src/mux"
 # TmuxBackend::apply_room_options shares the existing-session apply with reload (+1).
 # TmuxBackend::set_pane_kind publishes the exec wrapper's provider for border coloring (+1).
 # ClientPresence::last_input_ms and ClientView::attended_until share per-client input clocks (+2).
-surface-budget = 303
+# write_client_input and ClientInputWriteError share plugin input publication with the host (+2).
+surface-budget = 305
 
 [[verdict]]
 kind = "item"
@@ -3120,7 +3122,18 @@ path = "crates/rimz/src/mux/zellij"
 # ZellijSessionOption is opaque: its fields and value enum stay private to this module.
 # WidthMemo supplies cached per-pane geometry with live freshness checks (+1).
 # Stable tab identity, five ownership-cache operations, session runtime lookup and layout birth recording (+8).
-surface-budget = 60
+# write_client_input and ClientInputWriteError retain input independently of topology election (+2).
+surface-budget = 62
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::write_client_input"
+reason = "Host wake ingestion publishes monotonic per-client input under its own lock, outside topology writer election."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::ClientInputWriteError"
+reason = "The public wake-ingestion error preserves typed client-input lock and publication failures."
 
 [[module]]
 path = "crates/rimz/src/observability"

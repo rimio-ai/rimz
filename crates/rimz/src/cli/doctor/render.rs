@@ -1555,6 +1555,13 @@ fn push_presence_plugins(
     server_version: Option<&str>,
 ) {
     let desired = plugins.desired_build.as_deref().map(short_build);
+    kv.push(
+        "plugin permissions",
+        cell(concat!(
+            "seeded grant: ReadApplicationState, RunCommands, Reconfigure, ",
+            "ChangeApplicationState, InterceptInput (input timestamps only)"
+        )),
+    );
     if plugins.rows.is_empty() {
         let want = desired
             .as_deref()

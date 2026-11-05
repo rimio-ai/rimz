@@ -3508,6 +3508,7 @@ dependencies = [
  "serde",
  "serde_json",
  "zellij-tile",
+ "zellij-utils",
 ]
 
 [[package]]

@@ -341,6 +341,10 @@ pub struct WakeContext<'a> {
 pub enum WakeRequest {
     Changed,
     Alive(PluginTelemetry),
+    Input {
+        client_id: u16,
+        last_input_ms: u64,
+    },
     SwitchSettled {
         tab: u64,
         generation: u64,
@@ -359,6 +363,7 @@ pub fn wake_argv(
     let reason = match &request {
         WakeRequest::Changed => "panes-changed",
         WakeRequest::Alive(_) => "alive",
+        WakeRequest::Input { .. } => "input",
         WakeRequest::SwitchSettled { .. } => "switch-settled",
     };
     let mut argv = vec![
@@ -369,6 +374,20 @@ pub fn wake_argv(
         reason.to_owned(),
     ];
     match request {
+        WakeRequest::Input {
+            client_id,
+            last_input_ms,
+        } => {
+            push_session(ctx, &mut argv)?;
+            push_workspace(ctx, &mut argv);
+            argv.extend([
+                "--client-id".to_owned(),
+                client_id.to_string(),
+                "--last-input-ms".to_owned(),
+                last_input_ms.to_string(),
+            ]);
+            return Some(argv);
+        }
         WakeRequest::Changed => {
             push_session(ctx, &mut argv)?;
             push_workspace(ctx, &mut argv);

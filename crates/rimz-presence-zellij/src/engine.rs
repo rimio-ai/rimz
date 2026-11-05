@@ -552,8 +552,11 @@ pub struct Engine {
     wake_fork_failures: u32,
     stale_writer_rejections: u32,
     latest_accepted_topology_at: Option<u64>,
+    last_input_published_at: Option<u64>,
+    pending_input_ms: Option<u64>,
 }
 
+const INPUT_PUBLISH_FLOOR_MS: u64 = 1_000;
 const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
 const STALE_WRITER_MUTE_THRESHOLD: u32 = 3;
 impl Engine {
@@ -574,6 +577,8 @@ impl Engine {
             wake_fork_failures: 0,
             stale_writer_rejections: 0,
             latest_accepted_topology_at: None,
+            last_input_published_at: None,
+            pending_input_ms: None,
         }
     }
 
@@ -749,7 +754,63 @@ impl Engine {
 
     pub fn on_timer(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
         self.timer_gate.on_fire(now);
-        self.finish_update(now, host, Vec::new())
+        let mut effects = Vec::new();
+        self.publish_due_input(now, &mut effects);
+        self.finish_update(now, host, effects)
+    }
+
+    pub fn on_user_action(
+        &mut self,
+        client_id: u16,
+        cli_client_id: Option<u16>,
+        buttonless_motion: bool,
+        now: u64,
+        _host: &impl Host,
+    ) -> Vec<Effect> {
+        if !self.granted
+            || self.config.client_id != Some(client_id)
+            || cli_client_id.is_some()
+            || buttonless_motion
+        {
+            return Vec::new();
+        }
+        self.pending_input_ms = Some(now);
+        let mut effects = Vec::new();
+        self.publish_due_input(now, &mut effects);
+        self.rearm(now, &mut effects);
+        effects
+    }
+
+    fn input_deadline(&self) -> Option<u64> {
+        self.pending_input_ms.map(|stamp| {
+            self.last_input_published_at
+                .map_or(stamp, |at| at.saturating_add(INPUT_PUBLISH_FLOOR_MS))
+        })
+    }
+
+    fn publish_due_input(&mut self, now: u64, effects: &mut Vec<Effect>) {
+        if !self.granted || self.input_deadline().is_none_or(|at| at > now) {
+            return;
+        }
+        let (Some(client_id), Some(last_input_ms)) =
+            (self.config.client_id, self.pending_input_ms.take())
+        else {
+            return;
+        };
+        if let Some(argv) = wire::wake_argv(
+            &self.wake_context(),
+            wire::WakeRequest::Input {
+                client_id,
+                last_input_ms,
+            },
+            None,
+        ) {
+            effects.push(Effect::RunCommand {
+                argv,
+                topology_issued_at: None,
+            });
+            self.last_input_published_at = Some(now);
+        }
     }
 
     pub fn on_session_update(
@@ -986,7 +1047,7 @@ impl Engine {
     /// supersedes, and a superseded timer's fire is a harmless no-op.
     fn rearm(&mut self, now: u64, effects: &mut Vec<Effect>) {
         let policy_at = Some(self.policy.next_wake_at());
-        let Some(at) = [policy_at, self.focus.next_deadline()]
+        let Some(at) = [policy_at, self.focus.next_deadline(), self.input_deadline()]
             .into_iter()
             .flatten()
             .min()

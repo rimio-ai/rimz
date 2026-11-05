@@ -110,7 +110,10 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
-pub(super) fn parse_client_view(stdout: &[u8]) -> Option<ClientView> {
+pub(super) fn parse_client_view(
+    stdout: &[u8],
+    mut input_ms: impl FnMut(u32) -> Option<u64>,
+) -> Option<ClientView> {
     let mut has_header = false;
     let mut client_ids = BTreeSet::new();
     let mut clients = Vec::new();
@@ -152,7 +155,10 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> Option<ClientView> {
         viewed_panes,
         presence: ClientPresence {
             human_clients: client_ids.len(),
-            client_input_ms: Default::default(),
+            client_input_ms: client_ids
+                .into_iter()
+                .filter_map(|id| Some((MuxClientId::Zellij(id), input_ms(id)?)))
+                .collect(),
         },
     })
 }
@@ -190,7 +196,7 @@ mod tests {
         ];
         let accepted = replies
             .iter()
-            .filter(|reply| parse_client_view(reply).is_some())
+            .filter(|reply| parse_client_view(reply, |_| None).is_some())
             .map(|reply| String::from_utf8_lossy(reply))
             .collect::<Vec<_>>();
         assert!(
@@ -205,7 +211,8 @@ mod tests {
             &b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n"[..],
             &b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID RUNNING_COMMAND\n"[..],
         ] {
-            let view = parse_client_view(reply).expect("a header-only listing is genuine");
+            let view =
+                parse_client_view(reply, |_| None).expect("a header-only listing is genuine");
             assert_eq!(view.presence.human_clients, 0);
             assert!(view.clients.is_empty());
             assert!(view.viewed_panes.is_empty());
@@ -222,13 +229,14 @@ mod tests {
                        5         -              unknown\n\
                        action    terminal_9     unknown\n";
         assert_eq!(
-            terminal_client_ids(&parse_client_view(output).unwrap()),
+            terminal_client_ids(&parse_client_view(output, |_| None).unwrap()),
             BTreeSet::from([1, 2, 3])
         );
 
         assert!(
             terminal_client_ids(
-                &parse_client_view(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n").unwrap()
+                &parse_client_view(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n", |_| None)
+                    .unwrap()
             )
             .is_empty()
         );
@@ -242,6 +250,7 @@ mod tests {
               2 terminal_30 codex\n\
               3 plugin_2 rimz-presence-zellij\n\
               4 - unknown\n",
+            |_| None,
         )
         .unwrap();
 

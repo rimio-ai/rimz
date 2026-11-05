@@ -540,7 +540,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
         clients: None,
         panes: parsed,
     }
-    .into_pane_listing("rimz-test".to_owned(), false);
+    .into_pane_listing("rimz-test".to_owned(), false, None);
 
     let pane_ids: Vec<&str> = listing
         .panes
@@ -617,7 +617,7 @@ fn topology_cache_focus_becomes_authoritative_listing_focus() {
     )
     .unwrap();
 
-    let listing = cache.into_pane_listing("rimz-test".to_owned(), false);
+    let listing = cache.into_pane_listing("rimz-test".to_owned(), false, None);
 
     assert!(listing.session_focus.is_some());
     assert_eq!(

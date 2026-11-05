@@ -2296,6 +2296,8 @@ fn mux_section_states_what_a_healthy_presence_plugin_does() {
     for expected in [
         "presence plugin",
         "writing pane topology",
+        "seeded grant",
+        "InterceptInput",
         "build desired-, current",
         "last report 3s ago",
         "plugin #80",

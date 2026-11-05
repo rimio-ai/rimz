@@ -19,6 +19,7 @@ mod shell {
         ZOOM_PANE_PIPE,
     };
     use zellij_tile::prelude::*;
+    use zellij_utils::input::mouse::MouseEventType;
 
     #[derive(Default)]
     pub struct State {
@@ -72,6 +73,7 @@ mod shell {
                 PermissionType::RunCommands,
                 PermissionType::Reconfigure,
                 PermissionType::ChangeApplicationState,
+                PermissionType::InterceptInput,
             ];
             request_permission(&permissions);
             subscribe(&subscribed_events());
@@ -204,6 +206,16 @@ mod shell {
                 Event::ListClients(clients) => {
                     engine.on_list_clients(project_clients(&clients), now, &host)
                 }
+                Event::UserAction(action, client_id, _, cli_client_id) => {
+                    let buttonless_motion = matches!(
+                        action,
+                        actions::Action::MouseEvent { event: mouse }
+                            if mouse.event_type == MouseEventType::Motion
+                                && !mouse.left && !mouse.right && !mouse.middle
+                                && !mouse.wheel_up && !mouse.wheel_down
+                    );
+                    engine.on_user_action(client_id, cli_client_id, buttonless_motion, now, &host)
+                }
                 _ => Vec::new(),
             };
             execute(effects);
@@ -294,7 +306,7 @@ mod shell {
         }
     }
 
-    fn subscribed_events() -> [EventType; 10] {
+    fn subscribed_events() -> [EventType; 11] {
         [
             EventType::PaneUpdate,
             EventType::TabUpdate,
@@ -306,6 +318,7 @@ mod shell {
             EventType::RunCommandResult,
             EventType::SessionUpdate,
             EventType::ListClients,
+            EventType::UserAction,
         ]
     }
 
