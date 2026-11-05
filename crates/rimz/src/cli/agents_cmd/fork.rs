@@ -224,7 +224,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             )
         },
     )?;
-    let (title, pane_name) = fork_tab_names(&seed, channel.as_deref());
+    let (title, pane_name) = fork_tab_names(&seed, channel.as_deref(), launch);
     let panes = LayoutPanes {
         columns: vec![LayoutColumn {
             panes: vec![PaneCmd {
@@ -280,15 +280,27 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// The forked tab title and pane name: the pane is named by profile, else kind;
-/// the tab is `#<channel>`, else the pane name.
-fn fork_tab_names(seed: &ForkSeed, channel: Option<&str>) -> (String, String) {
-    let pane_name = seed
-        .launch
-        .profile
-        .clone()
-        .unwrap_or_else(|| seed.kind.to_string());
-    let title = channel.map_or_else(|| pane_name.clone(), |channel| format!("#{channel}"));
+/// The fork's tab keeps its short label; the pane identifies the new agent.
+fn fork_tab_names(
+    seed: &ForkSeed,
+    channel: Option<&str>,
+    launch: &AgentLaunchIdentity,
+) -> (String, String) {
+    let title = channel.map_or_else(
+        || {
+            rimz::agents::pane_title::short_label(seed.launch.profile.as_deref(), &seed.kind)
+                .to_owned()
+        },
+        |channel| format!("#{channel}"),
+    );
+    let pane_name = rimz::agents::pane_title::title(
+        rimz::agents::pane_title::Seat::from_launch(
+            &launch.kind,
+            Some(&launch.name),
+            &launch.launch,
+        ),
+        &[],
+    );
     (title, pane_name)
 }
 
@@ -664,16 +676,31 @@ mod tests {
     #[test]
     fn fork_tab_names_follow_the_seed_profile_else_kind() {
         let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
+        let names = |seed: &ForkSeed, channel| {
+            fork_tab_names(
+                seed,
+                channel,
+                &AgentLaunchIdentity {
+                    kind: seed.kind.clone(),
+                    agent_id: "fork".into(),
+                    name: "bright-river".into(),
+                    name_explicit: false,
+                    launch: seed.launch.clone(),
+                    run_id: None,
+                    prompt: None,
+                },
+            )
+        };
         let profiled = seed("claude", Some("brainstormer"), None);
         let bare = seed("claude", None, None);
         assert_eq!(
-            fork_tab_names(&profiled, None),
-            pair("brainstormer", "brainstormer")
+            names(&profiled, None),
+            pair("brainstormer", "brainstormer (@bright-river)")
         );
-        assert_eq!(fork_tab_names(&bare, None), pair("claude", "claude"));
+        assert_eq!(names(&bare, None), pair("claude", "claude (@bright-river)"));
         assert_eq!(
-            fork_tab_names(&profiled, Some("auth")),
-            pair("#auth", "brainstormer")
+            names(&profiled, Some("auth")),
+            pair("#auth", "brainstormer (@bright-river)")
         );
     }
 

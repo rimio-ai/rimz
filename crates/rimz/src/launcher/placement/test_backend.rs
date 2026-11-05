@@ -10,6 +10,7 @@ pub(super) struct Backend {
     pub(super) tabs: Mutex<Vec<m::TabOptions>>,
     pub(super) listed: Option<Vec<PaneRef>>,
     pub(super) split_error: Mutex<Option<m::MuxErr>>,
+    pub(super) splits: Mutex<Vec<m::SplitPaneOptions>>,
     pub(super) tab_error: Mutex<Option<m::MuxErr>>,
     pub(super) appends: Mutex<Vec<m::SplitPaneOptions>>,
     pub(super) append_outcomes:
@@ -55,7 +56,8 @@ impl m::MuxBackend for Backend {
             timeout: Duration::from_secs(1),
         })
     }
-    fn split_pane(&self, _opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
+    fn split_pane(&self, opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
+        self.splits.lock().unwrap().push(opts);
         Err(self
             .split_error
             .lock()

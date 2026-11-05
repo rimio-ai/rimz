@@ -661,6 +661,16 @@ fn subagent_zone_missing_anchor_and_split_failure_open_channel_companion() {
         let tabs = backend.tabs.lock().unwrap();
         assert_eq!(tabs.len(), 1, "must open a companion: {result:?}");
         assert_eq!(tabs[0].title, "#ch subagents");
+        assert_eq!(
+            tabs[0].panes.columns[0].panes[0].name.as_deref(),
+            Some(zone_backend::CHILD_TITLE)
+        );
+        if split {
+            assert_eq!(
+                backend.splits.lock().unwrap()[0].title.as_deref(),
+                Some(zone_backend::CHILD_TITLE)
+            );
+        }
         assert!(matches!(result, zone::SubagentZoneOpen::Opened));
     }
 }
@@ -734,6 +744,14 @@ fn subagent_zone_companion_append_uses_numbered_overflow_and_definitive_errors()
             "{result:?}"
         );
         assert_eq!(backend.appends.lock().unwrap().len(), attempts);
+        assert!(
+            backend
+                .appends
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|options| options.title.as_deref() == Some(zone_backend::CHILD_TITLE))
+        );
         let tabs = backend.tabs.lock().unwrap();
         assert_eq!(tabs.len(), usize::from(overflow));
         if overflow {
@@ -1066,6 +1084,10 @@ fn assert_zone_fallback(lookup: &str) {
         "lookup {lookup} must open a companion: {result:?}"
     );
     assert_eq!(tabs[0].title, "#ch subagents");
+    assert_eq!(
+        tabs[0].panes.columns[0].panes[0].name.as_deref(),
+        Some(zone_backend::CHILD_TITLE)
+    );
     assert_eq!(tabs[0].after, Some(after));
     assert!(!tabs[0].focus);
     assert!(matches!(result, zone::SubagentZoneOpen::Opened));
@@ -1117,6 +1139,8 @@ mod zone_backend {
     pub(super) use super::fake_backend::Backend;
     use super::*;
     use crate::mux as m;
+
+    pub(super) const CHILD_TITLE: &str = "coder (@brave-fox) › explorer subagent (@gold-tower)";
 
     pub(super) fn register_caller(fixture: &RunFixture) -> PaneRef {
         let identity = crate::harness::ancestry::CallerIdentity::from_env();
@@ -1217,9 +1241,8 @@ mod zone_backend {
             sidebar,
             &m::PaneCmd {
                 argv: vec!["child".to_owned()],
-                name: Some("child".to_owned()),
+                name: Some(CHILD_TITLE.to_owned()),
             },
-            "child",
             Some("ch"),
             Some(PaneId::parse("tmux:%99").unwrap()),
             &fixture.run_id(),

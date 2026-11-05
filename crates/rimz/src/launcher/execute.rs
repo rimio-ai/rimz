@@ -317,6 +317,14 @@ fn open_fresh(
             .loop_task
             .clone_from(&fresh.loop_task);
     }
+    let title_parents = if matches!(
+        fresh.ancestry.as_ref(),
+        Some(LaunchAncestry::Subagent { .. })
+    ) {
+        store.runtime_projection(crate::RuntimeScope::Audit)?.agents
+    } else {
+        Vec::new()
+    };
     let batch = store.begin_agent_launch_batch(
         &requests,
         AgentLaunchScope {
@@ -366,6 +374,7 @@ fn open_fresh(
             pick_session: fresh.pick_session,
             resume_seeds: None,
             launch_identities: batch.identities(),
+            agents: &title_parents,
             fallback_channel: None,
             reminder_section: fresh.reminder_section.as_ref(),
             leader_run: leader

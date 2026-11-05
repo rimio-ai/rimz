@@ -32,7 +32,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let peers = rimz::address::addressable_agents(&snapshot);
     let caller = resolve_caller(&snapshot.agents);
     let focus = LaunchFocus::resolve(false, caller.as_ref());
-    let message = restart_resolved(&ctx, &agent, &peers, focus, None, || {
+    let message = restart_resolved(&ctx, &agent, &peers, &snapshot.agents, focus, None, || {
         caller
             .as_ref()
             .map(|_| rimz::launcher::trust::Unattended::Agent)
@@ -45,6 +45,7 @@ pub(in crate::cli) fn restart_resolved(
     ctx: &Ctx,
     agent: &AgentState,
     peers: &[&AgentState],
+    agents: &[AgentState],
     focus: LaunchFocus,
     unattended: Option<rimz::launcher::trust::Unattended>,
     hook_unattended: impl FnOnce() -> Option<rimz::launcher::trust::Unattended>,
@@ -159,12 +160,14 @@ pub(in crate::cli) fn restart_resolved(
         .map(AgentLaunchBatch::single_identity)
         .transpose()?;
     let invocation = relaunch_request(agent, &posture, action, login, fresh_identity);
-    let pane_name = invocation
-        .identity
-        .params
-        .profile
-        .clone()
-        .unwrap_or_else(|| invocation.kind.to_string());
+    let pane_name = rimz::agents::pane_title::title(
+        rimz::agents::pane_title::Seat::from_launch(
+            &invocation.kind,
+            invocation.identity.name.as_deref(),
+            &invocation.identity.params,
+        ),
+        agents,
+    );
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),

@@ -260,7 +260,14 @@ fn resume_resolved(
                 store.runtime_paths(),
                 &request,
             )?,
-            name: child.name.clone(),
+            name: Some(rimz::agents::pane_title::title(
+                rimz::agents::pane_title::Seat::from_launch(
+                    &request.kind,
+                    request.identity.name.as_deref(),
+                    &request.identity.params,
+                ),
+                &current.agents,
+            )),
         };
         let sidebar = room.sidebar_options(&cwd);
         let open_started = std::time::Instant::now();
@@ -272,7 +279,6 @@ fn resume_resolved(
             env,
             sidebar,
             &pane,
-            child.name.as_deref().unwrap_or(child.agent_id.as_str()),
             child.channel.as_deref(),
             Some(parent_pane.pane_id.clone()),
             &run.run_id,

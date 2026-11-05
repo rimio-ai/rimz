@@ -715,7 +715,7 @@ pub struct SplitPaneOptions {
     pub target: SplitTarget,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
-    /// Explicit pane name so the backend keeps its launch identity while
+    /// Pane display title, not a short tab label, kept while
     /// foreground children churn.
     pub title: Option<String>,
     /// Close the pane when its command exits on either backend, regardless of
@@ -901,7 +901,7 @@ pub struct HostPane {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneCmd {
     pub argv: Vec<String>,
-    /// Stable short pane identity supplied when argv does not express it.
+    /// Pane display title, independent of the tab's short label.
     pub name: Option<String>,
 }
 

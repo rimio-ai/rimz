@@ -367,7 +367,6 @@ pub(super) fn execute_run(
                 request.identity_env,
                 request.sidebar,
                 single_pane(&request.panes)?,
-                &identity.name,
                 identity.launch.channel.as_deref(),
                 request.tab_anchor,
                 run_id,

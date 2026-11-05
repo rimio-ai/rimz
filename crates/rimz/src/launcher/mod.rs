@@ -1644,6 +1644,7 @@ fn launch_resume_layout(
             resume_seeds: Some(&plan.seeds),
             pick_session: false,
             launch_identities: launch_batch.identities(),
+            agents: &[],
             fallback_channel: channel.as_deref(),
             reminder_section: None,
             leader_run: None,
