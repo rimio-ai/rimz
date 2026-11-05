@@ -2151,7 +2151,8 @@ path = "crates/rimz/src/harness"
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
 # workflow::parse shares the sealed-spec parser with cached sidebar projection (+1).
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
-surface-budget = 1077
+# workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
+surface-budget = 1078
 
 [[verdict]]
 kind = "item"
@@ -10608,6 +10609,11 @@ reason = "Journal inspection distinguishes routing decisions, resumes, parks, an
 kind = "item"
 key = "harness::workflow::hops"
 reason = "One read-only journal reader folds repeated checks without double-counting engine evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::reached"
+reason = "The CLI rails and the sidebar strip share one reached rule over workflow history."
 
 [[verdict]]
 kind = "item"
