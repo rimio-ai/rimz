@@ -76,7 +76,7 @@ The following table describes the server half. The client uses the same wire for
 | Arrival or reconnect, no pending ask | `client_idle` or `client_running`, with `state_snapshot` set by decode |
 | Activation or reconnect, unseen pending background ask | `permission_ask` or `question_ask`, unstamped; already-forwarded asks are not repeated |
 | `session.inbox.enqueued`, user item only | `chat_message`, with `item.payload.text` |
-| `session.execution.started` | `client_running` |
+| `session.execution.started` | `client_running`, only with no pending permission or form ask |
 | `session.tool.success` or `failed` | `tool_after`; name joined from `session.tool.input.started` by message/tool ID, else cached tool content; unresolved names omitted |
 | `session.deleted`, session last reported on screen or holding a forwarded ask | `session_ended`, stamped for the former and unstamped for a background asker; other deletions send nothing |
 | Navigation or cleanup | None |
@@ -100,10 +100,10 @@ The client remembers step usage, model and agent selections without an envelope,
 | `session.compaction.started` | `session_compacting` | `Compacting` |
 | `session.compaction.ended` or `failed` | `session_compacted`, `is_error` on failure | `CompactionEnded` |
 | `permission.asked` | `permission_ask`, with `request_id`, the action as `tool_name`, the resources as `patterns` | `AwaitingInput` for `Permission` |
-| `permission.replied` | `permission_replied`, with `reply` | a native answer and `ToolUsed` |
-| `form.created` | `question_ask`, with one question per field | `AwaitingInput` for `Question` |
-| `form.replied` | `question_replied`, answers in the form's field order | native answers and `ToolUsed` |
-| `form.cancelled` | `question_rejected` | the native answer `(rejected)` and `ToolUsed` |
+| `permission.replied` | `permission_replied`, with `request_id` and `reply` | a native answer and `AskResolved` |
+| `form.created` | `question_ask`, with `request_id` and one question per field | `AwaitingInput` for `Question` |
+| `form.replied` | `question_replied`, with `request_id` and answers in the form's field order | native answers and `AskResolved` |
+| `form.cancelled` | `question_rejected`, with `request_id` | the native answer `(rejected)` and `AskResolved` |
 | `session.deleted`, root | `session_ended`, reason `deleted` | `Ended` |
 | activation cleanup | `session_ended` per root, reason `dispose` | `Ended` |
 
@@ -121,7 +121,7 @@ A child session reports only its start, its model, and its terminal execution. W
 
 ### Asks and plan approval
 
-Permission and form asks raise waiting cards that keep their structured questions. `decode_hook` takes at most four questions from a form. Each question's text comes from the field's description, then its title, then its key, and its header from the field's title. The adapter declares `native_ask_ui`, so attention goes to OpenCode's own dialog. The asks carry no native key (keyless, [model.md](./model.md#edges)). A reply event records the native answer and emits `ToolUsed`, which clears waiting ([model.md](./model.md#waiting-and-asks)). `rimz answer` is unsupported: RimZ has no mapped transport to answer OpenCode.
+Permission and form asks raise waiting cards that keep their structured questions. `decode_hook` takes at most four questions from a form. Each question's text comes from the field's description, then its title, then its key, and its header from the field's title. The adapter declares `native_ask_ui`, so attention goes to OpenCode's own dialog. Both asks carry `request_id` as their native key. A reply or cancellation records the native answer and emits `AskResolved` with that key. A parallel `tool_after` remains keyless and cannot clear the keyed wait, so attention, `rimz asks`, and parked-message holds last until its own reply or a turn boundary ([model.md](./model.md#waiting-and-asks)). An older payload without `request_id` produces a keyless ask or close. `rimz answer` is unsupported: RimZ has no mapped transport to answer OpenCode.
 
 Plan approval is derived from the agent the plugin remembers. A root execution that succeeds or is interrupted while that agent is `plan` sends `session_idle` with `plan_proposed`, and `decode_hook` raises `PlanApproval`. The next prompt clears it. A Plan launch request maps to Auto and selects no agent (see [Launch and resume](#launch-and-resume)), so only a plan agent the user picks in the TUI raises the gate.
 
