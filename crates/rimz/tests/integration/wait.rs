@@ -87,6 +87,31 @@ fn bubblewrap() -> Option<std::path::PathBuf> {
     }
 }
 
+fn pid_namespaced_bubblewrap() -> Option<std::path::PathBuf> {
+    let bwrap = bubblewrap()?;
+    let output = std::process::Command::new(&bwrap)
+        .args([
+            "--dev-bind",
+            "/",
+            "/",
+            "--unshare-pid",
+            "--proc",
+            "/proc",
+            "--",
+            "true",
+        ])
+        .output()
+        .expect("probe bubblewrap's PID namespace");
+    if !output.status.success() {
+        crate::common::skip(&format!(
+            "bubblewrap unusable: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        return None;
+    }
+    Some(bwrap)
+}
+
 fn register_owned_calling_agent(env: &Env) {
     register_agent_with_owner(
         env,
@@ -121,7 +146,7 @@ fn assert_unresolved_wait(output: &std::process::Output, unchanged: &str) {
 
 #[test]
 fn pid_namespaced_arm_refuses_unresolved_caller_and_leaves_no_wait() {
-    let Some(bwrap) = bubblewrap() else {
+    let Some(bwrap) = pid_namespaced_bubblewrap() else {
         return;
     };
     let env = Env::new();
@@ -140,7 +165,7 @@ fn pid_namespaced_arm_refuses_unresolved_caller_and_leaves_no_wait() {
 
 #[test]
 fn pid_namespaced_list_refuses_unresolved_caller_and_keeps_wait_pending() {
-    let Some(bwrap) = bubblewrap() else {
+    let Some(bwrap) = pid_namespaced_bubblewrap() else {
         return;
     };
     let env = Env::new();
@@ -161,7 +186,7 @@ fn pid_namespaced_list_refuses_unresolved_caller_and_keeps_wait_pending() {
 
 #[test]
 fn pid_namespaced_cancel_refuses_unresolved_caller_and_keeps_wait_pending() {
-    let Some(bwrap) = bubblewrap() else {
+    let Some(bwrap) = pid_namespaced_bubblewrap() else {
         return;
     };
     let env = Env::new();
@@ -179,6 +204,54 @@ fn pid_namespaced_cancel_refuses_unresolved_caller_and_keeps_wait_pending() {
     assert_unresolved_wait(&output, "nothing was canceled: ");
     assert_eq!(wait_instances(&env), before);
     assert_eq!(wait_ok(&env, &["wait", "list", "--json"]), pending);
+    wait_ok(&env, &["wait", "cancel", name]);
+}
+
+#[test]
+fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
+    let Some(bwrap) = bubblewrap() else {
+        return;
+    };
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_owned_calling_agent(&env);
+    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+        &env,
+        &["wait", "--pid", &std::process::id().to_string(), "--json"],
+    ))
+    .unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    wait_until(&env, "process watcher did not start", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
+            .unwrap()
+            .is_some()
+    });
+    let before = wait_instances(&env);
+    let output = read_only_home_wait(&env, &bwrap, false)
+        .args(["wait", "list", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let gate = env.store().runtime_paths().lock_path("lease-gate.lock");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "error: this command cannot write the RimZ home, for example inside a provider's \
+             command sandbox. Run `rimz wait …` as its own command, without a chain, pipe, \
+             redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
+             `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine \
+             rules predate this RimZ, refresh them with `rimz hooks install codex` from a user \
+             shell and restart the agent\n  could not open workspace lock {}: Read-only file \
+             system (os error 30)\n",
+            gate.display()
+        )
+    );
+    assert_eq!(wait_instances(&env), before);
+    let pending: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["name"], name);
     wait_ok(&env, &["wait", "cancel", name]);
 }
 

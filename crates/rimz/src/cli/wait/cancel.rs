@@ -37,7 +37,7 @@ pub(super) fn run(
     for name in &names {
         catalog
             .remove(name)
-            .map_err(|error| home_write_hint(error, "canceled"))?;
+            .map_err(|error| home_write_hint(error, Some("canceled")))?;
         stop_watcher(ctx.runtime(), name)?;
     }
     let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;

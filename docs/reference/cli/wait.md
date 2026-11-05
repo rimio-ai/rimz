@@ -212,6 +212,8 @@ From a user shell, text is read-only and starts with `<home-relative project roo
 
 If the caller's identity is set but no live session is visible, `list` refuses with exit 1 and `RimZ could not find the calling agent's live session from this process`, rather than falling back to the whole-room view. It names the kind and launch id, or legacy pane, and gives the same [sandbox remedy as arming](#arm-a-wait).
 
+If `list` cannot probe a watcher's lock because the RimZ home is read-only, it refuses with exit 1, keeping the original cause and the same [sandbox remedy as arming](#arm-a-wait); pending waits stay unchanged.
+
 ## Cancel a wait
 
 `rimz wait cancel <name>` cancels any one pending wait or subscription targeting the caller. `rimz wait cancel --all` cancels only waits you armed with `rimz wait`, leaving loop and team subscriptions intact. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``). If the caller's identity is set but no live session is visible, it refuses with exit 1 and `nothing was canceled: RimZ could not find the calling agent's live session from this process`, naming the kind and launch id, or legacy pane, with the same [sandbox remedy as arming](#arm-a-wait).

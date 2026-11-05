@@ -123,7 +123,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             surplus: None,
         },
     )
-    .map_err(|error| home_write_hint(error.into(), "armed"))?
+    .map_err(|error| home_write_hint(error.into(), Some("armed")))?
     else {
         unreachable!("timer, process, and command waits are not subscriptions")
     };
