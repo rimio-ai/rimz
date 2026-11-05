@@ -89,7 +89,8 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const gauges = new Map<string, Gauge>();
   const steps = new Map<string, { sessionID: string; model: ModelRef }>();
   const forms = new Map<string, string[]>();
-  const pending = new Set<Promise<void>>();
+  let feeds = Promise.resolve();
+  const replies = new Set<Promise<void>>();
   const registrations: Array<{ dispose(): Promise<void> }> = [];
   let disposed = false;
   let catalog: Promise<Map<string, { contextWindow?: number; modelDisplayName?: string }>> | undefined;
@@ -109,8 +110,10 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     };
   }
 
+  // Ingress order is commit order, so each feed waits for the one before it: a reply
+  // must never commit ahead of its own ask.
   function send(payload: Envelope): Promise<void> {
-    const done = new Promise<void>((finish) => {
+    const done = feeds.then(() => new Promise<void>((finish) => {
       const child = spawn(rimz, ["hooks", "feed", "--source", "opencode"], {
         cwd: payload.cwd,
         env: { ...process.env, RIMZ_AGENT_PID: String(process.ppid) },
@@ -120,9 +123,8 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
       child.on("close", () => finish());
       child.stdin.on("error", () => {});
       child.stdin.end(JSON.stringify(payload) + "\n");
-    });
-    pending.add(done);
-    void done.then(() => pending.delete(done));
+    }));
+    feeds = done.catch(() => {});
     return done;
   }
 
@@ -394,8 +396,8 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
         try {
           if (autoApprove && event.type === "permission.asked") {
             const done = permissionAsked(event);
-            pending.add(done);
-            void done.then(() => pending.delete(done));
+            replies.add(done);
+            void done.then(() => replies.delete(done));
           } else {
             await onEvent(event);
           }
@@ -416,7 +418,7 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     for (const sessionID of [...roots]) void endRoot(sessionID, "dispose");
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      Promise.allSettled([...pending, ...registrations.map((registration) => registration.dispose())]),
+      Promise.allSettled([feeds, ...replies, ...registrations.map((registration) => registration.dispose())]),
       new Promise<void>((finish) => { timer = setTimeout(finish, 1500); }),
     ]);
     if (timer) clearTimeout(timer);

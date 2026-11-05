@@ -30,7 +30,8 @@ fn plugin_preserves_usage_and_announces_child_models() {
         include_str!("../../../src/agents/adapters/opencode/index.ts"),
     )
     .unwrap();
-    std::fs::write(&stub_path, "#!/bin/sh\npayload=$(cat)\nprintf '{\"pid\":\"%s\",\"envelope\":%s}\\n' \"$RIMZ_AGENT_PID\" \"$payload\" >> \"$RIMZ_CAPTURE\"\n").unwrap();
+    // The stub holds the "slow" ask's feed so an unchained reply would commit first.
+    std::fs::write(&stub_path, "#!/bin/sh\npayload=$(cat)\ncase \"$payload\" in *question_ask*'\"request_id\":\"slow\"'*) sleep 0.3;; esac\nprintf '{\"pid\":\"%s\",\"envelope\":%s}\\n' \"$RIMZ_AGENT_PID\" \"$payload\" >> \"$RIMZ_CAPTURE\"\n").unwrap();
     std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     let harness = dir.path().join("harness.mjs");
     std::fs::write(&harness, r#"
@@ -260,6 +261,11 @@ await emit("form.replied", {id:"form", sessionID:"root", answer:{q1:"yes", q0:["
 assert.deepEqual((await envelope("question_replied")).answers, [["A","B"],["yes"],[]]);
 await emit("form.cancelled", {id:"cancelled", sessionID:"root"});
 await envelope("question_rejected");
+await emit("form.created", {form: {id:"slow", sessionID:"root", title:"Slow", fields:[]}});
+await emit("form.cancelled", {id:"slow", sessionID:"root"});
+await envelope("question_rejected", "root", 2);
+assert.deepEqual((await payloads()).filter(p => p.request_id === "slow").map(p => p.hook_event_name),
+  ["question_ask", "question_rejected"], "a reply must not commit ahead of its own ask");
 await emit("permission.asked", {id:"permission", sessionID:"root", action:"bash", resources:["git status"], message:"Run command"});
 if (autoApprove) {
   assert.deepEqual(replies, [], "reply must wait for the ask feed without blocking events");
