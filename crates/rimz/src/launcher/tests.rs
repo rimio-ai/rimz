@@ -888,6 +888,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         fresh: false,
         cwd: None,
         add_dirs: Vec::new(),
+        empty_dir: false,
         from_pr: None,
         channel: None,
         name: None,

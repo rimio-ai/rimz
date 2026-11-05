@@ -1521,6 +1521,38 @@ fn subagent_unsupported_added_directory_warns_and_launches() {
     assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("unsupported"));
 }
 
+#[test]
+fn subagent_explicit_empty_directory_displaces_cwd_and_preserves_its_lane() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("explicit"));
+}
+
+#[test]
+fn subagent_fanout_can_require_an_empty_directory() {
+    assert_subagent_checkout_case(true, false, Some("absolute"), None, Some("explicit"));
+}
+
+#[test]
+fn subagent_explicit_empty_directory_requires_usable_root() {
+    assert_subagent_checkout_case(
+        false,
+        false,
+        Some("absolute"),
+        None,
+        Some("explicit-restricted"),
+    );
+}
+
+#[test]
+fn subagent_saved_untrusted_displaced_checkout_refuses() {
+    assert_subagent_checkout_case(
+        false,
+        false,
+        Some("absolute"),
+        None,
+        Some("restricted-checkout"),
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn subagent_empty_dir_accepts_empty_codex_stubs() {
@@ -1684,7 +1716,7 @@ fn assert_subagent_checkout_case(
         }
         // Missing hooks make the supervised preflight refuse after the grant.
         Some("refused") => "claude",
-        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked" | "added") => {
+        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked" | "added" | "explicit") => {
             env.install_agent_hooks("claude");
             "claude"
         }
@@ -1700,7 +1732,11 @@ fn assert_subagent_checkout_case(
             } else {
                 format!(
                     "description: Research\nagent: {kind}\ntools: [Read]\n\
-                 allowed-tools: [Read]\nempty-dir: true"
+                     allowed-tools: [Read]\nempty-dir: {}",
+                    !matches!(
+                        empty,
+                        Some("explicit" | "explicit-restricted" | "restricted-checkout")
+                    )
                 )
             },
             "",
@@ -1725,7 +1761,7 @@ fn assert_subagent_checkout_case(
     }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
-    if empty == Some("added") {
+    if matches!(empty, Some("added" | "explicit")) {
         crate::common::trust_claude_project(&env, &foreign);
     }
     if matches!(empty, Some("grant" | "concurrent" | "refused")) {
@@ -1737,11 +1773,19 @@ fn assert_subagent_checkout_case(
             std::fs::write(&path, "{ malformed").unwrap();
             Some(path)
         }
-        Some("restricted" | "restricted-added" | "restricted-added-worktree") => {
+        Some(
+            "restricted"
+            | "restricted-added"
+            | "restricted-added-worktree"
+            | "explicit-restricted"
+            | "restricted-checkout",
+        ) => {
             let path = env.agent_config_path("codex");
             let mut table: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
             table["projects"].as_table_mut().unwrap().insert(
-                if restricted_added {
+                if empty == Some("restricted-checkout") {
+                    foreign.display().to_string()
+                } else if restricted_added {
                     main_repo
                         .as_ref()
                         .unwrap_or(&checkout)
@@ -1887,6 +1931,19 @@ fn assert_subagent_checkout_case(
     let mut command = env.rimz();
     command.args(["--mux", "zellij", "subagents"]);
     if fanout {
+        if empty == Some("explicit") {
+            std::fs::write(
+                foreign.join("tasks.json"),
+                serde_json::to_vec(&json!([
+                    {"profile":"researcher", "prompt_file":"brief.md", "cwd":foreign,
+                     "add_dirs":[foreign], "empty_dir":true},
+                    {"profile":"researcher", "prompt_file":"brief.md", "cwd":foreign,
+                     "add_dirs":[foreign], "empty_dir":true}
+                ]))
+                .unwrap(),
+            )
+            .unwrap();
+        }
         command.args(["fanout", "tasks.json"]);
     } else {
         command.args([
@@ -1899,7 +1956,7 @@ fn assert_subagent_checkout_case(
             "brief.md",
         ]);
     }
-    if let Some(cwd) = cwd {
+    if let Some(cwd) = cwd.filter(|_| !fanout) {
         command.arg("--cwd").arg(if cwd == "absolute" {
             foreign.as_os_str()
         } else {
@@ -1911,6 +1968,17 @@ fn assert_subagent_checkout_case(
             .arg("--add-dir")
             .arg(&checkout)
             .args(["--add-dir", "../parent-checkout"]);
+    }
+    if !fanout
+        && matches!(
+            empty,
+            Some("explicit" | "explicit-restricted" | "restricted-checkout")
+        )
+    {
+        command.arg("--empty-dir");
+        if empty == Some("explicit") {
+            command.arg("--add-dir").arg(&foreign);
+        }
     }
     command
         .current_dir(&foreign)
@@ -1949,6 +2017,8 @@ fn assert_subagent_checkout_case(
                             | "refused"
                             | "restricted-added"
                             | "restricted-added-worktree"
+                            | "explicit-restricted"
+                            | "restricted-checkout"
                     )
                 )
             {
@@ -1973,10 +2043,22 @@ fn assert_subagent_checkout_case(
     if let Some((path, bytes)) = &unchanged {
         assert_eq!(std::fs::read(path).unwrap(), *bytes);
     }
-    if restricted_added {
+    if restricted_added || empty == Some("restricted-checkout") {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !output.status.success() && stderr.contains("is saved untrusted"),
+            "{stderr}"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        assert!(!trace_path.exists());
+        return;
+    }
+    if empty == Some("explicit-restricted") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success()
+                && stderr.contains("empty-dir ignored:")
+                && stderr.contains("saved the empty folder as untrusted"),
             "{stderr}"
         );
         assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
@@ -2154,12 +2236,12 @@ fn assert_subagent_checkout_case(
     let lane_path = if cwd.is_some() { foreign } else { checkout };
     let applied = matches!(
         empty,
-        Some("root" | "named" | "revoked" | "grant" | "stubs")
+        Some("root" | "named" | "revoked" | "grant" | "stubs" | "explicit")
     );
     let checkout = if applied {
         let child = agents
             .iter()
-            .find(|agent| agent.parent_agent_id.is_some())
+            .find(|agent| agent.name == records[0].agent_name)
             .unwrap();
         let path = std::path::PathBuf::from(child.worktree_path.as_deref().unwrap());
         assert_eq!(child.checkout.as_deref(), lane_path.to_str());
@@ -2173,7 +2255,11 @@ fn assert_subagent_checkout_case(
         );
         assert_eq!(
             child.channel.as_deref(),
-            matches!(empty, Some("named" | "grant")).then_some("parent-checkout")
+            if cwd.is_some() {
+                lane_path.file_name().and_then(|name| name.to_str())
+            } else {
+                matches!(empty, Some("named" | "grant")).then_some("parent-checkout")
+            }
         );
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -2187,7 +2273,14 @@ fn assert_subagent_checkout_case(
     for record in &records {
         assert!(record.subagent);
         assert_eq!(record.workspace_id, env.workspace_id);
-        assert_eq!(record.worktree_path, checkout);
+        if applied {
+            assert_eq!(
+                record.worktree_path.parent(),
+                Some(store.paths().empty_room_dir().as_path())
+            );
+        } else {
+            assert_eq!(record.worktree_path, checkout);
+        }
         assert_eq!(record.prompt, prompt);
         let child = agents
             .iter()
@@ -2197,17 +2290,27 @@ fn assert_subagent_checkout_case(
             serde_json::to_value(child).unwrap()["automation"],
             automation
         );
-        assert_eq!(child.worktree_path.as_deref(), checkout.to_str());
-        if cwd.is_some() {
+        assert_eq!(
+            child.worktree_path.as_deref(),
+            record.worktree_path.to_str()
+        );
+        if applied {
+            assert_eq!(child.checkout.as_deref(), lane_path.to_str());
+        }
+        if cwd.is_some() && !applied {
             assert_eq!(
                 child.channel().as_deref(),
                 checkout.file_name().and_then(|name| name.to_str())
             );
         }
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
-        if empty == Some("added") {
+        if matches!(empty, Some("added" | "explicit")) {
             let value = serde_json::to_value(child).unwrap();
-            let target = env.home_root.join("parent-checkout");
+            let target = if empty == Some("added") {
+                env.home_root.join("parent-checkout")
+            } else {
+                lane_path.clone()
+            };
             assert_eq!(value["add_dirs"], json!([target]));
         }
         assert_eq!(
@@ -2223,7 +2326,7 @@ fn assert_subagent_checkout_case(
         .collect::<Vec<_>>();
     assert_eq!(panes.len(), expected_count, "child pane launches: {trace}");
     for pane in panes {
-        if cwd.is_some() {
+        if cwd.is_some() && !applied {
             assert!(
                 pane.contains(&format!("RIMZ_WORKTREE_PATH={}", checkout.display())),
                 "{pane}"
@@ -2231,7 +2334,12 @@ fn assert_subagent_checkout_case(
         }
         let args = pane.split('\t').collect::<Vec<_>>();
         let cwd = args.windows(2).find(|args| args[0] == "--cwd");
-        assert_eq!(cwd.map(|args| args[1]), checkout.to_str(), "{pane}");
+        assert!(
+            records
+                .iter()
+                .any(|record| cwd.map(|args| args[1]) == record.worktree_path.to_str()),
+            "{pane}"
+        );
         let payload = args
             .windows(2)
             .find(|args| args[0] == "--request-file")
@@ -2251,7 +2359,7 @@ fn assert_subagent_checkout_case(
             matches!(decoded.action, rimz::harness::launch::ExecAction::Launch { prompt: Some(ref actual), .. } if actual == &prompt)
         );
     }
-    if cwd.is_some() || applied {
+    if (cwd.is_some() || applied) && !fanout {
         let record = &records[0];
         let child = agents
             .iter()
@@ -2359,9 +2467,13 @@ fn assert_subagent_checkout_case(
         let payload = std::fs::read_to_string(payload).expect("exec request contents");
         let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, &payload)
             .expect("restarted child request");
-        if empty == Some("added") {
+        if matches!(empty, Some("added" | "explicit")) {
             let value = serde_json::to_value(&decoded.identity.params).unwrap();
-            let target = env.home_root.join("parent-checkout");
+            let target = if empty == Some("added") {
+                env.home_root.join("parent-checkout")
+            } else {
+                lane_path.clone()
+            };
             assert_eq!(value["add_dirs"], json!([target]));
         }
         let stderr = String::from_utf8_lossy(&output.stderr);

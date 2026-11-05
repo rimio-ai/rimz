@@ -129,6 +129,8 @@ struct FanoutTask {
     cwd: Option<PathBuf>,
     #[serde(default)]
     add_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    empty_dir: bool,
     profile: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
@@ -156,6 +158,9 @@ struct SubagentLaunchArgs {
     /// Additional working directory with file access, without loading its configuration.
     #[arg(long = "add-dir", value_name = "DIR")]
     add_dirs: Vec<PathBuf>,
+    /// Require a private empty working directory, also beside --cwd.
+    #[arg(long)]
+    empty_dir: bool,
     /// Configured subagent profile, agent kind, or shared command.
     #[arg(
         value_name = "PROFILE",
@@ -512,6 +517,7 @@ impl FanoutTask {
         let launch = SubagentLaunchArgs {
             cwd: self.cwd,
             add_dirs: self.add_dirs,
+            empty_dir: self.empty_dir,
             profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
@@ -601,6 +607,7 @@ impl SubagentLaunchArgs {
         Ok(agents_cmd::AgentLaunchArgs {
             cwd: self.cwd,
             add_dirs: self.add_dirs,
+            empty_dir: self.empty_dir,
             spec: Some(profile),
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {

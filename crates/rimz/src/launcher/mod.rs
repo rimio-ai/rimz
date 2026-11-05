@@ -1255,9 +1255,15 @@ fn check_cell(
             &machine.accounts,
         )?;
     let prepared = match empty_dir {
-        Some((agents, name)) => {
-            prepare_empty_dir(&state, agents, name, cell, &login, true, interaction)?
-        }
+        Some((agents, name)) => prepare_empty_dir(
+            &state,
+            agents,
+            name,
+            cell,
+            &login,
+            EmptyDirRequest::Profile,
+            interaction,
+        )?,
         None => None,
     };
     let cwd = prepared
@@ -1322,13 +1328,20 @@ fn check_cell(
     Ok((login.name().clone(), prepared))
 }
 
+#[derive(Clone, Copy)]
+enum EmptyDirRequest {
+    Disabled,
+    Profile,
+    Required,
+}
+
 fn prepare_empty_dir(
     paths: &crate::StatePaths,
     agents: &[AgentState],
     requested: Option<&str>,
     cell: &crate::harness::spec::AgentCell,
     login: &crate::agents::ProviderLogin,
-    eligible: bool,
+    request: EmptyDirRequest,
     interaction: &mut dyn Interaction,
 ) -> Result<Option<crate::agents::empty_dir::Prepared>> {
     match crate::agents::empty_dir::decide(
@@ -1337,7 +1350,11 @@ fn prepare_empty_dir(
         requested,
         &cell.kind,
         login,
-        eligible && cell.empty_dir == Some(true),
+        match request {
+            EmptyDirRequest::Disabled => false,
+            EmptyDirRequest::Profile => cell.empty_dir == Some(true),
+            EmptyDirRequest::Required => true,
+        },
     )? {
         crate::agents::empty_dir::Decision::Applied(prepared) => Ok(Some(prepared)),
         crate::agents::empty_dir::Decision::Granted {
@@ -1365,6 +1382,9 @@ fn prepare_empty_dir(
             Ok(Some(prepared?))
         }
         crate::agents::empty_dir::Decision::Fallback(notice) => {
+            if matches!(request, EmptyDirRequest::Required) {
+                bail!("{notice}");
+            }
             interaction.notice(Notice::Warning(&notice))?;
             Ok(None)
         }

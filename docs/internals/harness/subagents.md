@@ -111,6 +111,8 @@ An explicit `--cwd` overrides the default after the parent checkout is validated
 
 Repeated `--add-dir` and fanout `add_dirs` resolve through the same caller-path translation, keeping canonical host paths in flag order without duplicates. `LaunchParams.add_dirs` and `untrusted_checkout` survive lifecycle projection and every relaunch carrier; the latter is reserved for the undecided-cwd fallback. Added directories join the scoped view's required paths. Claude unions them into `permissions.additionalDirectories`; Codex joins them to its selection-dependent room-root grant. Other kinds warn and launch without a grant. Saved-untrusted directories refuse before launch, including on re-entry; no added-directory path grants folder trust.
 
+Explicit `--empty-dir` and fanout `empty_dir` widen the existing `prepare_empty_dir` placement to an explicit cwd and a profile without the key. They require placement, so `Decision::Fallback` refuses rather than printing a notice and continuing. The displaced cwd becomes `checkout`, keeping its lane; it is not automatically an added directory. Before empty-root preparation, the displaced target passes home-directory and Codex saved-untrusted admission. Profile-only placement retains its old eligibility and fallback behavior.
+
 Provider preflight then runs against the chosen checkout. Besides hook installation and trust, a child must pass the folder-trust preflight for every provider that models it, including Claude and [Codex](../agents/adapter_codex.md#directory-trust-preflight). An undecided project or a saved-untrusted folder refuses with the fix, so the child never sits on a trust screen until its deadline. A Codex projectless folder without a saved decision passes.
 
 ## Pane zones
