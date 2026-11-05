@@ -891,7 +891,7 @@ Launch resolves one lane and stamps it into `RIMZ_CHANNEL`, the launch event, an
 
 Read paths use the stamped lane, and fall back to the lane-path basename only for agents with no stamp: recorded `checkout` before `worktree_path`. Hooks resolve the git toplevel from the agent's own cwd at any depth, but do not replace a recorded checkout, so process-directory changes do not move its lane. A non-git agent whose lane path is the room root folds into the room's root lane.
 
-Lane equality scopes target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, `message list`, transcripts, and recovery. Branch names are display metadata on the worktree card and never define a lane.
+Lane equality scopes target resolution, rendered handles, pane overlays, `message list`, transcripts, and recovery. Sidebar grouping and `agents list` honor a stamped channel, then place unstamped rows under their deepest known root; a listed marked checkout uses its marker's channel. Branch names are display metadata on the worktree card and never define a lane.
 
 ### The shared namespace
 

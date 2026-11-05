@@ -331,13 +331,32 @@ fn read_published_snapshot_folds_caches_without_forking() {
     std::fs::create_dir_all(&worktree).unwrap();
     let wt = worktree.to_string_lossy().into_owned();
 
-    // Publish the rollup (project root = the worktree) to `latest.json`, where
-    // the consumer reads it fresh, and the live panes to `snapshot.json`. `own`
-    // is excluded; a sibling pane becomes a row.
+    // Record the worktree as the room's project root, publish the rollup to
+    // `latest.json`, where the consumer reads it fresh, and the live panes to
+    // `snapshot.json`. `own` is excluded; a sibling pane becomes a row.
     let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     rollup = rollup.with_project_root(Some(worktree.clone()));
     let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
+    crate::workspace::record::write(
+        &state,
+        &crate::workspace::record::WorkspaceRecord {
+            layout: 2,
+            workspace_id: workspace.clone(),
+            project_root: worktree.clone(),
+            worktree_root: None,
+            session_name: "rimz-test".to_owned(),
+            root_class: crate::workspace::RootClass::Repo,
+            rimz_bin: None,
+            rimz_build: None,
+            pins: Default::default(),
+            remote_control_off: Default::default(),
+            agent_shell: None,
+            skipped: Vec::new(),
+            updated_at: Timestamp::UNIX_EPOCH,
+        },
+    )
+    .unwrap();
     state.bind_runtime_checkpoint(&runtime);
     atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &rollup).unwrap();
     let panes = vec![

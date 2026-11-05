@@ -2415,7 +2415,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: None,
         root_lane: false,
         inactive: None,
         clean: None,

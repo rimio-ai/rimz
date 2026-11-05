@@ -2,6 +2,32 @@
 
 use super::*;
 
+#[test]
+fn foreign_places_always_have_a_qualifier_and_collisions_deepen_it() {
+    let (_, _, mut snapshot) = runtime();
+    let mut groups = vec![
+        group("/home/me/dotfiles", "dotfiles"),
+        group("/x/work/app", "main"),
+        group("/y/oss/app", "main"),
+    ];
+    for group in &mut groups {
+        group.place = Some(crate::store::snapshot::SidebarPlace {
+            path: PathBuf::from(&group.key),
+            foreign: true,
+        });
+    }
+    snapshot.worktree_groups = groups.into();
+    disambiguate_group_labels(&mut snapshot);
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.label_qualifier.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("dotfiles"), Some("work/app"), Some("oss/app")]
+    );
+}
+
 fn group(path: &str, label: &str) -> crate::store::snapshot::SidebarWorktreeGroup {
     let mut group = worktree_group(Path::new(path), Vec::new());
     group.label = label.to_owned();

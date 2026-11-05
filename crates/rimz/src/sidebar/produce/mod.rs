@@ -17,7 +17,7 @@ pub(crate) mod tab_status;
 pub(crate) use panes::PaneProducer;
 pub use panes::repaired_pane_frame_for_binding;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -590,7 +590,7 @@ fn producer_roots(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     min_pane_cache_ms: Option<u64>,
-) -> Option<Vec<PathBuf>> {
+) -> Option<(Vec<PathBuf>, BTreeMap<PathBuf, String>)> {
     snapshot.project_root.clone().map(|root| {
         git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
     })

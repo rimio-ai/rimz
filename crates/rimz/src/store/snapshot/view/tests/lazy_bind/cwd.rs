@@ -73,7 +73,9 @@ fn supervised_codex_uses_wrapper_worktree_path_for_idle_and_process_rows() {
         );
         pane.cwd = cwd;
 
-        let mut snapshot = room(Vec::new()).with_project_root(Some(PathBuf::from(root)));
+        let mut snapshot = room(Vec::new())
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_worktree_roots(vec![PathBuf::from(worktree)], Default::default());
         if wired_agent {
             snapshot.wired_kinds = vec!["codex".to_owned()];
         }

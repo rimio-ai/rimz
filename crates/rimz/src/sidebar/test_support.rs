@@ -193,7 +193,10 @@ pub(crate) fn worktree_group(
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: Some(crate::store::snapshot::SidebarPlace {
+            path: path.to_path_buf(),
+            foreign: false,
+        }),
         root_lane: false,
         inactive: None,
         clean: None,

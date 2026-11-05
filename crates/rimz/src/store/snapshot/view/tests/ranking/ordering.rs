@@ -497,7 +497,7 @@ fn inactive_groups_sink_below_process_groups() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: None,
         root_lane: false,
         inactive: None,
         clean: None,
@@ -874,7 +874,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: None,
         root_lane: false,
         inactive: None,
         clean: None,
@@ -916,7 +916,7 @@ fn listing_roster_uses_the_same_group_activity_rung() {
         agent_in("running", "/repo/z-working", AgentStatus::Running, 2_000).in_pane("%2"),
         agent_in("idle", "/repo/z-working", AgentStatus::Idle, 3_000).in_pane("%3"),
     ];
-    let snapshot = room(agents);
+    let snapshot = list_agent_checkouts(room(agents));
     let refs = snapshot.agents.iter().collect::<Vec<_>>();
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
 

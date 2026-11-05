@@ -21,9 +21,16 @@ fn base() -> SidebarSnapshot {
 }
 
 fn base_with(agents: Vec<AgentState>) -> SidebarSnapshot {
+    let marked = ["lane", "members"].map(|name| (PathBuf::from(format!("/trees/{name}")), name));
     room(agents)
         .with_project_root(Some(PathBuf::from("/repo")))
-        .with_worktree_home(Some(PathBuf::from("/trees")))
+        .with_worktree_roots(
+            marked.iter().map(|(path, _)| path.clone()).collect(),
+            marked
+                .iter()
+                .map(|(path, name)| (path.clone(), (*name).to_owned()))
+                .collect(),
+        )
 }
 
 #[test]

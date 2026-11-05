@@ -4,6 +4,37 @@ use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::CacheClock;
 
 #[test]
+fn foreign_header_draws_its_repo_chip_in_the_qualifier_tone() {
+    let mut snapshot = snapshot_with(vec![agent(
+        "foreign",
+        "claude",
+        AgentStatus::Idle,
+        Some("/home/me/dotfiles"),
+        Some("main"),
+        None,
+    )]);
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.place = Some(crate::store::snapshot::SidebarPlace {
+        path: std::path::PathBuf::from("/home/me/dotfiles"),
+        foreign: true,
+    });
+    group.label_qualifier = Some("dotfiles".to_owned());
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let qualifier = lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == " · dotfiles")
+        .expect("foreign qualifier");
+    assert_eq!(
+        qualifier.style,
+        theme.styled(Component::WorktreeQualifier, Modifier::empty())
+    );
+    let text = snapshot_to_screen(&snapshot, 44, 14);
+    assert!(text.contains("⑂ main · dotfiles"), "{text}");
+}
+
+#[test]
 fn filtered_team_cards_render_and_open_as_unfiltered() {
     let members = [AgentStatus::Running, AgentStatus::Idle]
         .into_iter()
@@ -1298,7 +1329,11 @@ fn render_worktree_channel_leads_with_merge_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
+        Some(crate::store::snapshot::SidebarPlace {
+            path: "/repo/worktrees/codex-resets".into(),
+            foreign: false,
+        });
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Pristine);
@@ -1327,7 +1362,11 @@ fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
+        Some(crate::store::snapshot::SidebarPlace {
+            path: "/repo/worktrees/codex-resets".into(),
+            foreign: false,
+        });
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1353,7 +1392,11 @@ fn render_worktree_channel_carries_pr_badge() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
+        Some(crate::store::snapshot::SidebarPlace {
+            path: "/repo/worktrees/codex-resets".into(),
+            foreign: false,
+        });
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
@@ -1376,7 +1419,11 @@ fn render_worktree_channel_leads_with_fork_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
+        Some(crate::store::snapshot::SidebarPlace {
+            path: "/repo/worktrees/codex-resets".into(),
+            foreign: false,
+        });
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);

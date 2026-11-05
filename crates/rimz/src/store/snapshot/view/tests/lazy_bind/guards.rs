@@ -88,7 +88,13 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
         ghost.usage.total_tokens = Some(126_621);
         ghost.model = Some("gpt-5.5".to_owned());
 
-        let mut snapshot = room(vec![ghost]);
+        let mut snapshot = room(vec![ghost]).with_worktree_roots(
+            vec![
+                PathBuf::from("/repo/main"),
+                PathBuf::from("/repo/hook-trace"),
+            ],
+            Default::default(),
+        );
         snapshot.wired_kinds = vec!["codex".to_owned()];
         let fresh_pane = PaneRef {
             pane_process_start: Some(epoch()),

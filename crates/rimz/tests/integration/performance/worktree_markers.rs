@@ -11,7 +11,6 @@ use rimz::sidebar::consumer::RollupCursor;
 use rimz::sidebar::frame::PaneFrame;
 use rimz::sidebar::produce::refresh_producer_caches;
 use rimz::sidebar::refresh::ProducerRefreshState;
-use rimz::store::snapshot::SidebarWorktreeKind;
 use rimz::testkit::WORK_COUNTERS;
 
 use crate::common::{Env, git};
@@ -150,19 +149,6 @@ fn refresh_in_child(root: &Path, count: usize) {
         let workspace = super::workspace_for_refresh(&mut cursor, &state, &runtime, &frame);
         let snapshot = rimz::sidebar::enrich::project_local(workspace.clone(), Some(&frame), None);
         assert_eq!(snapshot.project_root.as_deref(), Some(root));
-        assert_eq!(snapshot.worktree_groups.len(), count);
-        let groups: Vec<_> = snapshot
-            .worktree_groups
-            .iter()
-            .map(|group| (&group.label, group.kind))
-            .collect();
-        assert!(
-            groups
-                .iter()
-                .all(|(_, kind)| *kind == SidebarWorktreeKind::Channel),
-            "{groups:?}; home={:?}",
-            snapshot.worktree_home
-        );
         refresh_producer_caches(workspace, Some(&frame), &state, &runtime, &mut refresh).unwrap();
         reads.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
         if pass == 0 {

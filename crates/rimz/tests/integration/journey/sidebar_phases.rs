@@ -86,8 +86,12 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     // (the first-run hint contains it) or the synthesized idle Codex row that
     // can appear from live-pane presence before the event-fresh model folds in.
     let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("GPT 5.5"), SETTLE);
+    // `session_start` roots the agent at `/work/query-engine-main`, outside the
+    // project, so the header carries that repo's folder as its qualifier.
     assert!(
-        screen.lines().any(|line| line.trim() == "⑂ main"),
+        screen
+            .lines()
+            .any(|line| line.trim() == "⑂ main · query-engine-main"),
         "the agent groups under its unsealed worktree header:\n{screen}"
     );
     assert!(
@@ -241,7 +245,9 @@ fn phase6_reattach_reconstructs_from_store() {
     let room = RoomHarness::launch(&env, MuxName::Tmux);
     let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);
     assert!(
-        screen.lines().any(|line| line.trim() == "⑂ main"),
+        screen
+            .lines()
+            .any(|line| line.trim() == "⑂ main · query-engine-main"),
         "reattach reconstructs the unsealed worktree group:\n{screen}"
     );
     assert!(

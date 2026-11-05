@@ -2349,10 +2349,18 @@ mod render {
                     Some("/repo/main"),
                     Some("review"),
                 ),
+                agent_in_lane("dots", None, Some("/home/me/dotfiles"), None),
             ],
             now,
         )
-        .with_project_root(Some(PathBuf::from("/repo/main")));
+        .with_project_root(Some(PathBuf::from("/repo/main")))
+        .with_worktree_roots(
+            vec![PathBuf::from("/repo/worktrees/auth-refresh")],
+            std::collections::BTreeMap::from([(
+                PathBuf::from("/repo/worktrees/auth-refresh"),
+                "auth-refresh".to_owned(),
+            )]),
+        );
 
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
         let (auth_key, auth_label, auth_kind) = {
@@ -2380,6 +2388,8 @@ mod render {
         assert!(text.contains("⑂ auth-refresh · forge team #91 ✓"), "{text}");
         assert!(text.contains("# docs"), "{text}");
         assert!(text.contains("external"), "{text}");
+        assert!(text.contains("⑂ main · dotfiles"), "{text}");
+        assert_eq!(text.matches("· dotfiles").count(), 1, "{text}");
         assert!(
             !text.lines().next().unwrap_or_default().contains("CHANNEL"),
             "{text}"
@@ -2400,6 +2410,50 @@ mod render {
         assert!(text.contains("\u{e0a0} auth-refresh"), "{text}");
         assert!(text.contains("#91 \u{f058}"), "{text}");
         assert!(text.contains("\u{f292} docs"), "{text}");
+    }
+
+    #[test]
+    fn agents_table_tells_colliding_foreign_clones_apart() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            vec![
+                agent_in_lane("left", None, Some("/home/me/a/dotfiles"), None),
+                agent_in_lane("right", None, Some("/home/me/b/dotfiles"), None),
+            ],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+        let refs = snapshot.agents.iter().collect::<Vec<_>>();
+        let keys = rimz::store::snapshot::group_live_agents_by_worktree(&refs, &snapshot)
+            .into_iter()
+            .map(|group| (group.place.unwrap().path, group.key))
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        for (path, key) in keys {
+            let parent = path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy();
+            // Published by key, as the producer's enrich deepens colliding labels.
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(
+                serde_json::from_value(serde_json::json!({
+                    "key": key,
+                    "label": "main",
+                    "kind": "worktree",
+                    "status_counts": [],
+                    "rows": [],
+                    "label_qualifier": format!("{parent}/dotfiles")
+                }))
+                .unwrap(),
+            );
+        }
+
+        let text = render_agents_text(&snapshot, now, 120);
+        assert_eq!(text.matches("⑂ main · a/dotfiles").count(), 1, "{text}");
+        assert_eq!(text.matches("⑂ main · b/dotfiles").count(), 1, "{text}");
     }
 
     #[test]

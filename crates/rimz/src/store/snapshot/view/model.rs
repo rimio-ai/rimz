@@ -274,17 +274,15 @@ impl SidebarProviderPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarWorktreeKind {
-    /// A cooperation lane. A worktree-backed lane carries the git
-    /// story and leads with fork/merge glyphs; a plain lane has no git story
-    /// and leads with `#`.
+    /// A cooperation lane. A listed checkout whose marker names the lane
+    /// supplies its place and git story; a plain lane leads with `#`.
     Channel,
     /// A group root with a git story: a repo room's worktree checkout or a
     /// git-backed row's own resolved worktree.
     Worktree,
-    /// A non-repo room's own pod — panes at the root and in non-repo subdirs.
+    /// A non-repo room's own place, including subfolders with no deeper git root.
     Root,
-    /// The out-of-project catch-all: untethered scripts/CI and shells whose cwd
-    /// is outside every group root.
+    /// The catch-all for rows with no channel, known place, or pathless branch.
     External,
 }
 
@@ -464,16 +462,40 @@ pub struct SidebarWorkflow {
     pub agent: Option<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
 }
 
+/// The folder whose work made a group: the project root, a listed worktree,
+/// or an agent's git root.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarPlace {
+    pub path: std::path::PathBuf,
+    /// Outside the project root and not a listed worktree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub foreign: bool,
+}
+
+impl SidebarPlace {
+    /// The place's own folder name, which qualifies a foreign group's label.
+    pub fn folder_name(&self) -> String {
+        self.path
+            .file_name()
+            .unwrap_or(self.path.as_os_str())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
     pub label: String,
-    /// Dim repo qualifier appended to the header when another group renders
-    /// the same label: the shortest trailing path suffix distinguishing the
-    /// colliding checkouts. `None` when the label is unambiguous.
+    /// Dim repo-folder qualifier for a foreign place, or the shortest trailing
+    /// path suffix distinguishing colliding labels. Foreign places keep it
+    /// even when the folder name equals the label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_qualifier: Option<String>,
     pub kind: SidebarWorktreeKind,
+    /// The root that made this group, independent of its rows' subfolders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<SidebarPlace>,
     /// The unique non-empty team carried by this group's team-stamped rows.
     /// Roleless processes and stray agents do not hide a cohort label; two
     /// distinct teams make the group ambiguous.
@@ -504,12 +526,6 @@ pub struct SidebarWorktreeGroup {
     /// The resolved trunk name the diff and commit delta compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
-    /// Whether a channel lane is backed by a live RimZ worktree checkout
-    /// (marker name matches the lane label). Stamped by the git projection
-    /// every fold; drives the header's fork-vs-`#` lead without waiting for
-    /// the first git read.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub worktree_backed: bool,
     /// The resolved project-root group, independent of branch or label. It pins
     /// below actionable groups and never becomes inactive, even without agents.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -642,6 +658,21 @@ impl UnitStatus {
 }
 
 impl SidebarWorktreeGroup {
+    /// A channel named by a listed checkout's marker, even before git facts arrive.
+    pub fn worktree_backed(&self) -> bool {
+        self.kind == SidebarWorktreeKind::Channel && self.place.is_some()
+    }
+
+    /// The place whose git and PR facts this group carries.
+    pub fn git_checkout(&self) -> Option<&std::path::Path> {
+        match self.kind {
+            SidebarWorktreeKind::Worktree | SidebarWorktreeKind::Channel => {
+                self.place.as_ref().map(|place| place.path.as_path())
+            }
+            SidebarWorktreeKind::Root | SidebarWorktreeKind::External => None,
+        }
+    }
+
     pub(crate) fn has_rows_or_workflow(&self) -> bool {
         !self.rows.is_empty()
             || self
@@ -913,7 +944,7 @@ mod tests {
             commits_ahead: None,
             commits_behind: None,
             trunk: None,
-            worktree_backed: false,
+            place: None,
             root_lane: false,
             inactive: Some(crate::store::snapshot::SidebarInactive::Landed),
             clean: None,

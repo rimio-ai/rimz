@@ -2,10 +2,53 @@ use super::*;
 use crate::ids::WorkspaceId;
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
+use crate::store::snapshot::SidebarWorktreeKind;
 use jiff::Timestamp;
 use std::process::Command;
 
 mod index_refresh;
+
+#[test]
+fn marked_subfolder_shell_demands_checkout_root_not_its_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("worktrees/link-notices");
+    let subfolder = worktree.join(".rimz");
+    std::fs::create_dir_all(&subfolder).unwrap();
+    for with_agent in [true, false] {
+        let mut agent = root_agent("claude", "stamped", None);
+        agent.channel = Some("link-notices".to_owned());
+        agent.worktree_path = Some(worktree.display().to_string());
+        agent.worktree_branch = Some("link-notices".to_owned());
+        agent.pane = Some(pane("%1", "claude", worktree.to_str().unwrap()));
+        let mut panes = vec![pane("%2", "zsh", subfolder.to_str().unwrap())];
+        if with_agent {
+            panes.push(agent.pane.clone().unwrap());
+        }
+        let snapshot = SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(dir.path()),
+            if with_agent { vec![agent] } else { Vec::new() },
+            Timestamp::now(),
+        )
+        .with_project_root(Some(dir.path().to_path_buf()))
+        .with_worktree_roots(
+            vec![worktree.clone()],
+            BTreeMap::from([(worktree.clone(), "link-notices".to_owned())]),
+        )
+        .with_live_panes(panes, None);
+        assert_eq!(
+            snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.key.as_str())
+                .collect::<Vec<_>>(),
+            ["channel:link-notices"]
+        );
+        assert_eq!(
+            needed_worktree_paths(&snapshot, Default::default()),
+            [worktree.display().to_string()]
+        );
+    }
+}
 
 #[test]
 fn rowless_active_and_parked_groups_supply_the_run_scope_to_git_demand() {
@@ -1070,6 +1113,7 @@ fn repo_root_pane_is_included_in_git_reads() {
         .with_project_root(Some(dir.path().to_path_buf()))
         .with_live_panes(vec![pane("terminal_0", "zsh", &root_cwd)], None);
     assert_eq!(snapshot.worktree_groups.len(), 1);
+    assert_eq!(snapshot.worktree_groups[0].git_checkout(), Some(dir.path()));
     assert_eq!(
         snapshot.worktree_groups[0].kind,
         SidebarWorktreeKind::Worktree
@@ -1107,6 +1151,11 @@ fn root_pod_is_excluded_from_git_reads() {
         .iter()
         .map(|group| group.kind)
         .collect();
+    assert_eq!(snapshot.worktree_groups[0].git_checkout(), None);
+    assert_eq!(
+        snapshot.worktree_groups[1].git_checkout(),
+        Some(child.as_path())
+    );
     assert_eq!(
         kinds,
         vec![SidebarWorktreeKind::Root, SidebarWorktreeKind::Worktree]
@@ -1187,10 +1236,6 @@ fn write_rimz_worktree_marker(repo: &GitFixture, base_ref: &str) {
     write_rimz_worktree_marker_with_pr(repo, "feature", base_ref, None);
 }
 
-fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &str) {
-    write_rimz_worktree_marker_with_pr(repo, name, base_ref, None);
-}
-
 fn write_rimz_worktree_marker_with_pr(
     repo: &GitFixture,
     name: &str,
@@ -1255,7 +1300,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: None,
         root_lane: false,
         inactive: None,
         clean: None,
@@ -1270,36 +1315,33 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
 }
 
 #[test]
-fn git_backed_worktree_path_accepts_worktrees_and_marked_channels() {
+fn place_based_git_admission_accepts_worktrees_and_marked_channels() {
     let repo = GitFixture::init(&["init", "-q"]);
-    let worktree = crate::sidebar::test_support::worktree_group(repo.path(), Vec::new());
-    assert_eq!(
-        git_backed_worktree_path(&worktree).as_deref(),
-        Some(repo.path_str())
-    );
+    let mut worktree = crate::sidebar::test_support::worktree_group(repo.path(), Vec::new());
+    worktree.place = Some(crate::store::snapshot::SidebarPlace {
+        path: repo.path().to_path_buf(),
+        foreign: false,
+    });
+    assert_eq!(worktree.git_checkout(), Some(repo.path()));
 
     let mut root = worktree.clone();
     root.kind = SidebarWorktreeKind::Root;
-    assert_eq!(git_backed_worktree_path(&root), None);
+    assert_eq!(root.git_checkout(), None);
 
     let mut external = worktree.clone();
     external.kind = SidebarWorktreeKind::External;
-    assert_eq!(git_backed_worktree_path(&external), None);
+    assert_eq!(external.git_checkout(), None);
 
     let unmarked = channel_group("feature", repo.path());
-    assert_eq!(git_backed_worktree_path(&unmarked), None);
+    assert_eq!(unmarked.git_checkout(), None);
+    assert!(!unmarked.worktree_backed());
 
-    if !repo.initialized {
-        return;
-    }
-
-    write_rimz_worktree_marker_named(&repo, "feature", "HEAD");
+    let mut marked = channel_group("feature", repo.path());
+    marked.place = worktree.place.clone();
+    assert_eq!(marked.git_checkout(), Some(repo.path()));
+    assert!(marked.worktree_backed());
     assert_eq!(
-        git_backed_worktree_path(&channel_group("feature", repo.path())).as_deref(),
-        Some(repo.path_str())
-    );
-    assert_eq!(
-        git_backed_worktree_path(&channel_group("design", repo.path())),
+        channel_group("design", repo.path()).git_checkout(),
         None,
         "named channels inside a RimZ worktree do not borrow the worktree story"
     );

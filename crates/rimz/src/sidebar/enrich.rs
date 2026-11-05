@@ -20,7 +20,7 @@ use crate::store::Store;
 use crate::store::snapshot::{
     HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
     RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
-    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup,
+    SidebarPresence, SidebarProviderPanel, SidebarSnapshot, SidebarWorktreeGroup,
     SidebarWorktreeKind, ThrottleNotice, TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState,
     WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
@@ -35,7 +35,6 @@ use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache, is_trunk_branch,
-    worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::rate_limits::apply_cached_rate_limits;
@@ -182,31 +181,14 @@ fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_m
 /// *path*, not of any one agent, so they belong to the group — which also
 /// settles the shared-worktree "whose branch?" ambiguity. The producer
 /// validates checkout paths before refreshing their entries and publishes
-/// exact channel marker classifications; consumers project those caches without
-/// git subprocesses or checkout metadata reads.
-fn project_diff_stats(
-    snapshot: &mut SidebarSnapshot,
-    cache: &DiffStatsCache,
-    roots_cache: Option<&WorktreeRootsCache>,
-) {
+/// the group's resolved place; consumers project those caches without git
+/// subprocesses or checkout metadata reads.
+fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
-        if group.kind == SidebarWorktreeKind::Channel {
-            group.worktree_backed = false;
-        }
-        let Some(path) = cached_git_backed_worktree_path(
-            group.kind,
-            &group.label,
-            &group.key,
-            &group.rows,
-            group.workflow.as_ref(),
-            roots_cache,
-        ) else {
+        let Some(path) = group.git_checkout() else {
             continue;
         };
-        if group.kind == SidebarWorktreeKind::Channel {
-            group.worktree_backed = true;
-        }
-        let Some(entry) = cache.entries.get(path) else {
+        let Some(entry) = cache.entries.get(path.to_string_lossy().as_ref()) else {
             continue;
         };
         group.pr_number = entry.from_pr;
@@ -252,7 +234,7 @@ fn project_diff_stats(
     }
 }
 
-/// Qualify groups whose final display labels collide with the shortest
+/// Qualify foreign places by folder, deepening colliding labels to the shortest
 /// distinguishing trailing checkout path.
 fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
     let mut by_label = BTreeMap::<String, Vec<(usize, Vec<String>, usize)>>::new();
@@ -265,12 +247,14 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
         if group.kind == SidebarWorktreeKind::Channel {
             continue;
         }
-        let Some(path) =
-            worktree_group_path_fields(&group.key, &group.rows, group.workflow.as_ref())
-        else {
+        let Some(place) = &group.place else {
             continue;
         };
-        let components = Path::new(path)
+        if place.foreign {
+            group.label_qualifier = Some(place.folder_name());
+        }
+        let components = place
+            .path
             .components()
             .filter(|component| !matches!(component, std::path::Component::RootDir))
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
@@ -319,8 +303,9 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
                 continue;
             }
             let suffix = trailing_path_suffix(&components, depth);
-            if suffix != label {
-                Arc::make_mut(&mut snapshot.worktree_groups)[index].label_qualifier = Some(suffix);
+            let group = &mut Arc::make_mut(&mut snapshot.worktree_groups)[index];
+            if suffix != label || group.place.as_ref().is_some_and(|place| place.foreign) {
+                group.label_qualifier = Some(suffix);
             }
         }
     }
@@ -336,60 +321,34 @@ fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCach
     }
 }
 
-fn cached_git_backed_worktree_path<'a>(
-    kind: SidebarWorktreeKind,
-    label: &str,
-    key: &'a str,
-    rows: &'a [SidebarRow],
-    workflow: Option<&'a crate::store::snapshot::SidebarWorkflow>,
-    roots_cache: Option<&WorktreeRootsCache>,
-) -> Option<&'a str> {
-    let path = worktree_group_path_fields(key, rows, workflow)?;
-    match kind {
-        SidebarWorktreeKind::Worktree => Some(path),
-        SidebarWorktreeKind::Channel => roots_cache?
-            .marker_names
-            .get(Path::new(path))
-            .is_some_and(|name| name == label)
-            .then_some(path),
-        SidebarWorktreeKind::Root | SidebarWorktreeKind::External => None,
-    }
-}
-
 fn project_pr_state_map(
     snapshot: &mut SidebarSnapshot,
     states: &BTreeMap<String, PrLink>,
     branch_ci: &BTreeMap<String, WorktreeCi>,
     diff_cache: &DiffStatsCache,
-    roots_cache: Option<&WorktreeRootsCache>,
 ) {
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.pr_stack = Default::default();
-        let Some(path) = cached_git_backed_worktree_path(
-            group.kind,
-            &group.label,
-            &group.key,
-            &group.rows,
-            group.workflow.as_ref(),
-            roots_cache,
-        ) else {
+        let Some(path) = group.git_checkout() else {
             continue;
         };
-        let trunk = diff_cache.entries.get(path).is_some_and(|entry| {
+        let path = path.to_string_lossy();
+        let trunk = diff_cache.entries.get(path.as_ref()).is_some_and(|entry| {
             entry
                 .branch
                 .as_deref()
                 .is_some_and(|branch| is_trunk_branch(branch, entry.trunk.as_deref()))
         });
+        let link = states.get(path.as_ref());
+        let ci = branch_ci.get(path.as_ref()).copied();
         if trunk {
             group.pr_state = None;
             group.pr_queue = None;
-            group.ci = branch_ci.get(path).copied();
+            group.ci = ci;
             group.pr_number = None;
             group.pr_url = None;
             continue;
         }
-        let link = states.get(path);
         group.pr_stack = link.map(|link| link.stack.clone()).unwrap_or_default();
         group.pr_state = link.map(|link| link.state);
         group.pr_queue = link.and_then(PrLink::queue).map(|queue| match queue {
@@ -416,16 +375,9 @@ fn project_cached_pr_states(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     diff_cache: &DiffStatsCache,
-    roots_cache: Option<&WorktreeRootsCache>,
 ) {
     let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_state_map(
-        snapshot,
-        &cache.states,
-        &cache.branch_ci,
-        diff_cache,
-        roots_cache,
-    );
+    project_pr_state_map(snapshot, &cache.states, &cache.branch_ci, diff_cache);
 }
 
 fn classify_trunk_sync(
@@ -457,7 +409,7 @@ fn classify_trunk_sync(
 /// supplied by `sidebar::refresh` or read from published caches.
 pub struct FoldOpts<'a> {
     pub producing: bool,
-    pub fresh_roots: Option<Vec<PathBuf>>,
+    pub fresh_roots: Option<(Vec<PathBuf>, BTreeMap<PathBuf, String>)>,
     pub config: Option<Arc<crate::config::MachineConfig>>,
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
     pub agent_projection: crate::sidebar::agent_projection::AgentProjection,
@@ -739,15 +691,13 @@ fn enrich_core(
     // folding into `external`. Directory rooms get git roots from each
     // git-backed row's resolved worktree during the row fold. The producer
     // passes its fresh enumeration in; a consumer reads the cached one back.
-    if let Some(roots) = opts.fresh_roots.take() {
-        snapshot = snapshot.with_worktree_roots(roots);
+    if let Some((roots, channels)) = opts.fresh_roots.take() {
+        snapshot = snapshot.with_worktree_roots(roots, channels);
     } else if snapshot.project_root.is_some() {
-        snapshot = snapshot.with_worktree_roots(
-            roots_cache
-                .as_ref()
-                .map(|cache| cache.roots.clone())
-                .unwrap_or_default(),
-        );
+        let (roots, channels) = roots_cache
+            .map(|cache| (cache.roots, cache.marker_names))
+            .unwrap_or_default();
+        snapshot = snapshot.with_worktree_roots(roots, channels);
     }
     // The repo's durable worktree home, resolved purely from the project root
     // plus the `[agents.worktree] dir` template — independent of `git worktree list`,
@@ -964,7 +914,7 @@ fn enrich_core(
         remote_control_health,
         lanes,
     );
-    project_diff_stats(&mut folded, &diff_cache, roots_cache.as_ref());
+    project_diff_stats(&mut folded, &diff_cache);
     disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
     for group in Arc::make_mut(&mut folded.worktree_groups) {
@@ -981,15 +931,9 @@ fn enrich_core(
         runtime,
     );
     if let Some(lanes) = lanes {
-        project_pr_state_map(
-            &mut folded,
-            &lanes.pr_states,
-            &lanes.branch_ci,
-            &diff_cache,
-            roots_cache.as_ref(),
-        );
+        project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
     } else {
-        project_cached_pr_states(&mut folded, runtime, &diff_cache, roots_cache.as_ref());
+        project_cached_pr_states(&mut folded, runtime, &diff_cache);
     }
     snapshot = folded;
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile

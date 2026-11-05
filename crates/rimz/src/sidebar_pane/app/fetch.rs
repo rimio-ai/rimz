@@ -321,6 +321,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         only_daemon_view_remains,
         project_root,
         worktree_roots,
+        worktree_channels,
         worktree_home,
         root_class,
         sidebar,
@@ -367,6 +368,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && only_daemon_view_remains == &right.only_daemon_view_remains
         && project_root == &right.project_root
         && worktree_roots == &right.worktree_roots
+        && worktree_channels == &right.worktree_channels
         && worktree_home == &right.worktree_home
         && root_class == &right.root_class
         && sidebar == &right.sidebar

@@ -37,7 +37,7 @@ The `@` sigil is required, so a stray word never reaches an agent: `rimz message
 
 ## Channels
 
-A channel groups the agents working one line of work inside a room. The sidebar groups its cards by channel, an address targets it with `#channel`, and RimZ reopens it as its own Zellij tab or tmux window when it restores the room. Your pane always sits in one, which is why a bare `@codex` scopes to it and you only reach across when you name another.
+A channel groups the agents working one line of work inside a room. The sidebar honors an agent's channel first; unstamped panes join the place they work in, including a marked worktree's channel from any subfolder. An address targets a channel with `#channel`, and RimZ reopens it as its own Zellij tab or tmux window when it restores the room. Your pane always sits in one, which is why a bare `@codex` scopes to it and you only reach across when you name another.
 
 A channel is never created or removed on its own: it is derived from what backs it, and it exists for as long as that does. A `#name` comes from one of four places:
 

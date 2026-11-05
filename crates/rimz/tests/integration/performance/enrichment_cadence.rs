@@ -13,6 +13,7 @@
 
 use rimz::sidebar::consumer::RollupCursor;
 use rimz::sidebar::refresh::git_stats::DiffStatsCache;
+use rimz::store::snapshot::SidebarProviderPanel;
 use rimz::utils::time::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
@@ -106,6 +107,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
+    fixture.register_pane_agents();
     let _store = fixture.env.store();
     let session = fixture.publish_pane_frame();
     let state = fixture.env.state_path_for(&fixture.env.project_root);
@@ -295,7 +297,20 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         },
     )
     .expect("frameless refresh produce");
-    assert_eq!(frameless.providers, refresh.providers);
+    // A frameless produce sees no panes, so it counts no on-screen sessions.
+    let off_screen = |providers: &[SidebarProviderPanel]| {
+        providers
+            .iter()
+            .map(|panel| SidebarProviderPanel {
+                active_sessions: 0,
+                ..panel.clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        off_screen(&frameless.providers),
+        off_screen(&refresh.providers)
+    );
     assert_eq!(frameless.project_root, refresh.project_root);
 }
 
@@ -341,6 +356,7 @@ fn idle_room_produce_runs_no_enrichment_io() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
+    fixture.register_pane_agents();
 
     let cold = fixture.run_snapshot();
     assert!(

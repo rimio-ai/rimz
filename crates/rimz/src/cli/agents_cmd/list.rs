@@ -247,7 +247,7 @@ fn group_header_cells(
         SidebarWorktreeKind::Worktree => {
             format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
         }
-        SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
+        SidebarWorktreeKind::Channel if group.place.is_some() => {
             format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
         }
         SidebarWorktreeKind::Channel => {
@@ -259,6 +259,17 @@ fn group_header_cells(
         }
     };
     let mut cells = vec![render::cell(label).fg(render::palette::header())];
+    // The published qualifier deepens colliding labels; a snapshot that skipped
+    // enrichment (the message-miss table) still names a foreign repo's folder.
+    let qualifier = group_pr(snapshot, &group.key)
+        .and_then(|published| published.label_qualifier.clone())
+        .or_else(|| {
+            let place = group.place.as_ref().filter(|place| place.foreign)?;
+            Some(place.folder_name())
+        });
+    if let Some(qualifier) = qualifier {
+        cells.push(render::cell(format!("· {qualifier}")).fg(render::palette::meta()));
+    }
     if !group
         .agents
         .iter()
@@ -347,23 +358,6 @@ fn render_list_summary(
         })
         .collect::<Vec<_>>();
     render::needs_you(w, &rows, now)
-}
-
-fn channel_group_is_worktree_backed(
-    group: &AgentWorktreeGroup<'_>,
-    snapshot: &SidebarSnapshot,
-) -> bool {
-    let Some(project_root) = snapshot.project_root.as_deref() else {
-        return false;
-    };
-    let Some(first) = group.agents.first().and_then(|agent| agent.lane_path()) else {
-        return false;
-    };
-    Path::new(first) != project_root
-        && group
-            .agents
-            .iter()
-            .all(|agent| agent.lane_path() == Some(first))
 }
 
 /// A named scope that selects no live agent: fail when it is no lane at all,

@@ -1089,7 +1089,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             commits_ahead: None,
             commits_behind: None,
             trunk: None,
-            worktree_backed: false,
+            place: None,
             root_lane: false,
             inactive: None,
             clean: None,

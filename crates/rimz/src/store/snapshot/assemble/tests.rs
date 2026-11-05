@@ -592,12 +592,17 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
     let paths = checkpoint_paths(workspace, dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
     let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
-    legacy["snapshot_version"] = serde_json::json!(75);
+    legacy["snapshot_version"] = serde_json::json!(76);
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "a snapshot without journal-derived reached flags must be refolded"
     );
+}
+
+#[test]
+fn snapshot_place_contract_is_version_77() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 77);
 }
 
 /// [`read_fresh_latest`] on a fresh thread, past this thread's parse

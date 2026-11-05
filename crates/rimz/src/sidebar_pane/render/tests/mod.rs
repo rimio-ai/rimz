@@ -283,8 +283,17 @@ fn snapshot_with(mut agents: Vec<AgentState>) -> SidebarSnapshot {
         agent.pane = Some(live.clone());
         panes.push(live);
     }
+    // Each agent works in its own listed checkout, so a branchless one still
+    // makes its own place.
+    let checkouts = agents
+        .iter()
+        .filter_map(|agent| agent.worktree_path.as_deref())
+        .chain(panes.iter().filter_map(|pane| pane.cwd.as_deref()))
+        .map(std::path::PathBuf::from)
+        .collect::<std::collections::BTreeSet<_>>();
     let mut snapshot =
-        SidebarSnapshot::build_with_carryover(fixed_workspace(), Vec::new(), agents, fixed_now());
+        SidebarSnapshot::build_with_carryover(fixed_workspace(), Vec::new(), agents, fixed_now())
+            .with_worktree_roots(checkouts.into_iter().collect(), Default::default());
     if !panes.is_empty() {
         snapshot = snapshot.with_live_panes(panes, None);
     }

@@ -10,7 +10,9 @@ use super::layout::{
     GroupEntry, GroupResolver, compare_groups, group_branch_label, sort_rows, status_counts,
 };
 use super::score;
-use super::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, cohort_team};
+use super::{
+    SidebarPlace, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, cohort_team,
+};
 
 mod forks;
 mod status;
@@ -96,7 +98,13 @@ impl<'a> AgentProjectionIndex<'a> {
     }
 }
 
-type GroupSeed = (String, SidebarWorktreeKind, bool, Vec<SidebarRow>);
+type GroupSeed = (
+    String,
+    SidebarWorktreeKind,
+    bool,
+    Vec<SidebarRow>,
+    Option<SidebarPlace>,
+);
 
 /// A run on a branch-split path joins the split group holding its newest step
 /// root, else the one with the newest activity. `None` leaves the run to mint
@@ -111,7 +119,7 @@ fn split_run_group(
     by_group
         .iter()
         .filter(|(group, _)| group.as_str() == key || group.starts_with(&split))
-        .max_by_key(|(_, (_, _, _, rows))| {
+        .max_by_key(|(_, (_, _, _, rows, _))| {
             rows.iter()
                 .map(|row| (agents.step_seq(row, run), row.last_activity))
                 .max()
@@ -214,8 +222,16 @@ impl SidebarSnapshot {
             });
             by_group
                 .entry(identity.key)
-                .and_modify(|(_, _, _, rows)| rows.push(row.clone()))
-                .or_insert_with(|| (identity.label, identity.kind, identity.root_lane, vec![row]));
+                .and_modify(|(_, _, _, rows, _)| rows.push(row.clone()))
+                .or_insert_with(|| {
+                    (
+                        identity.label,
+                        identity.kind,
+                        identity.root_lane,
+                        vec![row],
+                        identity.place,
+                    )
+                });
         }
 
         let mut runs_by_group = BTreeMap::<_, &super::SidebarWorkflow>::new();
@@ -244,13 +260,14 @@ impl SidebarSnapshot {
                     identity.kind,
                     identity.root_lane,
                     Vec::new(),
+                    identity.place,
                 )
             });
         }
 
         let mut groups = by_group
             .into_iter()
-            .map(|(key, (label, kind, root_lane, mut rows))| {
+            .map(|(key, (label, kind, root_lane, mut rows, place))| {
                 sort_rows(&mut rows);
                 // Prefer a branch label over the path-basename seed for worktree
                 // pods. Root pods keep the room name; external keeps its catch-all
@@ -284,7 +301,7 @@ impl SidebarSnapshot {
                     commits_ahead: None,
                     commits_behind: None,
                     trunk: None,
-                    worktree_backed: false,
+                    place,
                     root_lane,
                     inactive: None,
                     clean: None,

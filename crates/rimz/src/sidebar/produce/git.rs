@@ -29,7 +29,7 @@ pub(in crate::sidebar::produce) fn project_group_roots(
     root_class: RootClass,
     runtime: &crate::RuntimePaths,
     min_refreshed_at_ms: Option<u64>,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, BTreeMap<PathBuf, String>) {
     let cache_path = runtime.group_roots_path();
     let cache: Option<WorktreeRootsCache> = atomic::read_json_cache(&cache_path);
     let now_ms = unix_now_ms();
@@ -44,7 +44,7 @@ pub(in crate::sidebar::produce) fn project_group_roots(
         .filter(|w| w.is_fresh(now_ms))
         .filter(floor_ok)
     {
-        return cached.roots.clone();
+        return (cached.roots.clone(), cached.marker_names.clone());
     }
     let roots = list_group_roots(project_root, root_class);
     let marker_names = roots
@@ -58,13 +58,13 @@ pub(in crate::sidebar::produce) fn project_group_roots(
         .collect::<BTreeMap<_, _>>();
     let cache = WorktreeRootsCache {
         refreshed_at_ms: now_ms,
-        roots: roots.clone(),
+        roots,
         marker_names,
     };
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar worktree-roots cache write failed");
     }
-    roots
+    (cache.roots, cache.marker_names)
 }
 
 /// Enumerate group roots by the room root's class: a repo room reports its

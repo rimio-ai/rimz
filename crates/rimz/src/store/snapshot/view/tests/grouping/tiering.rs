@@ -22,7 +22,7 @@ fn ranked_snapshot_in(mut agents: Vec<AgentState>, project_root: Option<&str>) -
         panes.push(live);
     }
 
-    room(agents)
+    list_agent_checkouts(room(agents))
         .with_project_root(project_root.map(PathBuf::from))
         .with_live_panes(panes, None)
 }
@@ -344,12 +344,12 @@ fn fresh_ask_group_outranks_hot_park_without_a_root_group() {
 
 #[test]
 fn native_child_attention_outranks_the_pinned_root_group() {
-    let snapshot = room(vec![
+    let snapshot = list_agent_checkouts(room(vec![
         agent_in("desk", "/repo", AgentStatus::Success, 0).in_pane("%1"),
         agent_in("parent", "/repo/child", AgentStatus::Success, 0).in_pane("%2"),
         child_state("parent", "ask", AgentStatus::Waiting, 0),
         agent_in("working", "/repo/working", AgentStatus::Running, 0).in_pane("%3"),
-    ])
+    ]))
     .with_project_root(Some(PathBuf::from("/repo")))
     .with_live_panes(
         vec![
@@ -365,9 +365,9 @@ fn native_child_attention_outranks_the_pinned_root_group() {
 
 #[test]
 fn process_only_root_group_is_pinned_and_never_folds() {
-    let mut snapshot = room(vec![
+    let mut snapshot = list_agent_checkouts(room(vec![
         agent_in("working", "/repo/working", AgentStatus::Running, 0).in_pane("%1"),
-    ])
+    ]))
     .with_project_root(Some(PathBuf::from("/repo")))
     .with_live_panes(
         vec![

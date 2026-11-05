@@ -24,7 +24,7 @@ use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_HIBERNATED_TTL,
     DIFF_STATS_IDLE_TTL, DIFF_STATS_QUIET_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
 };
-use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup};
 use crate::utils::time::unix_now_ms;
 use crate::worktree::{self, LandedVerdict};
 
@@ -286,30 +286,8 @@ pub(super) fn refresh_diff_stats_for(
     );
 }
 
-/// The checkout path a group's git reads run against. A path-keyed group —
-/// per-path or root-keyed — carries it as the key's first line (the key may
-/// carry a `\n<branch>` suffix when one path holds two branches), which is
-/// stabler than any one row's cwd: a root-keyed pod's rows can sit in
-/// different subdirs of one checkout. A non-path key (`branch:…`, the
-/// `external` catch-all) falls back to a row's path, then the live run's scope.
-pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
-    key: &'a str,
-    rows: &'a [crate::store::snapshot::SidebarRow],
-    workflow: Option<&'a crate::store::snapshot::SidebarWorkflow>,
-) -> Option<&'a str> {
-    key.split('\n')
-        .next()
-        .filter(|key| Path::new(key).is_absolute())
-        .or_else(|| {
-            rows.iter()
-                .find_map(|row| row.lane_path())
-                .filter(|path| !path.is_empty())
-        })
-        .or_else(|| workflow.map(|run| run.scope_path.as_str()))
-}
-
 /// The live worktree paths this snapshot needs git facts for: a git-backed
-/// group whose recovered path is a live directory, de-duplicated so two
+/// group whose place is a live directory, de-duplicated so two
 /// branch-split groups and live CI conditions for one dir share a single git read.
 pub(super) fn needed_worktree_paths(
     snapshot: &SidebarSnapshot,
@@ -327,29 +305,12 @@ pub(super) fn needed_worktree_paths(
     needed
 }
 
-/// The checkout path a worktree-like group reads git facts from. Ordinary
-/// worktree groups trust their path; channel groups must carry the RimZ
-/// worktree marker whose name matches the lane label before they inherit that
-/// checkout's git story.
+/// Producer demand adds directory liveness to the model's shared git admission.
 fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
-    let path = worktree_group_path_fields(&group.key, &group.rows, group.workflow.as_ref())?;
-    if !Path::new(path).is_dir() {
-        return None;
-    }
-    match group.kind {
-        SidebarWorktreeKind::Worktree => Some(path.to_owned()),
-        SidebarWorktreeKind::Channel => {
-            is_worktree_channel(path, &group.label).then(|| path.to_owned())
-        }
-        SidebarWorktreeKind::Root | SidebarWorktreeKind::External => None,
-    }
-}
-
-fn is_worktree_channel(path: &str, label: &str) -> bool {
-    worktree::read_marker_from_checkout_metadata(Path::new(path))
-        .ok()
-        .flatten()
-        .is_some_and(|marker| marker.name == label)
+    group
+        .git_checkout()
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

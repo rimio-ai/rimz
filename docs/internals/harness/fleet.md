@@ -22,7 +22,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 
 Spawning separates three independent choices, so any combination is one command: **agents** choose which tools run, **layout** chooses the shape on screen, and **channel** chooses the cooperation lane.
 
-A **channel** is one cooperation lane. It is backed by a durable bare name, a [worktree](./worktrees.md), an in-place named team stamped as `<dir>/<team>`, or the directory room itself. The sidebar groups by it, and an address narrows to it with `#<channel>`.
+A **channel** is one cooperation lane. It is backed by a durable bare name, a [worktree](./worktrees.md), an in-place named team stamped as `<dir>/<team>`, or the directory room itself. An address narrows to it with `#<channel>`. The sidebar honors stamped channels; unstamped panes join their deepest known place, with listed marked worktrees resolving to their channel.
 
 A **member** is an agent inside a channel, named by a **handle**: `@claude` the kind, `@planner` the profile, `@coder` the team role, `@writer` an explicit launch name, `@swift-otter` the minted petname.
 

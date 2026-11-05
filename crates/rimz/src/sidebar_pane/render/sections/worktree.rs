@@ -766,7 +766,7 @@ fn group_header(
     });
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
-        SidebarWorktreeKind::Channel if !group.worktree_backed => {
+        SidebarWorktreeKind::Channel if !group.worktree_backed() => {
             format!("{} {}", theme.glyph(GlyphRole::ChannelHash), group.label)
         }
         _ => {

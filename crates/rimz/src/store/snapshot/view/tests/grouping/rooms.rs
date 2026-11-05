@@ -101,7 +101,10 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
         let snapshot = room(Vec::new())
             .with_root_class(root_class)
             .with_project_root(Some(PathBuf::from(root)))
-            .with_worktree_roots(worktree_roots.into_iter().map(PathBuf::from).collect())
+            .with_worktree_roots(
+                worktree_roots.into_iter().map(PathBuf::from).collect(),
+                BTreeMap::new(),
+            )
             .with_live_panes(panes, None);
 
         assert_eq!(snapshot.worktree_groups.len(), 1, "{label}");
