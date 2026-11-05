@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -47,11 +48,18 @@ pub(super) fn update(
     session: &str,
     edit: impl FnOnce(&mut BTreeMap<u64, TabOwnerRecord>) -> Result<bool>,
 ) -> Result<()> {
-    let _guard = WorkspaceLock::acquire_with_timeout(
-        &runtime.lock_path("tab-owners.lock"),
-        crate::mux::TAB_RENAME_TIMEOUT,
-    )
-    .map_err(super::output_error)?;
+    update_within(runtime, session, crate::mux::TAB_RENAME_TIMEOUT, edit)
+}
+
+fn update_within(
+    runtime: &RuntimePaths,
+    session: &str,
+    lock_timeout: Duration,
+    edit: impl FnOnce(&mut BTreeMap<u64, TabOwnerRecord>) -> Result<bool>,
+) -> Result<()> {
+    let _guard =
+        WorkspaceLock::acquire_with_timeout(&runtime.lock_path("tab-owners.lock"), lock_timeout)
+            .map_err(super::output_error)?;
     let mut tabs = read(runtime, session);
     if !edit(&mut tabs)? {
         return Ok(());
@@ -159,11 +167,13 @@ mod tests {
     fn concurrent_writers_keep_each_others_live_records() {
         let dir = tempfile::tempdir().unwrap();
         let runtime = runtime(dir.path());
+        // The last of 16 writers queues behind every other hold, so production's tab-chrome
+        // bound would time this test against load; the property is that no record is lost.
         std::thread::scope(|scope| {
             for id in 0..16 {
                 let runtime = &runtime;
                 scope.spawn(move || {
-                    update(runtime, "room", |tabs| {
+                    update_within(runtime, "room", crate::disk::lock::LOCK_TIMEOUT, |tabs| {
                         tabs.insert(id, owner("agent"));
                         Ok(true)
                     })
