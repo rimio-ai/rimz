@@ -647,8 +647,14 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
 }
 
 pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
-    if view.inactive_peek.is_some() {
-        close_inactive(view, snapshot);
+    if view.inactive_peek.take().is_some() {
+        for group in snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| group.inactive.is_some())
+        {
+            view.expanded_groups.remove(&group.key);
+        }
     } else {
         view.inactive_peek = Some(Default::default());
     }
@@ -657,21 +663,6 @@ pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) 
     view.offset_authoritative = true;
     view.scroll_ease.cancel();
     InputOutcome::redraw()
-}
-
-pub(super) fn close_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) {
-    if view.inactive_peek.take().is_none() {
-        return;
-    }
-    for group in snapshot
-        .worktree_groups
-        .iter()
-        .filter(|group| group.inactive.is_some())
-    {
-        view.expanded_groups.remove(&group.key);
-    }
-    view.inactive_reveal = true;
-    view.scroll_ease.cancel();
 }
 
 fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_key: String) {

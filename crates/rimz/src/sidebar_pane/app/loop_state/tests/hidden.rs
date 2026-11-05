@@ -85,7 +85,7 @@ fn painted_workflow_sections(rig: &Rig) -> Vec<String> {
 }
 
 #[test]
-fn hidden_mirror_draws_an_open_inactive_peek_closed_without_changing_its_source() {
+fn hidden_mirror_draws_an_open_inactive_peek_without_changing_its_source() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = mirror_pair(mux);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
@@ -98,6 +98,7 @@ fn hidden_mirror_draws_an_open_inactive_peek_closed_without_changing_its_source(
             let rows = Arc::make_mut(&mut old.rows);
             rows.truncate(1);
             rows[0].id = "old-agent".into();
+            rows[0].name = "old-agent".into();
             rows[0].pane = None;
             Arc::make_mut(&mut v.context.current.worktree_groups).push(old);
             v.state.inactive_peek = Some(Default::default());
@@ -121,11 +122,11 @@ fn hidden_mirror_draws_an_open_inactive_peek_closed_without_changing_its_source(
         let text = screen.screen().contents();
         assert!(text.contains("1 inactive"), "{mux:?}: {text}");
         assert!(
-            text.contains("[ ▸ 1 inactive · 1 unlanded ]"),
+            text.contains("[ ▾ 1 inactive · 1 unlanded ]"),
             "{mux:?}: {text}"
         );
         assert!(
-            !text.contains("inactive-work") && !text.contains(" older"),
+            text.contains("inactive-work") && text.contains("old-agent"),
             "{mux:?}: {text}"
         );
         assert!(pair.view(0).inactive_peek.is_some());

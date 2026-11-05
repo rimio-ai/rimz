@@ -462,7 +462,6 @@ fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
     for pages in [0, 1, 2, 3] {
         view.inactive_peek = (pages > 0).then(|| super::super::ui_state::InactivePeek {
             pages: pages.try_into().unwrap(),
-            ..Default::default()
         });
         let block = body(&snapshot, &view, &UiState::default(), 54);
         let texts = line_texts(&block.lines);
