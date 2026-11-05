@@ -3802,7 +3802,19 @@ path = "crates/rimz/src/store"
 # and SidebarWorktreeGroup::has_rows_or_workflow share live run groups (+6).
 # workflow::parse_journal shares lenient row decoding with cached sidebar reads (+1).
 # SidebarSnapshot::process_attention_facts shares process-slot aging with enrichment (+1).
-surface-budget = 545
+# TypingHold, TypingHoldReplay and Store::hold_message_claims share durable input deferral (+3).
+# Store::record_typing_hold_replay retains live delivery intent during an existing hold (+1).
+surface-budget = 549
+
+[[verdict]]
+kind = "item"
+key = "store::message::TypingHold"
+reason = "Delivery persists its input-hold deadline and the sweep's optional live replay mode."
+
+[[verdict]]
+kind = "item"
+key = "store::message::TypingHoldReplay"
+reason = "The store owns the durable steer/interrupt replay vocabulary below message delivery."
 
 [[verdict]]
 kind = "item"

@@ -10,8 +10,8 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
-    MessageStatus, SoftCompactStep, claim_expired, delivery_batch_indices, fresh_boundary_blocker,
-    sender_notice,
+    MessageStatus, SoftCompactStep, TypingHold, TypingHoldReplay, claim_expired,
+    delivery_batch_indices, fresh_boundary_blocker, sender_notice,
 };
 
 use super::super::{Result, Store, ingress, message};
@@ -131,6 +131,9 @@ impl MessageEdit {
         }
         if let Some(not_before) = self.not_before {
             record.not_before = not_before;
+            if not_before.is_some() {
+                record.typing_hold = None;
+            }
         }
         if let Some(force) = self.force {
             record.force = force;
@@ -928,6 +931,7 @@ impl Store {
                 message.last_sent_at = Some(now);
                 message.updated_at = now;
                 message.last_error = None;
+                message.typing_hold = None;
                 queue.upsert(message.clone());
                 queue.stage_event(EventEnvelope::message_event(
                     &message,
@@ -1016,6 +1020,79 @@ impl Store {
                 }
             });
             Ok(updated)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub(crate) fn hold_message_claims(
+        &self,
+        held: &[MessageRecord],
+        typing_hold: TypingHold,
+        compacted: bool,
+        session_name: &str,
+    ) -> Result<Vec<MessageRecord>> {
+        self.commit_queue(|queue| {
+            let now = Timestamp::now();
+            let note = format!(
+                "someone is using the receiver's pane; retry at {}",
+                typing_hold.until
+            );
+            Ok(queue.apply_all(session_name, now, |message| {
+                let Some(claim) = held.iter().find(|claim| holds(claim, message)) else {
+                    return MessageUpdate::Keep;
+                };
+                message.requeue(now, &note);
+                message.pane_id = claim.pane_id.clone();
+                message.attempts = message.attempts.saturating_sub(1);
+                message.last_attempt_at = None;
+                message.retry_after = Some(typing_hold.until);
+                message.typing_hold = Some(message.typing_hold.map_or(typing_hold, |previous| {
+                    typing_hold.with_replay(previous.replay, previous.force)
+                }));
+                if compacted {
+                    message.auto_compact = None;
+                }
+                MessageUpdate::Rewrite {
+                    method: MessageEventMethod::Queued,
+                    reason: Some(note.clone()),
+                }
+            }))
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub(crate) fn record_typing_hold_replay(
+        &self,
+        message_id: &MessageId,
+        replay: TypingHoldReplay,
+        force: bool,
+        session_name: &str,
+    ) -> Result<()> {
+        self.commit_queue(|queue| {
+            let Some(mut message) = queue
+                .get(message_id)
+                .filter(|message| message.status == MessageStatus::Queued)
+            else {
+                return Ok(());
+            };
+            let Some(hold) = message.typing_hold else {
+                return Ok(());
+            };
+            let replayed = hold.with_replay(Some(replay), force);
+            if replayed == hold {
+                return Ok(());
+            }
+            message.typing_hold = Some(replayed);
+            message.updated_at = Timestamp::now();
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::Queued,
+                Some("live delivery requested while someone is using the receiver's pane"),
+            );
+            queue.upsert(message);
+            queue.stage_event(event);
+            Ok(())
         })
     }
 

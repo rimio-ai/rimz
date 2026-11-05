@@ -370,6 +370,168 @@ fn release_batch_resets_every_claim_field() {
 }
 
 #[test]
+fn typing_hold_requeues_owned_claims_without_spending_attempts() {
+    let outcomes = [false, true].map(|compacted| {
+        let q = Queue::new();
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
+        let mut record = q
+            .record(1)
+            .with_pane_id(pane_id.clone())
+            .with_auto_compact(Some(AutoCompact::Percent(70)));
+        record.attempts = MAX_DELIVERY_ATTEMPTS - 1;
+        q.queue_message(&record, "session").unwrap();
+        let claimed = q
+            .claim_delivery_batch(&record.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .unwrap();
+        let hold = TypingHold {
+            until: Timestamp::now() + Duration::from_secs(30),
+            replay: None,
+            force: false,
+        };
+        let held = q
+            .hold_message_claims(&claimed, hold, compacted, "session")
+            .unwrap();
+        let observed = held.first().map(|message| {
+            (
+                message.status,
+                message.attempts,
+                message.last_attempt_at,
+                message.pane_id.clone(),
+                message.typing_hold,
+                message.retry_after,
+                message.auto_compact,
+            )
+        });
+        let expected = Some((
+            MessageStatus::Queued,
+            MAX_DELIVERY_ATTEMPTS - 1,
+            None,
+            Some(pane_id),
+            Some(hold),
+            Some(hold.until),
+            (!compacted).then_some(AutoCompact::Percent(70)),
+        ));
+        let before = q.live();
+        let stale = q
+            .hold_message_claims(&claimed, hold, compacted, "session")
+            .unwrap();
+        (observed == expected, stale.is_empty() && q.live() == before)
+    });
+    assert_eq!(outcomes, [(true, true); 2]);
+}
+
+#[test]
+fn reholding_claims_preserves_the_stronger_replay_and_either_force() {
+    let cases = [
+        (Some("steer"), None, true, false, Some("steer"), true),
+        (
+            Some("interrupt"),
+            Some("steer"),
+            false,
+            true,
+            Some("interrupt"),
+            true,
+        ),
+        (
+            Some("steer"),
+            Some("interrupt"),
+            true,
+            false,
+            Some("interrupt"),
+            true,
+        ),
+        (None, Some("steer"), false, false, Some("steer"), false),
+        (None, None, false, false, None, false),
+    ];
+    for (old, new, old_force, new_force, expected_replay, expected_force) in cases {
+        let q = Queue::new();
+        let now = Timestamp::now();
+        let held = q.queue_with(1, |message| {
+            message.typing_hold = Some(
+                serde_json::from_value(serde_json::json!({
+                    "until": now - Duration::from_secs(1),
+                    "replay": old,
+                    "force": old_force,
+                }))
+                .unwrap(),
+            );
+        });
+        let claimed = q
+            .claim_delivery_batch(&held.message_id, AgentStatus::Idle, now)
+            .unwrap()
+            .unwrap();
+        let until = now + Duration::from_secs(30);
+        let hold = serde_json::from_value(serde_json::json!({
+            "until": until,
+            "replay": new,
+            "force": new_force,
+        }))
+        .unwrap();
+        q.hold_message_claims(&claimed, hold, false, "session")
+            .unwrap();
+        let updated = q.by_id(&held.message_id);
+        let encoded = serde_json::to_value(updated.typing_hold).unwrap();
+        assert_eq!(encoded["replay"], serde_json::json!(expected_replay));
+        assert_eq!(encoded["force"].as_bool().unwrap_or(false), expected_force);
+        assert_eq!(updated.retry_after, Some(until));
+        assert_eq!(updated.attempts, 0);
+        assert!(!updated.force);
+    }
+}
+
+#[test]
+fn stored_hold_push_records_replay_and_force_without_claiming() {
+    let q = Queue::new();
+    let until = Timestamp::now() + Duration::from_secs(30);
+    let held = q.queue_with(1, |message| {
+        message.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+        message.typing_hold = Some(TypingHold {
+            until,
+            replay: None,
+            force: false,
+        });
+        message.retry_after = Some(until);
+    });
+    q.record_typing_hold_replay(
+        &held.message_id,
+        message::TypingHoldReplay::Interrupt,
+        true,
+        "session",
+    )
+    .unwrap();
+    q.record_typing_hold_replay(
+        &held.message_id,
+        message::TypingHoldReplay::Steer,
+        false,
+        "session",
+    )
+    .unwrap();
+    let updated = q.by_id(&held.message_id);
+    let encoded = serde_json::to_value(updated.typing_hold).unwrap();
+    assert_eq!(encoded["replay"], "interrupt");
+    assert_eq!(encoded["force"], true);
+    assert_eq!(updated.status, MessageStatus::Queued);
+    assert_eq!(updated.attempts, 0);
+    assert_eq!(updated.pane_id, held.pane_id);
+    assert_eq!(updated.retry_after, Some(until));
+    assert!(!updated.force);
+
+    q.cancel_message(&held.message_id, "session", "withdrawn")
+        .unwrap();
+    let history = q.history();
+    q.record_typing_hold_replay(
+        &held.message_id,
+        message::TypingHoldReplay::Steer,
+        false,
+        "session",
+    )
+    .unwrap();
+    assert!(q.live().is_empty());
+    assert_eq!(q.history(), history);
+}
+
+#[test]
 fn batch_failure_preserves_sent_and_requeues_or_abandons_the_rest() {
     let q = Queue::new();
     let sent = q.queue(1);
