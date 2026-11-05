@@ -452,7 +452,7 @@ enum ReadyRoom {
     Managed(Box<RoomContext>),
     External {
         session_name: String,
-        mux_config: rimz::config::MultiplexerConfig,
+        mux_config: Box<rimz::config::MultiplexerConfig>,
         mux: MuxName,
     },
 }
@@ -675,7 +675,9 @@ fn prepare_room(
     } else {
         ReadyRoom::External {
             session_name: entry.session_name().to_owned(),
-            mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
+            mux_config: Box::new(rimz::config::MultiplexerConfig::from(
+                machine_config.as_ref(),
+            )),
             mux,
         }
     };

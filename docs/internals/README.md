@@ -57,7 +57,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 
 | Page | What it owns |
 | --- | --- |
-| [theme.md](./theme.md) | The theme core: the four-layer color pipeline and its three renderers, perceptual color math, palette resolution, color depth and degradation, glyphs, provider identity, the interface language, shared value formats, and the theme boundaries. |
+| [theme.md](./theme.md) | The theme core: the four-layer color pipeline and its four renderers, perceptual color math, palette resolution, color depth and degradation, glyphs, provider identity, the interface language, shared value formats, and the theme boundaries. |
 | [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, hook ingress, the write path and write classes, the read path, session death, maintenance, and what survives what. |
 | [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation and the subagent cap, provider sandbox flags, bubblewrap preflight, the launch plan, mount order, live protected-bind repair, reachable host paths, environment pins, temp units, the system SSH-config mirror, the launch reminder, toolchain homes, and profile skill views. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle and room admission, both backends, and the Zellij presence plugin. |

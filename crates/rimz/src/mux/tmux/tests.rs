@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::TmuxConfig;
 
 #[test]
 fn width_request_freshness_boundaries() {
@@ -278,7 +279,7 @@ fn window_options_shim(
          case \"$*\" in\n*'#{allow-passthrough}'*) cat \"$dir/windows\" ;;\n\
          *) awk -F '|' '/^@/ { print $1 \"|\" $2 \"|\" $4 \"|\" $7; next } { print }' \"$dir/windows\" ;;\nesac\n",
     );
-    let border_format = tmux_window_options(&TmuxConfig::default())
+    let border_format = tmux_window_options(&TmuxConfig::default(), &Default::default())
         .into_iter()
         .find_map(|(key, value)| (key == "pane-border-format").then_some(value).flatten())
         .unwrap();
@@ -308,7 +309,7 @@ fn window_options_matching_effective_values_need_no_writes() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_ok()
     );
     let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
@@ -342,7 +343,7 @@ fn window_options_script_writes_only_the_differing_key() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_ok()
     );
     assert!(
@@ -374,7 +375,7 @@ fn window_options_partial_failure_still_applies_other_windows() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_ok()
     );
     assert!(
@@ -404,7 +405,7 @@ fn window_options_all_lines_failing_refuses_room_open() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_err(),
         "a listed session with no applied window must fail"
     );
@@ -420,7 +421,7 @@ fn window_options_failed_read_does_not_count_a_matching_window() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_err(),
         "a window that closed during the read was not applied"
     );
@@ -437,7 +438,7 @@ fn window_options_read_transport_failure_refuses_room_open() {
     );
     assert!(
         backend
-            .apply_window_options("room", &TmuxConfig::default())
+            .apply_window_options("room", &MultiplexerConfig::default())
             .is_err(),
         "a read that never ran cannot prove the window matches"
     );

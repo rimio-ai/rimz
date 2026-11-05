@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::MuxName;
 
-use super::MachineConfig;
+use super::{MachineConfig, ThemeConfig};
 
 /// Multiplexer preferences. `default` is consulted after `--mux` and an
 /// active mux env; unset resolves from installed binaries with tmux as the
@@ -31,6 +31,7 @@ pub struct MultiplexerConfig {
     pub status_bar: MuxStatusBar,
     pub zellij: ZellijConfig,
     pub tmux: TmuxConfig,
+    pub theme: ThemeConfig,
 }
 
 impl From<&MachineConfig> for MultiplexerConfig {
@@ -39,6 +40,7 @@ impl From<&MachineConfig> for MultiplexerConfig {
             status_bar: config.mux.status_bar,
             zellij: config.zellij.clone(),
             tmux: config.tmux.clone(),
+            theme: config.theme.clone(),
         }
     }
 }

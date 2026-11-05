@@ -1,12 +1,14 @@
 //! tmux room options and sidebar-pane classification.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 use std::path::Path;
 
-use crate::config::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus};
+use crate::config::{ThemeConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus};
 use crate::ids::MuxName;
 use crate::mux::{SidebarPaneOptions, sidebar_serve_args};
 use crate::pane::SIDEBAR_CHROME_TITLE;
+use crate::theme::{Palette, Tone, resolve_provider_brand};
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
@@ -101,7 +103,7 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     );
     // The hook body is one tmux command string rather than argv, so an argument
     // carrying a space or a `#{…}` reference is quoted on the way in.
-    let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
+    let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux, &opts.config.theme)
         .into_iter()
         .map(|(key, value)| {
             window_option_argv(key, value.as_deref(), None)
@@ -292,11 +294,36 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
     opts
 }
 
-fn pane_border_format() -> String {
+fn border_tone(tone: Tone) -> String {
+    match tone {
+        Tone::Indexed(index) => format!("#[fg=colour{index}]"),
+        Tone::Rgb(red, green, blue) => format!("#[fg=#{red:02x}{green:02x}{blue:02x}]"),
+    }
+}
+
+fn pane_border_format(theme: &ThemeConfig) -> String {
+    let palette = Palette::resolve(theme, theme.effective_theme_mode().depth(true));
+    let muted = border_tone(palette.muted);
+    let mut title_style = border_tone(palette.body);
+    let kinds: BTreeSet<_> = crate::agents::registry::known_kinds()
+        .map(str::to_owned)
+        .chain(theme.providers.keys().cloned())
+        .filter(|kind| crate::agents::plugins::valid_kind(kind))
+        .collect();
+    for kind in kinds {
+        let brand = border_tone(resolve_provider_brand(&kind, &theme.providers).tone(&palette));
+        title_style = format!("#{{?#{{==:#{{@rimz_kind}},{kind}}},{brand},{title_style}}}");
+    }
     [
         "#{?#{==:#{pane_title},",
         SIDEBAR_CHROME_TITLE,
-        "}, rimz , #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} }",
+        "},",
+        &muted,
+        " rimz ,#{?#{@rimz_title},",
+        &title_style,
+        " #{@rimz_title} ,",
+        &muted,
+        " #{pane_current_command} }}",
     ]
     .concat()
 }
@@ -324,7 +351,10 @@ pub(super) fn window_option_argv(
     argv
 }
 
-pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Option<String>)> {
+pub(super) fn tmux_window_options(
+    config: &TmuxConfig,
+    theme: &ThemeConfig,
+) -> Vec<(&'static str, Option<String>)> {
     let mut options = vec![
         (
             "allow-passthrough",
@@ -341,7 +371,7 @@ pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Opt
                 "pane-border-status",
                 Some(config.pane_border_status.as_str().to_owned()),
             ),
-            ("pane-border-format", Some(pane_border_format())),
+            ("pane-border-format", Some(pane_border_format(theme))),
             ("@rimz_borders", Some("1".into())),
         ]);
     }
@@ -362,11 +392,6 @@ mod tests {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::SidebarPaneOptions;
-
-    const BORDER_FORMAT: &str = concat!(
-        "#{?#{==:#{pane_title},rimz-sidebar}, rimz , ",
-        "#{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} }",
-    );
 
     #[test]
     fn stack_hooks_are_indexed_global_and_guard_zoom_and_floats() {
@@ -390,7 +415,7 @@ mod tests {
                 toml::from_str::<TmuxConfig>(&format!("pane_border_status = '{status}'"))
                     .ok()
                     .map(|config| {
-                        tmux_window_options(&config)
+                        tmux_window_options(&config, &ThemeConfig::default())
                             .into_iter()
                             .filter(|(key, _)| *key != "pane-border-lines")
                             .filter(|(key, _)| {
@@ -400,11 +425,19 @@ mod tests {
                     })
             })
             .into();
+        let format = actual[0]
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|(key, _)| *key == "pane-border-format")
+            .unwrap()
+            .1
+            .clone();
         let expected = ["top", "bottom", "off"]
             .map(|status| {
                 Some(vec![
                     ("pane-border-status", Some(status.into())),
-                    ("pane-border-format", Some(BORDER_FORMAT.into())),
+                    ("pane-border-format", format.clone()),
                     ("@rimz_borders", Some("1".into())),
                 ])
             })
@@ -412,6 +445,57 @@ mod tests {
             .chain([Some(Vec::new())])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn border_format_resolves_provider_and_hierarchy_tones() {
+        let theme = toml::from_str("muted = '#112233'\nbody = '#445566'").unwrap();
+        let format = pane_border_format(&theme);
+        assert!(
+            format.contains("#{==:#{pane_title},rimz-sidebar},#[fg=#112233] rimz ,"),
+            "{format}"
+        );
+        assert!(
+            format.contains("#{==:#{@rimz_kind},claude},#[fg=#d97757],"),
+            "{format}"
+        );
+        assert!(format.contains("#[fg=#445566]"), "{format}");
+        assert!(
+            format.contains(" #{@rimz_title} ,#[fg=#112233] #{pane_current_command} "),
+            "{format}"
+        );
+    }
+
+    #[test]
+    fn border_format_respects_indexed_mode() {
+        let theme = ThemeConfig {
+            mode: crate::config::ThemeMode::Indexed,
+            ..Default::default()
+        };
+        let format = pane_border_format(&theme);
+        assert!(
+            format.contains("#{==:#{@rimz_kind},claude},#[fg=colour"),
+            "{format}"
+        );
+        assert!(!format.contains("#[fg=#"), "{format}");
+    }
+
+    #[test]
+    fn border_format_filters_provider_keys_and_includes_custom_kinds() {
+        let theme = toml::from_str(
+            "[providers.custom-provider]\ncolor = '#123456'\n[providers.'bad,kind']\ncolor = 42",
+        )
+        .unwrap();
+        let format = pane_border_format(&theme);
+        assert_eq!(
+            [
+                format.contains("#{==:#{@rimz_kind},custom-provider},#[fg=#123456],"),
+                format.contains("bad,kind"),
+                format.contains('\'')
+            ],
+            [true, false, false],
+            "{format}",
+        );
     }
 
     #[test]
@@ -657,13 +741,19 @@ mod tests {
                 ),
             ],
         );
+        let (format, options): (Vec<_>, Vec<_>) =
+            tmux_window_options(&config, &ThemeConfig::default())
+                .into_iter()
+                .partition(|(key, _)| *key == "pane-border-format");
+        assert!(
+            matches!(format.as_slice(), [("pane-border-format", Some(format))] if format.contains(SIDEBAR_CHROME_TITLE))
+        );
         assert_eq!(
-            tmux_window_options(&config),
+            options,
             vec![
                 ("allow-passthrough", Some("on".to_owned())),
                 ("aggressive-resize", Some("on".to_owned())),
                 ("pane-border-status", Some("top".to_owned())),
-                ("pane-border-format", Some(BORDER_FORMAT.into())),
                 ("@rimz_borders", Some("1".into())),
                 ("pane-border-lines", None),
             ],

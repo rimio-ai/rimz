@@ -2105,7 +2105,16 @@ fn rimz_borders_label_every_pane_in_a_background_stack_window() {
         "stacks",
         "sleep 600",
     ]);
-    ensure_rimz_session(&server, "stacks", Some((160, 60)));
+    let cwd = std::env::temp_dir();
+    let mut opts = session_opts(
+        "stacks",
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-stacks")),
+        &cwd,
+        &cwd,
+        Some((160, 60)),
+    );
+    opts.config.theme = toml::from_str("muted = '#112233'\nbody = '#445566'").unwrap();
+    server.backend.ensure_session(&opts).unwrap();
     let new = stack_split(&server, &background, SplitPlacement::Stacked);
     assert_stack(
         &server,
@@ -2135,11 +2144,19 @@ fn rimz_borders_label_every_pane_in_a_background_stack_window() {
             .trim_end_matches('\n')
             .to_owned()
     };
-    assert_eq!(border(&background), " rimz ");
-    assert_eq!(border(new.raw()), " @coder ");
+    assert_eq!(border(&background), "#[fg=#112233] rimz ");
+    assert_eq!(border(new.raw()), "#[fg=#d97757] @coder ");
+    for kind in ["", "unknown-agent"] {
+        server.tmux(&["set-option", "-p", "-t", new.raw(), "@rimz_kind", kind]);
+        assert_eq!(border(new.raw()), "#[fg=#445566] @coder ");
+    }
+    server.tmux(&["set-option", "-p", "-t", &current, "@rimz_kind", "claude"]);
     assert_eq!(
         border(&current),
-        format!(" {} ", server.display(&current, "#{pane_current_command}"))
+        format!(
+            "#[fg=#112233] {} ",
+            server.display(&current, "#{pane_current_command}")
+        )
     );
     for pane in [&background, &current] {
         assert_eq!(server.display(pane, "#{@rimz_borders}"), "1");

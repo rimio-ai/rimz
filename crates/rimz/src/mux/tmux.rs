@@ -32,7 +32,7 @@ use options::{
 use parse::parse_terminal_features;
 
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
-use crate::config::{MultiplexerConfig, TmuxConfig, TmuxPaneBorderStatus};
+use crate::config::{MultiplexerConfig, TmuxPaneBorderStatus};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ScriptLine {
@@ -642,7 +642,7 @@ impl TmuxBackend {
         commands.extend(tmux_extended_key_bindings(tmux));
         commands.extend(stack_hook_commands());
         self.batch(&commands)?;
-        self.apply_window_options(session, tmux)?;
+        self.apply_window_options(session, config)?;
         self.apply_status(session, config.status_bar);
         Ok(())
     }
@@ -650,8 +650,8 @@ impl TmuxBackend {
     /// Compare window-scoped options in two reads, then script only differing
     /// keys, one independent line per window. A vanished window costs its line;
     /// room open fails only when windows were listed and none matched or applied.
-    fn apply_window_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
-        let mut options = tmux_window_options(config);
+    fn apply_window_options(&self, session: &str, config: &MultiplexerConfig) -> Result<()> {
+        let mut options = tmux_window_options(&config.tmux, &config.theme);
         // Keep the free-form format last in the script's option values.
         options.sort_by_key(|(key, _)| *key == "pane-border-format");
         // Formats resolve pane-capable options through the active pane first.
@@ -675,7 +675,7 @@ impl TmuxBackend {
             .map(|key| vec!["show-options".into(), "-gwv".into(), (*key).into()])
             .collect();
         let mut format = "#{window_id}|".to_owned();
-        if config.pane_border_status == TmuxPaneBorderStatus::Inherit {
+        if config.tmux.pane_border_status == TmuxPaneBorderStatus::Inherit {
             format.push_str("#{||:#{@rimz_borders},#{@rimz_stack_borders_owned}}");
         }
         for key in &window_keys {
@@ -762,7 +762,7 @@ impl TmuxBackend {
                 })
                 .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(fields[0])))
                 .collect();
-            if config.pane_border_status == TmuxPaneBorderStatus::Inherit && fields[1] == "1" {
+            if config.tmux.pane_border_status == TmuxPaneBorderStatus::Inherit && fields[1] == "1" {
                 commands.extend(
                     [
                         "pane-border-status",

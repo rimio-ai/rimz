@@ -1,6 +1,6 @@
 # The theme core
 
-The theme core turns the machine's `[theme]` config into the vocabulary every human surface paints with: color tones, glyphs, provider identity, and value formats. Three renderers paint with it: the CLI's `anstyle` output, the sidebar's ratatui frames, and the ratatui picker of `rimz sessions`. All three read the same resolved vocabulary, so a scheme or override change reaches them together.
+The theme core turns the machine's `[theme]` config into the vocabulary every human surface paints with: color tones, glyphs, provider identity, and value formats. Four renderers paint with it: the CLI's `anstyle` output, the sidebar's ratatui frames, the ratatui picker of `rimz sessions`, and tmux pane-border labels. All four read the same resolved vocabulary; tmux borders refresh on the next room open, reattach, or `rimz reload`.
 
 The core lives in [`crates/rimz/src/theme/`](../../crates/rimz/src/theme/) and is renderer-neutral. It names every color as a `Tone`, and each renderer converts that `Tone` to its own terminal color type at the last moment, so the core depends on neither ratatui nor `anstyle`. Its output is display preference only: a theme changes what a frame looks like, never what an agent can do.
 
@@ -26,9 +26,12 @@ Layer 4  Carrier      cli/render/palette.rs     Tone → anstyle::Color
                       sidebar_pane/render/      Tone → ratatui::Color
                       theme.rs
                       cli/sessions/picker.rs    Tone → ratatui::Color
+                      mux/tmux/options.rs       Tone → tmux #[fg=…]
 ```
 
 Layers 1 and 2 are the shared core and never name a terminal color type. Layer 3 exists only in the sidebar, which has enough distinct fixed roles to need names for them, and `Component::resolve` returns a ratatui `Color` through the Layer 4 conversion. The CLI's `anstyle` output has no Layer 3: it reads Layer 2 through the accessors in `cli/render/palette.rs` and a typed state mapping. The `rimz sessions` picker resolves its own `Palette` in `crates/rimz/src/cli/sessions/picker.rs::PickerTheme` and converts with a private `tone_color`. Outside the Layer 3 and Layer 4 modules, sidebar render code passes resolved colors around and writes no color literal except `Color::Reset` (see [Boundaries](#boundaries)).
+
+The tmux border carrier in `crates/rimz/src/mux/tmux/options.rs` resolves the machine theme at apply time. Provider kinds come from the agent registry and valid `[theme.providers]` keys; agent titles use their provider brand, titles without a matching kind use `body`, and the sidebar label and current-command fallback use `muted`. `Tone::Indexed` becomes `colour<n>` and `Tone::Rgb` becomes `#rrggbb` inside `#[fg=…]`. Borders use truecolor under `auto` (tmux downgrades for each client's capabilities) and indexed tones under `mode = "256"`. Reload refreshes existing windows; the new-window hook's captured theme refreshes on the next room open, reattach, or sidebar reconcile.
 
 Each kind of change lands in one layer. A scheme switch replaces Layer 1, and a slot override replaces one Layer 2 slot, so every call site follows without edits. A new sidebar element names a Layer 3 component instead of picking a color. Two fixed sidebar tones sit outside the layers and ignore the scheme: `CHIP_INK`, the near-black ink on colored chips, and `VALUE_FLASH_INK`, the money settle flash, both constants in `sidebar_pane/render/theme.rs`.
 
