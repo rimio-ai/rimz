@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::agents::AgentStatus;
+use crate::agents::{AgentStatus, pane_title};
 use crate::ids::PaneId;
 use crate::mux::tab_name::{
     TabNameIntent, TabOwnerRecord, ViewNaming, is_scoped_label, label_from_pane_names, stored_label,
@@ -78,6 +78,16 @@ pub(crate) fn desired_tab_renames(
         .filter(|row| row.as_agent().is_some())
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .collect::<HashSet<_>>();
+    let labels_by_pane = snapshot
+        .agent_panes
+        .iter()
+        .map(|pane| {
+            (
+                &pane.pane_id,
+                pane_title::short_label(pane.profile.as_deref(), &pane.kind),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let mut status_by_pane = HashMap::<PaneId, TabStatus>::new();
     for group in snapshot.worktree_groups.iter() {
         for (key, unit) in group.unit_statuses() {
@@ -181,9 +191,14 @@ pub(crate) fn desired_tab_renames(
                     anchor = first.pane_id.clone();
                     let label = stored_label(
                         tab.kind,
-                        &label_from_pane_names(
-                            survivors.iter().filter_map(|pane| pane.title.as_deref()),
-                        ),
+                        &label_from_pane_names(survivors.iter().filter_map(|pane| {
+                            labels_by_pane.get(&pane.pane_id).copied().or_else(|| {
+                                pane.current
+                                    .hosted_agent_kind
+                                    .as_ref()
+                                    .map(|kind| kind.as_str())
+                            })
+                        })),
                     );
                     if !label.is_empty() && label != base {
                         desired_name = status.map_or_else(

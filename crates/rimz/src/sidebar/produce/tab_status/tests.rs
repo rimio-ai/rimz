@@ -79,6 +79,21 @@ fn snapshot(rows: Vec<(AgentStatus, &str, Timestamp)>, now: Timestamp) -> Sideba
     snapshot
 }
 
+fn short_labels(snapshot: &mut SidebarSnapshot, labels: &[(&str, &str)]) {
+    snapshot.agent_panes = labels
+        .iter()
+        .map(|(id, profile)| {
+            serde_json::from_value(serde_json::json!({
+                "pane_id": pane(id).pane_id,
+                "kind": "claude",
+                "profile": profile,
+            }))
+            .unwrap()
+        })
+        .collect::<Vec<_>>()
+        .into();
+}
+
 #[test]
 fn worst_live_agent_status_wins_the_tab() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
@@ -338,7 +353,8 @@ fn founder_holds_then_label_follows_then_releases() {
     );
     assert!(desired_tab_renames(&both, &frame, "zsh").is_empty());
     frame.tabs[0].panes.remove(0);
-    let peer = snapshot(vec![(AgentStatus::Idle, "%2", now)], now);
+    let mut peer = snapshot(vec![(AgentStatus::Idle, "%2", now)], now);
+    short_labels(&mut peer, &[("%2", "brainstormer")]);
     let renames = desired_tab_renames(&peer, &frame, "zsh");
     assert_eq!(renames.len(), 1);
     assert_eq!(renames[0].desired_name, "brainstormer");
@@ -366,11 +382,9 @@ fn founder_holds_then_label_follows_then_releases() {
 fn founder_that_exited_to_a_shell_has_left() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
     let frame = owned_frame("debugger", &["debugger", "brainstormer"], &["%1"]);
-    let renames = desired_tab_renames(
-        &snapshot(vec![(AgentStatus::Idle, "%2", now)], now),
-        &frame,
-        "zsh",
-    );
+    let mut snapshot = snapshot(vec![(AgentStatus::Idle, "%2", now)], now);
+    short_labels(&mut snapshot, &[("%2", "brainstormer")]);
+    let renames = desired_tab_renames(&snapshot, &frame, "zsh");
     assert_eq!(renames.len(), 1);
     assert_eq!(renames[0].desired_name, "brainstormer");
     assert_eq!(renames[0].anchor.raw(), "%2");
@@ -402,13 +416,14 @@ fn untitled_survivor_keeps_the_base_and_only_updates_status() {
 #[test]
 fn tmux_follow_label_converges_on_the_read_back_name() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
-    let snapshot = snapshot(vec![(AgentStatus::Idle, "%1", now)], now);
+    let mut snapshot = snapshot(vec![(AgentStatus::Idle, "%1", now)], now);
     for (title, read_back) in [
         ("host.lan", "host-lan"),
         ("a:b,c", "a-b_c"),
         (" peer ", "peer"),
     ] {
         assert_eq!(stored_label(ViewKind::Window, title), read_back);
+        short_labels(&mut snapshot, &[("%1", title)]);
         let mut frame = owned_frame("founder", &[title], &["%9"]);
         let renames = desired_tab_renames(&snapshot, &frame, "zsh");
         assert_eq!(renames.len(), 1);
@@ -426,13 +441,15 @@ fn tmux_follow_label_converges_on_the_read_back_name() {
 #[test]
 fn zellij_follow_label_keeps_the_raw_title_and_converges() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
-    let snapshot = snapshot(vec![], now);
+    let mut snapshot = snapshot(vec![], now);
+    short_labels(&mut snapshot, &[("%1", "a:b,c.lan")]);
     let mut frame = owned_frame("founder", &["a:b,c.lan"], &[]);
     frame.tabs[0].kind = ViewKind::Tab;
     frame.tabs[0].view_id = ViewId::new_unchecked("tab_0");
     let survivor = &mut frame.tabs[0].panes[0];
     survivor.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     survivor.current.hosted_agent_kind = Some(crate::ids::AgentKind::new_unchecked("claude"));
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes)[0].pane_id = survivor.pane_id.clone();
     let renames = desired_tab_renames(&snapshot, &frame, "zsh");
     assert_eq!(renames[0].desired_name, "a:b,c.lan");
     assert!(matches!(renames[0].intent, TabNameIntent::Rebuild { .. }));
@@ -467,7 +484,7 @@ fn rebuild_groups_survivors_oldest_first() {
     {
         pane.first_seen_at_ms = first_seen;
     }
-    let snapshot = snapshot(
+    let mut snapshot = snapshot(
         (1..=5)
             .map(|id| match id {
                 1 => "%1",
@@ -480,6 +497,22 @@ fn rebuild_groups_survivors_oldest_first() {
             .collect(),
         now,
     );
+    short_labels(
+        &mut snapshot,
+        &[
+            ("%1", "d"),
+            ("%2", "c"),
+            ("%3", "b"),
+            ("%4", "a"),
+            ("%5", "missing-time"),
+        ],
+    );
+    for pane in &mut frame.tabs[0].panes {
+        pane.title = Some(format!(
+            "recon · planner (@parent) › {} subagent (@child)",
+            pane.title.as_deref().unwrap()
+        ));
+    }
     let renames = desired_tab_renames(&snapshot, &frame, "zsh");
     assert_eq!(renames.len(), 1);
     assert_eq!(renames[0].desired_name, "a+c+b+…");
@@ -504,16 +537,28 @@ fn scoped_bases_are_never_rebuilt_or_released() {
 fn status_precedence_over_rebuild() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
     let frame = owned_frame("founder", &["a", "b"], &["%9"]);
-    let snapshot = snapshot(
+    let mut snapshot = snapshot(
         vec![
             (AgentStatus::Running, "%1", now),
             (AgentStatus::Failed, "%2", now),
         ],
         now,
     );
+    short_labels(&mut snapshot, &[("%1", "a"), ("%2", "b")]);
     let renames = desired_tab_renames(&snapshot, &frame, "zsh");
     assert_eq!(renames[0].desired_name, "a+b !");
     assert!(matches!(renames[0].intent, TabNameIntent::Rebuild { .. }));
+}
+
+#[test]
+fn hosted_survivor_without_a_snapshot_label_uses_its_kind_not_its_title() {
+    let now = Timestamp::from_second(1_700_000_000).expect("time");
+    let snapshot = snapshot(vec![], now);
+    let mut frame = owned_frame("founder", &["coder (@brave-fox)"], &["%9"]);
+    frame.tabs[0].panes[0].current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("claude"));
+    let renames = desired_tab_renames(&snapshot, &frame, "zsh");
+    assert_eq!(renames[0].desired_name, "claude");
 }
 
 #[test]
