@@ -400,8 +400,9 @@ impl Theme {
     /// floor, and `alarm` for the negative tier (diff removals, a spent budget's
     /// red track, a critical gate). The continuous green→red sweep lives in
     /// [`heat_tone`](Self::heat_tone) / [`warm_heat_tone`](Self::warm_heat_tone),
-    /// so `caution` is reached only through the ramp and needs no flat accessor —
-    /// as `accent`/`cool`/`meta` always name a [`Component`] rather than a tier.
+    /// and a fixed `caution` mark (the stall lead and figure) names a
+    /// [`Component`], as `accent`/`cool`/`meta` always do, so it needs no
+    /// flat accessor.
     pub(crate) fn good(&self, modifier: Modifier) -> Style {
         self.style(tone_color(self.palette.good), modifier)
     }

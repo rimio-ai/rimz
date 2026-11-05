@@ -477,8 +477,9 @@ fn snapshot_exits_cleanly_when_the_consumer_closes_the_pipe() {
 }
 
 #[test]
-fn frame_emits_plain_text_over_a_pipe() {
+fn frame_emits_plain_text_and_stall_from_published_panes() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session = "test-session";
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
@@ -487,8 +488,42 @@ fn frame_emits_plain_text_over_a_pipe() {
     rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &published)
         .expect("publish pane frame");
 
+    let pressure_root = env.home_root.join("pressure");
+    let cgroup = pressure_root.join("sys/fs/cgroup");
+    std::fs::create_dir_all(&cgroup).expect("pressure fixture directory");
+    std::fs::write(
+        cgroup.join("memory.pressure"),
+        "some avg10=34.00 avg60=12.00 avg300=1.00 total=1\n",
+    )
+    .expect("pressure fixture");
+
+    let passive = env
+        .rimz()
+        .env("RIMZ_TEST_PRESSURE_ROOT", &pressure_root)
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--session-name",
+            session,
+            "--no-produce",
+            "--json",
+        ])
+        .output()
+        .expect("spawn passive snapshot");
+    assert!(
+        passive.status.success(),
+        "passive snapshot failed: {}",
+        String::from_utf8_lossy(&passive.stderr)
+    );
+    let passive: serde_json::Value =
+        serde_json::from_slice(&passive.stdout).expect("passive snapshot JSON");
+    assert!(passive.get("stall").is_none(), "{passive}");
+
     let output = env
         .rimz()
+        .env("RIMZ_TEST_PRESSURE_ROOT", &pressure_root)
         .args([
             "sidebar",
             "frame",
@@ -515,6 +550,8 @@ fn frame_emits_plain_text_over_a_pipe() {
         "piped frame contains ANSI escapes: {:?}",
         String::from_utf8_lossy(&output.stdout)
     );
+    let frame = String::from_utf8_lossy(&output.stdout);
+    assert!(frame.contains("stall mem 34%"), "{frame}");
 }
 
 const ROOM_LESS_ID: &str = "ws_abcdef0123456789abcdef01";

@@ -381,8 +381,8 @@ A suspended laptop or a NAT rebind can leave an SSH child holding the tty on a t
 
 | Age | Freshness | Footer |
 | --- | --- | --- |
-| Up to 10s | Fresh | The measured badge, or `⇄ remote …` while RTT is still warming. |
-| 10s to 120s | Stale | `⇄ remote ?` in the muted tone. |
+| Up to 10s | Fresh | The measured badge, or `⇄ …` while RTT is still warming. |
+| 10s to 120s | Stale | `⇄ stale` in the muted tone. |
 | Past 120s | Expired | No badge. |
 
 ### Two health scales

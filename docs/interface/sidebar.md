@@ -42,7 +42,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
   W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88     ← last 7 local days, all providers
   M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66     ← last 30 local days
 
- ⇄ remote 210ms                              ? for help     ← footer
+ ⇄ 210ms                                     ? for help     ← footer
 ```
 
 The cockpit counts this room only: its project root and the worktrees grouped under it. The provider dashboard and the fleet store count every session on the account, in any project.
@@ -190,7 +190,9 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `▐` / `▕` on the right edge | scrollbar thumb and track, drawn over the right spines while the cards scroll |
 | `┤ Tab ├` | the active dashboard tab under `NO_COLOR` |
 | `zᶻ idle`, `zᶻ away` | you are away from the terminal |
-| `⇄ remote 210ms` | SSH link round-trip time |
+| `⇄ 210ms` | SSH link round-trip time |
+| `⧗ stall mem 34%` | machine resource pressure: time tasks spent stalled, not utilisation |
+| `mem 6%↓` | a fading stall; its ten-second average has eased while the minute average remains high |
 | `/ auth` | the text search, above the dashboard |
 | `⚠` | a notice or alert |
 
@@ -892,12 +894,19 @@ The footer is the last line, apart from hook-drainer alerts and recovered refres
 
 | mark | when |
 |------|------|
-| `? for help` | always, at the right edge |
-| `zᶻ idle`, then `zᶻ idle · 17m` | No human input for `[sidebar] afk_after_secs` (15 minutes by default), on both backends once an input timestamp is known; minutes are added after the first minute |
-| `zᶻ away` | No terminal client is attached |
-| `⇄ remote 210ms` | the room runs over SSH: the smoothed round-trip time, with packet loss added above 10%; `⇄ remote ?` means the last reading is stale |
+| `⇄ 210ms`, `⇄ 210ms 15%` | an SSH room's round-trip time, with probe loss added above 10% |
+| `⇄ …`, `⇄ stale` | the SSH reading is warming up or stale |
+| `⧗ stall mem 34% · cpu 81%` | machine/container resources stalling on the room host; absent when none is tripped |
+| `mem 6%↓` | a fading stall item, muted instead of bold amber |
+| `zᶻ idle`, then `zᶻ idle · 17m` | no human input for `[sidebar] afk_after_secs` (15 minutes by default), on both backends once an input timestamp is known; minutes are added after the first minute |
+| `zᶻ away` | no terminal client is attached |
+| `? for help`, `?` | help at the right edge, shortened or dropped when the line is crowded |
 
-The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading. On both backends, `afk_after_secs` also bounds retention of departed clients' sidebar views ([configuration](../guide/configuration.md#sidebar-rendering)).
+The SSH anchor takes the left edge, followed by the stall notice and then the presence badge, with two cells between groups. Help stays pinned right with at least a two-cell gap. The anchor's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading; stale readings are muted. On both backends, `afk_after_secs` also bounds retention of departed clients' sidebar views ([configuration](../guide/configuration.md#sidebar-rendering)).
+
+Stall figures are Linux PSI's `some` averages: the percentage of time at least one task waited for memory, CPU, or I/O, not how much of the resource was used. An item shows when its ten-second or minute average reaches 10% for memory, 50% for CPU, or 25% for I/O. The figure is the current ten-second average, rounded to a whole percent. Below 80% of its threshold it fades with `↓`; it clears when both averages fall below the threshold. Active items come first, then fading ones, with memory, CPU, I/O in that order within each group. The lead and active figures are bold amber; fading items are muted (dim under `NO_COLOR`). Unavailable readings contribute no item.
+
+As the pane narrows, presence drops first, help shortens to `?`, and a healthy or warming SSH figure becomes bare `⇄`. Bad-link figures and `stale` never drop. Next help drops, the items after the first collapse to `+cpu` for one hidden item or `+N` for several, the tag becomes numeric even for one item, and the word `stall` drops while its glyph stays. `?` returns whenever it fits beside a later shape; the final shape clips at the right edge. An active refresh alert hides the footer and its stall notice until the room can be read again.
 
 ### Notices and alerts
 

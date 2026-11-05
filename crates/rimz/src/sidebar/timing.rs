@@ -230,7 +230,7 @@ pub(super) const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
 pub(super) const CODEX_DAEMON_REAP_STALE: Duration = Duration::from_secs(90);
 
 /// Link stats are stale after three missed two-second publishes plus slack.
-/// Stale renders as dim unknown (`⇄ remote ?`) rather than red: during a hard
+/// Stale renders as dim `⇄ stale` rather than red: during a hard
 /// drop the remote-rendered sidebar cannot reach the user, and a second local
 /// viewer of the same room should not see a false hard failure.
 pub(super) const LINK_STATS_STALE: Duration = Duration::from_secs(10);

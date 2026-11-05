@@ -130,6 +130,8 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ChromeAlert, "⚠", None),
     glyph!(ChromePresenceAway, "zᶻ", Some("\u{f186}")),
     glyph!(ChromeRemoteLink, "⇄", Some("\u{ede3}")),
+    glyph!(ChromeStall, "⧗", Some("\u{f0f86}")),
+    glyph!(ChromeStallFading, "↓", None),
     glyph!(ChromeRemoteControl, "⇅", None),
     glyph!(ChromeHairline, "─", None),
     glyph!(ChromeBoxTopLeft, "╭", None),
@@ -551,6 +553,7 @@ mod tests {
             ('⑃', "OCR; DejaVu Sans, and the Nerd Font set replaces it"),
             ('⧉', "Misc Math Symbols-B; the Nerd Font set replaces it"),
             ('⧖', "Misc Math Symbols-B; the Nerd Font set replaces it"),
+            ('⧗', "Misc Math Symbols-B; the Nerd Font set replaces it"),
             (
                 '🮇',
                 "Legacy Computing; terminal sprite renderers draw it, and Cascadia Code NF carries it for xtask screenshots",

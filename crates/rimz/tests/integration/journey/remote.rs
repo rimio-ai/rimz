@@ -49,12 +49,9 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
     });
     room.publish_link_stats(&file);
 
-    let screen = room.wait_for(
-        |s| s.contains("coder") && s.contains("⇄ remote 210ms"),
-        SETTLE,
-    );
+    let screen = room.wait_for(|s| s.contains("coder") && s.contains("⇄ 210ms"), SETTLE);
     assert!(
-        screen.contains("⇄ remote 210ms"),
+        screen.contains("⇄ 210ms"),
         "footer should render the remote link-health badge:\n{screen}"
     );
 }
