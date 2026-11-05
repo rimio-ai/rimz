@@ -77,6 +77,33 @@ fn parse_wake(argv: &[&str]) -> Box<super::WakeArgs> {
 }
 
 #[test]
+fn input_wake_requires_session_client_and_action_stamp() {
+    use clap::Parser;
+    let base = ["rimz", "sidebar", "wake", "--reason", "input"];
+    let cases: &[&[&str]] = &[
+        &[
+            "--session-name",
+            "s",
+            "--client-id",
+            "7",
+            "--last-input-ms",
+            "1234",
+        ],
+        &["--client-id", "7", "--last-input-ms", "1234"],
+        &["--session-name", "s", "--last-input-ms", "1234"],
+        &["--session-name", "s", "--client-id", "7"],
+    ];
+    let accepted = cases
+        .iter()
+        .map(|args| {
+            crate::cli::Cli::try_parse_from(base.iter().copied().chain(args.iter().copied()))
+                .is_ok()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accepted, [true, false, false, false]);
+}
+
+#[test]
 fn plugin_focus_argv_parses_without_workspace_id() {
     use clap::Parser;
 

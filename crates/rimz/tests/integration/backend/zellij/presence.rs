@@ -412,7 +412,10 @@ pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &P
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n    ChangeApplicationState\n}}\n",
+            concat!(
+                "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n",
+                "    Reconfigure\n    ChangeApplicationState\n    InterceptInput\n}}\n",
+            ),
             wasm.display(),
         ),
     )

@@ -204,8 +204,12 @@ struct WakeArgs {
     workspace_id: Option<String>,
     #[arg(long, value_enum)]
     reason: WakeReason,
-    #[arg(long)]
+    #[arg(long, required_if_eq("reason", "input"))]
     session_name: Option<String>,
+    #[arg(long, hide = true, required_if_eq("reason", "input"))]
+    client_id: Option<u32>,
+    #[arg(long, hide = true, required_if_eq("reason", "input"))]
+    last_input_ms: Option<u64>,
     #[arg(long)]
     pane_id: Option<String>,
     #[arg(long, hide = true)]
@@ -286,11 +290,12 @@ impl WakeArgs {
     }
 }
 
-/// Why a presence poke fired. Every reason refreshes the liveness stamp;
+/// Why a presence poke fired. Topology reasons refresh the liveness stamp;
 /// `alive` is the plugin's keepalive — stamp-only — so an idle-but-healthy
 /// channel stays distinguishable from a dead one.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum WakeReason {
+    Input,
     PanesChanged,
     PaneOpened,
     PaneClosed,
@@ -301,18 +306,26 @@ enum WakeReason {
     Alive,
 }
 
-impl From<WakeReason> for ZellijWakeReason {
-    fn from(reason: WakeReason) -> Self {
-        match reason {
+impl WakeReason {
+    fn into_wake_reason(
+        self,
+        client_id: Option<u32>,
+        last_input_ms: Option<u64>,
+    ) -> Result<ZellijWakeReason> {
+        Ok(match self {
+            WakeReason::Input => ZellijWakeReason::Input {
+                client_id: client_id.context("input wake requires --client-id")?,
+                last_input_ms: last_input_ms.context("input wake requires --last-input-ms")?,
+            },
             WakeReason::PanesChanged
             | WakeReason::PaneOpened
             | WakeReason::PaneClosed
             | WakeReason::CommandChanged
-            | WakeReason::FocusChanged => Self::Announced,
-            WakeReason::FocusStranded => Self::FocusStranded,
-            WakeReason::SwitchSettled => Self::SwitchSettled,
-            WakeReason::Alive => Self::Alive,
-        }
+            | WakeReason::FocusChanged => ZellijWakeReason::Announced,
+            WakeReason::FocusStranded => ZellijWakeReason::FocusStranded,
+            WakeReason::SwitchSettled => ZellijWakeReason::SwitchSettled,
+            WakeReason::Alive => ZellijWakeReason::Alive,
+        })
     }
 }
 
@@ -478,6 +491,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 workspace_id,
                 reason,
                 session_name,
+                client_id,
+                last_input_ms,
                 pane_id,
                 active_tab,
                 focus_generation,
@@ -504,7 +519,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 globals,
                 workspace_id,
                 ZellijWake {
-                    reason: reason.into(),
+                    reason: reason.into_wake_reason(client_id, last_input_ms)?,
                     session_name,
                     pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
                     active_tab,

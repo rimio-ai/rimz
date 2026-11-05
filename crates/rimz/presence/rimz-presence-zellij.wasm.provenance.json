@@ -1,5 +1,5 @@
 {
-  "source_sha256": "61e40630d51b197106900a025bdc7ceef5d858275fc7df96f2b9b605c35a0437",
-  "wasm_sha256": "5787a97fc97da7e0b899a49ebf89e47e3c0b8929eae3eba8eafb9d826098e53f",
+  "source_sha256": "637b6ced7056ca077c8c09496d688d4c06eb6e2db7ea66f411d22dd05450d234",
+  "wasm_sha256": "96662d1a6b4fab5ffbd543593aa728eed13500c6ba749b33cda5a4ccee4e238f",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
 }

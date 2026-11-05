@@ -1195,6 +1195,19 @@ impl RuntimePaths {
         self.lock_path("topology-writer.lock")
     }
 
+    pub(crate) fn zellij_client_input_paths(
+        &self,
+        session: &str,
+        client_id: u32,
+    ) -> (PathBuf, PathBuf) {
+        let key = sidebar_host_key(MuxName::Zellij, session);
+        let name = format!("zellij-input-{key}-{client_id}");
+        (
+            self.lane_path(format!("{name}.json")),
+            self.lock_path(format!("{name}.lock")),
+        )
+    }
+
     pub(crate) fn authoritative_pane_probe_path(&self) -> PathBuf {
         self.lane_path("authoritative-pane-probe.json")
     }

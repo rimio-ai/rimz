@@ -3,7 +3,8 @@
 //! `rimz sidebar wake` normalizes the plugin payload at the CLI boundary, then
 //! this module owns the accepted-or-rejected transaction: topology writer
 //! fencing and publication, presence stamping, plugin telemetry, and event
-//! mapping. A stale writer returns before any accepted-wake side effect.
+//! mapping. A stale writer returns before any accepted-topology side effect;
+//! client input publication bypasses writer election entirely.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -39,6 +40,7 @@ pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZellijWakeReason {
+    Input { client_id: u32, last_input_ms: u64 },
     Announced,
     Alive,
     FocusStranded,
@@ -88,6 +90,8 @@ pub enum ZellijWakeOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZellijWakeError {
+    #[error("could not retain Zellij client input: {0}")]
+    ClientInput(#[from] crate::mux::zellij::pane_topology::ClientInputWriteError),
     #[error("could not serialize topology writer selection: {0}")]
     TopologyLock(#[from] crate::disk::lock::LockErr),
     #[error("could not publish accepted topology: {0}")]
@@ -110,6 +114,24 @@ pub fn ingest_zellij_wake(
     runtime: &RuntimePaths,
     wake: &ZellijWake,
 ) -> Result<ZellijWakeOutcome, ZellijWakeError> {
+    if let ZellijWakeReason::Input {
+        client_id,
+        last_input_ms,
+    } = wake.reason
+    {
+        if let Some(session) = wake.session_name.as_deref() {
+            crate::mux::zellij::pane_topology::write_client_input(
+                runtime,
+                session,
+                client_id,
+                last_input_ms,
+            )?;
+        }
+        return Ok(ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: None,
+        });
+    }
     let mut transitions = Vec::new();
     let mut accepted_topology = None;
     'topology: {

@@ -1,4 +1,4 @@
-//! Zellij pane-topology cache published by the presence plugin through
+//! Zellij topology and per-client input caches published by the presence plugin through
 //! `rimz sidebar wake`.
 //!
 //! The cache is Zellij's pushed pane projection, not proof of absence: it
@@ -9,6 +9,7 @@
 //! foreground display command.
 //! `pane_cwd` follows Zellij's cwd events and `pane_pid` identifies each pane's
 //! root process; targeted `/proc` reads supply cwd and resource enrichment.
+//! Input records retain only each client's last action time, independently of topology writers.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -19,6 +20,57 @@ use crate::RuntimePaths;
 use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientView, PRESENCE_STAMP_FRESH, PaneListing};
 use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientInputWriteError {
+    #[error("could not lock the client input record: {0}")]
+    Lock(#[from] crate::disk::lock::LockErr),
+    #[error("could not publish the client input record: {0}")]
+    Write(#[from] crate::disk::atomic::AtomicErr),
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClientInput {
+    session_name: String,
+    client_id: u32,
+    last_input_ms: u64,
+}
+
+pub(crate) fn write_client_input(
+    runtime: &RuntimePaths,
+    session: &str,
+    client_id: u32,
+    last_input_ms: u64,
+) -> Result<(), ClientInputWriteError> {
+    let (path, lock) = runtime.zellij_client_input_paths(session, client_id);
+    let _guard = crate::disk::lock::WorkspaceLock::acquire_with_timeout(
+        &lock,
+        std::time::Duration::from_secs(1),
+    )?;
+    if read_client_input_ms(runtime, session, client_id).is_some_and(|at| at >= last_input_ms) {
+        return Ok(());
+    }
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &ClientInput {
+            session_name: session.to_owned(),
+            client_id,
+            last_input_ms,
+        },
+    )?;
+    Ok(())
+}
+
+pub(super) fn read_client_input_ms(
+    runtime: &RuntimePaths,
+    session: &str,
+    client_id: u32,
+) -> Option<u64> {
+    let bytes = std::fs::read(runtime.zellij_client_input_paths(session, client_id).0).ok()?;
+    let record: ClientInput = serde_json::from_slice(&bytes).ok()?;
+    (record.session_name == session && record.client_id == client_id)
+        .then_some(record.last_input_ms)
+}
 
 #[cfg(test)]
 thread_local! {
@@ -48,7 +100,10 @@ pub struct PaneTopologyCache {
 
 impl PaneTopologyCache {
     pub(crate) fn projected_session_focus(&self) -> Option<PaneId> {
-        let clients = self.clients.clone().map(TopologyClients::into_client_view);
+        let clients = self
+            .clients
+            .clone()
+            .map(|clients| clients.into_client_view(|_| None));
         project_session_focus(&self.panes, clients.as_ref(), self.focused_pane)
     }
 
@@ -56,8 +111,10 @@ impl PaneTopologyCache {
         self,
         session_name: String,
         authoritative: bool,
+        runtime: Option<&RuntimePaths>,
     ) -> PaneListing {
         let Self {
+            session_name: cache_session,
             produced_at_ms,
             focused_pane,
             clients,
@@ -65,7 +122,11 @@ impl PaneTopologyCache {
             panes,
             ..
         } = self;
-        let client_view = clients.map(TopologyClients::into_client_view);
+        let client_view = clients.map(|clients| {
+            clients.into_client_view(|id| {
+                runtime.and_then(|runtime| read_client_input_ms(runtime, &cache_session, id))
+            })
+        });
         let session_focus = project_session_focus(&panes, client_view.as_ref(), focused_pane);
         PaneListing {
             authoritative,
@@ -149,7 +210,7 @@ pub struct TopologyClients {
 }
 
 impl TopologyClients {
-    fn into_client_view(self) -> ClientView {
+    fn into_client_view(self, mut input_ms: impl FnMut(u32) -> Option<u64>) -> ClientView {
         let human_clients = self.human_clients.map_or_else(
             || {
                 self.views
@@ -168,6 +229,16 @@ impl TopologyClients {
                 .into_iter()
                 .collect()
         });
+        let client_input_ms = self
+            .views
+            .iter()
+            .filter_map(|view| {
+                Some((
+                    MuxClientId::Zellij(view.client_id),
+                    input_ms(view.client_id)?,
+                ))
+            })
+            .collect();
         ClientView {
             clients: self
                 .views
@@ -179,7 +250,7 @@ impl TopologyClients {
                 .collect(),
             presence: crate::mux::ClientPresence {
                 human_clients,
-                client_input_ms: Default::default(),
+                client_input_ms,
             },
             viewed_panes: viewed_panes
                 .into_iter()
@@ -463,6 +534,29 @@ pub fn pane_topology_cache_is_fresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_input_records_are_session_and_client_scoped() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        let path = runtime.zellij_client_input_paths("room-a", 7).0;
+        let mut observed = Vec::new();
+        for (session, client) in [("room-a", 7), ("room-b", 7), ("room-a", 8)] {
+            crate::disk::atomic::write_temp_then_rename_cache(
+                &path,
+                &serde_json::json!({
+                    "session_name": session, "client_id": client, "last_input_ms": 1_234,
+                }),
+            )
+            .unwrap();
+            observed.push(read_client_input_ms(&runtime, "room-a", 7));
+        }
+        assert_eq!(observed, [Some(1_234), None, None]);
+    }
     use crate::ids::WorkspaceId;
     use crate::sidebar::FRESH_PANE_GRACE;
     use crate::utils::time::unix_now_ms;
@@ -492,7 +586,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             cache
-                .into_pane_listing("rimz-test".to_owned(), false)
+                .into_pane_listing("rimz-test".to_owned(), false, None)
                 .positions,
             vec![("tab_4".to_owned(), 4)],
         );
@@ -508,7 +602,7 @@ mod tests {
         let old: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
         assert!(
             !old.clone()
-                .into_pane_listing("rimz-test".to_owned(), false)
+                .into_pane_listing("rimz-test".to_owned(), false, None)
                 .client_sample_withheld
         );
         assert!(
@@ -521,7 +615,7 @@ mod tests {
         payload["clients_withheld"] = true.into();
         let cache: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
         assert_eq!(serde_json::to_value(&cache).unwrap(), payload);
-        let listing = cache.into_pane_listing("rimz-test".to_owned(), false);
+        let listing = cache.into_pane_listing("rimz-test".to_owned(), false, None);
         assert!(listing.client_sample_withheld);
         assert!(listing.client_view.is_none());
         assert!(listing.session_focus.is_none());
@@ -756,7 +850,10 @@ mod tests {
         )
         .expect("views-only topology parses");
 
-        let view = cache.clients.expect("client sample").into_client_view();
+        let view = cache
+            .clients
+            .expect("client sample")
+            .into_client_view(|_| None);
 
         assert_eq!(view.presence.human_clients, 2);
         assert_eq!(

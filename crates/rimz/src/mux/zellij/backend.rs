@@ -1089,7 +1089,7 @@ impl MuxBackend for ZellijBackend {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let mut listing = cache.into_pane_listing(session_name, authoritative);
+        let mut listing = cache.into_pane_listing(session_name, authoritative, runtime.as_ref());
         listing.views = views.into_iter().collect();
         Ok(listing)
     }
@@ -1100,6 +1100,7 @@ impl MuxBackend for ZellijBackend {
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session = self.resolve_session(opts.session_name.as_deref())?;
         let spec = self.zellij_action(&session).arg("list-clients");
+        let runtime = self.runtime_paths_for_session(&session).ok();
         self.retry_action_reply(
             &session,
             spec,
@@ -1107,8 +1108,17 @@ impl MuxBackend for ZellijBackend {
             false,
             "`list-clients` returned no header on every attempt",
             |stdout| {
-                tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(stdout), "zellij list-clients sample");
-                parse_client_view(stdout).map(Ok)
+                tracing::debug!(
+                    session = %session,
+                    stdout = ?String::from_utf8_lossy(stdout),
+                    "zellij list-clients sample",
+                );
+                parse_client_view(stdout, |id| {
+                    runtime.as_ref().and_then(|runtime| {
+                        super::pane_topology::read_client_input_ms(runtime, &session, id)
+                    })
+                })
+                .map(Ok)
             },
         )
     }

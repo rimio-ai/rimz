@@ -2564,6 +2564,102 @@ exit 1
 
 #[cfg(unix)]
 #[test]
+fn both_client_view_builders_join_only_attached_clients_input_records() {
+    use super::pane_topology::{TopologyClientView, ZellijPaneId};
+    use crate::ids::MuxClientId;
+    let room = TestRoom::new();
+    room.publish_workspace();
+    room.write_cache(
+        unix_now_ms(),
+        None,
+        Some(TopologyClients {
+            human_clients: None,
+            viewed_panes: None,
+            views: vec![
+                TopologyClientView {
+                    client_id: 1,
+                    pane_id: ZellijPaneId::Terminal(7),
+                },
+                TopologyClientView {
+                    client_id: 2,
+                    pane_id: ZellijPaneId::Terminal(8),
+                },
+                TopologyClientView {
+                    client_id: 3,
+                    pane_id: ZellijPaneId::Plugin(9),
+                },
+            ],
+        }),
+        vec![
+            terminal_pane(7, 0, 100, 0, "zsh"),
+            terminal_pane(8, 0, 100, 0, "zsh"),
+        ],
+    );
+    for (id, stamp) in [(1, 1_000), (2, 2_000), (3, 3_000), (99, 99_000)] {
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &room.runtime.zellij_client_input_paths("rimz-test", id).0,
+            &serde_json::json!({
+                "session_name": "rimz-test", "client_id": id, "last_input_ms": stamp,
+            }),
+        )
+        .unwrap();
+    }
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n2 terminal_8 zsh\n3 plugin_9 plugin\n4 terminal_7 zsh\n'
+"#,
+    );
+    let backend = room.backend(&shim);
+    let direct = backend
+        .client_view(ClientFocusOptions {
+            session_name: Some("rimz-test".to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+    let listed = backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-test".to_owned()),
+            runtime_paths: Some(room.runtime.clone()),
+            ..Default::default()
+        })
+        .unwrap()
+        .client_view
+        .unwrap();
+    let expected = [
+        (MuxClientId::Zellij(1), 1_000),
+        (MuxClientId::Zellij(2), 2_000),
+        (MuxClientId::Zellij(3), 3_000),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        [
+            direct.presence.client_input_ms.clone(),
+            listed.presence.client_input_ms.clone()
+        ],
+        [expected.clone(), expected]
+    );
+    for view in [direct, listed] {
+        assert_eq!(view.presence.last_input_ms(), Some(3_000));
+        assert_eq!(
+            view.attended_until(
+                &PaneId::from(ZellijPaneId::Terminal(7)),
+                Duration::from_secs(30)
+            ),
+            Some(31_000)
+        );
+        assert_eq!(
+            view.attended_until(
+                &PaneId::from(ZellijPaneId::Terminal(8)),
+                Duration::from_secs(30)
+            ),
+            Some(32_000)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn detached_writer_reads_dump_once_per_identity_and_recovery_interval() {
     let room = TestRoom::new();
     room.write_cache(
