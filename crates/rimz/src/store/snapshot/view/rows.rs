@@ -21,6 +21,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: agent.last_activity,
         card: RowCard::Agent(std::sync::Arc::new(AgentCard::from_agent(agent, now))),
     }

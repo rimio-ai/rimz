@@ -1074,6 +1074,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 inactive: false,
                 archived: false,
                 attention_score: 0,
+                attention_at_ms: None,
                 last_activity: Timestamp::now(),
                 card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
                     crate::store::snapshot::AgentCard {

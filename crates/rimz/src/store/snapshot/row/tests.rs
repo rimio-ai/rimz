@@ -18,6 +18,7 @@ fn meter_row() -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Agent(Arc::new(AgentCard {
             auto_compact: Some(200_000),
@@ -345,6 +346,24 @@ fn subagent_compaction_count_defaults_to_zero_and_round_trips_when_positive() {
 }
 
 #[test]
+fn attention_stamp_round_trips_on_agent_and_process_rows() {
+    for card in [
+        RowCard::Agent(Arc::new(AgentCard::default())),
+        RowCard::Process(ProcessCard::default()),
+    ] {
+        let mut row = meter_row();
+        row.card = card;
+        let mut value = serde_json::to_value(&row).unwrap();
+        value["attention_at_ms"] = serde_json::json!(42);
+        let decoded: SidebarRow = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap()["attention_at_ms"],
+            42
+        );
+    }
+}
+
+#[test]
 fn serde_keeps_cards_flat_with_row_kind_key() {
     let agent = SidebarRow {
         checkout: None,
@@ -358,6 +377,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Running,
@@ -447,6 +467,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard {
             state: ProcessState::Stuck,
@@ -482,6 +503,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Success,
@@ -509,6 +531,7 @@ fn own_last_activity_falls_back_to_the_row_clock_and_stays_off_an_untouched_card
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Agent(std::sync::Arc::default()),
     };
@@ -543,6 +566,7 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             handle: Some("planner".to_owned()),
@@ -570,6 +594,7 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard::default()),
     };

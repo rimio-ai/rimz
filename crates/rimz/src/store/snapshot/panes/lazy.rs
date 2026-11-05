@@ -777,6 +777,7 @@ fn idle_agent_row(
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: pane
             .pane_process_start
             .or_else(|| {

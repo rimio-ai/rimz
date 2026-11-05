@@ -88,6 +88,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: super::fixed_now(),
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: crate::agents::AgentStatus::Running,

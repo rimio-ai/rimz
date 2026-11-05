@@ -1127,6 +1127,7 @@ fn render_make_up_filter_narrows_the_body() {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: fixed_now(),
         card: crate::store::snapshot::RowCard::Process(
             crate::store::snapshot::ProcessCard::default(),

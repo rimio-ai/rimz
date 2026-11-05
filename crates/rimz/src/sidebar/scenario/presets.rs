@@ -410,6 +410,7 @@ fn process_row(spec: ProcessRowSpec) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: spec.last_activity,
         card: RowCard::Process(ProcessCard {
             state: spec.state,
@@ -2219,6 +2220,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: activity_at,
         card: RowCard::Agent(std::sync::Arc::new(card)),
     }

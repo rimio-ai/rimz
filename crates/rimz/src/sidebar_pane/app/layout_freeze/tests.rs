@@ -110,6 +110,7 @@ fn row(id: &str, raw_pane: &str) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: jiff::Timestamp::from_second(1).expect("fixed timestamp"),
         card: RowCard::Process(ProcessCard::default()),
     }
@@ -361,7 +362,7 @@ fn focused_status_changes_keep_the_captured_rank_without_timing_out() {
         let agent = row.as_agent_mut().unwrap();
         agent.status = after;
         if before.is_actionable() != after.is_actionable() {
-            agent.attention_at_ms = Some(30);
+            row.attention_at_ms = Some(30);
         }
         rig.present(previous.clone(), std::slice::from_ref(&focused), false);
         assert!(
@@ -391,7 +392,7 @@ fn a_focus_entry_captures_the_previous_rank_before_this_folds_ask() {
         &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
     )[1];
     row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
-    row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+    row.attention_at_ms = Some(30);
     rig.present(next, &[focused], false);
     assert_eq!(row_ids(&rig.context.current, "a"), ["other", "focused"]);
 }
@@ -438,8 +439,8 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
     let now = next.now;
     let rows =
         std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows);
+    rows[1].attention_at_ms = Some(30);
     let parent = rows[1].as_agent_mut().unwrap();
-    parent.attention_at_ms = Some(30);
     parent
         .sub_agents
         .push(crate::store::snapshot::SidebarSubAgent {
@@ -560,7 +561,7 @@ fn releasing_focus_arms_the_existing_deadline_then_settles_the_card() {
             &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
         )[1];
         row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
-        row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+        row.attention_at_ms = Some(30);
         rig.present(next.clone(), std::slice::from_ref(&focused), false);
         rig.clock.advance(std::time::Duration::from_secs(40));
         rig.present(next.clone(), &[], parked);
@@ -635,7 +636,7 @@ fn first_fetch_and_new_panes_capture_from_the_current_snapshot() {
             &mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows,
         )[1];
         row.as_agent_mut().unwrap().status = AgentStatus::Waiting;
-        row.as_agent_mut().unwrap().attention_at_ms = Some(30);
+        row.attention_at_ms = Some(30);
         rig.clock.advance(std::time::Duration::from_secs(31));
         rig.present(next, &[focused], false);
         assert_eq!(
@@ -678,7 +679,7 @@ fn stamped_row(id: &str, raw_pane: &str, status: AgentStatus, stamp: i64) -> Sid
     let birth = row.last_activity;
     let card = row.as_agent_mut().unwrap();
     card.registered_at = Some(birth);
-    card.attention_at_ms = Some(stamp);
+    row.attention_at_ms = Some(stamp);
     row
 }
 

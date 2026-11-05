@@ -50,6 +50,10 @@ pub struct SidebarRow {
     /// presentation sort after the fold.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attention_score: u32,
+    /// Birth or the last displayed top/calm crossing for an agent; the pane's
+    /// retained order stamp for a process row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_at_ms: Option<i64>,
     pub last_activity: Timestamp,
     #[serde(flatten)]
     pub card: RowCard,
@@ -569,9 +573,6 @@ pub struct AgentCard {
     /// and seeds row ordering until an attention-zone crossing is observed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-    /// Birth or the last displayed crossing between actionable and calm zones.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attention_at_ms: Option<i64>,
     /// Latest launch or non-keepalive prompt, the group's quiet-clock input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engaged_at: Option<Timestamp>,
@@ -666,7 +667,6 @@ impl Default for AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: None,
-            attention_at_ms: None,
             engaged_at: None,
             own_last_activity: None,
             cache: None,
@@ -757,7 +757,6 @@ impl AgentCard {
             sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: agent.registered_at,
-            attention_at_ms: None,
             engaged_at: agent.registered_at.max(agent.last_prompt_at),
             own_last_activity: None,
             cache: None,

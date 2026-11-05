@@ -468,6 +468,7 @@ mod tests {
             inactive: false,
             archived: false,
             attention_score: 0,
+            attention_at_ms: None,
             last_activity: jiff::Timestamp::from_millisecond(last_activity).expect("timestamp"),
             card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status,

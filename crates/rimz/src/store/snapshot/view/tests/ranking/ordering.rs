@@ -979,6 +979,7 @@ fn process_row(id: &str, worktree: &str) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: epoch(),
         card: crate::store::snapshot::RowCard::Process(
             crate::store::snapshot::ProcessCard::default(),
@@ -999,6 +1000,7 @@ fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
+        attention_at_ms: None,
         last_activity: epoch(),
         card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
             crate::store::snapshot::row::AgentCard {
