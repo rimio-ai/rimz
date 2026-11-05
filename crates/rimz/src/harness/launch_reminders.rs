@@ -149,6 +149,7 @@ pub(super) fn render(
         || !lsp_servers.is_empty()
         || team_context.is_some()
         || reminders.files.is_some()
+        || !params.add_dirs.is_empty()
     {
         paragraphs.push(env_paragraph(
             reminders,
@@ -156,6 +157,7 @@ pub(super) fn render(
             reminders.env.then_some(shell).flatten(),
             cwd,
             team_context.as_ref(),
+            params,
         ));
     }
     if request.subagent {
@@ -181,6 +183,7 @@ fn env_paragraph(
     shell: Option<&Path>,
     cwd: &Path,
     team: Option<&launch_context::TeamLaunchContext>,
+    params: &LaunchParams,
 ) -> String {
     let env = reminders.env;
     let mut lines = vec!["### Environment\n".to_owned()];
@@ -189,17 +192,22 @@ fn env_paragraph(
             "- cwd: {}",
             escape_reminder_text(&cwd.to_string_lossy())
         ));
-        if let Some(worktree) = &reminders.worktree {
-            let base = worktree
-                .base_branch
-                .as_deref()
-                .map(|branch| format!("branched from {}; ", escape_reminder_text(branch)))
-                .unwrap_or_default();
-            lines.push(format!(
-                "- worktree: {base}primary checkout at {}",
-                escape_reminder_text(&worktree.primary.to_string_lossy())
-            ));
-        }
+    }
+    for dir in &params.add_dirs {
+        lines.push(format!("- added dir: {}", escape_reminder_text(dir)));
+    }
+    if (env || team.is_some())
+        && let Some(worktree) = &reminders.worktree
+    {
+        let base = worktree
+            .base_branch
+            .as_deref()
+            .map(|branch| format!("branched from {}; ", escape_reminder_text(branch)))
+            .unwrap_or_default();
+        lines.push(format!(
+            "- worktree: {base}primary checkout at {}",
+            escape_reminder_text(&worktree.primary.to_string_lossy())
+        ));
     }
     if let Some(kind) = shell.and_then(Path::file_name) {
         lines.push(format!(

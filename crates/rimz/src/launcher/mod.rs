@@ -1489,6 +1489,8 @@ fn launch_resume_layout(
         let mut preflight_workspace = preflight_workspace.clone();
         if let crate::harness::plan::CohortSeed::Resume(agent) = seed {
             cell.launch.checkout.clone_from(&agent.checkout);
+            cell.launch.add_dirs.clone_from(&agent.add_dirs);
+            cell.launch.untrusted_checkout = agent.untrusted_checkout;
             cell.launch.login.clone_from(&agent.login);
             if agent.checkout.is_some() {
                 let cwd = agent

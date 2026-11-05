@@ -35,7 +35,7 @@ macro_rules! lifetime_fields {
                 projected.$transcript = None;
             }
             $(projected.$observation = None;)*
-            $(projected.launch.$launch = None;)*
+            $(projected.launch.$launch = Default::default();)*
             projected
         }
 
@@ -52,7 +52,8 @@ macro_rules! lifetime_fields {
 
 lifetime_fields!(
     transcript_path; account_key;
-    role, team, loop_task, workflow, automation, channel, profile, login, tier, record, checkout
+    role, team, loop_task, workflow, automation, channel, profile, login, tier, record, checkout,
+    add_dirs, untrusted_checkout
 );
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;

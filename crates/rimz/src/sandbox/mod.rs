@@ -127,6 +127,7 @@ pub struct SandboxInputs<'a> {
     pub worktree: Option<&'a Path>,
     /// The enclosing Git checkout, resolved by the compiler; absent for empty-dir launches.
     pub checkout: Option<&'a Path>,
+    pub add_dirs: &'a [String],
     pub read_only: Vec<PathBuf>,
     pub tmp_dir: &'a Path,
     pub skills_dir: &'a Path,
@@ -384,6 +385,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     }
     required.extend([inputs.cwd.to_path_buf(), inputs.project_root.to_path_buf()]);
     required.extend(inputs.worktree.map(Path::to_path_buf));
+    required.extend(inputs.add_dirs.iter().map(PathBuf::from));
     required.extend(inputs.default_home.clone());
     if let Some(home) = &inputs.provider_home
         && home.source.exists()
@@ -723,6 +725,7 @@ mod tests {
             project_root: Path::new("/project"),
             worktree: None,
             checkout: None,
+            add_dirs: &[],
             read_only: Vec::new(),
             tmp_dir: unit,
             skills_dir: &state().skills_dir,
@@ -750,6 +753,7 @@ mod tests {
             project_root: checkout.path(),
             worktree: None,
             checkout: None,
+            add_dirs: &[],
             read_only: vec![checkout.path().to_path_buf()],
             tmp_dir: Path::new("/state/tmp/unit"),
             skills_dir: Path::new("/state/skills"),

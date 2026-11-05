@@ -109,6 +109,8 @@ The same re-anchor applies to interactive peers, supervised peers, and teams lau
 
 An explicit `--cwd` overrides the default after the parent checkout is validated. Entry resolution converts the path to an existing canonical host directory, and `resolve_launch_checkout` returns a user-owned checkout there. The pane, provider, channel basename, `RIMZ_WORKTREE_PATH`, and the durable child and run `worktree_path` follow that directory without changing the room pin, store, or effective config. Restart, fork, child resume, and rebirth reuse the recorded directory. RimZ takes no cleanup ownership of that directory.
 
+Repeated `--add-dir` and fanout `add_dirs` resolve through the same caller-path translation, keeping canonical host paths in flag order without duplicates. `LaunchParams.add_dirs` and `untrusted_checkout` survive lifecycle projection and every relaunch carrier; the latter is reserved for the undecided-cwd fallback. Added directories join the scoped view's required paths. Claude unions them into `permissions.additionalDirectories`; Codex joins them to its selection-dependent room-root grant. Other kinds warn and launch without a grant. Saved-untrusted directories refuse before launch, including on re-entry; no added-directory path grants folder trust.
+
 Provider preflight then runs against the chosen checkout. Besides hook installation and trust, a child must pass the folder-trust preflight for every provider that models it, including Claude and [Codex](../agents/adapter_codex.md#directory-trust-preflight). An undecided project or a saved-untrusted folder refuses with the fix, so the child never sits on a trust screen until its deadline. A Codex projectless folder without a saved decision passes.
 
 ## Pane zones

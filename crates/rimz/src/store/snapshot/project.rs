@@ -866,6 +866,10 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     if let Some(checkout) = &launch.checkout {
         state.checkout = Some(checkout.clone());
     }
+    if !launch.add_dirs.is_empty() {
+        state.add_dirs.clone_from(&launch.add_dirs);
+    }
+    state.untrusted_checkout |= launch.untrusted_checkout;
     if let Some(role) = &launch.role {
         state.role = Some(role.clone());
     }
@@ -1117,6 +1121,8 @@ fn inherit_launch_identity(
     successor.mode = predecessor.mode;
     successor.isolation = predecessor.isolation;
     successor.checkout.clone_from(&predecessor.checkout);
+    successor.add_dirs.clone_from(&predecessor.add_dirs);
+    successor.untrusted_checkout = predecessor.untrusted_checkout;
     successor.effective_isolation = predecessor.effective_isolation;
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);

@@ -78,6 +78,8 @@ pub enum LaunchPlanWarning {
         "{kind} has no per-launch permission rules; allowed-tools is not applied and the agent prompts as usual: remove allowed-tools from the definition or run it on claude"
     )]
     ToolRulesUnsupported { kind: crate::ids::AgentKind },
+    #[error("{kind} has no added-directory permission channel; --add-dir is ignored")]
+    AddedDirsUnsupported { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
     DefaultReminders,
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
@@ -649,6 +651,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         Ok(servers) => reminders.lsp_servers = servers,
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
+    if !request.identity.params.add_dirs.is_empty() && !adapter.supports_added_dirs() {
+        warnings.push(LaunchPlanWarning::AddedDirsUnsupported {
+            kind: request.kind.clone(),
+        });
+    }
     reminders.sandbox = inputs.isolation.is_scoped();
     reminders.env = inputs
         .effective
@@ -953,6 +960,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
                 checkout: checkout.as_deref(),
+                add_dirs: &request.identity.params.add_dirs,
                 read_only: judge_read_only(&request, inputs.cwd, checkout.as_deref())?,
                 tmp_dir: &unit,
                 skills_dir: &inputs.state.skills_dir,

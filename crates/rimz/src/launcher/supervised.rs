@@ -93,6 +93,18 @@ fn prepare(
         None => checkout::open_launch_store(&workspace)?,
     };
     let cwd = checkout::resolve_launch_cwd(request.cwd.as_deref(), store.paths())?;
+    let mut add_dirs = Vec::new();
+    for dir in &request.add_dirs {
+        // A supplied path always resolves to Some.
+        let dir = checkout::resolve_launch_cwd(Some(dir), store.paths())
+            .context("resolving --add-dir")?
+            .expect("an explicit directory resolves to a path")
+            .display()
+            .to_string();
+        if !add_dirs.contains(&dir) {
+            add_dirs.push(dir);
+        }
+    }
     // Inside a team's lane, a bare role names that team's role, exactly as it
     // does for an interactive launch: in `#forge`, `reviewer` means
     // `forge.reviewer`.
@@ -256,6 +268,7 @@ fn prepare(
     {
         if let Cell::Agent(cell) = row {
             cell.launch.automation.clone_from(&automation);
+            cell.launch.add_dirs.clone_from(&add_dirs);
         }
     }
     let agent_cell = layout
@@ -264,6 +277,12 @@ fn prepare(
         .context("run-bearing layout needs an agent leader")?;
     let adapter = crate::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    if !add_dirs.is_empty() && !adapter.supports_added_dirs() {
+        let warning = crate::harness::launch_plan::LaunchPlanWarning::AddedDirsUnsupported {
+            kind: agent_cell.kind.clone(),
+        };
+        interaction.notice(Notice::Warning(&warning.to_string()))?;
+    }
     let isolation = crate::config::Isolation::resolve(
         agent_cell.launch.isolation,
         agent_cell.isolation_default,

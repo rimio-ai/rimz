@@ -127,6 +127,8 @@ struct FanoutArgs {
 #[serde(deny_unknown_fields)]
 struct FanoutTask {
     cwd: Option<PathBuf>,
+    #[serde(default)]
+    add_dirs: Vec<PathBuf>,
     profile: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
@@ -151,6 +153,9 @@ struct SubagentLaunchArgs {
     /// Working directory for the launched agent; the room stays the caller's.
     #[arg(long, value_name = "DIR")]
     cwd: Option<PathBuf>,
+    /// Additional working directory with file access, without loading its configuration.
+    #[arg(long = "add-dir", value_name = "DIR")]
+    add_dirs: Vec<PathBuf>,
     /// Configured subagent profile, agent kind, or shared command.
     #[arg(
         value_name = "PROFILE",
@@ -364,6 +369,14 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
     let launches = parse_fanout_launches(&raw, &args, &config.agents.subagents)
         .with_context(|| format!("validating fanout tasks from {source}"))?;
+    let ctx = Ctx::open(globals)?;
+    for launch in &launches {
+        rimz::launcher::checkout::resolve_launch_cwd(launch.cwd.as_deref(), ctx.store.paths())?;
+        for dir in &launch.add_dirs {
+            rimz::launcher::checkout::resolve_launch_cwd(Some(dir), ctx.store.paths())
+                .context("resolving --add-dir")?;
+        }
+    }
     let mut launched = Vec::with_capacity(launches.len());
     for (index, launch) in launches.into_iter().enumerate() {
         match agents_cmd::launch_supervised_background(launch, globals) {
@@ -498,6 +511,7 @@ impl FanoutTask {
             .or(fanout.grace);
         let launch = SubagentLaunchArgs {
             cwd: self.cwd,
+            add_dirs: self.add_dirs,
             profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
@@ -586,6 +600,7 @@ impl SubagentLaunchArgs {
             .context("computing subagent kill deadline")?;
         Ok(agents_cmd::AgentLaunchArgs {
             cwd: self.cwd,
+            add_dirs: self.add_dirs,
             spec: Some(profile),
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {

@@ -411,6 +411,8 @@ fn validate_fork_source(
         cwd,
         launch: rimz::agents::LaunchParams {
             checkout: agent.checkout.clone(),
+            add_dirs: agent.add_dirs.clone(),
+            untrusted_checkout: agent.untrusted_checkout,
             profile: agent.profile.clone(),
             profile_scope: (scope == ProfileScope::Subagents).then_some(scope),
             login,

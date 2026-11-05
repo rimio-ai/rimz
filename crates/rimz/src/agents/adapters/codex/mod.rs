@@ -1186,7 +1186,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         extra_args: &mut Vec<String>,
         login_env: &BTreeMap<String, String>,
         (cwd, main_root): (&Path, Option<&Path>),
-        roots: &[PathBuf; 3],
+        roots: &[PathBuf],
         isolation: crate::config::Isolation,
     ) {
         enum Selection {
@@ -1338,6 +1338,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 ]);
             }
         }
+    }
+
+    fn supports_added_dirs(&self) -> bool {
+        true
     }
 }
 

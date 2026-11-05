@@ -919,6 +919,13 @@ pub struct AgentState {
     /// Original checkout for an empty-dir agent, independent of its process cwd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
+    /// Canonical host directories granted file access at launch and carried on every relaunch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
+    /// The checkout had no folder-trust decision at launch, so empty-dir placement displaced it.
+    /// Set at launch and carried on every relaunch without re-reading provider trust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub untrusted_checkout: bool,
     /// Latest observed branch for this identity.
     pub worktree_branch: Option<String>,
     /// Every branch this identity was observed on, including its launch branch.
@@ -1340,6 +1347,8 @@ impl AgentState {
             profile_scope: None,
             worktree_path: None,
             checkout: None,
+            add_dirs: Vec::new(),
+            untrusted_checkout: false,
             worktree_branch: None,
             worktree_branches: BTreeSet::new(),
             task: None,
