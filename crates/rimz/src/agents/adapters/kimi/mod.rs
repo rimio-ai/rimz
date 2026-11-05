@@ -76,7 +76,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
     brand: Brand {
         emblem: None,
         color: 33,
-        color_rgb: (0x17, 0x83, 0xff),
+        color_rgb: (0x00, 0x7c, 0xff),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kimi" },
     plan_capacities: None,

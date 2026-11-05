@@ -65,8 +65,8 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     display_name: "Open Code",
     brand: Brand {
         emblem: None,
-        color: 208,
-        color_rgb: (0xff, 0x87, 0x00),
+        color: 247,
+        color_rgb: (0xa0, 0xa0, 0xa0),
     },
     plan_label: PlanLabel::TitleCaseOnly,
     plan_capacities: None,

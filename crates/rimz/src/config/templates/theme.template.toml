@@ -449,7 +449,7 @@
 ## """
 ## [theme.providers.opencode]
 ## product_name = "Open Code"
-## color = "#ff8700"
+## color = "#a0a0a0"
 ## ascii_art = """
 ##  ▗▛▀▀▀▜▖
 ## ▝▜▌ █ ▐▛▘
