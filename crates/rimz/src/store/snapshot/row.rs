@@ -952,6 +952,8 @@ impl ProcessState {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProcessCard {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_tracked: Option<crate::agents::NotTracked>,
     #[serde(default, skip_serializing_if = "ProcessState::is_idle")]
     pub state: ProcessState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

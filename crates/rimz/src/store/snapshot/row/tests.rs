@@ -470,6 +470,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         attention_at_ms: None,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard {
+            not_tracked: None,
             state: ProcessState::Stuck,
             command_detail: Some("cargo build --release".to_owned()),
             foreign_user: None,
@@ -482,14 +483,22 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
     let value = serde_json::to_value(&process).unwrap();
 
     assert_eq!(value["row_kind"], "process");
+    assert!(value.get("not_tracked").is_none());
     assert!(value.get("card").is_none());
     assert!(value.get("status").is_none());
     assert_eq!(value["state"], "stuck");
     assert_eq!(value["command_detail"], "cargo build --release");
     assert_eq!(
-        serde_json::from_value::<SidebarRow>(value).unwrap(),
+        serde_json::from_value::<SidebarRow>(value.clone()).unwrap(),
         process
     );
+    let mut noted = value;
+    noted["not_tracked"] = serde_json::json!({
+        "reason": "hooks_missing", "fix": "rimz hooks install unregistered, then restart"
+    });
+    let round_trip: SidebarRow = serde_json::from_value(noted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&round_trip).unwrap(), noted);
+    assert!(round_trip.is_process());
 
     let unread = SidebarRow {
         checkout: None,

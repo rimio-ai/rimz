@@ -16,7 +16,7 @@ use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
-    LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
+    LazyAgentPairingResult, PaneBindingIndex, PaneWiring, pane_admits_card, row_from_frame_pane,
 };
 
 use super::aggregate::AttentionWindows;
@@ -404,8 +404,11 @@ impl SidebarSnapshot {
                 pane.pane_process_start = None;
                 if let Some(mut next) = row_from_frame_pane(
                     pane,
-                    &self.wired_kinds,
-                    &self.wired_default_models,
+                    &PaneWiring {
+                        kinds: &self.wired_kinds,
+                        default_models: &self.wired_default_models,
+                        untracked: &self.untracked_kinds,
+                    },
                     self.now,
                 ) {
                     next.attention_at_ms = row.attention_at_ms;

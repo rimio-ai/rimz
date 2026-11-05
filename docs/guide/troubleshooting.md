@@ -257,7 +257,7 @@ Fix the source the warning names: make the file readable, or bring its frontmatt
 
 ### An agent shows as a plain process row
 
-An agent earns a live card once its reporting hooks are installed. The hooks are a handful of lines RimZ adds to the agent's own config file; through them the agent reports its turns, prompts, and blocking questions to the sidebar. Without them the agent runs fine, but the sidebar can only draw a plain process row. Preview the lines, then install them:
+An agent with working reporting hooks or supported local-session discovery can get an idle card before a session binds. The hooks are a handful of lines RimZ adds to the agent's own config file; through them the agent reports its turns, prompts, and blocking questions to the sidebar. When RimZ knows that hooks are missing or blocked, or that the pane runs an unsupported reporting mode, it keeps a process row with that reason and a fix. Integrations whose reporting RimZ cannot inspect stay ordinary process rows rather than guessing a cause. A bound session takes precedence. For missing hooks, preview the lines, then install them:
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing

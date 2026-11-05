@@ -2,11 +2,12 @@ use super::*;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId};
-use crate::store::snapshot::panes::{PaneBinder, PaneBindingDisposition};
+use crate::store::snapshot::panes::{PaneBinder, PaneBindingDisposition, PaneWiring};
 use crate::store::snapshot::testkit::{AgentStateFx, agent, ago, pane};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 mod hook_recovery;
+mod not_tracked;
 
 fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
     PaneRef {
@@ -94,8 +95,11 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
             &agents,
             &pairings,
             &bound,
-            &[],
-            &default_models,
+            &crate::store::snapshot::panes::PaneWiring {
+                kinds: &[],
+                default_models: &default_models,
+                untracked: &BTreeMap::new(),
+            },
             ago(0),
         )
         .is_none(),
@@ -107,8 +111,11 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
         &agents,
         &pairings,
         &bound,
-        &["claude".to_owned()],
-        &default_models,
+        &crate::store::snapshot::panes::PaneWiring {
+            kinds: &["claude".to_owned()],
+            default_models: &default_models,
+            untracked: &BTreeMap::new(),
+        },
         ago(0),
     ) {
         Some(AgentPaneRow::Idle(row)) => {
@@ -156,28 +163,19 @@ fn untracked_mini_panes_only_have_process_rows() {
                     MuxName::Zellij => pane_cmd("terminal_1", "tab_0", command, None),
                 }
             };
+            let wiring = PaneWiring {
+                kinds: &wired,
+                default_models: &models,
+                untracked: &BTreeMap::new(),
+            };
             let idle = matches!(
-                agent_pane_for_pane(
-                    &pane,
-                    &[],
-                    &pairings,
-                    &BTreeSet::new(),
-                    &wired,
-                    &models,
-                    ago(0),
-                ),
+                agent_pane_for_pane(&pane, &[], &pairings, &BTreeSet::new(), &wiring, ago(0)),
                 Some(AgentPaneRow::Idle(_))
             );
-            let mut binder = PaneBinder::new(
-                PaneBindingIndex::new(&[]),
-                &pairings,
-                &wired,
-                &models,
-                None,
-                ago(0),
-            );
+            let frame = row_from_frame_pane(&pane, &wiring, ago(0)).unwrap();
+            let mut binder =
+                PaneBinder::new(PaneBindingIndex::new(&[]), &pairings, wiring, None, ago(0));
             let process = matches!(binder.resolve(&pane), PaneBindingDisposition::Process);
-            let frame = row_from_frame_pane(&pane, &wired, &models, ago(0)).unwrap();
             (idle, process, frame.as_agent().is_some())
         })
         .collect();
@@ -202,8 +200,11 @@ fn a_real_mini_session_wins_over_the_process_fallback() {
         &agents,
         &pairings,
         &BTreeSet::new(),
-        &["opencode".to_owned()],
-        &BTreeMap::new(),
+        &PaneWiring {
+            kinds: &["opencode".to_owned()],
+            default_models: &BTreeMap::new(),
+            untracked: &BTreeMap::new(),
+        },
         ago(0),
     );
     assert!(

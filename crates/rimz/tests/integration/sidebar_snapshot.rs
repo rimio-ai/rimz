@@ -11,6 +11,29 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn grok_tracking_reason_reads_the_rerooted_policy_files() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let policy = env.grok_policy_root().join("etc/grok/requirements.toml");
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(&policy, "allow_managed_hooks_only = true\n").unwrap();
+    let panes = [tmux_pane("%7", "grok", &env.project_root)];
+    let blocked = env.snapshot_json_with_panes(&panes);
+    std::fs::remove_file(&policy).unwrap();
+    let missing = env.snapshot_json_with_panes(&panes);
+    assert_eq!(
+        [
+            &blocked["untracked_kinds"]["grok"]["reason"],
+            &missing["untracked_kinds"]["grok"]["reason"]
+        ],
+        [
+            &serde_json::json!("hooks_blocked"),
+            &serde_json::json!("hooks_missing")
+        ],
+    );
+}
+
+#[test]
 fn ended_rows_keep_labels_without_pane_argv() {
     let env = Env::new();
     env.record(&env.project_root);

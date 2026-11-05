@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -20,6 +20,10 @@ pub(crate) enum AgentPaneRow<'a> {
     Agent(&'a AgentState),
     /// A wired instance with no session bound yet.
     Idle(Box<SidebarRow>),
+    NotTracked {
+        kind: Option<AgentKind>,
+        row: Box<SidebarRow>,
+    },
     /// This pane resolves to a session already bound to another pane. It folds
     /// no row; the projection emits the diagnostic.
     SuppressedDuplicate {
@@ -30,13 +34,12 @@ pub(crate) enum AgentPaneRow<'a> {
 
 /// Resolve a live pane running a known agent command ([`AgentPaneRow`]) to its
 /// row — the relaxation of stamped-id binding, kept tightly scoped here.
-pub(crate) fn agent_pane_for_pane<'a>(
+pub(in crate::store::snapshot) fn agent_pane_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
     pairings: &LazyAgentPairingResult,
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
-    wired_kinds: &[String],
-    wired_default_models: &BTreeMap<String, String>,
+    wiring: &super::PaneWiring<'_>,
     now: Timestamp,
 ) -> Option<AgentPaneRow<'a>> {
     let (kind, definition, cwd) = agent_pane_identity(pane)?;
@@ -54,19 +57,14 @@ pub(crate) fn agent_pane_for_pane<'a>(
         }
         return Some(AgentPaneRow::Agent(agent));
     }
-    let wired = wired_kinds.iter().any(|wired| wired == kind);
-    (wired && !pane_has_untracked_frontend(pane, kind)).then(|| {
-        AgentPaneRow::Idle(Box::new(idle_agent_row(
-            pane,
-            definition,
-            cwd,
-            wired_default_models
-                .get(kind)
-                .map(String::as_str)
-                .or(definition.default_model),
-            now,
-        )))
-    })
+    unbound_agent_row(
+        pane,
+        definition,
+        cwd,
+        wiring,
+        || untracked_mode_fix(pane, kind),
+        now,
+    )
 }
 
 #[cfg(test)]
@@ -804,29 +802,81 @@ fn idle_agent_row(
     }
 }
 
-/// Project a realtime command overlay for an already frame-admitted pane. This
-/// uses the same agent-pane identity gate as the verified pull path, but only
-/// synthesizes the unbound idle row for wired agents.
-pub(crate) fn row_from_frame_pane(
+fn unbound_agent_row(
     pane: &PaneRef,
-    wired_kinds: &[String],
-    wired_default_models: &BTreeMap<String, String>,
+    definition: &AgentSpec,
+    worktree_path: &str,
+    wiring: &super::PaneWiring<'_>,
+    mode_fix: impl FnOnce() -> Option<String>,
     now: Timestamp,
-) -> Option<SidebarRow> {
-    if let Some((kind, definition, worktree_path)) = agent_pane_identity(pane)
-        && wired_kinds.iter().any(|wired| wired == kind)
-        && !pane_has_untracked_frontend(pane, kind)
-    {
-        return Some(idle_agent_row(
+) -> Option<AgentPaneRow<'static>> {
+    let wired_frontend = wiring.kinds.iter().any(|kind| kind == definition.kind)
+        && !pane_has_untracked_frontend(pane, definition.kind);
+    let note = wiring.untracked.get(definition.kind).cloned().or_else(|| {
+        mode_fix().map(|fix| crate::agents::NotTracked {
+            reason: crate::agents::NotTrackedReason::ModeNotFollowed,
+            fix,
+        })
+    });
+    if let Some(note) = note {
+        let kind = (wired_frontend
+            && matches!(
+                note.reason,
+                crate::agents::NotTrackedReason::HooksMissing
+                    | crate::agents::NotTrackedReason::HooksBlocked
+            ))
+        .then(|| AgentKind::new_unchecked(definition.kind));
+        let mut row = row_from_process(pane, now);
+        // row_from_process always constructs RowCard::Process.
+        row.as_process_mut().expect("process card").not_tracked = Some(note);
+        return Some(AgentPaneRow::NotTracked {
+            kind,
+            row: Box::new(row),
+        });
+    }
+    wired_frontend.then(|| {
+        AgentPaneRow::Idle(Box::new(idle_agent_row(
             pane,
             definition,
             worktree_path,
-            wired_default_models
-                .get(kind)
+            wiring
+                .default_models
+                .get(definition.kind)
                 .map(String::as_str)
                 .or(definition.default_model),
             now,
-        ));
+        )))
+    })
+}
+
+fn untracked_mode_fix(pane: &PaneRef, kind: &str) -> Option<String> {
+    let command = pane
+        .foreground_cmdline
+        .as_deref()
+        .or(pane.command.as_deref())?;
+    crate::agents::find_definition(kind)?.untracked_mode_fix(command)
+}
+
+/// Project a realtime command overlay for an already frame-admitted pane. This
+/// uses the same agent-pane identity gate as the verified pull path, but only
+/// projects the unbound not-tracked or idle row before ordinary process rows.
+pub(in crate::store::snapshot) fn row_from_frame_pane(
+    pane: &PaneRef,
+    wiring: &super::PaneWiring<'_>,
+    now: Timestamp,
+) -> Option<SidebarRow> {
+    if let Some((kind, definition, worktree_path)) = agent_pane_identity(pane)
+        && let Some(AgentPaneRow::Idle(row) | AgentPaneRow::NotTracked { row, .. }) =
+            unbound_agent_row(
+                pane,
+                definition,
+                worktree_path,
+                wiring,
+                || untracked_mode_fix(pane, kind),
+                now,
+            )
+    {
+        return Some(*row);
     }
     pane_command_is_known(pane).then(|| row_from_process(pane, now))
 }

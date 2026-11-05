@@ -442,6 +442,30 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn untracked_kinds_are_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut right = left.clone();
+    right.untracked_kinds.insert(
+        "unregistered".to_owned(),
+        crate::agents::NotTracked {
+            reason: crate::agents::NotTrackedReason::HooksMissing,
+            fix: "rimz hooks install unregistered, then restart".to_owned(),
+        },
+    );
+    let mut changed = right.clone();
+    changed.untracked_kinds.get_mut("unregistered").unwrap().fix =
+        "enable hooks, then restart".to_owned();
+    assert_eq!(
+        [
+            same_snapshot_content(&left, &right),
+            same_snapshot_content(&right, &changed),
+            same_snapshot_content(&right, &left)
+        ],
+        [false; 3],
+    );
+}
+
+#[test]
 fn throttle_notices_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();
