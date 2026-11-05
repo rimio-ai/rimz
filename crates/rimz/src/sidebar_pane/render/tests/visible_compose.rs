@@ -125,6 +125,50 @@ fn write_back(ui: &mut ViewState, pane_ui: &mut UiState, frame: compose::Compose
     ui.own_input_reveal = false;
 }
 
+#[test]
+fn group_placements_track_target_window_overlap() {
+    let mut snapshot = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO);
+    let mut group = snapshot.worktree_groups[0].clone();
+    group.rows = Arc::new(Vec::new());
+    group.inactive = None;
+    snapshot.worktree_groups = Arc::new(
+        ["wf-a", "wf-b", "wf-c"]
+            .into_iter()
+            .map(|key| {
+                let mut group = group.clone();
+                group.key = key.into();
+                group.label = key.into();
+                group
+            })
+            .collect(),
+    );
+    let mut ui = ViewState {
+        scroll_offset: 1,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    let full = compose_cached(&snapshot, &mut ui, &mut pane_ui, 80, 80);
+    let height = u16::try_from(full.top_height + full.bottom_height + 3).unwrap();
+    for _ in 0..2 {
+        let frame = compose_cached(&snapshot, &mut ui, &mut pane_ui, 80, height);
+        assert_eq!(frame.scroll_offset, 1);
+        assert_eq!(
+            frame.group_placements,
+            vec![("wf-a".into(), -1), ("wf-b".into(), 2)],
+            "include the clipped workflow strip and omit the off-window group"
+        );
+        assert!(frame.anchored_rows.is_empty());
+    }
+    let empty = compose_cached(&snapshot, &mut ui, &mut pane_ui, 80, 0);
+    assert!(
+        empty.group_placements.is_empty(),
+        "no viewport draws no groups"
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
     #[test]

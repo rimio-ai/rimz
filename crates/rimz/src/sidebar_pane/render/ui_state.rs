@@ -245,6 +245,7 @@ impl Default for InactivePeek {
 #[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct LayoutKey {
     rows: Vec<(String, isize)>,
+    groups: Vec<(String, isize)>,
     top_height: usize,
     bottom_height: usize,
     content_height: usize,
@@ -263,6 +264,7 @@ impl LayoutKey {
     /// Compares in place, so recomposing an unchanged layout allocates nothing.
     fn describes(&self, frame: &super::compose::ComposedFrame, view: &ViewState) -> bool {
         self.rows == frame.anchored_rows
+            && self.groups == frame.group_placements
             && self.top_height == frame.top_height
             && self.bottom_height == frame.bottom_height
             && self.content_height == frame.content_height
@@ -324,6 +326,7 @@ impl ViewState {
         }
         self.layout_key = Some(LayoutKey {
             rows: frame.anchored_rows.clone(),
+            groups: frame.group_placements.clone(),
             top_height: frame.top_height,
             bottom_height: frame.bottom_height,
             content_height: frame.content_height,

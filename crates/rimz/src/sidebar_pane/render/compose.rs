@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, ScrollbarMode};
@@ -137,7 +138,11 @@ pub(super) fn compose_lines_with_meter(
         .min(height);
 
     let held_expansions = view.effective_held_expansions(&roster);
-    let (scroll, inactive_span) = scroll_lines_windowed(
+    let ScrollContent {
+        block: scroll,
+        inactive_span,
+        group_spans,
+    } = scroll_lines_windowed(
         snapshot,
         view,
         ui,
@@ -188,6 +193,22 @@ pub(super) fn compose_lines_with_meter(
     };
     let painted_rows = placements(layout.offset, layout.top_shown);
     let anchored_rows = placements(layout.resolution.offset, 0);
+    let target_window =
+        layout.resolution.offset..layout.resolution.offset.saturating_add(layout.viewport);
+    let group_placements = group_spans
+        .iter()
+        .filter(|(_, span)| {
+            !target_window.is_empty()
+                && span.start < target_window.end
+                && target_window.start < span.end
+        })
+        .map(|(index, span)| {
+            (
+                roster.groups()[*index].source().key.clone(),
+                span.start as isize - target_window.start as isize,
+            )
+        })
+        .collect();
     let marker = view
         .selected_index
         .filter(|_| view.focus_marker_ready && layout.viewport > 0)
@@ -244,7 +265,7 @@ pub(super) fn compose_lines_with_meter(
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
         walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
         walk.measuring = false;
-        let (painted, painted_inactive_span) = scroll_lines_windowed(
+        let painted = scroll_lines_windowed(
             snapshot,
             view,
             ui,
@@ -257,12 +278,13 @@ pub(super) fn compose_lines_with_meter(
         );
         debug_assert_eq!(
             scroll.interactions.row_map(),
-            painted.interactions.row_map()
+            painted.block.interactions.row_map()
         );
-        debug_assert_eq!(scroll.card_starts, painted.card_starts);
-        debug_assert_eq!(inactive_span, painted_inactive_span);
-        debug_assert_eq!(scroll.lines.len(), painted.lines.len());
-        painted
+        debug_assert_eq!(scroll.card_starts, painted.block.card_starts);
+        debug_assert_eq!(inactive_span, painted.inactive_span);
+        debug_assert_eq!(group_spans, painted.group_spans);
+        debug_assert_eq!(scroll.lines.len(), painted.block.lines.len());
+        painted.block
     } else {
         scroll
     };
@@ -319,6 +341,7 @@ pub(super) fn compose_lines_with_meter(
         painted_parks,
         painted_rows,
         anchored_rows,
+        group_placements,
         drawn_selection: view
             .selected_index
             .and_then(|index| roster.row(index))
@@ -723,6 +746,8 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(super) painted_parks: BTreeMap<crate::ids::WorkflowRunId, jiff::Timestamp>,
     pub(super) painted_rows: Vec<(String, isize)>,
     pub(super) anchored_rows: Vec<(String, isize)>,
+    /// Drawn groups overlapping the target window, with signed zone-relative first lines.
+    pub(super) group_placements: Vec<(String, isize)>,
     pub(super) drawn_selection: Option<String>,
     pub(super) held_expansions: BTreeSet<String>,
     pub(super) banner_shown: bool,
@@ -1162,7 +1187,7 @@ pub(super) fn scroll_lines(
     theme: &Theme,
     meter_pixels: Option<&mut MeterPixels>,
 ) -> (RenderedBlock, Option<(usize, usize)>) {
-    scroll_lines_windowed(
+    let scroll = scroll_lines_windowed(
         snapshot,
         view,
         ui,
@@ -1172,7 +1197,14 @@ pub(super) fn scroll_lines(
         theme,
         meter_pixels,
         &mut CardWalk::new(None),
-    )
+    );
+    (scroll.block, scroll.inactive_span)
+}
+
+struct ScrollContent {
+    block: RenderedBlock,
+    inactive_span: Option<(usize, usize)>,
+    group_spans: Vec<(usize, Range<usize>)>,
 }
 
 #[expect(
@@ -1189,9 +1221,10 @@ fn scroll_lines_windowed(
     theme: &Theme,
     mut meter_pixels: Option<&mut MeterPixels>,
     walk: &mut CardWalk<'_>,
-) -> (RenderedBlock, Option<(usize, usize)>) {
+) -> ScrollContent {
     let mut block = RenderedBlock::default();
     let mut inactive_span = None;
+    let mut group_spans = Vec::new();
 
     let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
     let ctx = RowCtx {
@@ -1239,7 +1272,11 @@ fn scroll_lines_windowed(
     {
         block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
         block.tag("chrome");
-        return (block, None);
+        return ScrollContent {
+            block,
+            inactive_span,
+            group_spans,
+        };
     }
     if !snapshot.worktree_groups.is_empty() {
         let hide_inactive_chip = view.make_up_filter.filter.is_some()
@@ -1266,7 +1303,7 @@ fn scroll_lines_windowed(
         let mut inactive_seen = 0;
         let mut older = 0;
         let mut emitted = false;
-        for group in roster.groups() {
+        for (index, group) in roster.groups().iter().enumerate() {
             if !group.shown() {
                 continue;
             }
@@ -1313,6 +1350,7 @@ fn scroll_lines_windowed(
                 },
                 walk,
             ));
+            group_spans.push((index, walk.origin..block.lines.len()));
             if inactive_span.is_none()
                 && group.source().inactive.is_some()
                 && group.is_empty()
@@ -1327,7 +1365,11 @@ fn scroll_lines_windowed(
         inactive_span = inactive_span.or(inactive_chip.map(|chip| (chip, chip)));
     }
 
-    (block, inactive_span)
+    ScrollContent {
+        block,
+        inactive_span,
+        group_spans,
+    }
 }
 
 fn inactive_older_line(theme: &Theme, count: usize) -> RenderedBlock {

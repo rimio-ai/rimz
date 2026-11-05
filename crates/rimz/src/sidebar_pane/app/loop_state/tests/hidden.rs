@@ -43,6 +43,47 @@ fn repaint_source(pair: &mut super::scroll::SharedPanes) {
         .unwrap();
 }
 
+fn card_less_mirror_pair(mux: MuxName, keys: &[&str]) -> super::scroll::SharedPanes {
+    let mut pair = mirror_pair(mux);
+    let workflow = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO);
+    let mut group = workflow.worktree_groups[0].clone();
+    group.rows = Arc::new(Vec::new());
+    group.inactive = None;
+    pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+        Arc::make_mut(&mut v.context.current.worktree_groups).splice(
+            0..0,
+            keys.iter().map(|key| {
+                let mut group = group.clone();
+                group.key = (*key).into();
+                group.label = group.key.clone();
+                group
+            }),
+        );
+        v.state.scroll_offset = 0;
+        v.state.offset_authoritative = true;
+        v.state.scroll_ease.cancel();
+    });
+    repaint_source(&mut pair);
+    pair.clock
+        .advance(super::super::super::timing::MIRROR_QUIET);
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+    pair
+}
+
+fn painted_workflow_sections(rig: &Rig) -> Vec<String> {
+    rig.state
+        .pane
+        .ui
+        .sections
+        .iter()
+        .map(|label| label.as_str())
+        .filter(|label| label.starts_with("#wf-"))
+        .map(str::to_owned)
+        .collect()
+}
+
 #[test]
 fn hidden_mirror_draws_an_open_inactive_peek_closed_without_changing_its_source() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
@@ -299,6 +340,79 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
         .map(|(mux, change, ..)| (*mux, *change, true, true, true, 1))
         .collect::<Vec<_>>();
     assert_eq!(results, expected);
+}
+
+#[test]
+fn hidden_mirrors_card_less_group_moves_on_both_backends() {
+    let mut results = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = card_less_mirror_pair(mux, &["wf-a", "wf-b"]);
+        let before = pair.plane.views.read().mirror_target;
+        let sections = painted_workflow_sections(&pair.panes[1]);
+        pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+            Arc::make_mut(&mut v.context.current.worktree_groups).swap(0, 1);
+        });
+        repaint_source(&mut pair);
+        let expected = painted_workflow_sections(&pair.panes[0]);
+        assert_ne!(expected, sections, "{mux:?}: the drawn groups swapped");
+        pair.clock
+            .advance(super::super::super::timing::MIRROR_QUIET);
+        let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+        results.push((
+            mux,
+            pair.plane.views.read().mirror_target != before,
+            painted,
+            painted_workflow_sections(&pair.panes[1]) == expected,
+        ));
+    }
+    assert_eq!(
+        results,
+        vec![
+            (MuxName::Tmux, true, true, true),
+            (MuxName::Zellij, true, true, true)
+        ],
+        "card-less group moves must publish and paint the new group order"
+    );
+}
+
+#[test]
+fn hidden_mirrors_card_less_group_scrolls_on_both_backends() {
+    let mut results = Vec::new();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = card_less_mirror_pair(
+            mux,
+            &[
+                "wf-a", "wf-b", "wf-c", "wf-d", "wf-e", "wf-f", "wf-g", "wf-h",
+            ],
+        );
+        assert!(pair.view(0).anchored_rows.is_empty());
+        assert!(pair.panes[0].state.pane.ui.painted_rows.is_empty());
+        let before = pair.plane.views.read().mirror_target;
+        let sections = painted_workflow_sections(&pair.panes[1]);
+        pair.input(0);
+        assert_eq!(pair.view(0).scroll_offset, 3);
+        assert!(pair.view(0).anchored_rows.is_empty());
+        pair.clock
+            .advance(super::super::super::timing::MIRROR_QUIET);
+        repaint_source(&mut pair);
+        let expected = painted_workflow_sections(&pair.panes[0]);
+        assert_ne!(expected, sections, "{mux:?}: the drawn groups scrolled");
+        let painted = advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+        results.push((
+            mux,
+            pair.plane.views.read().mirror_target != before,
+            painted,
+            painted_workflow_sections(&pair.panes[1]) == expected,
+        ));
+    }
+    assert_eq!(
+        results,
+        vec![
+            (MuxName::Tmux, true, true, true),
+            (MuxName::Zellij, true, true, true)
+        ],
+        "card-less group scrolls must publish and paint the target window"
+    );
 }
 
 #[test]
