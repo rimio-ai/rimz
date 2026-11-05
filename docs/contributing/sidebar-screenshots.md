@@ -78,7 +78,7 @@ agent @coder codex in #main
 9s @coder done "shipped"
 ```
 
-Presets are `empty`, `fleet`, `provider`, `cockpit`, `focus`, `economy`, `reach`, `clocks`, `clocks-done`, and `workflow` (a rowless queued run); declarations and beats may follow and address their handles. Use `glyphs nerd-font` for the alternate clock icons, or `pets <pet>` for a companion. Other agent verbs are `idle`, `waits <duration> ["reason"]`, `fails "reason"`, `leaves`, and `set context <pct>%|cost $<usd>|tokens <n>|model <name>`. UI beats support `select`, `expand`, `collapse`, or `click @handle`, `key <key>`, and `scroll up|down [n]`. Handle-targeted UI beats address root cards, not spawned children; a child target is refused with its parent handle. Unknown names suggest a correction; undeclared handles and states the provider cannot reach are refused with a line, column and fix.
+Presets are `empty`, `fleet`, `provider`, `cockpit`, `focus`, `economy`, `reach`, `clocks`, `clocks-done`, `workflow` (a rowless queued run), and `not-tracked` (the three reporting-gap reasons); declarations and beats may follow and address their handles. Use `glyphs nerd-font` for the alternate clock icons, or `pets <pet>` for a companion. Other agent verbs are `idle`, `waits <duration> ["reason"]`, `fails "reason"`, `leaves`, and `set context <pct>%|cost $<usd>|tokens <n>|model <name>`. UI beats support `select`, `expand`, `collapse`, or `click @handle`, `key <key>`, and `scroll up|down [n]`. Handle-targeted UI beats address root cards, not spawned children; a child target is refused with its parent handle. Unknown names suggest a correction; undeclared handles and states the provider cannot reach are refused with a line, column and fix.
 
 ## Fidelity
 

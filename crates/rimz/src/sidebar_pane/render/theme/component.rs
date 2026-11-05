@@ -98,6 +98,12 @@ pub(crate) enum Component {
     ProcMem,
     /// The process `⇅` (I/O) marker.
     ProcIo,
+    /// The reporting-gap suffix on a not-tracked process row.
+    NotTrackedSuffix,
+    /// The `tip:` label before a reporting fix.
+    NotTrackedTip,
+    /// The action text that enables an untracked pane's reporting.
+    NotTrackedFix,
     /// The `↗` output token marker.
     Output,
     /// The `↘` fresh-input token marker — the costliest read wears the `expense`
@@ -198,6 +204,9 @@ impl Component {
         Component::ProcCpu,
         Component::ProcMem,
         Component::ProcIo,
+        Component::NotTrackedSuffix,
+        Component::NotTrackedTip,
+        Component::NotTrackedFix,
         Component::Output,
         Component::Input,
         Component::CacheWrite,
@@ -235,7 +244,9 @@ impl Component {
         tone_color(match self {
             Sessions | Output | HelpKey | WindowHuge => palette.accent,
             LaneSpine | EntrySpine => palette.selection,
-            WorktreeHeader | BranchDelta | WorkflowState | StallWord => palette.body,
+            WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
+                palette.body
+            }
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator => palette.faint,
             StallLeadActive | StallFigure => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
@@ -253,9 +264,8 @@ impl Component {
             CacheExpired => palette.cache_expired,
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
-            | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow => {
-                palette.muted
-            }
+            | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
+            | NotTrackedSuffix | NotTrackedTip => palette.muted,
         })
     }
 }

@@ -7,6 +7,7 @@ fn scenario_snapshot(
     let source = match name {
         "empty" => include_str!("../../../../scenarios/empty.scn"),
         "workflow" => include_str!("../../../../scenarios/workflow.scn"),
+        "not-tracked" => include_str!("../../../../scenarios/not-tracked.scn"),
         "fleet" => include_str!("../../../../scenarios/fleet.scn"),
         "provider" => include_str!("../../../../scenarios/provider.scn"),
         "cockpit" => include_str!("../../../../scenarios/cockpit.scn"),
@@ -90,6 +91,7 @@ fn fixture_frames_are_deterministic() {
     for (state, snapshot_name) in [
         ("fleet", "fleet_fixture_frame"),
         ("workflow", "workflow_fixture_frame"),
+        ("not-tracked", "not_tracked_fixture_frame"),
         ("cockpit", "cockpit_fixture_frame"),
         ("focus", "focus_fixture_frame"),
         ("economy", "economy_fixture_frame"),

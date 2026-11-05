@@ -157,7 +157,9 @@ How much of the card shows at rest is yours to tune with `card_density` ([themin
 
 ## Process rows
 
-A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows share the calm agent cards' newest-first order in their worktree, below asks and failures, never enter the cockpit tallies, and never join the jump queue. A process stuck in uninterruptible sleep or left as a zombie does wear `!`, which flags a wedged process rather than a failed turn. Rows are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card. When the agent exits, the process row keeps the card's place.
+A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows share the calm agent cards' newest-first order in their worktree, below asks and failures, never enter the cockpit tallies, and never join the jump queue. A process stuck in uninterruptible sleep or left as a zombie does wear `!`, which flags a wedged process rather than a failed turn. Rows are still jump targets, and when a tracked agent starts in that pane the row becomes that agent's card. When the agent exits, the process row keeps the card's place.
+
+A recognized agent pane with a known reporting gap instead reads `○ <program> · not tracked`, followed by a one-line fix. Here `○` says RimZ reads nothing, not that the agent is idle. Missing hooks, blocked hooks, and an explicitly unsupported reporting mode each supply their own tip. The row sorts and folds as a process row, without stats or cockpit counts; click either line to reach the agent. The [not-tracked row reference](../interface/sidebar.md#not-tracked-rows) explains clipped tips and narrow widths.
 
 ## The agent lifecycle
 
@@ -189,7 +191,7 @@ A session's life traces one loop through those states:
                                  └─ waiting
 ```
 
-- A fresh agent is **idle** until its first prompt; a prompt you type, or a queued `rimz message`, starts a turn.
+- A fresh agent with working reporting is **idle** until its first prompt; a prompt you type, or a queued `rimz message`, starts a turn. A known reporting gap instead shows a two-line [not-tracked row](../interface/sidebar.md#not-tracked-rows) with a fix, not an idle card.
 - A **running** turn animates its head, and the head changes as the agent thinks, edits, compacts, or waits on its own children.
 - An ask pulls the card to **waiting**, and answering it in the pane returns the agent to work; the card notices your answer before the turn formally moves on.
 - A turn ends **done** or **failed**, and the state tells you whether to collect a result or unblock a problem.
@@ -234,7 +236,7 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 Inside a group, the workflow card and [cohort blocks](#teams-read-as-one) lead. Among the remaining rows, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
 
-Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
+Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows, including not-tracked agent panes. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
 
 Within a band, prompts, clean finishes, entering or leaving a provider pause, and read receipts do not reshuffle calm cards. A second ask, or a question becoming a failure, keeps its place among the attention cards. Read state affects emphasis and the jump inbox, not this order.
 
@@ -271,7 +273,7 @@ Four partitions hold regardless of any score, so the column keeps one stable out
 - The `external` divider and out-of-project panes follow active project work, whatever they hold.
 - Inactive project groups follow `external`, behind the inactive chip at the bottom. The whole line and `i` toggle a paged peek without filtering; `+K older` loads the next 10 at the end of the body. It follows your view across tabs and focus changes until you toggle it, and starts closed after a host restart. Opening reveals the first receipt, closing returns to the chip, and neither moves the selection.
 
-Inside an active group, the six-row cap fills in section order, so idle cohort members take slots before idle solo cards and process rows; overflow folds behind `+K more`. An agent card that is working, blocked, parked, finished, unread, or selected is never folded. When only process panes remain hot, the first hot process row stays visible as a liveness anchor; cooled shells are not exempt.
+Inside an active group, the six-row cap fills in section order, so idle cohort members take slots before idle solo cards and process rows; overflow folds behind `+K more`. Not-tracked rows follow the same cap as other process rows. An agent card that is working, blocked, parked, finished, unread, or selected is never folded. When only process panes remain hot, the first hot process row stays visible as a liveness anchor; cooled shells are not exempt.
 
 The card in a pane you have focused keeps its place in the order, and its group keeps its place, until you leave that pane. Prompting it, answering its ask, or waking cooled work does not move it. Clients sharing a view can focus different panes: both cards hold. Other cards can still arrive or ask for attention above them.
 

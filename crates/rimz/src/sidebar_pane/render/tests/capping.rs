@@ -66,6 +66,23 @@ fn collapsed_cap_trims_ordinary_idle_tail() {
 }
 
 #[test]
+fn collapsed_cap_folds_not_tracked_rows_like_idle_processes() {
+    let mut rows = idle_rows(6);
+    let mut row = process_row("codex");
+    row.as_process_mut().unwrap().not_tracked = Some(crate::agents::NotTracked {
+        reason: crate::agents::NotTrackedReason::HooksMissing,
+        fix: "rimz hooks install codex, then restart".to_owned(),
+    });
+    rows.push(row);
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.worktree_groups = vec![group(rows)].into();
+    let screen = snapshot_to_screen(&snapshot, 54, 28);
+    assert!(screen.contains("+1 more"), "{screen}");
+    assert!(!screen.contains("not tracked"), "{screen}");
+    assert_snapshot("not_tracked_folded", screen);
+}
+
+#[test]
 fn expanded_and_filtered_groups_are_uncapped() {
     let group = group(idle_rows(9));
 

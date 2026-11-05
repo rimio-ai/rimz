@@ -114,8 +114,8 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `accent` | data: the `◎` sessions glyph and the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
-| `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, and active stall resource words |
-| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the fading stall lead and items, stall overflow tags, and the compacted-context meter's empty track while it has no size estimate |
+| `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, and not-tracked fix text |
+| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, and the compacted-context meter's empty track while it has no size estimate |
 | `faint` | faintest chrome: measured bar tracks, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |

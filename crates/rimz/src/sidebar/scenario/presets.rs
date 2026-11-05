@@ -81,6 +81,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         Preset::Focus => add_focus_fixture(&mut snapshot, now),
         Preset::Economy => add_economy_fixture(&mut snapshot, now),
         Preset::Workflow => add_workflow_fixture(&mut snapshot, now),
+        Preset::NotTracked => add_not_tracked_fixture(&mut snapshot, now),
         Preset::Reach => add_reach_fixture(&mut snapshot, now),
         Preset::Clocks | Preset::ClocksDone => {
             add_clock_fixture(&mut snapshot, now, state);
@@ -423,6 +424,61 @@ fn process_row(spec: ProcessRowSpec) -> SidebarRow {
             ..ProcessCard::default()
         }),
     }
+}
+
+fn add_not_tracked_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
+    use crate::agents::{NotTracked, NotTrackedReason};
+
+    let rows = [
+        (
+            "qoder",
+            NotTrackedReason::HooksMissing,
+            "rimz hooks install qoder, then restart",
+        ),
+        (
+            "hermes",
+            NotTrackedReason::HooksBlocked,
+            "launch hermes in a terminal and answer y to each RimZ hook prompt, then restart",
+        ),
+        (
+            "custom-agent",
+            NotTrackedReason::ModeNotFollowed,
+            "start in an interactive mode",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (name, reason, fix))| {
+        let mut row = process_row(ProcessRowSpec {
+            id: name,
+            name,
+            pane: ["terminal_1", "terminal_2", "terminal_3"][index],
+            command: name,
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            state: ProcessState::Idle,
+            detail: None,
+            cpu_pct: None,
+            rss_kb: None,
+            io_bps: None,
+            last_activity: now,
+        });
+        if let Some(process) = row.as_process_mut() {
+            process.not_tracked = Some(NotTracked {
+                reason,
+                fix: fix.to_owned(),
+            });
+        }
+        row
+    })
+    .collect();
+    snapshot.worktree_groups = vec![worktree_group(WorktreeGroupSpec {
+        key: "/srv/code/query-engine",
+        label: "main",
+        rows,
+        ..Default::default()
+    })]
+    .into();
 }
 
 fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
