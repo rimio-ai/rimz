@@ -6,11 +6,25 @@
 # `cargo xtask gate` and CI. Install with `cargo xtask hooks`; bypass a single
 # commit with `git commit --no-verify`.
 
+# Build xtask first: the `cargo xtask` alias runs cargo quiet, so a toolchain or compiler
+# wrapper that breaks the build exits with no output, and every check below looks refused.
+build_output=$(cargo build --package xtask 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+	printf '%s\n' "$build_output" >&2
+	echo >&2
+	echo "pre-commit: \`cargo build --package xtask\` failed with exit status $rc, so no check ran. Fix the error above and commit again." >&2
+	exit 1
+fi
+
 # Formatting: judge staged Rust index copies, rewrite only refused files' working
 # copies, and never re-stage, so partially staged files never gain hunks silently.
-if ! cargo xtask fmt --staged; then
+# xtask says what it refused, so this line claims only the failure and its status.
+cargo xtask fmt --staged
+rc=$?
+if [ "$rc" -ne 0 ]; then
 	echo >&2
-	echo "pre-commit: staged Rust files above were not formatted; only their working copies were formatted where possible, nothing was re-staged. Review the diff, re-stage, and commit again." >&2
+	echo "pre-commit: \`cargo xtask fmt --staged\` failed with exit status $rc. Its output above names the cause." >&2
 	exit 1
 fi
 

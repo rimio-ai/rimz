@@ -112,6 +112,7 @@ fn refused_index_formats_only_its_working_copy_without_staging() {
     assert_eq!(err.matches("lib.rs").count(), 1, "{err}");
     assert!(err.contains("working copy formatted"), "{err}");
     assert!(err.contains("re-stage"), "{err}");
+    assert!(err.contains("nothing was re-staged"), "{err}");
 }
 
 #[test]
@@ -201,6 +202,7 @@ fn index_parse_error_is_reported_and_a_valid_working_copy_is_formatted() {
     let err = fmt_staged(root.path()).unwrap_err().to_string();
 
     assert!(err.contains("unclosed delimiter"), "{err}");
+    assert!(err.contains("rustfmt failed with exit status"), "{err}");
     assert!(err.contains("working copy formatted"), "{err}");
     assert_eq!(
         fs::read(root.path().join("example.rs")).unwrap(),

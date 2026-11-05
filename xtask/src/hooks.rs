@@ -62,7 +62,12 @@ pub(crate) fn fmt_staged(root: &Path) -> Result<()> {
         refused.push(format!("{path:?}: {problem}{outcome}"));
     }
     if !refused.is_empty() {
-        bail!("{}", refused.join("\n"));
+        bail!(
+            "{}\nstaged Rust files above were not formatted; only their working copies were \
+             formatted where possible, nothing was re-staged. Review the diff, re-stage, and \
+             commit again.",
+            refused.join("\n")
+        );
     }
     Ok(())
 }
@@ -117,7 +122,8 @@ fn rustfmt(root: &Path, source: &[u8]) -> Result<Vec<u8>> {
         let output = output?;
         if !output.status.success() {
             bail!(
-                "rustfmt failed: {}",
+                "rustfmt failed with {}: {}",
+                output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
