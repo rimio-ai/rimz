@@ -109,18 +109,19 @@ pub(super) fn bar_row(
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead, except in
-/// the compaction gap, whose meter keeps the cluster at every width. The age
-/// appears from five minutes quiet, filling over an hour ([`hour_age_glyph`])
-/// and staying full past it. Its continuous tone is muted until half the known
-/// TTL, or the last ten minutes if earlier, and never before the last hour
-/// ([`CACHE_WARNING_MAX_SECS`]), then warn through caution to alarm at the
-/// ceiling. Past the ceiling it wears the fixed expired-cache tone, while its
-/// age face keeps the hour scale. Unknown lifetimes and the gap between
-/// compaction and prompt stay muted without a cache line. A keep-warm horizon
-/// takes precedence in the steady held tone ([`cache_age_pin`]). Finished cards
-/// follow the same ramp. The clock reads the agent's own cache clock
-/// ([`SidebarRow::idle_since`]), not child-folded activity: a parent waiting on
-/// children makes no model call, so its cache keeps cooling.
+/// a compaction gap with a cache, whose meter keeps the cluster at every width.
+/// The age appears from five minutes quiet, filling over an hour
+/// ([`hour_age_glyph`]) and staying full past it. Its continuous tone is muted
+/// until half the known TTL, or the last ten minutes if earlier, and never
+/// before the last hour ([`CACHE_WARNING_MAX_SECS`]), then warn through caution
+/// to alarm at the ceiling. Past the ceiling it wears the fixed expired-cache
+/// tone, while its age face keeps the hour scale. Unknown lifetimes stay muted
+/// without a cache line. A hollow meter or compaction since the last prompt
+/// means no cache: no pin, cache line, or expired tone, even during a keep-warm
+/// hold. Other held caches keep the steady held tone ([`cache_age_pin`]).
+/// Finished cards follow the same ramp. The clock reads the agent's own cache
+/// clock ([`SidebarRow::idle_since`]), not child-folded activity: a parent
+/// waiting on children makes no model call, so its cache keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -158,9 +159,10 @@ pub(super) fn gauge_line(
     // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
+    let age = cache_age(ctx, row);
     let (bar_color, segments) = if compacted_empty {
         (theme.component(Component::ContextCompacted), None)
-    } else if cache_age(row, ctx.now).expired(ctx.now) {
+    } else if age.expired(ctx.now) {
         (theme.component(Component::CacheExpired), None)
     } else if compacted_unmeasured {
         (color, None)
@@ -169,22 +171,23 @@ pub(super) fn gauge_line(
     };
     let glyph = if compacted_unmeasured {
         theme.glyph(GlyphRole::MeterCompacted)
-    } else if drawn > 0.0 {
-        theme.glyph(GlyphRole::MeterContextFull)
-    } else {
+    } else if empty_context_meter(row, bands) {
         theme.glyph(GlyphRole::MeterContextEmpty)
+    } else {
+        theme.glyph(GlyphRole::MeterContextFull)
     };
     let glyph_color = if compacted_empty {
         theme.heat_tone(0.0)
     } else {
         bar_color
     };
-    // The gap hides the stats line that pins the age below L2, so its meter keeps the age.
-    let age_width = if ctx.tier == Tier::L2 || compacted_unmeasured {
-        6
-    } else {
-        0
-    };
+    // A gap with a cache keeps the age below L2 because its stats line is hidden.
+    let age_width =
+        if ctx.tier == Tier::L2 || (compacted_unmeasured && !matches!(age, CacheAge::NoCache)) {
+            6
+        } else {
+            0
+        };
     let segments = segments
         .as_ref()
         .map(|segments| &segments[..])
@@ -235,7 +238,7 @@ pub(super) fn gauge_line(
     if age_width != 0 {
         line.spans.push(Span::raw(" "));
         line.spans
-            .push(cache_age_pin(theme, row, ctx.now).unwrap_or_else(|| Span::raw("     ")));
+            .push(cache_age_pin(ctx, row).unwrap_or_else(|| Span::raw("     ")));
     }
     line
 }
@@ -382,10 +385,12 @@ pub(super) fn gauge_segments(
 
 /// What the card's prompt-cache clock says at the snapshot time.
 enum CacheAge {
+    /// A hollow meter or compaction since the last prompt, even while held.
+    NoCache,
     /// A keep-warm horizon holds the phase, not the age origin.
     Held,
     /// Count from the later of own activity and the last ping; an unknown TTL
-    /// or the gap between compaction and prompt has no ceiling.
+    /// has no ceiling.
     Aging {
         since: jiff::Timestamp,
         ceiling: Option<i64>,
@@ -399,6 +404,7 @@ const CACHE_WARNING_MAX_SECS: i64 = 3_600;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CachePhase {
+    NoCache,
     Held,
     Unknown,
     Calm,
@@ -408,8 +414,10 @@ enum CachePhase {
 
 impl CacheAge {
     fn phase(&self, now: jiff::Timestamp) -> CachePhase {
-        let Self::Aging { since, ceiling } = *self else {
-            return CachePhase::Held;
+        let (since, ceiling) = match *self {
+            Self::NoCache => return CachePhase::NoCache,
+            Self::Held => return CachePhase::Held,
+            Self::Aging { since, ceiling } => (since, ceiling),
         };
         let Some(ceiling) = ceiling else {
             return CachePhase::Unknown;
@@ -446,44 +454,60 @@ impl CachePhase {
             Self::Expired => {
                 theme.style(theme.component(Component::CacheExpired), Modifier::empty())
             }
-            Self::Unknown | Self::Calm => theme.muted(),
+            Self::NoCache | Self::Unknown | Self::Calm => theme.muted(),
         }
     }
 }
 
-fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
+fn empty_context_meter(row: &SidebarRow, bands: &ContextMeterConfig) -> bool {
+    if row.as_agent().is_some_and(|card| card.compacted_unmeasured) {
+        return false;
+    }
+    let meter = row.context_meter(bands.scale);
+    meter
+        .precise_percent
+        .or(meter.estimated_percent)
+        .unwrap_or_else(|| f64::from(meter.percent.unwrap_or(0)))
+        == 0.0
+}
+
+fn cache_age(ctx: &RowCtx<'_>, row: &SidebarRow) -> CacheAge {
     let agent = row.as_agent();
+    if agent.is_some_and(|agent| agent.compacted_since_prompt)
+        || empty_context_meter(row, ctx.bands)
+    {
+        return CacheAge::NoCache;
+    }
     let cache = agent.and_then(|agent| agent.cache);
     if let Some(clock) = cache
-        && clock.warm_until.is_some_and(|until| now < until)
+        && clock.warm_until.is_some_and(|until| ctx.now < until)
     {
         return CacheAge::Held;
     }
     CacheAge::Aging {
         since: row.idle_since(),
-        ceiling: if agent.is_some_and(|agent| agent.compacted_since_prompt) {
-            // The next request starts from the summary, not the old prompt cache.
-            None
-        } else {
-            cache.map(|clock| i64::from(clock.ceiling_secs))
-        },
+        ceiling: cache.map(|clock| i64::from(clock.ceiling_secs)),
     }
 }
 
-/// The cache-clock tone every card age wears.
-pub(super) fn cache_age_style(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Style {
-    cache_age(row, now).phase(now).style(theme)
+/// The cache-clock tone every card age wears, muted when the card has no cache.
+pub(super) fn cache_age_style(ctx: &RowCtx<'_>, row: &SidebarRow) -> Style {
+    cache_age(ctx, row).phase(ctx.now).style(ctx.theme)
 }
 
 /// The card's cache-age pin fills over the first hour of its label's age
 /// and stays full past it, never ringed. Held or not, the pin counts from own
 /// activity or the last cache request. A hold stays steady `good`; otherwise
 /// tone follows the known TTL: muted until its warning band, then warn through
-/// caution to alarm. Unknown lifetimes and the gap between compaction and
-/// prompt stay muted without a warning; expired caches wear the meter's expired
-/// tone.
-fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
-    let phase = cache_age(row, now).phase(now);
+/// caution to alarm. Unknown lifetimes stay muted without a warning; expired
+/// caches wear the meter's expired tone. No-cache cards have no pin, even held.
+fn cache_age_pin(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Span<'static>> {
+    let theme = ctx.theme;
+    let now = ctx.now;
+    let phase = cache_age(ctx, row).phase(now);
+    if phase == CachePhase::NoCache {
+        return None;
+    }
     let style = phase.style(theme);
     let since = row.idle_since();
     let label = activity_short(since, now)?;
@@ -492,11 +516,11 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
 }
 
 /// Cache expiry guidance follows the template's stats, including held cards,
-/// but stays hidden between compaction and the next prompt.
+/// but stays hidden on no-cache cards, even during a keep-warm hold.
 pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let wide = ctx.tier == Tier::L2;
-    let phase = cache_age(row, ctx.now).phase(ctx.now);
+    let phase = cache_age(ctx, row).phase(ctx.now);
     let mut spans = vec![Span::raw("  ")];
     match phase {
         CachePhase::Closing { remaining, .. } => {
@@ -653,9 +677,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     if row_ctx.tier == Tier::L2 {
         return Line::from(trim_spans_to_width(left, width));
     }
-    let age = cache_age_pin(theme, row, row_ctx.now)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let age = cache_age_pin(row_ctx, row).into_iter().collect::<Vec<_>>();
     pin_right(left, age, width)
 }
 
@@ -711,6 +733,13 @@ mod tests {
             assert_eq!(phase(age, None), CachePhase::Unknown);
         }
         assert_eq!(CacheAge::Held.phase(now), CachePhase::Held);
+        let no_cache = CacheAge::NoCache;
+        assert_eq!(no_cache.phase(now), CachePhase::NoCache);
+        assert!(!no_cache.expired(now));
+        assert_eq!(
+            no_cache.phase(now).style(&Theme::fixed(false)),
+            Theme::fixed(false).muted()
+        );
     }
 
     #[test]

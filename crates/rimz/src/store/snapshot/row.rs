@@ -600,8 +600,8 @@ pub struct AgentCard {
     pub compacted_unmeasured: bool,
     /// The old prompt cache is irrelevant after compaction. Native turn starts
     /// use [`crate::agents::AgentState::compacted_since_prompt`]; other kinds
-    /// use the resolved [`Self::compacted_unmeasured`]. Unless held warm, the
-    /// age stays muted without a ring and the cache line stays hidden.
+    /// use the resolved [`Self::compacted_unmeasured`]. The age pin and cache
+    /// line stay hidden even while held warm; the stale-line age stays muted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacted_since_prompt: bool,
     /// Lifetime count of completed context compactions, copied from the rollup;
