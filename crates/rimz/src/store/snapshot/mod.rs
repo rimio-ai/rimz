@@ -66,10 +66,11 @@ pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan, RedeemForecast,
     RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarInactive,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence,
-    SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarUnitKey,
-    SidebarWorkflow, SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
-    ThrottleNotice, TruthNotice, UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue,
-    WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStallItem, SidebarStallPhase,
+    SidebarStallResource, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow, SidebarWorkflowNode,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, TruthNotice, UnitStatus,
+    WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    lead_unread_row,
 };
 pub(crate) use view::{actionable_unread_count, triage_key};
 

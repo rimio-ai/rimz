@@ -79,7 +79,7 @@ fn only_a_test_sandbox_names_a_skip_log_and_its_runs_keep_it() {
 }
 
 #[test]
-fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
+fn only_a_test_sandbox_exports_missing_host_inputs_and_its_runs_keep_them() {
     let workspace = TempDir::new().unwrap();
     let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
     let exported = sandbox.command_env();
@@ -88,7 +88,11 @@ fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
         .find_map(|(key, value)| (*key == CODEX_BIN_ENV).then_some(value))
         .expect("test sandbox exports the codex override");
     assert!(!codex.exists(), "{}", codex.display());
-    let ambient = [std::ffi::OsString::from(CODEX_BIN_ENV)];
+    let pressure = exported
+        .iter()
+        .find_map(|(key, value)| (*key == "RIMZ_TEST_PRESSURE_ROOT").then_some(value));
+    assert_eq!(pressure.map(|root| root.exists()), Some(false));
+    let ambient = [CODEX_BIN_ENV, "RIMZ_TEST_PRESSURE_ROOT"].map(std::ffi::OsString::from);
     assert_eq!(
         test_removed_env(ambient.into_iter(), &sandbox.env, &[]),
         ["NO_COLOR"]
@@ -99,7 +103,7 @@ fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
         manual
             .command_env()
             .iter()
-            .all(|(key, _)| *key != CODEX_BIN_ENV)
+            .all(|(key, _)| ![CODEX_BIN_ENV, "RIMZ_TEST_PRESSURE_ROOT"].contains(key))
     );
 }
 

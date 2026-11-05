@@ -43,9 +43,10 @@ pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
     ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarInactive,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence,
-    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow,
-    SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice,
-    UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarStallItem, SidebarStallPhase,
+    SidebarStallResource, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow, SidebarWorkflowNode,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice, UnitStatus,
+    WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
     agent_idle_since, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
@@ -96,7 +97,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 78;
+pub const SNAPSHOT_VERSION: u32 = 79;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -314,9 +315,13 @@ pub struct SidebarSnapshot {
     pub fleet_budget: Option<DailyBudgetView>,
     /// Remote SSH link health published by `rimz remote connect` through the
     /// remote-side `link-stats.json` sidecar. Local rooms and old remotes carry
-    /// `None`, keeping the footer byte-identical to the pre-link-health render.
+    /// `None`, leaving the footer without an SSH anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<SidebarLinkHealth>,
+    /// Machine resources stalling on the room host, in footer order. Stamped by
+    /// the room host's fetch cycle and the CLI producer; other folds leave it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stall: Vec<SidebarStallItem>,
     /// The active event-log extent this rollup reflects — the freshness stamp
     /// `read_fresh_latest` compares against the live log. Stamped by
     /// `build_from` under the producing fold; `None` on the pure-reducer
@@ -438,6 +443,7 @@ impl SidebarSnapshot {
             fleet_day_spend_epoch_secs: None,
             fleet_budget: None,
             link: None,
+            stall: Vec::new(),
             reflects_log: None,
             fenced_sessions: Arc::default(),
             resume_outcomes: Some(Arc::default()),

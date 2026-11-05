@@ -3552,7 +3552,18 @@ path = "crates/rimz/src/sidebar"
 # HIBERNATED_CHECK_TTL shares the held-agent cadence with the transcript watcher (+1).
 # FOLD_FLOOR and UNWATCHED_FOLD_INTERVAL share room-fold cadence bounds (+2).
 # attention::reconcile_snapshot stamps final folds before observation and publication (+1).
-surface-budget = 249
+# stall and stall::read share classified host PSI with the host and CLI producers (+2).
+surface-budget = 251
+
+[[verdict]]
+kind = "item"
+key = "sidebar::stall"
+reason = "Host and CLI publication sample machine stall without adding I/O to passive folds."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::stall::read"
+reason = "Each publication cycle shares one classified machine/container PSI reading."
 
 [[verdict]]
 kind = "item"
@@ -3943,7 +3954,8 @@ path = "crates/rimz/src/store"
 # SidebarSnapshot::process_attention_facts shares process-slot aging with enrichment (+1).
 # TypingHold, TypingHoldReplay and Store::hold_message_claims share durable input deferral (+3).
 # Store::record_typing_hold_replay retains live delivery intent during an existing hold (+1).
-surface-budget = 549
+# SidebarStallResource, SidebarStallPhase and SidebarStallItem carry classified host PSI (+3).
+surface-budget = 552
 
 [[verdict]]
 kind = "item"
@@ -3954,6 +3966,21 @@ reason = "Delivery persists its input-hold deadline and the sweep's optional liv
 kind = "item"
 key = "store::message::TypingHoldReplay"
 reason = "The store owns the durable steer/interrupt replay vocabulary below message delivery."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarStallResource"
+reason = "Snapshot stall resources have stable wire names independent of the private proc reader."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarStallPhase"
+reason = "Snapshot publication classifies active and fading stalls before projection and rendering."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarStallItem"
+reason = "Whole-percent notice content repaints only when a displayed stall changes."
 
 [[verdict]]
 kind = "item"

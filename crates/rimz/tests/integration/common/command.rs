@@ -71,6 +71,8 @@ pub(super) fn provider_home_keys() -> impl Iterator<Item = &'static str> {
 /// and rewrite a session sidecar mid-test.
 const MISSING_CODEX_BIN: &str = "/nonexistent/rimz-fixture-codex";
 
+const MISSING_PRESSURE_ROOT: &str = "/nonexistent/rimz-fixture-pressure";
+
 /// The ambient environment keys [`ScrubSessionEnvExt::scrub_session_env`]
 /// drops from a child.
 fn ambient_session_keys() -> impl Iterator<Item = String> {
@@ -96,7 +98,9 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
 /// about codex behaviour sets it afterwards to the app-server stub or its own
 /// fake. Set `RIMZ_PRICING_OFFLINE=1` so pricing never fetches live lists; a test
 /// needing prices seeds its own cache, and one testing a real fetch sets the
-/// switch to `0` afterwards. Under coverage, point child profile
+/// switch to `0` afterwards. Point `RIMZ_TEST_PRESSURE_ROOT` at a missing root,
+/// so no child reads the host's PSI; a pressure test supplies its fixture root
+/// afterwards. Under coverage, point child profile
 /// output at the null device: several fixtures intentionally SIGKILL long-lived
 /// child `rimz` processes, and a half-written `.profraw` poisons the merge even
 /// though the test process itself exited cleanly.
@@ -111,6 +115,7 @@ impl ScrubSessionEnvExt for Command {
         }
         self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
         self.env("RIMZ_PRICING_OFFLINE", "1");
+        self.env("RIMZ_TEST_PRESSURE_ROOT", MISSING_PRESSURE_ROOT);
         suppress_child_coverage(self);
         self
     }
@@ -123,6 +128,7 @@ impl ScrubSessionEnvExt for portable_pty::CommandBuilder {
         }
         self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
         self.env("RIMZ_PRICING_OFFLINE", "1");
+        self.env("RIMZ_TEST_PRESSURE_ROOT", MISSING_PRESSURE_ROOT);
         suppress_pty_child_coverage(self);
         self
     }

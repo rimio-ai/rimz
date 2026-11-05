@@ -911,9 +911,11 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
         && let Some(session) = context.session_name.as_deref()
         && published_frame_exists(&context.runtime, session)
     {
-        PublishedSnapshotReader::new(context.runtime.clone(), session, None)
+        let mut snapshot = PublishedSnapshotReader::new(context.runtime.clone(), session, None)
             .read(&context.state)
-            .context("reading the consumer snapshot")?
+            .context("reading the consumer snapshot")?;
+        snapshot.stall = rimz::sidebar::stall::read();
+        snapshot
     } else {
         producer_snapshot(&context, command.mux, globals)?
     };
@@ -1064,13 +1066,14 @@ fn producer_snapshot(
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
     };
-    produce_snapshot_with_refresh(
+    let mut snapshot = produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &context.state,
         &context.runtime,
         &opts,
-    )
-    .map_err(Into::into)
+    )?;
+    snapshot.stall = rimz::sidebar::stall::read();
+    Ok(snapshot)
 }
 
 fn emit_snapshot(snapshot: &SidebarSnapshot, json: bool) -> Result<()> {

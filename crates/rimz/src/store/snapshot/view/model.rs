@@ -825,6 +825,30 @@ pub enum SidebarLinkFreshness {
     Stale,
 }
 
+/// Machine resources in footer order within each stall phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarStallResource {
+    Memory,
+    Cpu,
+    Io,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarStallPhase {
+    Active,
+    Fading,
+}
+
+/// One classified machine stall, with the current ten-second whole percent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarStallItem {
+    pub resource: SidebarStallResource,
+    pub percent: u8,
+    pub phase: SidebarStallPhase,
+}
+
 /// The producer's raw client-presence sample, classified into
 /// [`SidebarPresence`] at enrich time against the configured idle window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

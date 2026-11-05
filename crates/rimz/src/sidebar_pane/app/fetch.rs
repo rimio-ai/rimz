@@ -22,7 +22,7 @@ use crate::sidebar::timing::FOLD_FLOOR;
 #[cfg(test)]
 use crate::sidebar::unread::UnreadEpisodes;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, reconcile_snapshot};
-use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
+use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot, SidebarStallItem};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
@@ -104,6 +104,7 @@ pub(super) struct FoldInputs {
     pub sampled_at: Instant,
     pub anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
     pub filter: crate::sidebar::body_filter::BodyLens,
+    pub stall: Vec<SidebarStallItem>,
 }
 
 impl Default for FoldInputs {
@@ -112,16 +113,18 @@ impl Default for FoldInputs {
             sampled_at: Instant::now(),
             anchor: None,
             filter: Default::default(),
+            stall: Vec::new(),
         }
     }
 }
 
 impl FoldInputs {
-    fn read(runtime: &RuntimePaths) -> Self {
+    fn read(runtime: &RuntimePaths, read_stall: fn() -> Vec<SidebarStallItem>) -> Self {
         Self {
             sampled_at: Instant::now(),
             anchor: crate::mux::focus_anchor::load(runtime),
             filter: crate::sidebar::body_filter::load(runtime),
+            stall: read_stall(),
         }
     }
 }
@@ -336,6 +339,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         fleet_day_spend_epoch_secs,
         fleet_budget,
         link,
+        stall,
         reflects_log,
         fenced_sessions,
         resume_outcomes,
@@ -391,6 +395,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && fleet_day_spend_epoch_secs == &right.fleet_day_spend_epoch_secs
         && fleet_budget == &right.fleet_budget
         && link == &right.link
+        && stall == &right.stall
         && reflects_log == &right.reflects_log
         && parked_workflows == &right.parked_workflows
         && throttle_notices == &right.throttle_notices
@@ -482,6 +487,7 @@ struct FetchWorker {
     window: FetchWindow,
     tab_name_memo: TabNameMemo,
     session_listed: fn(crate::MuxName, &str) -> bool,
+    read_stall: fn() -> Vec<SidebarStallItem>,
     #[cfg(test)]
     on_read: Option<Box<dyn FnMut() + Send>>,
 }
@@ -797,6 +803,7 @@ impl FetchWorker {
             },
             #[cfg(test)]
             on_read: None,
+            read_stall: crate::sidebar::stall::read,
         }
     }
 
@@ -832,7 +839,7 @@ impl FetchWorker {
         if let Some(on_read) = &mut self.on_read {
             on_read();
         }
-        sink.inputs = Arc::new(FoldInputs::read(&self.runtime));
+        sink.inputs = Arc::new(FoldInputs::read(&self.runtime, self.read_stall));
         sink.context = Some(Arc::new(FoldShared {
             observation: None,
             inputs: sink.inputs.clone(),
@@ -1036,6 +1043,7 @@ impl FetchWorker {
         source: SnapshotSource,
         sink: &mut ResultSink,
     ) {
+        fold.workspace.0.stall = sink.inputs.stall.clone();
         let final_snapshot = phase == FetchPhase::Final;
         if final_snapshot {
             crate::sidebar::attention::reconcile_snapshot(&self.runtime, &mut fold.workspace.0);

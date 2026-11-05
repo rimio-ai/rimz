@@ -104,6 +104,9 @@ impl HostSandbox {
         let missing_codex = sandbox.root.join("missing-codex");
         sandbox.env.insert(CODEX_BIN_ENV, missing_codex);
         sandbox.env.insert(PRICING_OFFLINE_ENV, PathBuf::from("1"));
+        sandbox
+            .env
+            .insert(PRESSURE_ROOT_ENV, sandbox.root.join("missing-pressure"));
         for (unit_key, key) in [
             ("RIMZ_UNIT_TEST_RIMZ_HOME", "RIMZ_HOME"),
             ("RIMZ_UNIT_TEST_XDG_CONFIG_HOME", "XDG_CONFIG_HOME"),
@@ -245,14 +248,20 @@ const SKIP_LOG_ENV: &str = "RIMZ_TEST_SKIP_LOG";
 /// so a test process and every session it births in-process read codex as not
 /// installed. The integration scrub sets the same default on each command it
 /// builds (`crates/rimz/tests/integration/common/command.rs`); this export
-/// covers the births that build no command.
+/// covers the births that build no command. Offline pricing and missing
+/// pressure below pin the other host inputs on those paths too.
 const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
 
 /// The pricing switch a test sandbox turns on, so a test process and every
 /// spending walk it runs in-process fetch no live price list. The integration
 /// scrub sets the same default on each command it builds; a manual sandbox
-/// leaves it unset, so a live check keeps real pricing.
+/// leaves it unset, so a live check keeps real pricing and pressure.
 const PRICING_OFFLINE_ENV: &str = "RIMZ_PRICING_OFFLINE";
+
+/// A missing PSI root keeps test processes and their children independent of
+/// host load. The integration scrub sets the same default on each command;
+/// manual sandboxes leave it unset for live checks or an explicit fixture root.
+const PRESSURE_ROOT_ENV: &str = "RIMZ_TEST_PRESSURE_ROOT";
 
 const SKIP_NAMES_SHOWN: usize = 5;
 
