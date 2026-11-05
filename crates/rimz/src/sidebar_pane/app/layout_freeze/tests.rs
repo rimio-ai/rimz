@@ -534,14 +534,17 @@ fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping(
     rig.present(previous.clone(), &[focused.clone(), cooling.clone()], false);
     assert_eq!(
         group_keys(&rig.context.current),
-        ["a", "b", "c", "external"]
+        ["a", "c", "b", "external"]
     );
     rig.clock.advance(std::time::Duration::from_secs(1));
     previous.now = rig.clock.timestamp();
     let mut arrival = stamped_row("new", "terminal_5", AgentStatus::Running, 30);
     arrival.as_agent_mut().unwrap().registered_at = Some(previous.now);
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut previous.worktree_groups)[2].rows)
-        .push(arrival);
+    let focused_group = std::sync::Arc::make_mut(&mut previous.worktree_groups)
+        .iter_mut()
+        .find(|group| group.key == "c")
+        .unwrap();
+    std::sync::Arc::make_mut(&mut focused_group.rows).push(arrival);
     rig.present(previous, &[focused, cooling], false);
     assert!(
         !inactive_group(&rig.context.current, "b"),
@@ -549,7 +552,7 @@ fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping(
     );
     assert_eq!(
         group_keys(&rig.context.current),
-        ["a", "b", "c", "external"]
+        ["a", "c", "b", "external"]
     );
 }
 
@@ -951,7 +954,7 @@ fn inactive_admission_waits_for_freeze_release_but_revival_is_immediate() {
     let (held, _, expired) = reconcile_fold(next, &previous, &mut ui, &clock, None);
     assert_eq!(
         (group_keys(&held), inactive_group(&held, "b"), expired),
-        (vec!["a", "b", "c", "external"], false, false),
+        (vec!["a", "c", "b", "external"], false, false),
         "time alone must not admit a group during the hold"
     );
 

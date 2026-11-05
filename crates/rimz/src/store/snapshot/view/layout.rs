@@ -518,12 +518,14 @@ pub(super) fn compare_groups(
 
 fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
     // Active project work leads external, then inactive groups. Only
-    // actionable groups use urgency. Member groups lead rowless runs within each
-    // tier; rowless runs rank by node entry rather than agent clocks.
+    // actionable groups use urgency. Unlanded groups lead landed ones after
+    // urgency; members lead rowless runs within each slice. Rowless runs rank
+    // by node entry rather than agent clocks.
     group_sort_key(
         group.rows.iter().map(row_rank_facts),
         group.kind,
         group.inactive.is_some(),
+        group_landed(group),
         group.root_lane,
         &group.label,
         group.workflow.as_ref().map(|run| run.entered_at),
@@ -535,6 +537,7 @@ struct GroupRankKey {
     partition: GroupPartition,
     tier: u8,
     urgency: Reverse<u32>,
+    landed: bool,
     rowless: bool,
     newest: StartKey<Reverse<jiff::Timestamp>>,
     ordinal: StartKey<Reverse<u64>>,
@@ -563,6 +566,7 @@ fn group_sort_key<'a>(
     facts: impl Iterator<Item = RankFacts<'a>>,
     kind: SidebarWorktreeKind,
     inactive: bool,
+    landed: bool,
     root_lane: bool,
     label: &str,
     run_entered_at: Option<jiff::Timestamp>,
@@ -596,6 +600,7 @@ fn group_sort_key<'a>(
             2
         },
         urgency: Reverse(if actionable { urgency } else { 0 }),
+        landed: !inactive && landed,
         rowless,
         newest: StartKey::from(
             if rowless {
@@ -616,13 +621,13 @@ fn group_sort_key<'a>(
     }
 }
 
-fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
+fn group_landed(group: &SidebarWorktreeGroup) -> bool {
     let pr_finished = matches!(
         group.pr_state,
         Some(WorktreePrState::Merged | WorktreePrState::Closed)
     );
     let finished = pr_finished || group.trunk_sync == Some(WorktreeTrunkSync::Merged);
-    score::git_rung(group.clean, finished)
+    score::git_rung(group.clean, finished) == GitRung::Done
 }
 
 fn group_inactive(
@@ -639,7 +644,7 @@ fn group_inactive(
     {
         return None;
     }
-    let landed = group_git_rung(group) == GitRung::Done;
+    let landed = group_landed(group);
     if !landed && (group.workflow.is_some() || group.rows.iter().any(|row| row.unread)) {
         return None;
     }
@@ -691,7 +696,8 @@ fn band(inactive: bool, archived: bool) -> u8 {
     }
 }
 
-/// One worktree's live agents, ranked within the group like the sidebar.
+/// One worktree's live agents in snapshot attention order, without the
+/// renderer's cohort blocks or workflow-owner section.
 #[derive(Debug)]
 pub struct AgentWorktreeGroup<'a> {
     pub key: String,
@@ -707,9 +713,11 @@ impl AgentWorktreeGroup<'_> {
     }
 }
 
-/// Group root agents by worktree and rank them the way the sidebar ranks rows
-/// and groups: actionable groups first, then the root lane, then newest agent
-/// registration first, with `external` last. The roster has no inactive partition.
+/// Group root agents by worktree: actionable groups first, then the root lane,
+/// then other groups, with `external` last. After urgency, unlanded groups lead
+/// landed ones, using git facts from the published snapshot's matching group key.
+/// Within each slice, newest agent registration leads. The roster has no
+/// inactive partition, cohort blocks or workflow-owner section.
 /// Within groups, actionable agents lead, newest attention stamp first; calm
 /// agents follow by band and newest stamp. Stamps come from the snapshot's
 /// enriched rows, falling back to registration. The roster uses effective agent
@@ -719,6 +727,12 @@ pub fn group_live_agents_by_worktree<'a>(
     snapshot: &SidebarSnapshot,
 ) -> Vec<AgentWorktreeGroup<'a>> {
     let windows = AttentionWindows::from_config(&snapshot.attention);
+    let landed_keys: BTreeSet<_> = snapshot
+        .worktree_groups
+        .iter()
+        .filter(|group| group_landed(group))
+        .map(|group| group.key.as_str())
+        .collect();
     let stamps: BTreeMap<_, _> = snapshot
         .rows()
         .filter(|row| row.is_agent())
@@ -779,6 +793,7 @@ pub fn group_live_agents_by_worktree<'a>(
                 .map(|agent| agent_rank_facts(agent, snapshot.now, windows, None)),
             group.kind,
             false,
+            landed_keys.contains(group.key.as_str()),
             *root_lane,
             &group.label,
             None,
