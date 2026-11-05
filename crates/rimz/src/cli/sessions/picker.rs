@@ -24,9 +24,10 @@ use rimz::theme::{Identity, Palette, Tone, resolve_provider_brand, theme_glyphs}
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::workspace::KnownWorkspace;
 use rimz::{RuntimePaths, SpendWindow, StatePaths};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::cli::GlobalFlags;
+use crate::cli::render::truncate_left_width;
 
 const EVENT_POLL: Duration = Duration::from_millis(250);
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
@@ -1384,28 +1385,6 @@ fn truncate_spans_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span
         break;
     }
     truncated
-}
-
-fn truncate_left_width(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_owned();
-    }
-    if max_width == 0 {
-        return String::new();
-    }
-    let content_width = max_width.saturating_sub(1);
-    let mut width = 0;
-    let mut suffix = Vec::new();
-    for character in text.chars().rev() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if width + character_width > content_width {
-            break;
-        }
-        width += character_width;
-        suffix.push(character);
-    }
-    let suffix = suffix.into_iter().rev().collect::<String>();
-    format!("…{suffix}")
 }
 
 #[cfg(test)]

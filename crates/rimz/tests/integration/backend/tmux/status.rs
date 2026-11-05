@@ -331,6 +331,23 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
     server.output(&["set-option", "-g", "base-index", "0"]);
     server.output(&["move-window", "-r", "-t", session]);
     let sessions = server.stdout(&["list-sessions", "-F", "#{session_name}"]);
+    let heartbeat_path = crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Tmux,
+        session,
+        "reload",
+    );
+    let mut heartbeat: rimz::wakeup::heartbeat::SidebarHeartbeat =
+        serde_json::from_slice(&std::fs::read(&heartbeat_path).unwrap()).unwrap();
+    heartbeat.build = Some(
+        rimz::build_id::of_file(&crate::common::cargo_bin(
+            "rimz",
+            env!("CARGO_BIN_EXE_rimz"),
+        ))
+        .unwrap(),
+    );
+    rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat_path, &heartbeat).unwrap();
+    crate::common::room::date_heartbeat_as_live(&heartbeat_path);
     for mode in ["off", "compact", "full"] {
         std::fs::write(
             env.rimz_home().join("config.toml"),

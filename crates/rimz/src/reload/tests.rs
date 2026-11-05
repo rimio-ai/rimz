@@ -219,7 +219,10 @@ fn staging_sweeps_only_unreferenced_builds() {
         .set_modified(std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1))
         .unwrap();
     let second = stage_build_under(&second_source, dir.path()).unwrap();
-    let room_bin = record_live_room_bin_at(&known, &second, &paths, &runtime).unwrap();
+    let room_bin =
+        record_live_room_bin_at(&known, &second, &paths, &runtime, &MachineConfig::default())
+            .unwrap()
+            .bin;
 
     assert!(
         first.path.is_file(),
@@ -344,12 +347,6 @@ fn reload_outcome_merge_sums_every_field() {
         recovered: 9,
         closed: 10,
         reaped: 11,
-        dead_swept: 12,
-        stats_reloaded: 13,
-        brokers_retired: 1,
-        brokers_marked: 2,
-        brokers_kept: 3,
-        brokers_unchecked: 4,
         drainers_restarted: 2,
         drainers_stop_failed: 3,
         failed: 14,
@@ -375,12 +372,6 @@ fn reload_outcome_merge_sums_every_field() {
         recovered: 26,
         closed: 27,
         reaped: 28,
-        dead_swept: 29,
-        stats_reloaded: 30,
-        brokers_retired: 5,
-        brokers_marked: 6,
-        brokers_kept: 7,
-        brokers_unchecked: 8,
         drainers_restarted: 4,
         drainers_stop_failed: 5,
         failed: 31,
@@ -409,12 +400,6 @@ fn reload_outcome_merge_sums_every_field() {
             recovered: 35,
             closed: 37,
             reaped: 39,
-            dead_swept: 41,
-            stats_reloaded: 43,
-            brokers_retired: 6,
-            brokers_marked: 8,
-            brokers_kept: 10,
-            brokers_unchecked: 12,
             drainers_restarted: 6,
             drainers_stop_failed: 8,
             failed: 45,

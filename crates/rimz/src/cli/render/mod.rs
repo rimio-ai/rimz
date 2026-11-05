@@ -24,6 +24,28 @@ use jiff::Timestamp;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+pub(crate) fn truncate_left_width(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let content_width = max_width.saturating_sub(1);
+    let mut width = 0;
+    let mut suffix = Vec::new();
+    for character in text.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > content_width {
+            break;
+        }
+        width += character_width;
+        suffix.push(character);
+    }
+    let suffix = suffix.into_iter().rev().collect::<String>();
+    format!("…{suffix}")
+}
+
 /// Prefix every written line with the loop output gutter.
 pub(crate) struct GutterWriter<W: Write> {
     inner: W,

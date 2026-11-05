@@ -303,7 +303,7 @@ Closing the sidebar pane costs you nothing durable: every agent keeps working, a
 rimz sidebar repair    # remount a missing, duplicate, wedged, or mis-docked sidebar
 ```
 
-`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. It does say so, counting the rooms and naming the verb (``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.``), and `rimz reload --repair` runs both operations in order.
+`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. The room's line says `no sidebar reporting in`, with `fix: rimz reload --repair` in the closing block. `rimz reload --repair` upgrades and repairs before reporting the resulting room state.
 
 On Zellij, a silent or stale presence-plugin warning does not stop repair: it uses Zellij's live pane list. Run `rimz doctor`, then reattach or restart to reload the plugin. A detached session defers pane changes until you attach; a busy repair asks you to re-run after the other pass finishes. The command exits 1 if repair is incomplete, even when other rooms were repaired successfully ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
 
@@ -345,9 +345,9 @@ rimz reload --repair    # run those two independent operations in order
 rimz doctor --clear     # dismiss diagnostics, incidents, and log records from before the upgrade
 ```
 
-`rimz reload` is the pane-preserving fix: it re-execs each sidebar in place and leaves every other pane alone, it runs from anywhere, and it leaves stopped sessions stopped. `rimz start` and `rimz attach` print the same warning when a live room still runs a different sidebar build. A sidebar that misses the command's reporting window keeps converging from the durable room record on its own, so run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes.
+`rimz reload` is the pane-preserving fix: it re-execs each sidebar in place and leaves every other pane alone, it runs from anywhere, and it leaves stopped sessions stopped. `rimz start` and `rimz attach` print the same warning when a live room still runs a different sidebar build. A sidebar that misses the command's reporting window is `settling, retries on its own` from the durable room record, so run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes.
 
-With `--repair`, an incomplete structural repair exits 1 after reporting every room; the preceding build upgrade stays committed ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
+Reload exits 1 after the full report when its closing block names anything that needs you; settling and pending settings do not fail it. With `--repair`, an incomplete structural repair appears in that block; the preceding build upgrade stays committed ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
 
 Once the live writers converge, `rimz doctor --clear` records a workspace watermark, so pre-upgrade diagnostics, the last incident, message failures, and multiplexer log records stop appearing without deleting their evidence files.
 
@@ -466,9 +466,9 @@ With hundreds of windows, the full status tab list can dominate redraw work. Run
 
 ### A `[zellij]` or `[tmux]` setting did nothing
 
-Run `rimz start` to apply changes to an open room. On tmux, `rimz reload` also re-applies options to the live session and its current windows without reattaching. Zellij's start-only settings, and removal of an optional `[zellij]` key, need a new room. If `[zellij] mouse_mode = true` still leaves the mouse disabled, remove or change `mouse_mode false` in `config.kdl` before attaching. If `pane_frames = true` draws no frame, split the work pane: Zellij frames a pane only when its tab holds another framed pane, and the sidebar and bottom bar do not count. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only list and when each backend applies changes.
+Run `rimz reload` to apply live settings to an open room. On tmux it re-applies options to the session and its current windows and rebinds the sidebar chords without reattaching. On Zellij the presence plugin receives live settings; reload names settings waiting for the next room start or managed attach. Removing an optional live `[zellij]` key needs a new room; client-only `mouse_mode` and `support_kitty_keyboard_protocol` changes need another attach. If `[zellij] mouse_mode = true` still leaves the mouse disabled, remove or change `mouse_mode false` in `config.kdl` before attaching. If `pane_frames = true` draws no frame, split the work pane: Zellij frames a pane only when its tab holds another framed pane, and the sidebar and bottom bar do not count. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only list and when each backend applies changes.
 
-On Zellij, a `[mux] status_bar` change reaches tabs RimZ opens at once, while existing tabs and tabs you open yourself follow at the next room birth; `rimz reload` does not change the Zellij bar ([large rooms](./multiplexer.md#large-rooms)).
+On Zellij, a `[mux] status_bar` change reaches tabs RimZ opens at once, while existing tabs and tabs you open yourself follow at the next room birth; `rimz reload` names the pending change without changing those bars ([large rooms](./multiplexer.md#large-rooms)).
 
 ### A theme or width change did nothing
 

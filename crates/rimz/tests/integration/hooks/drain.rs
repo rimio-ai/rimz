@@ -247,6 +247,14 @@ fn reload_command(env: &Env, binary: &std::path::Path) -> Command {
         &workspace.session_name,
         Vec::new(),
     );
+    for (path, mut heartbeat) in
+        rimz::wakeup::heartbeat::read_current_heartbeats(&env.runtime_paths().heartbeat_dir)
+            .unwrap()
+    {
+        heartbeat.build = Some(rimz::build_id::of_file(binary).unwrap());
+        rimz::disk::atomic::write_temp_then_rename_cache(&path, &heartbeat).unwrap();
+        crate::common::room::date_heartbeat_as_live(&path);
+    }
     let mut command = env.rimz_at(binary);
     command
         .arg("reload")
@@ -374,8 +382,8 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     let output = reload.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let report = String::from_utf8_lossy(&output.stdout);
-    assert!(report.contains("1 hook drainer"), "{output:?}");
-    assert!(report.contains("onto the current build"), "{output:?}");
+    assert!(report.contains("✓ 1 room on rimz"), "{output:?}");
+    assert!(!report.contains("hook drainer"), "{output:?}");
     let successor = drainer_connection(&store, None);
     let after =
         nix::sys::socket::getsockopt(&successor, nix::sys::socket::sockopt::PeerCredentials)

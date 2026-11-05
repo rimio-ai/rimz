@@ -43,6 +43,60 @@ fn standalone_sidebar_repair_does_not_stage_a_build() {
     );
 }
 
+#[test]
+fn missing_presence_artifact_is_a_reload_problem_with_or_without_repair() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let mut heartbeat = SidebarHeartbeat::new(
+        workspace.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Zellij,
+        &workspace.session_name,
+        runtime.sock_dir.join("reload.sock"),
+        Some("zellij:terminal_1".parse().unwrap()),
+    );
+    heartbeat.build = Some(
+        rimz::build_id::of_file(&crate::common::cargo_bin(
+            "rimz",
+            env!("CARGO_BIN_EXE_rimz"),
+        ))
+        .unwrap(),
+    );
+    write_heartbeat(&runtime, "sidebar.live.json", heartbeat);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[zellij]\npane_frames = false\n",
+    )
+    .unwrap();
+    for repair in [false, true] {
+        let mut command = env.rimz();
+        command
+            .arg("reload")
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("zellij.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_PRESENCE_PLUGIN",
+                env.project_root.join("missing.wasm"),
+            );
+        if repair {
+            command.arg("--repair");
+        }
+        let output = command.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(1), "{text}");
+        assert!(
+            text.contains("presence plugin not upgraded: presence plugin artifact unavailable"),
+            "{text}"
+        );
+        assert!(text.contains("rimz doctor --root"), "{text}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
@@ -83,7 +137,7 @@ fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
     let online = command().arg("reload").output().expect("reload online");
     assert!(online.status.success(), "{:?}", online.stderr);
     assert!(
-        String::from_utf8_lossy(&online.stdout).contains("Restarted the shared web daemon."),
+        String::from_utf8_lossy(&online.stdout).contains("web daemon restarted"),
         "{}",
         String::from_utf8_lossy(&online.stdout)
     );

@@ -144,11 +144,11 @@ rimz update [--version <TAG>]
 | Cargo (the binary is in Cargo's bin directory) | `cargo install --locked rimz`. A source build (a version containing `+g`) prints a warning that the crates.io release will replace it. |
 | The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place. If the running version already matches, it prints `rimz VERSION is up to date.` without replacing the binary, then continues to packs. |
 
-When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it and outdated language-server brokers retire without interrupting their servers. If that reload fails, `update` exits 1 with ``RimZ updated, but `PATH` reload exited with STATUS; rerun `rimz reload` ``.
+When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it and outdated language-server brokers retire without interrupting their servers. A reload that fails to start or exits nonzero does not stop pack updates. After packs, `update` exits 1 with ``RimZ updated, but `PATH reload` exited with STATUS; see its fixes above`` (or the error that prevented starting reload).
 
-After the binary step and any reload succeed, the active binary runs [`rimz packs update`](./packs.md#update-git-sources), even when RimZ was already current. Unpinned official packs follow that binary's `v<version>` tag; unpinned third-party sources follow their remote default branch. Pinned and linked sources do not move. With no recorded sources, the pack step prints nothing. If the agents home's `packs/` directory belongs to another user, the step is skipped with a notice to run `rimz packs update` as its owner, without changing the exit code; this keeps `sudo rimz update` from leaving root-owned checkouts in a user's home. An unreadable installation record is reported by the pack step rather than silently skipped.
+After the binary step and any reload attempt, the active binary runs [`rimz packs update`](./packs.md#update-git-sources), even when RimZ was already current. Unpinned official packs follow that binary's `v<version>` tag; unpinned third-party sources follow their remote default branch. Pinned and linked sources do not move. With no recorded sources, the pack step prints nothing. If the agents home's `packs/` directory belongs to another user, the step is skipped with a notice to run `rimz packs update` as its owner, without changing the exit code; this keeps `sudo rimz update` from leaving root-owned checkouts in a user's home. An unreadable installation record is reported by the pack step rather than silently skipped.
 
-Pack reviews and permission holds are the same as for `rimz packs update`: non-widening updates apply without asking, and widening updates ask on a terminal or are held with exit 1 without one. `rimz update` has no `--yes`; use `rimz packs update --yes` to approve a held update explicitly. A failed or non-terminal-held pack step makes `update` exit 1, saying RimZ itself is updated or current but pack updates did not complete and naming `rimz packs update` as the retry. The binary is not rolled back, nor are successful earlier pack updates. A binary or reload failure stops before packs.
+Pack reviews and permission holds are the same as for `rimz packs update`: non-widening updates apply without asking, and widening updates ask on a terminal or are held with exit 1 without one. `rimz update` has no `--yes`; use `rimz packs update --yes` to approve a held update explicitly. A failed or non-terminal-held pack step makes `update` exit 1, saying RimZ itself is updated or current but pack updates did not complete and naming `rimz packs update` as the retry. If reload also failed, both errors are reported. The binary is not rolled back, nor are successful earlier pack updates. A failure in the binary update itself still stops before packs.
 
 An official pack without the binary's `v<version>` tag, possible on `latest-main`, fails the pack step with the missing-tag error. Rolling back with `--version` to a binary that predates `packs` likewise fails that step with the older binary's usage error.
 
@@ -181,12 +181,12 @@ rimz reload [--repair]
 - publishes the invoking build as the target of every live room, so each room's sidebars restart onto it in place;
 - stops each live room's running hook drainer after its current frame, then nudges a replacement on the recorded build; a room with no running drainer starts none;
 - upgrades a room's Zellij presence plugin when its build or configuration differs, and leaves a current one alone;
-- re-applies `[tmux]` room options and `[mux] status_bar` to each live tmux room, warning and continuing if a room's apply fails or its session vanishes;
+- re-applies `[tmux]` room options, `[mux] status_bar` and sidebar chords to each live tmux room, reporting any failed apply while continuing with other rooms;
 - moves the `rimzd` loop panel, Codex broker, content supervisors and their configured commands onto the room's new build in place, and restarts the Claude remote-control host (an open phone session drops);
 - restarts standalone `rimz stats --refresh` dashboards and stats children of older, non-following content supervisors;
 - retires outdated language-server brokers without interrupting running servers or attached editors;
 - reaps sidebar processes whose pane is gone, and sweeps leftover processes and runtime files from stopped sessions;
-- restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped, and a failed restart prints a warning without failing the reload.
+- restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped; a failed restart appears in the report's closing block.
 
 It never starts a stopped session, creates or closes a pane, or touches an agent wrapper, loop run, or `rimz wait`. If the new build fails to start, the sidebar and following rimzd processes keep running on their old build. A content slot restarts its configured command, even when that command is not RimZ.
 
@@ -196,30 +196,39 @@ A drainer that cannot stop within the bounded wait keeps its old build until it 
 
 A broker on the PATH build is left alone, including a staged copy of that build. An outdated broker retires now if dormant, with no start pending and no editor attached; otherwise it leaves after its server next stops and no editor remains. Its leases stay for the next query to start a fresh broker, without relaunching agents. An outdated broker already exiting counts as retired; one that exits during the check is left out of the report. Older brokers that cannot receive the retirement mark are retired only when their server and editors are gone; reload reports the rest and asks for another reload once they are idle. If the installed build cannot be read from PATH, reload reports that brokers were not checked. No running or indexing language server is restarted by reload.
 
-A room whose sidebar pane was closed has nothing to reload, so the report counts it and names the verb that fixes it: ``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` That room still counts as a live session, so `No running sidebars to reload.` never covers this case. The same line covers a sidebar running a protocol this build cannot signal, which repair replaces rather than mounts. `--repair`, or [`rimz sidebar repair`](#repair-sidebars) on its own, is what does it; with `--repair` already passed the line is left out, since the repair runs next.
+A room whose sidebar pane was closed has nothing to reload: its line says `no sidebar reporting in`, and the closing block offers `fix: rimz reload --repair`. The same phrase covers a renderer using a protocol this build cannot signal, which repair replaces rather than mounts. It is still a live room, never the empty state.
 
-The report prints a line per non-zero count:
+The headline names the invoking build and counts confirmed rooms, not individual processes. Each live room has one row: project path, mux, session and sidebar count. Rows needing you come first, then settling rooms, then healthy rooms; paths break ties in byte order. Narrow terminals drop the session column before the sidebar count and shorten paths from the left.
 
 | Line | Meaning |
 | --- | --- |
-| `Reloaded N sidebars across N sessions.` | Sidebars that moved to the new build. |
-| `N sidebars already on the current build.` | Nothing to do there. |
-| `N sidebars still converging; their supervisors will retry from the recorded build automatically.` | These sidebars did not confirm within the report window. They keep retrying on their own; no repair is needed. |
-| `N sidebars could not be build-verified.` | RimZ could not read which build these sidebars run. |
-| `Upgraded N presence plugins.`, `Reconciled N presence plugins.`, `N presence plugins already current.` | The Zellij presence plugin in each room. |
-| `Reloaded N stats dashboards.` | Standalone dashboards and stats children of non-following supervisors signalled to restart; stats inside a following content slot restart with that slot and are not counted. |
-| `Restarted N hook drainers onto the current build.` | Running drainers stopped at a frame boundary; their successors use the room's recorded build. |
-| `N hook drainers did not stop in time; they keep their old build until they go idle or the next reload.` | Stops that failed; reload continued. |
-| `Retired N outdated language-server brokers. The next query in each checkout starts a fresh one.` | Dormant outdated brokers retired with their leases kept. |
-| `N outdated language-server brokers still serving; each retires when its server next stops.` | Brokers marked for retirement without interrupting their server. |
-| ``Left N language-server brokers running: too old to be told to retire. Run `rimz reload` again once idle.`` | Legacy brokers that could not safely retire now. |
-| ``Language-server brokers were not checked: no readable installed `rimz` resolves on PATH. No broker stops servers under memory pressure until `rimz` is on PATH.`` | Live brokers exist, but the installed build could not be resolved. |
-| `Reaped N orphaned sidebar processes.`, `Swept N leftover processes from stopped sessions.` | Cleanup. |
-| ``N rooms with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` | Live rooms with no fresh, protocol-current sidebar heartbeat: the pane is gone, or its renderer is one this build cannot signal. Suppressed under `--repair`, which runs that repair next. |
-| `Restarted the shared web daemon.` | The web daemon was running and restarted. |
-| `No running sidebars to reload.` | No live room, stopped session to sweep, dashboard, or broker retirement report. A second line suggests `rimz start` or `rimz attach`. |
+| `✓ N rooms on rimz VERSION` | Every room confirmed its build and nothing needs you. A healthy room row ends at `N sidebars`; successful drainer and plugin upgrades stay quiet. |
+| `… C of N rooms on rimz VERSION · S settling` | These rooms have not confirmed yet. Their rows say `C of N sidebars · S settling, retries on its own`, including sidebars whose build could not be verified. |
+| `! C of N rooms on rimz VERSION · K need you` | The closing block has K entries, rooms plus machine issues. If some rooms are settling, `· S settling` precedes the need-you count. |
+| `Also: …` | Nonzero dashboard reloads, broker retirements, brokers marked to retire when their servers stop, orphaned sidebar processes reaped, leftovers swept from stopped rooms, and a web daemon restart. |
+| `Claude remote control restarts in SESSION; an open phone session drops.` | An enabled Claude host was live before recording a different build. The restart follows asynchronously; unknown or stopped hosts are not listed. |
+| `No running sidebars to reload.` | No live room. A second line suggests `rimz start` or `rimz attach`; machine results and fixes still follow. |
 
-`--repair` runs [`rimz sidebar repair`](#repair-sidebars) after the reload finishes, repairing sidebar panes and reopening wholly closed `rimzd` tabs. It is a separate step: a repair that cannot run does not undo the reload. How a sidebar hands over to a new build is in [sidebar internals](../../internals/sidebar/sidebar.md#build-promotion).
+The closing block starts with `! K need you`. Each `! SESSION: problem` (or `! machine: problem`) has its own `fix:` line:
+
+| Problem | Fix |
+| --- | --- |
+| `no sidebar reporting in` | `rimz reload --repair` |
+| `hook drainer still on the old build` | `rimz reload once its agents are idle` |
+| `new build not recorded: ERROR` | `rimz doctor --root PATH` |
+| `tmux room options not applied: ERROR` | `rimz reload` |
+| `presence plugin not upgraded: ERROR` | `rimz doctor --root PATH` (check plugin availability before retrying reload) |
+| `sidebar could not be repaired`, `repair waits for an attached client` | `rimz attach --root PATH`, then `rimz reload --repair` |
+| `sidebar working but not docked`, `rimzd tab could not be reopened` | `rimz reload --repair` |
+| `another repair holds the room` | `rimz reload --repair once it finishes` |
+| `presence plugin silent` | `rimz attach --root PATH` |
+| `N language-server brokers too old to retire` | `rimz reload once idle` |
+| `no readable rimz on PATH; brokers not checked` | Put RimZ on PATH, then `rimz reload`. |
+| `web daemon restart failed: ERROR` | `rimz web restart` |
+
+Zellij settings that cannot apply live appear in muted `Applies when the room next starts:` or `Applies when you next attach:` blocks, comparing your effective machine config with what RimZ last asserted. Each room gets a targeted reset or attach command. Reset closes the room's agents. Rooms started before settings tracking instead get `N rooms started before RimZ tracked room settings; changes there show after their next start.` No setting is inferred for those rooms. tmux has no pending settings; before tmux 3.7, a `history_limit` change still affects only new panes, not existing panes' scrollback. These notices do not count as problems; see [multiplexer settings](../../guide/multiplexer.md#change-what-the-room-asserts) for the classes.
+
+Exit status is 1 exactly when the closing block has an entry, after the whole report is printed: `reload left 1 item that needs you; see the fixes above`, or `reload left K items that need you; see the fixes above` for several items. Settling and pending settings alone exit 0. `--repair` runs structural repair and reopens wholly closed `rimzd` tabs before the report, so rows show the repair result, including recovered sidebars. A completed repair replaces the missing-sidebar warning; incomplete repairs name their own problem. Repair never undoes the published build. Standalone [`rimz sidebar repair`](#repair-sidebars) retains its own report and exit rules. How a sidebar hands over to a new build is in [sidebar internals](../../internals/sidebar/sidebar.md#build-promotion).
 
 ## Repair sidebars
 
@@ -245,7 +254,7 @@ rimz sidebar repair
 | `Sidebar structure is healthy across N sessions.` | Nothing needed repair. |
 | `No running sidebars to repair.` | No live room. |
 
-Exit status is 1 after the full report if a sidebar repair or daemon-tab reopen failed or was deferred, a sidebar remained misdocked, or a session was busy; otherwise it is 0. A silent or stale plugin alone does not fail the command. `rimz reload --repair` returns the repair's status without undoing the completed reload. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
+Exit status is 1 after the full report if a sidebar repair or daemon-tab reopen failed or was deferred, a sidebar remained misdocked, or a session was busy; otherwise it is 0. A silent or stale plugin alone does not fail this standalone command; `rimz reload --repair` also names it in its closing block. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
 
 ## Reset a wedged room
 

@@ -114,7 +114,7 @@ A live record is reused only when every desired value matches (`record_matches`)
 | `rimz web unshare` | Untouched. | Restarts it, or stops it when the list becomes empty. |
 | `rimz web unshare --all` | Untouched. | Stops it. |
 
-`rimz start` is best-effort because browser access is enrichment on a room the user asked to open. The explicit web commands treat the same checks as fatal preconditions. `rimz reload` warns instead of failing. Its restart path (`web::restart_if_online`) checks liveness before it validates config, so a config error there leaves a live daemon running and reports the error as a warning. A writable error also skips the broadcast restart, since the two run in sequence.
+`rimz start` is best-effort because browser access is enrichment on a room the user asked to open. The explicit web commands treat the same checks as fatal preconditions. `rimz reload` continues its other work and names a failed web restart in its closing block, then exits 1. Its restart path (`web::restart_if_online`) checks liveness before it validates config, so a config error there leaves a live daemon running. A writable error also skips the broadcast restart, since the two run in sequence.
 
 Stopping sends SIGTERM to the gate and ttyd, polls the process table for up to one second, sends SIGKILL to any survivor, waits up to one second for the public listener to close, and removes the record.
 
