@@ -244,7 +244,7 @@ The direct-dependency snapshot. Entries move when a better-designed alternative 
 | **Binary boundary only** | `anyhow` — permitted in `crates/rimz/src/main.rs`, the private `cli/` module tree, and `xtask/` |
 | **CLI presentation** | `anstyle`, `anstream`, `colorchoice`, `unicode-width` — the clap-native styling stack behind `cli/render`; all four are already in the tree transitively through clap, so promoting them to direct deps adds zero footprint. `pulldown-cmark` provides the markdown event stream behind `cli/render`'s prose renderer |
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
-| **Zellij plugin (wasm-only)** | `zellij-tile` — the official plugin API, a `cfg(target_family = "wasm")` dependency of `crates/rimz-presence-zellij` alone, so no host artifact links it. Its tree is excluded from `deny.toml`'s audited targets (the wasm executes inside Zellij's plugin sandbox) and covered by `cargo vet` at `safe-to-run` |
+| **Zellij plugin (wasm-only)** | `zellij-tile` — the official plugin API — and its same-version `zellij-utils` dependency for `MouseEventType`, which tile does not re-export. Both are `cfg(target_family = "wasm")` dependencies of `crates/rimz-presence-zellij` alone, so no host artifact links them. Their tree is excluded from `deny.toml`'s audited targets (the wasm executes inside Zellij's plugin sandbox) and covered by `cargo vet` at `safe-to-run` |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |
 | **Performance benches** | `divan` — dev-only, small benchmark harness with built-in allocation profiling; links only into `[[bench]]` targets |
 

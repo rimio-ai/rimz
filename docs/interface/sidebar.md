@@ -893,8 +893,8 @@ The footer is the last line, apart from hook-drainer alerts and recovered refres
 | mark | when |
 |------|------|
 | `? for help` | always, at the right edge |
-| `zᶻ idle`, then `zᶻ idle · 17m` | tmux: no input for `[sidebar] afk_after_secs` (15 minutes by default); minutes are added after the first minute |
-| `zᶻ away` | no terminal client is attached; Zellij reports only this state |
+| `zᶻ idle`, then `zᶻ idle · 17m` | No human input for `[sidebar] afk_after_secs` (15 minutes by default), on both backends once an input timestamp is known; minutes are added after the first minute |
+| `zᶻ away` | No terminal client is attached |
 | `⇄ remote 210ms` | the room runs over SSH: the smoothed round-trip time, with packet loss added above 10%; `⇄ remote ?` means the last reading is stale |
 
 The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading. On both backends, `afk_after_secs` also bounds retention of departed clients' sidebar views ([configuration](../guide/configuration.md#sidebar-rendering)).

@@ -36,10 +36,10 @@ pub struct SidebarConfig {
     /// Sidebar motion key bindings. Each string is a space-separated list of
     /// chords; the first chord is the one the help overlay displays.
     pub keys: SidebarKeys,
-    /// Seconds of input idle before the footer shows the AFK badge. tmux
-    /// reports per-client input idle, so this drives `zᶻ idle` and adds `· Nm`
-    /// after the first minute; Zellij reports attach state only, so it shows
-    /// `zᶻ away` on full detach regardless of this value. 15 minutes by default.
+    /// Seconds of input idle before the footer shows `zᶻ idle` on either backend,
+    /// adding `· Nm` after the first minute. Both report per-client input clocks;
+    /// without a known clock an attached room stays active. 15 minutes by default.
+    /// Full detach shows `zᶻ away` regardless of this value.
     /// Also bounds departed clients' sidebar-view retention on both backends.
     pub afk_after_secs: NonZeroU32,
 }
