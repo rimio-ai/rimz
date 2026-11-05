@@ -1112,6 +1112,26 @@ fn runtime_paths_share_user_scoped_cache_files() {
         first_paths.shared_pricing_cache_path(),
         second_paths.shared_pricing_cache_path()
     );
+    assert_eq!(
+        first_paths.shared_pricing_table_path(),
+        second_paths.shared_pricing_table_path()
+    );
+    assert_eq!(
+        first_paths.shared_pricing_refresh_path(),
+        second_paths.shared_pricing_refresh_path()
+    );
+    assert_eq!(
+        [
+            first_paths.shared_pricing_table_path(),
+            first_paths.shared_pricing_refresh_path(),
+        ],
+        [
+            first_paths.persistent_shared_root.join("pricing.v1.sqlite"),
+            first_paths
+                .persistent_shared_root
+                .join("pricing-refresh.v1.json"),
+        ]
+    );
 }
 
 #[test]

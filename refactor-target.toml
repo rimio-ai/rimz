@@ -1468,7 +1468,8 @@ allowed-dependencies = [
 # paths::loop_throttle_start_stamps names the machine, workflow and step launch stamps.
 # RuntimePaths::attention_path owns the host's attention-stamp lane (+1).
 # RuntimePaths::zellij_client_input_paths owns per-session/client cache and lock paths (+1).
-surface-budget = 321
+# Versioned price-table and refresh-state paths and atomic::publish_staged_replace (+3).
+surface-budget = 324
 
 [[verdict]]
 kind = "item"
@@ -4561,7 +4562,8 @@ allowed-dependencies = []
 # Exact-mode creation, append, replacement and non-replacing copy support shared history (+4).
 # sync_tree shares bottom-up file and directory barriers for staged pack checkouts (+1).
 # publish_staged_no_replace publishes complete staged files and directories without replacement (+1).
-surface-budget = 28
+# publish_staged_replace syncs complete price tables before replacing the published inode (+1).
+surface-budget = 29
 
 [[verdict]]
 kind = "item"
@@ -4597,6 +4599,11 @@ reason = "Staged Git trees sync read-only objects and directories before entries
 kind = "item"
 key = "disk::atomic::publish_staged_no_replace"
 reason = "Home overrides publish synced staged files or directories without replacing concurrent entries."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::publish_staged_replace"
+reason = "Immutable price-table readers require complete file and directory barriers around replacement."
 
 [[verdict]]
 kind = "item"
