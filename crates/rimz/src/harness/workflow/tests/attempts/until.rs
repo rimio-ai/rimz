@@ -7,6 +7,7 @@ use jiff::Timestamp;
 const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[checks.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
 
 mod checks;
+mod delay;
 
 fn turn() -> LeaderTurn {
     LeaderTurn {

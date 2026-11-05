@@ -392,7 +392,7 @@ fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
     ))
     .unwrap();
     let journal: Vec<JournalEntry> = serde_json::from_str(journal).unwrap();
-    let hops = rimz::harness::workflow::hops(&spec, &journal);
+    let hops = rimz::harness::workflow::hops(&spec, &journal, None);
     let mut record = record(stopping);
     record.state = RunState::Canceled;
     let mut out = Vec::new();

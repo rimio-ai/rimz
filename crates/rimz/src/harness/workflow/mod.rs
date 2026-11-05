@@ -23,14 +23,14 @@ pub(crate) use engine::reassign_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{
-    Hop, HopKind, evaluation_target, hold_until, hops, next_bound, reached, repeats_evaluation,
-    routing_hop, timeout_at,
+    Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
+    repeats_evaluation, routing_hop, timeout_at,
 };
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
 pub(crate) use spec::parse;
 pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, ScopeKind, SpecErr,
-    Step, StepEdges, StepKind, WorkflowSpec, load, schema,
+    Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, Route, ScopeKind,
+    SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, schema,
 };
 pub use validate::{NodeRow, Validation, validate};
 

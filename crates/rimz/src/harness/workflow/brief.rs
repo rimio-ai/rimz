@@ -26,7 +26,8 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
     }
     let mut arrival = Vec::new();
     if let Ok(journal) = workflow::journal(paths) {
-        arrival.push(match routing_hop(spec, &journal, &record.node) {
+        let sender = routing_hop(spec, &journal, &record.node, record.held.as_ref());
+        arrival.push(match sender {
             Some(hop) if hop.kind == HopKind::Resume => {
                 "The user resumed the run at this step after it parked.".into()
             }

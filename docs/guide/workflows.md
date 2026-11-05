@@ -198,6 +198,17 @@ Use `lifecycle = "stay"` when you want to work with the agent across turns. The 
 
 Use `lifecycle = "until"` to work across turns until the check says you are done. At each leader turn end, once the leader is at rest with no pending work, blocking question, or provider limit, RimZ runs `then` once. A route back to this step or to `@wait` keeps the layout open without another visit; every other route closes it and follows that route without repeating the check. A kept `@wait` waits for your next turn end, not a timer or signal. While the check runs, `list` reads `with you · checking <check>`, with any waiting detail appended; a blocking question still takes precedence. If RimZ observes a newer turn when it rechecks a closing verdict, it discards that verdict without stopping your session. Provider exit, deadline, and cancel still end the session as for `stay`. Both `stay` and `until` are staying steps.
 
+To leave time for another turn before an `until` session closes, give the closing route a delay:
+
+```toml
+[checks.ruled]
+run = "uv run --script checks/notes.py after"
+on = { open = "@wait", settled = { to = "@done", delay = "30m" }, left = "@user" }
+timeout = "5m"
+```
+
+Here an until step must name `ruled` as its `then` check. A `settled` answer starts the 30-minute delay without rerunning the check; the check timeout does not cut that saved verdict short. A new leader turn discards it, and the next eligible turn end checks again with a fresh delay. Cancel, deadline, and provider exit still interrupt it; a signal wake or `resume --extend` does not shorten it. Closing uses the usual minute tick, so it can be about a minute late. `list` and `show` read `checking ruled: closing in 23m → @done` while the delay remains. `workflow validate` and the node view print the route as `settled → @done after 30m`. Without a held until session, including `resume --at ruled`, it goes at once. Delays use nonzero `s`, `m`, `h`, or `d`; invalid delays or delays on a check not used by an until step, a `@wait` route, or a return to an until step using that check warn and are ignored, keeping the target.
+
 An agent step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
 When a loop starts the run automatically, its agent steps also wait for [capacity](./loops.md#limit-agent-starts), before stopping any occupant. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. On an agent step, set `capacity-wait = "6h"` to give up after six hours, or leave the default `forever`. Giving up ends the run as failed unless `on.capacity` names `@done` or another node. It cannot park at `@user` or `@wait`. A window or occupancy wait restarts this clock, and the run deadline still applies. `throttle = "off"` skips the machine turn, stagger, resource limits, and capacity check, not the machine caps or workflow and step limits below. Runs you start with `rimz workflow run` or `rimz loop fire`, and runs detached by removing their loop task, skip capacity waits but still count and restart any applicable workflow or step stagger, never machine stagger. Command steps, checks, and an already-open staying session never ask for admission.

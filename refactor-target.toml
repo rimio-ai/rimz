@@ -2152,7 +2152,8 @@ path = "crates/rimz/src/harness"
 # workflow::parse shares the sealed-spec parser with cached sidebar projection (+1).
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
-surface-budget = 1078
+# workflow::Route and workflow::close_after share delayed routes and their close instant (+2).
+surface-budget = 1080
 
 [[verdict]]
 kind = "item"
@@ -10633,6 +10634,11 @@ reason = "Inspection and transitions share check entry and paused turn-step time
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::close_after"
+reason = "The held-verdict gate and workflow views share one sealed-spec delayed-close instant and target."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::hold_until"
 reason = "Transitions and workflow inspection share each case's first-settlement hold instant."
 
@@ -10670,6 +10676,11 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 kind = "item"
 key = "harness::workflow::Check"
 reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Route"
+reason = "Check routes accept a target string or a target with an optional held-session close delay."
 
 [[verdict]]
 kind = "item"

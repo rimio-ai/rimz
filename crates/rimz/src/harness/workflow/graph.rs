@@ -61,6 +61,8 @@ pub struct Edge {
     pub fires: Fireability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub because: Option<NeverReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delay: Option<String>,
 }
 
 impl Edge {
@@ -254,6 +256,12 @@ impl WorkflowSpec {
                     let (target, explicit) = edges.remove(&outcome)?;
                     let (fires, because) = self.fireability(node, &outcome);
                     Some(Edge {
+                        delay: self
+                            .checks
+                            .get(node)
+                            .and_then(|check| check.on.get(&outcome))
+                            .and_then(|route| route.delay())
+                            .map(str::to_owned),
                         outcome,
                         target,
                         source: if explicit {
@@ -350,7 +358,11 @@ impl WorkflowSpec {
 
 impl Check {
     fn edges(&self) -> BTreeMap<String, String> {
-        let mut edges = self.on.clone();
+        let mut edges = self
+            .on
+            .iter()
+            .map(|(outcome, route)| (outcome.clone(), route.target().to_owned()))
+            .collect::<BTreeMap<_, _>>();
         for outcome in ["timeout", "invalid"] {
             edges
                 .entry(outcome.into())

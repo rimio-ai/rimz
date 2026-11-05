@@ -30,12 +30,21 @@ impl HistoryRow<'_> {
         note
     }
 
-    fn target(&self, spec: &WorkflowSpec, journal: &[JournalEntry]) -> Option<String> {
+    fn target(
+        &self,
+        spec: &WorkflowSpec,
+        journal: &[JournalEntry],
+        record: &RunRecord,
+    ) -> Option<String> {
         match &self.latest.event {
-            JournalEvent::Evaluation { .. } => {
-                workflow::evaluation_target(spec, self.latest, &journal[self.index + 1..])
+            JournalEvent::Evaluation { .. } | JournalEvent::Route { .. } => {
+                workflow::evaluation_target(
+                    spec,
+                    self.latest,
+                    &journal[self.index + 1..],
+                    record.held.as_ref(),
+                )
             }
-            JournalEvent::Route { outcome, .. } => spec.target(&self.latest.node, outcome),
             _ => None,
         }
     }
@@ -183,7 +192,7 @@ impl View<'_> {
                     writeln!(
                         out,
                         "{answer}{}{note}{}",
-                        row.target(self.spec, self.journal)
+                        row.target(self.spec, self.journal, self.record)
                             .map_or_else(String::new, |target| format!(" → {target}")),
                         cost(row.cost_usd)
                     )?;
@@ -289,7 +298,8 @@ impl View<'_> {
                     writeln!(
                         out,
                         "route {outcome}{} · {}",
-                        self.target(&entry.node, outcome),
+                        row.target(self.spec, self.journal, self.record)
+                            .map_or_else(String::new, |target| format!(" → {target}")),
                         value(&input)
                     )?;
                 }
@@ -314,7 +324,7 @@ impl View<'_> {
                     reason,
                     ..
                 } => {
-                    let action = match action {
+                    let action_name = match action {
                         TurnEndAction::Kept => "kept",
                         TurnEndAction::Closed => "closed",
                         TurnEndAction::Discarded => "discarded",
@@ -322,10 +332,14 @@ impl View<'_> {
                     };
                     writeln!(
                         out,
-                        "turn_end {action} · {check} {}{}",
+                        "turn_end {action_name} · {check} {}{}",
                         outcome.as_deref().unwrap_or("—"),
                         target
                             .as_ref()
+                            .filter(|_| matches!(
+                                action,
+                                TurnEndAction::Kept | TurnEndAction::Closed
+                            ))
                             .map_or_else(String::new, |target| format!(" → {target}"))
                     )?;
                     if let Some(reason) = reason {
@@ -376,12 +390,6 @@ impl View<'_> {
             }
         }
         Ok(())
-    }
-
-    fn target(&self, node: &str, outcome: &str) -> String {
-        self.spec
-            .target(node, outcome)
-            .map_or_else(String::new, |target| format!(" → {target}"))
     }
 
     fn answer(&self, out: &mut impl Write, object: &Value) -> Result<()> {

@@ -43,6 +43,9 @@ pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
             })
             .collect::<Vec<_>>();
         let source = error.into_inner();
+        if path.len() > 4 && path[0] == "checks" && path[2] == "on" && path[4] == "to" {
+            path.truncate(4);
+        }
         if path.len() >= 4
             && path[0] == "checks"
             && path[2] == "wake"

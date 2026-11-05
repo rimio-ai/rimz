@@ -59,7 +59,7 @@ expression: value
         },
         "on": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/Route"
           },
           "default": {},
           "type": "object"
@@ -235,6 +235,31 @@ expression: value
           },
           "minItems": 1,
           "type": "array"
+        }
+      ]
+    },
+    "Route": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delay": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "type": "object"
         }
       ]
     },

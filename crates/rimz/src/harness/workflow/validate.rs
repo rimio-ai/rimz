@@ -160,9 +160,9 @@ pub(super) fn validate_spec(
                 },
             );
         }
-        for (outcome, target) in &check.on {
-            report.target(spec, &format!("{path}.on.{outcome}"), target);
-            if outcome == "timeout" && target == "@wait" {
+        for (outcome, route) in &check.on {
+            report.target(spec, &format!("{path}.on.{outcome}"), route.target());
+            if outcome == "timeout" && route.target() == "@wait" {
                 report.error(
                     &format!("{path}.on.timeout"),
                     "a timed-out check cannot wait on its expired timeout clock",
