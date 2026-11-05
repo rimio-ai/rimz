@@ -40,10 +40,31 @@ import {pathToFileURL} from "node:url";
 import childProcess from "node:child_process";
 import {syncBuiltinESMExports} from "node:module";
 let spawns = 0;
+let releasePermission;
+const feedsClosed = new Set();
 const spawn = childProcess.spawn;
-childProcess.spawn = (...args) => { spawns++; return spawn(...args); };
+childProcess.spawn = (...args) => {
+  spawns++;
+  const child = spawn(...args);
+  const end = child.stdin.end.bind(child.stdin);
+  child.stdin.end = (line) => {
+    const payload = JSON.parse(line);
+    child.on("close", () => {
+      if (payload.hook_event_name === "permission_ask") feedsClosed.add(payload.request_id);
+    });
+    if (autoApprove && payload.request_id === "permission" && !releasePermission) {
+      releasePermission = () => end(line);
+      return child.stdin;
+    }
+    return end(line);
+  };
+  return child;
+};
 syncBuiltinESMExports();
-const [pluginPath, capturePath, binary, directory] = process.argv.slice(2);
+const [pluginPath, capturePath, binary, directory, marker] = process.argv.slice(2);
+const autoApprove = marker === "1";
+if (marker !== "absent") process.env.RIMZ_LAUNCH_AUTO_APPROVE = marker;
+const inheritedMarker = process.env.RIMZ_LAUNCH_AUTO_APPROVE;
 process.env.RIMZ_BIN = binary;
 process.env.RIMZ_CAPTURE = capturePath;
 delete process.env.RIMZ_WORKSPACE_ID;
@@ -55,17 +76,23 @@ assert.equal(typeof plugin.setup, "function", "v2 loader requires setup");
 assert.equal("server" in plugin, false);
 assert.equal(await plugin.setup({}), undefined, "outside-room setup must be inert");
 assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, reminders);
+assert.equal(process.env.RIMZ_LAUNCH_AUTO_APPROVE, inheritedMarker);
 process.env.RIMZ_WORKSPACE_ID = "workspace";
 process.env.RIMZ_BIN = directory + "/missing-rimz";
 assert.equal(await plugin.setup({}), undefined, "missing executable must be inert");
+assert.equal(process.env.RIMZ_LAUNCH_AUTO_APPROVE, inheritedMarker);
 process.env.RIMZ_BIN = binary;
 const argv = process.argv;
 process.argv = [...argv, "serve", "--service"];
 assert.equal(await plugin.setup({}), undefined, "shared service setup must be inert");
 assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, reminders);
+assert.equal(process.env.RIMZ_LAUNCH_AUTO_APPROVE, inheritedMarker);
 process.argv = argv;
 
 const hooks = new Map();
+const replies = [], replyErrors = [];
+const stderr = console.error;
+console.error = (...args) => replyErrors.push(args.join(" "));
 let subscriptions = 0, catalogReads = 0, deliver, handled;
 let metadata = {title: "New session - 2026-08-27T05:12:33.123Z", agent: "plan"};
 let stalled = false;
@@ -78,6 +105,14 @@ const ctx = {
   location: {directory},
   session: {get: async () => stalled ? await new Promise(() => {}) : metadata, hook: register},
   tool: {hook: register},
+  permission: {reply: async (request) => {
+    replies.push(request);
+    if (request.requestID === "permission") {
+      check("ask feed closes before reply", () => assert.equal(feedsClosed.has("permission"), true));
+    }
+    if (request.requestID === "rejected") throw new Error("reply unavailable");
+    if (request.requestID === "gone") throw {_tag: "PermissionNotFoundError"};
+  }},
   model: {list: async () => {
     catalogReads++;
     return {data: [
@@ -145,6 +180,7 @@ await plugin.setup(ctx);
 assert.equal(subscriptions, 1);
 assert.equal(hooks.size, 3);
 assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, undefined);
+check("auto-approve marker claimed", () => assert.equal(process.env.RIMZ_LAUNCH_AUTO_APPROVE, undefined));
 await emit("session.created", {sessionID: "root", location: {directory}, version: "2.0.27", agent: "plan"});
 const root = await envelope("session_created");
 assert.equal(root.cwd, directory);
@@ -225,9 +261,18 @@ assert.deepEqual((await envelope("question_replied")).answers, [["A","B"],["yes"
 await emit("form.cancelled", {id:"cancelled", sessionID:"root"});
 await envelope("question_rejected");
 await emit("permission.asked", {id:"permission", sessionID:"root", action:"bash", resources:["git status"], message:"Run command"});
+if (autoApprove) {
+  assert.deepEqual(replies, [], "reply must wait for the ask feed without blocking events");
+  releasePermission();
+}
 const permission = await envelope("permission_ask");
 assert.equal(permission.tool_name, "bash");
 assert.deepEqual(permission.patterns, ["git status"]);
+await emit("permission.asked", {id:"permission", sessionID:"root", action:"bash", resources:[]});
+await emit("permission.asked", {id:"child-permission", sessionID:"child", action:"bash", resources:[]});
+await emit("permission.asked", {id:"foreign-permission", sessionID:"foreign", action:"bash", resources:[]}, "/elsewhere");
+await emit("permission.asked", {id:"rejected", sessionID:"root", action:"bash", resources:[]});
+await emit("permission.asked", {id:"gone", sessionID:"root", action:"bash", resources:[]});
 await emit("permission.replied", {requestID:"permission", sessionID:"root", reply:"once"});
 assert.equal((await envelope("permission_replied")).reply, "once");
 await emit("session.compaction.started", {sessionID:"root"});
@@ -238,6 +283,10 @@ await emit("session.execution.failed", {sessionID:"root", error:{type:"ProviderA
 const failure = await envelope("session_error");
 assert.equal(failure.error_class, "ProviderAuthError");
 assert.equal(failure.error_message, "expired");
+if (autoApprove) {
+  try { await eventually(() => replies.length === 5); }
+  catch (error) { regressions.push("auto-replies settled: " + error.message); }
+}
 stalled = true;
 await emit("session.created", {sessionID:"stalled", location:{directory}, version:"2.0.27"});
 await envelope("session_created", "stalled");
@@ -249,6 +298,17 @@ await emit("session.created", {sessionID:"foreign", location:{directory:"/elsewh
 await cleanup();
 await envelope("session_ended");
 const all = await payloads();
+check("permission replies", () => assert.deepEqual(
+  replies.map(reply => reply.requestID).sort(),
+  autoApprove ? ["child-permission", "foreign-permission", "gone", "permission", "rejected"] : [],
+));
+for (const reply of replies) {
+  assert.deepEqual(reply, {sessionID: reply.requestID === "child-permission" ? "child" : reply.requestID === "foreign-permission" ? "foreign" : "root", requestID: reply.requestID, decision:"once"});
+}
+check("reply failure is diagnostic only", () => assert.equal(replyErrors.length, autoApprove ? 1 : 0, JSON.stringify(replyErrors)));
+if (autoApprove) check("reply error logged", () => assert.match(replyErrors[0] || "", /reply unavailable/));
+assert.equal(all.some(p => p.request_id === "child-permission" || p.request_id === "foreign-permission"), false);
+console.error = stderr;
 assert.equal(all.filter(p => p.hook_event_name === "SubagentStart" && p.session_id === "child").length, 2, JSON.stringify(all));
 assert.equal(all.some(p => p.hook_event_name === "tool_after" && p.session_id === "child"), false);
 assert.equal(all.some(p => p.session_id === "foreign"), false);
@@ -283,18 +343,23 @@ try {
 await cleanupErrors();
 assert.deepEqual(regressions, [], regressions.join("\n"));
 "#).unwrap();
-    let output = std::process::Command::new("node")
-        .arg("--experimental-strip-types")
-        .arg(&harness)
-        .args([&plugin_path, &capture_path, &stub_path, dir.path()])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "node harness failed for OpenCode\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for marker in ["1", "absent", "true"] {
+        let _ = std::fs::remove_file(&capture_path);
+        let output = std::process::Command::new("node")
+            .arg("--experimental-strip-types")
+            .arg(&harness)
+            .args([&plugin_path, &capture_path, &stub_path, dir.path()])
+            .arg(marker)
+            .env_remove("RIMZ_LAUNCH_AUTO_APPROVE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "node harness failed for OpenCode (auto-approve {marker})\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
