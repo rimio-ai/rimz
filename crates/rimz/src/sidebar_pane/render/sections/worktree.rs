@@ -287,7 +287,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         );
         block.sections[start..].fill(SectionLabel(format!("{identity}#{}", group.label)));
     }
-    for line in worktree_tail(ctx, roster, visible_group)
+    for (line, regions) in worktree_tail(ctx, roster, visible_group)
         .into_iter()
         .flatten()
     {
@@ -295,7 +295,18 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         if group.rows.is_empty() {
             block.push_inert(line);
         } else {
-            block.push_target(line, group_target.clone());
+            let regions = regions.into_iter().map(|(columns, target)| {
+                (
+                    columns.start.saturating_add(1)..columns.end.saturating_add(1),
+                    target,
+                )
+            });
+            // Member hits precede the whole-line hit: equal precedence resolves by push order.
+            block.push_with_regions(
+                line,
+                None,
+                regions.chain(std::iter::once((0..u16::MAX, group_target.clone()))),
+            );
         }
     }
     block.tag(&format!("#{}", group.label));
@@ -472,18 +483,20 @@ fn strip_owner_style(
     })
 }
 
+type TailLine = (Line<'static>, Vec<(Range<u16>, HitTarget)>);
+
 fn worktree_tail(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,
     visible_group: &VisibleGroup<'_>,
-) -> [Option<Line<'static>>; 2] {
+) -> [Option<TailLine>; 2] {
     let group = visible_group.source();
     let collapses = group.collapses();
     let hidden = visible_group.hidden_count();
     if inactive_folded(visible_group) && group.workflow.is_some() {
         return [
             Some(inactive_roster_line(ctx, visible_group, roster)),
-            inactive_totals_line(ctx, group),
+            inactive_totals_line(ctx, group).map(|line| (line, Vec::new())),
         ];
     }
     if hidden > 0 && !visible_group.expanded() {
@@ -491,15 +504,22 @@ fn worktree_tail(
             Some(if inactive_folded(visible_group) {
                 inactive_roster_line(ctx, visible_group, roster)
             } else {
-                Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
+                (
+                    Line::styled(format!("  +{hidden} more"), ctx.theme.muted()),
+                    Vec::new(),
+                )
             }),
             collapses
                 .then(|| inactive_totals_line(ctx, group))
-                .flatten(),
+                .flatten()
+                .map(|line| (line, Vec::new())),
         ];
     }
     if visible_group.natural_hidden_count() > 0 && visible_group.expanded() && !collapses {
-        [Some(Line::styled("  − less", ctx.theme.muted())), None]
+        [
+            Some((Line::styled("  − less", ctx.theme.muted()), Vec::new())),
+            None,
+        ]
     } else {
         [None, None]
     }
@@ -526,7 +546,7 @@ fn inactive_roster_line(
     ctx: &RowCtx<'_>,
     visible_group: &VisibleGroup<'_>,
     roster: &VisibleRoster<'_>,
-) -> Line<'static> {
+) -> TailLine {
     let group = visible_group.source();
     let members = inactive_members(visible_group, roster).collect::<Vec<_>>();
     let process_count = visible_group.hidden_count().saturating_sub(members.len());
@@ -576,7 +596,10 @@ fn inactive_roster_line(
             format!(" {}", run.word),
             workflow::word_style(ctx.theme, run),
         ));
-        return pin_right(spans, cost_spans, content_width(ctx.width));
+        return (
+            pin_right(spans, cost_spans, content_width(ctx.width)),
+            Vec::new(),
+        );
     }
     if let Some(team) = team {
         spans.push(Span::styled(
@@ -595,6 +618,7 @@ fn inactive_roster_line(
     let budget =
         width.saturating_sub(spans_width(&cost_spans) + usize::from(!cost_spans.is_empty()));
     let mut roster_width = spans_width(&spans);
+    let mut regions = Vec::new();
     let mut placed = 0;
     for (row, status) in &members {
         let glyph = status_glyph(ctx.theme, *status);
@@ -609,6 +633,14 @@ fn inactive_roster_line(
         if roster_width + separator_width + chip_width + remainder_width > budget {
             break;
         }
+        let start = roster_width + separator_width;
+        regions.push((
+            start as u16..(start + chip_width) as u16,
+            HitTarget::ExpandGroup {
+                key: group.key.clone(),
+                row: row.id.clone(),
+            },
+        ));
         if separator_width > 0 {
             spans.push(Span::raw("  "));
         }
@@ -634,7 +666,7 @@ fn inactive_roster_line(
         }
     }
 
-    pin_right(spans, cost_spans, width)
+    (pin_right(spans, cost_spans, width), regions)
 }
 
 fn inactive_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
