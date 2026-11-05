@@ -1,8 +1,9 @@
 //! View-owned timed freeze following input or a focus hold's release.
 //!
 //! The view module owns focused cards' held rank keys. This module reapplies
-//! the last painted order for the settling window, appending arrivals after
-//! frozen rows and new groups after live groups. Content keeps updating.
+//! the last painted order for the settling window. Arrivals enter before their
+//! first frozen successor in their group's live order; new groups follow live
+//! groups. Content keeps updating.
 
 use std::collections::{HashMap, HashSet};
 
@@ -193,18 +194,21 @@ fn admit_new_items(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
         if !frozen.groups.contains(&group.key) {
             frozen.groups.push(group.key.clone());
         }
-    }
-
-    for row in current
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-    {
-        if !frozen.rows.iter().any(|frozen| frozen.id == row.id) {
-            frozen.rows.push(FrozenRow {
-                id: row.id.clone(),
-                pane: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
-            });
+        for (index, row) in group.rows.iter().enumerate() {
+            if frozen.rows.iter().any(|frozen| frozen.id == row.id) {
+                continue;
+            }
+            let position = group.rows[index + 1..]
+                .iter()
+                .find_map(|next| frozen.rows.iter().position(|frozen| frozen.id == next.id))
+                .unwrap_or(frozen.rows.len());
+            frozen.rows.insert(
+                position,
+                FrozenRow {
+                    id: row.id.clone(),
+                    pane: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+                },
+            );
         }
     }
 }

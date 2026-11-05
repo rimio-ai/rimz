@@ -21,30 +21,35 @@ fn rowless_workflow_fold_is_not_deferred_by_another_groups_hold() {
 }
 
 #[test]
-fn arrivals_append_after_frozen_rows() {
+fn arrivals_take_their_live_rank_below_asks_and_failures() {
     let mut ui = ViewState::default();
-    let mut current = snapshot_with_groups(vec![group(
+    let mut current = hold_snapshot(vec![group(
         "a",
         vec![
-            agent_row("agent-a", "terminal_1", AgentStatus::Running),
-            row("shell", "terminal_2"),
-            row("build", "terminal_3"),
+            stamped_row("ask", "terminal_1", AgentStatus::Waiting, 60),
+            stamped_row("failed", "terminal_2", AgentStatus::Failed, 50),
+            stamped_row("calm", "terminal_3", AgentStatus::Idle, 20),
         ],
     )]);
     arm_freeze(&mut ui, 1_000);
     ui.freeze.as_mut().unwrap().frozen = capture_order(&current, &ui);
-    std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows = vec![
-        agent_row("agent-b", "terminal_4", AgentStatus::Waiting),
-        agent_row("agent-a", "terminal_1", AgentStatus::Running),
-        row("new-process", "terminal_5"),
-        row("shell", "terminal_2"),
-        row("build", "terminal_3"),
-    ]
-    .into();
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows,
+    );
+    let mut shell = row("new-process", "terminal_4");
+    shell.attention_at_ms = Some(40);
+    rows.push(shell);
+    rows.push(stamped_row(
+        "new-agent",
+        "terminal_5",
+        AgentStatus::Idle,
+        30,
+    ));
+    current.sort_groups_for_presentation();
     apply_freeze(&mut ui, &mut current, false, 1_001, false);
     assert_eq!(
         row_ids(&current, "a"),
-        ["agent-a", "shell", "build", "agent-b", "new-process"]
+        ["ask", "failed", "new-process", "new-agent", "calm"]
     );
 }
 
@@ -465,6 +470,62 @@ fn a_focused_old_shell_becoming_an_agent_keeps_its_rank_even_during_a_freeze() {
 }
 
 #[test]
+fn a_fresh_shell_keeps_its_painted_index_through_launch_release_and_expiry() {
+    for first_fetch in [true, false] {
+        let previous = hold_snapshot(vec![group(
+            "a",
+            vec![
+                stamped_row("ask", "terminal_1", AgentStatus::Waiting, 40),
+                stamped_row("failed", "terminal_2", AgentStatus::Failed, 30),
+                stamped_row("calm", "terminal_3", AgentStatus::Idle, 10),
+            ],
+        )]);
+        let old_focus = pane("terminal_3", "tab_0", false).pane_id;
+        let mut rig = if first_fetch {
+            HoldRig::new(hold_snapshot(Vec::new()), None)
+        } else {
+            let mut rig = HoldRig::new(previous.clone(), Some(old_focus.clone()));
+            rig.present(previous.clone(), &[old_focus], false);
+            rig
+        };
+        let mut fresh = previous;
+        let mut shell = row("shell", "terminal_4");
+        shell.attention_at_ms = Some(20);
+        let focused = shell.pane.as_ref().unwrap().pane_id.clone();
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut fresh.worktree_groups)[0].rows)
+            .push(shell);
+        fresh.sort_groups_for_presentation();
+        rig.present(fresh.clone(), std::slice::from_ref(&focused), false);
+        assert!(rig.ui.freeze.is_some(), "first fetch={first_fetch}");
+        let painted_index = |rig: &HoldRig| {
+            rig.ui
+                .visible_roster(&rig.context.current)
+                .rows()
+                .iter()
+                .position(|row| {
+                    row.pane
+                        .as_ref()
+                        .is_some_and(|pane| pane.pane_id == focused)
+                })
+        };
+        let mut positions = vec![painted_index(&rig)];
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut fresh.worktree_groups)[0].rows,
+        )[2] = stamped_row("launched", "terminal_4", AgentStatus::Running, 21);
+        rig.present(fresh.clone(), std::slice::from_ref(&focused), false);
+        positions.push(painted_index(&rig));
+        rig.present(fresh.clone(), &[], false);
+        positions.push(painted_index(&rig));
+        assert!(rig.ui.freeze.is_some());
+        rig.clock.advance(LAYOUT_FREEZE);
+        rig.present(fresh, &[], false);
+        positions.push(painted_index(&rig));
+        assert!(rig.ui.freeze.is_none());
+        assert_eq!(positions, [Some(2); 4], "first fetch={first_fetch}");
+    }
+}
+
+#[test]
 fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping() {
     let mut previous = inactivity_boundary();
     let focused = pane("terminal_3", "tab_0", false).pane_id;
@@ -745,7 +806,7 @@ fn mid_hold_group_churn_keeps_new_last_ranked_group_last() {
 }
 
 #[test]
-fn new_row_appends_after_frozen_neighbors() {
+fn new_row_takes_its_live_place_between_frozen_neighbors() {
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![
@@ -764,12 +825,12 @@ fn new_row_appends_after_frozen_neighbors() {
     admit_new_items(&current, &mut frozen);
     reorder_to_frozen(&mut current, &frozen);
 
-    assert_eq!(row_ids(&current, "a"), vec!["a1", "a3", "a2"]);
-    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a3", "a2"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a1", "a2", "a3"]);
+    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a2", "a3"]);
 }
 
 #[test]
-fn new_first_ranked_row_appends_at_tail() {
+fn new_first_ranked_row_leads_frozen_rows() {
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![row("a-new", "terminal_2"), row("a1", "terminal_1")],
@@ -784,8 +845,8 @@ fn new_first_ranked_row_appends_at_tail() {
     admit_new_items(&current, &mut frozen);
     reorder_to_frozen(&mut current, &frozen);
 
-    assert_eq!(row_ids(&current, "a"), vec!["a1", "a-new"]);
-    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a-new"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a-new", "a1"]);
+    assert_eq!(frozen_row_ids(&frozen), vec!["a-new", "a1"]);
 }
 
 #[test]
@@ -1219,15 +1280,18 @@ fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
         visible: HashSet::from(["a2".to_owned()]),
     };
     let mut expected_order = order.clone();
-    expected_order.rows.push(FrozenRow {
-        id: "a-new".to_owned(),
-        pane: Some("zellij:terminal_3".to_owned()),
-    });
+    expected_order.rows.insert(
+        1,
+        FrozenRow {
+            id: "a-new".to_owned(),
+            pane: Some("zellij:terminal_3".to_owned()),
+        },
+    );
     let stamp_ms = 2_000;
 
     adopt_shared_order(&mut ui, &mut current, order, Some(stamp_ms));
 
-    assert_eq!(row_ids(&current, "a"), vec!["a2", "a1", "a-new"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a2", "a-new", "a1"]);
     assert_eq!(
         ui.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
         Some(stamp_ms + LAYOUT_FREEZE.as_millis() as i64)
@@ -1236,7 +1300,7 @@ fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
         ui.freeze.as_ref().map(|hold| &hold.frozen),
         Some(&expected_order)
     );
-    assert_eq!(frozen_row_ids(&ui.last_order), vec!["a2", "a1", "a-new"]);
+    assert_eq!(frozen_row_ids(&ui.last_order), vec!["a2", "a-new", "a1"]);
     assert_eq!(
         ui.last_order.visible,
         HashSet::from(["a-new".to_owned(), "a2".to_owned(), "a1".to_owned()])
