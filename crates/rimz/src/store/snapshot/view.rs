@@ -36,8 +36,8 @@ mod score;
 use providers::format_plan_label;
 pub(crate) use providers::sort_windows;
 
-pub(crate) use layout::HeldRank;
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
+pub(crate) use layout::{HeldRank, group_partition};
 use model::cohort_team;
 pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,

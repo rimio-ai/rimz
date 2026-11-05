@@ -51,7 +51,12 @@ fn inactive_snapshot() -> SidebarSnapshot {
 
 fn paged_snapshot() -> SidebarSnapshot {
     let mut snapshot = inactive_snapshot();
-    let template = snapshot.worktree_groups[2].clone();
+    let template = snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.label == "inactive-a")
+        .unwrap()
+        .clone();
     let now = snapshot.now;
     let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
     groups.retain(|group| group.inactive.is_none());
@@ -93,7 +98,7 @@ fn body(
 }
 
 #[test]
-fn closed_inactive_line_replaces_receipts_before_external() {
+fn closed_inactive_line_replaces_receipts_after_external() {
     let snapshot = inactive_snapshot();
     let block = body(&snapshot, &ViewState::default(), &UiState::default(), 54);
     let texts = line_texts(&block.lines);
@@ -103,11 +108,8 @@ fn closed_inactive_line_replaces_receipts_before_external() {
         .expect("closed fold line");
     assert!(texts[fold - 1].is_empty());
     assert!(texts[..fold].iter().any(|line| line.contains("open-b")));
-    assert!(
-        texts[fold + 1..]
-            .iter()
-            .any(|line| line.contains("external"))
-    );
+    assert!(texts[..fold].iter().any(|line| line.contains("external")));
+    assert_eq!(fold, texts.len() - 1);
     assert!(
         texts.iter().all(|line| !line.contains("inactive-")),
         "{texts:?}"
@@ -126,6 +128,50 @@ fn closed_inactive_line_replaces_receipts_before_external() {
         );
     }
     assert_snapshot("inactive_closed", snapshot_to_screen(&snapshot, 54, 42));
+}
+
+#[test]
+fn opening_a_bottom_peek_scrolls_only_to_the_first_receipt() {
+    let snapshot = inactive_snapshot();
+    let view = ViewState {
+        inactive_peek: Some(Default::default()),
+        offset_authoritative: true,
+        inactive_reveal: true,
+        ..Default::default()
+    };
+    let pane_ui = UiState::default();
+    let block = body(&snapshot, &view, &pane_ui, 54);
+    let texts = line_texts(&block.lines);
+    let chip = texts
+        .iter()
+        .position(|line| line.contains("3 inactive"))
+        .unwrap();
+    let external = texts
+        .iter()
+        .position(|line| line.contains("external"))
+        .unwrap();
+    assert!(
+        external < chip,
+        "external must precede the bottom peek: {texts:?}"
+    );
+    let receipt_end = texts
+        .iter()
+        .position(|line| line.contains("inactive-a"))
+        .unwrap()
+        + 2;
+    let theme = Theme::fixed(true);
+    let full = compose::compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 100);
+    let viewport = 6;
+    let height = u16::try_from(full.top_height + full.bottom_height + viewport).unwrap();
+    let frame = compose::compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, height);
+    assert_eq!(frame.scroll_offset, receipt_end + 1 - viewport);
+    assert!(frame.scroll_offset <= chip);
+    assert_eq!(frame.scroll_offset + viewport - 1, receipt_end);
+    assert!(
+        line_texts(&frame.lines)
+            .iter()
+            .any(|line| line.contains("inactive-a"))
+    );
 }
 
 #[test]
@@ -296,8 +342,7 @@ fn inactive_chip_drops_breakdown_then_label_but_keeps_the_count() {
     for unlanded in [false, true] {
         let mut snapshot = inactive_snapshot();
         if unlanded {
-            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[2].inactive =
-                Some(SidebarInactive::Unlanded);
+            mark_one_unlanded(&mut snapshot);
         }
         for inner in [6, 7, 8, 15, 16, 17, 28, 29, 30] {
             let block = body(
@@ -339,8 +384,7 @@ fn inactive_chip_drops_breakdown_then_label_but_keeps_the_count() {
 #[test]
 fn inactive_chip_hit_columns_follow_a_wide_dotted_glyph() {
     let mut snapshot = inactive_snapshot();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[2].inactive =
-        Some(SidebarInactive::Unlanded);
+    mark_one_unlanded(&mut snapshot);
     let theme = Theme::fixed_for_theme(
         true,
         &toml::from_str("[glyphs.unicode.worktree]\ndotted = '界'").unwrap(),
@@ -546,8 +590,7 @@ fn workflow_receipt_has_no_member_regions_and_stays_inert_without_rows() {
 #[test]
 fn inactive_chip_is_one_target_in_both_states() {
     let mut snapshot = inactive_snapshot();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[2].inactive =
-        Some(SidebarInactive::Unlanded);
+    mark_one_unlanded(&mut snapshot);
     for open in [false, true] {
         let view = ViewState {
             inactive_peek: open.then(Default::default),
@@ -659,11 +702,7 @@ fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
                 block.interactions.target_at(1, tail as u16),
                 Some(HitTarget::MoreInactive)
             );
-            assert!(
-                texts[tail + 1..]
-                    .iter()
-                    .any(|line| line.contains("external"))
-            );
+            assert_eq!(tail, texts.len() - 1);
         } else {
             assert!(!text.contains(" older"), "{text}");
         }
@@ -708,16 +747,20 @@ fn inactive_first_page_is_newest_first_with_a_muted_older_tail() {
         .iter()
         .position(|line| line.contains("+15 older"))
         .unwrap();
-    assert!(
-        texts[tail + 1..]
-            .iter()
-            .any(|line| line.contains("external"))
-    );
+    assert_eq!(tail, texts.len() - 1);
     assert_eq!(block.lines[tail].spans[1].style, Theme::fixed(true).muted());
     assert_snapshot(
         "inactive_paged",
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &view, &UiState::default(), 54, 80),
     );
+}
+
+fn mark_one_unlanded(snapshot: &mut SidebarSnapshot) {
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|group| group.inactive.is_some())
+        .unwrap()
+        .inactive = Some(SidebarInactive::Unlanded);
 }
 
 #[test]

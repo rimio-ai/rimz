@@ -56,7 +56,6 @@ pub use row::{
     AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
     RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
-pub(crate) use view::HeldRank;
 pub(crate) use view::sort_windows;
 pub use view::{
     AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, ParkedWorkflow,
@@ -72,6 +71,7 @@ pub use view::{
     WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
     lead_unread_row,
 };
+pub(crate) use view::{HeldRank, group_partition};
 pub(crate) use view::{actionable_unread_count, triage_key};
 
 #[derive(Debug, thiserror::Error)]

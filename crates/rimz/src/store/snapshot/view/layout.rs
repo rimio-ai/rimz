@@ -517,7 +517,7 @@ pub(super) fn compare_groups(
 }
 
 fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
-    // External stays last; inactive groups follow active project work. Only
+    // Active project work leads external, then inactive groups. Only
     // actionable groups use urgency. Member groups lead rowless runs within each
     // tier; rowless runs rank by node entry rather than agent clocks.
     group_sort_key(
@@ -532,14 +532,31 @@ fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct GroupRankKey {
-    external: bool,
-    inactive: bool,
+    partition: GroupPartition,
     tier: u8,
     urgency: Reverse<u32>,
     rowless: bool,
     newest: StartKey<Reverse<jiff::Timestamp>>,
     ordinal: StartKey<Reverse<u64>>,
     label: String,
+}
+
+/// The presentation partitions in column order, shared with frozen layouts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum GroupPartition {
+    Active,
+    External,
+    Inactive,
+}
+
+pub(crate) fn group_partition(kind: SidebarWorktreeKind, inactive: bool) -> GroupPartition {
+    if inactive {
+        GroupPartition::Inactive
+    } else if kind == SidebarWorktreeKind::External {
+        GroupPartition::External
+    } else {
+        GroupPartition::Active
+    }
 }
 
 fn group_sort_key<'a>(
@@ -570,8 +587,7 @@ fn group_sort_key<'a>(
         highest_ordinal = highest_ordinal.max(facts.pane_ordinal);
     }
     GroupRankKey {
-        external: kind == SidebarWorktreeKind::External,
-        inactive,
+        partition: group_partition(kind, inactive),
         tier: if actionable {
             0
         } else if root_lane {

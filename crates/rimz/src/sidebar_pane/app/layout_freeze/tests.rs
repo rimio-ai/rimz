@@ -965,7 +965,7 @@ fn inactive_admission_waits_for_freeze_release_but_revival_is_immediate() {
             inactive_group(&admitted, "b"),
             expired
         ),
-        (vec!["a", "c", "b", "external"], true, true),
+        (vec!["a", "c", "external", "b"], true, true),
         "the releasing pass must admit the previously deferred group"
     );
 
@@ -1206,6 +1206,22 @@ fn reconcile_fold(
 }
 
 #[test]
+fn freeze_keeps_external_above_inactive_even_in_old_frozen_order() {
+    let mut finished = group("finished", vec![]);
+    finished.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
+    let mut external = group("external", vec![]);
+    external.kind = SidebarWorktreeKind::External;
+    let mut current = snapshot_with_groups(vec![finished, external, group("active", vec![])]);
+    let mut ui = ViewState {
+        last_order: capture_order(&current, &ViewState::default()),
+        ..Default::default()
+    };
+    apply_freeze(&mut ui, &mut current, true, 1_000, false);
+    assert!(ui.freeze.is_some());
+    assert_eq!(group_keys(&current), ["active", "external", "finished"]);
+}
+
+#[test]
 fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     let mut ui = crate::sidebar_pane::render::ViewState {
         last_order: FrozenOrder {
@@ -1230,8 +1246,8 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
                 vec![agent_row("coder", "terminal_2", AgentStatus::Idle)],
             ),
             group("main", vec![row("zsh", "terminal_1")]),
-            finished,
             external,
+            finished,
         ]
     };
     let now_ms = 1_000;
@@ -1241,7 +1257,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
 
     assert_eq!(
         group_keys(&current),
-        vec!["main", "team", "finished", "external"]
+        vec!["main", "team", "external", "finished"]
     );
     assert_eq!(
         ui.freeze.as_ref().map(|hold| hold.frozen.groups.clone()),
@@ -1259,7 +1275,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     assert!(ui.freeze.is_none());
     assert_eq!(
         group_keys(&current),
-        vec!["team", "main", "finished", "external"]
+        vec!["team", "main", "external", "finished"]
     );
 }
 

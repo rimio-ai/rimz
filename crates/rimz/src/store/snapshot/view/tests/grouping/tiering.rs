@@ -491,7 +491,7 @@ fn root_pin_survives_snapshot_json_and_presentation_sort() {
 }
 
 #[test]
-fn group_tiering_floats_attention_and_always_tails_external() {
+fn active_group_tiering_floats_attention_and_tails_external() {
     let labels_for = |agents: Vec<AgentState>| labels(&ranked_snapshot(agents));
     let external = |id: &str, status: AgentStatus| agent("claude", id, status, 1_000);
 
@@ -519,8 +519,8 @@ fn group_tiering_floats_attention_and_always_tails_external() {
         vec!["beta", "external"]
     );
 
-    // It tails below even an inactive project group — a stale, calm worktree
-    // still outranks an out-of-project agent holding `failed`.
+    // A cooled member still outranks external work in the active partition.
+    // Group inactivity is applied by the later presentation sort.
     assert_eq!(
         labels_for(vec![
             agent_in("a1", "/repo/alpha", AgentStatus::Idle, 1_000)
@@ -623,7 +623,7 @@ fn newer_success_group_leads_without_folding_a_fresh_merge() {
 }
 
 #[test]
-fn inactive_partition_follows_active_work_and_precedes_external() {
+fn inactive_partition_follows_active_work_and_external() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done", "/repo/done", AgentStatus::Success, 1_000),
         agent_in("old", "/repo/old", AgentStatus::Idle, 2_000).active_ago(25 * 60 * 60),
@@ -641,9 +641,9 @@ fn inactive_partition_follows_active_work_and_precedes_external() {
         }
     }
     snapshot.sort_groups_for_presentation();
-    assert_eq!(labels(&snapshot), ["old", "done", "external"]);
+    assert_eq!(labels(&snapshot), ["old", "external", "done"]);
     assert!(snapshot.worktree_groups[0].rows[0].archived);
-    assert!(snapshot.worktree_groups[1].inactive.is_some());
+    assert!(snapshot.worktree_groups[2].inactive.is_some());
 }
 
 #[test]
