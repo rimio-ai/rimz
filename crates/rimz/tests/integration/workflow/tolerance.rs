@@ -25,6 +25,116 @@ fn validate_warns_about_ignored_fields_in_text_and_json() {
 }
 
 #[test]
+fn delayed_route_warnings_keep_the_target_in_validate_text_and_json() {
+    let step = "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=3\n";
+    for (route, lifecycle, target) in [
+        ("{to='@done',delay=42}", "until", "@done"),
+        ("{to='@done',delay='soon'}", "until", "@done"),
+        ("{to='@done',delay='0s'}", "until", "@done"),
+        ("{to='@done',delay='30m'}", "turn", "@done"),
+        ("{to='@wait',delay='30m'}", "until", "@wait"),
+        ("{to='build',delay='30m'}", "until", "build"),
+    ] {
+        let text = format!(
+            "{HEADER}{}{step}lifecycle='{lifecycle}'\n",
+            WAIT.replace("done = '@done'", &format!("done = {route}"))
+        );
+        let (env, _) = fixture(&text, PENDING);
+        let output = command(&env, &["workflow", "validate", "review"]);
+        assert!(
+            output.status.success(),
+            "an optional delay must only warn: {output:?}"
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains("warning: review: checks.pr.on.done.delay: ignored field:"),
+            "{text}"
+        );
+        let report: Value = serde_json::from_str(&success(command(
+            &env,
+            &["workflow", "validate", "review", "--json"],
+        )))
+        .unwrap();
+        assert_eq!(report["errors"], json!([]));
+        assert!(
+            report["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["path"] == "checks.pr.on.done.delay" }),
+            "{report}"
+        );
+        let edge = report["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["node"] == "pr")
+            .unwrap()["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["outcome"] == "done")
+            .unwrap();
+        assert_eq!(edge["target"], target);
+        assert!(edge.get("delay").is_none(), "{edge}");
+    }
+}
+
+#[test]
+fn delayed_routes_render_in_definition_node_and_validate_views() {
+    let spec = format!(
+        "{HEADER}{}[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=3\n",
+        WAIT.replace("done = '@done'", "done = {to='@done',delay='30m'}")
+    );
+    let (env, _) = fixture(&spec, PENDING);
+    for (args, edge) in [
+        (
+            vec!["workflow", "validate", "review"],
+            "done → @done after 30m",
+        ),
+        (vec!["workflow", "show", "review"], "done @done after 30m"),
+        (
+            vec!["workflow", "show", "review", "pr"],
+            "done → @done after 30m",
+        ),
+    ] {
+        let text = success(command(&env, &args));
+        assert_eq!(text.matches(edge).count(), 1, "{args:?}: {text}");
+        if args.len() == 4 {
+            assert!(
+                text.contains(
+                    "Delays apply only while an until session is held; otherwise routes go at once."
+                ),
+                "{text}"
+            );
+        }
+    }
+    let report: Value = serde_json::from_str(&success(command(
+        &env,
+        &["workflow", "validate", "review", "--json"],
+    )))
+    .unwrap();
+    let edges = report["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["node"] == "pr")
+        .unwrap()["edges"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        edges.iter().find(|edge| edge["outcome"] == "done").unwrap()["delay"],
+        "30m"
+    );
+    assert!(
+        edges
+            .iter()
+            .filter(|edge| edge["outcome"] != "done")
+            .all(|edge| edge.get("delay").is_none())
+    );
+}
+
+#[test]
 fn run_warns_on_stderr_and_keeps_its_receipt_lines() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}future=true\n"), PENDING);
     let output = command(&env, &["workflow", "run", "review"]);

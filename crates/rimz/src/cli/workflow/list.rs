@@ -319,7 +319,7 @@ fn write_rows(
             age_pad = age.saturating_sub(row.age.width()),
         )?;
         if let Some(spec) = row.spec {
-            let hops = workflow::hops(spec, &row.journal);
+            let hops = workflow::hops(spec, &row.journal, row.record.held.as_ref());
             rail::horizontal(out, spec, row.record, &hops, &row.journal, width, 6)?;
         }
     }

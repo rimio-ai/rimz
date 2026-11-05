@@ -191,7 +191,7 @@ fn hops_fold_only_matching_consecutive_check_decisions() {
         evaluation("fail"),
         evaluation("fail"),
     ];
-    let trail = hops(&spec(), &journal);
+    let trail = hops(&spec(), &journal, None);
     assert_eq!(
         trail
             .iter()
@@ -216,7 +216,7 @@ fn hops_count_invalid_evaluation_and_route_once() {
         ),
     ];
     assert_eq!(
-        hops(&spec(), &journal)
+        hops(&spec(), &journal, None)
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
@@ -237,7 +237,7 @@ fn hops_do_not_count_an_abandoned_check_as_a_routing_decision() {
     );
     bound.seq = None;
     assert_eq!(
-        hops(&spec(), &[abandoned, bound])
+        hops(&spec(), &[abandoned, bound], None)
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
@@ -265,7 +265,7 @@ fn hops_do_not_route_a_judges_failed_evaluations_before_its_check_park() {
         entry("pr", json!({"event":"park", "reason":"check"})),
     ];
     assert_eq!(
-        hops(&spec, &journal)
+        hops(&spec, &journal, None)
             .iter()
             .map(|hop| &hop.kind)
             .collect::<Vec<_>>(),
@@ -286,7 +286,7 @@ fn hops_keep_engine_caps_and_parks_separate() {
         entry("build", json!({"event":"park", "reason":"cap"})),
     ];
     assert_eq!(
-        hops(&spec(), &journal)
+        hops(&spec(), &journal, None)
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
@@ -310,7 +310,7 @@ fn hops_resume_names_the_reentered_node() {
         "pr",
         json!({"event":"resume", "visit_grant":1, "deadline":null}),
     )];
-    let trail = hops(&spec(), &journal);
+    let trail = hops(&spec(), &journal, None);
     assert_eq!(
         trail
             .iter()
@@ -401,7 +401,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
         }
         actual.push((
             action,
-            hops(&spec, &t.entries)
+            hops(&spec, &t.entries, t.record.held.as_ref())
                 .into_iter()
                 .filter(|hop| hop.kind == HopKind::Route)
                 .map(|hop| {
@@ -435,7 +435,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
 #[test]
 fn hops_hold_routes_to_wait_not_the_case_target() {
     assert_eq!(
-        hops(&spec(), &[evaluation("hold")])
+        hops(&spec(), &[evaluation("hold")], None)
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
@@ -450,7 +450,7 @@ fn hops_preserve_terminal_rows_without_counting_cancel_twice() {
         entry("pr", json!({"event":"terminal", "state":"canceled"})),
     ];
     assert_eq!(
-        hops(&spec(), &journal)
+        hops(&spec(), &journal, None)
             .iter()
             .map(|hop| &hop.kind)
             .collect::<Vec<_>>(),

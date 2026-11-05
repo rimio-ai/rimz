@@ -4,8 +4,8 @@ use jiff::Timestamp;
 
 use super::WorkflowSpec;
 use crate::store::workflow::{
-    AttemptOutcome, EvaluationOrigin, JournalEntry, JournalEvent, ParkReason, RunRecord, RunState,
-    TurnEndAction,
+    AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, ParkReason,
+    RunRecord, RunState, TurnEndAction,
 };
 use crate::utils::time::TimeInputErr;
 
@@ -48,14 +48,15 @@ impl Hop {
 
 /// Fold consecutive matching evaluations, retaining the first decision's timestamp.
 /// Wait summaries and the engine's duplicate route evidence add no routing decisions.
-pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
+pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry], held: Option<&HeldSession>) -> Vec<Hop> {
     let mut hops: Vec<Hop> = Vec::new();
     let mut previous_evaluation = false;
     for (index, entry) in journal.iter().enumerate() {
         if repeats_evaluation(entry, index.checked_sub(1).map(|i| &journal[i])) {
             continue;
         }
-        let Some((kind, outcome, target)) = hop_kind(spec, entry, &journal[index + 1..]) else {
+        let Some((kind, outcome, target)) = hop_kind(spec, entry, &journal[index + 1..], held)
+        else {
             continue;
         };
         let hop = Hop {
@@ -86,9 +87,14 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry]) -> Vec<Hop> {
 
 /// The latest parked resume at a node or route into it, shared by arrival and park views.
 /// Active-run extensions do not replace the sender.
-pub fn routing_hop(spec: &WorkflowSpec, journal: &[JournalEntry], node: &str) -> Option<Hop> {
+pub fn routing_hop(
+    spec: &WorkflowSpec,
+    journal: &[JournalEntry],
+    node: &str,
+    held: Option<&HeldSession>,
+) -> Option<Hop> {
     let mut resumed = None;
-    for hop in hops(spec, journal).into_iter().rev() {
+    for hop in hops(spec, journal, held).into_iter().rev() {
         match hop.kind {
             HopKind::Resume if hop.node == node && resumed.is_none() => resumed = Some(hop),
             HopKind::Park { .. } if resumed.is_some() => return resumed,
@@ -160,13 +166,14 @@ fn hop_kind(
     spec: &WorkflowSpec,
     entry: &JournalEntry,
     following: &[JournalEntry],
+    held: Option<&HeldSession>,
 ) -> Option<(HopKind, Option<String>, Option<String>)> {
-    if matches!(entry.event, JournalEvent::Route { .. }) && held_verdict(entry, following) {
+    if matches!(entry.event, JournalEvent::Route { .. }) && held_verdict(entry, following, held) {
         return None;
     }
     let outcome: &str = match &entry.event {
         JournalEvent::Evaluation { outcome, .. } => {
-            return evaluation_target(spec, entry, following)
+            return evaluation_target(spec, entry, following, held)
                 .map(|target| (HopKind::Route, Some(outcome.clone()), Some(target)));
         }
         JournalEvent::Route { outcome, .. } => outcome,
@@ -203,12 +210,16 @@ fn hop_kind(
     ))
 }
 
-/// The routed target of an evaluation, shared by trail and full-history projection.
+/// The routed target of a check or engine decision, shared by trail and full history.
 pub fn evaluation_target(
     spec: &WorkflowSpec,
     entry: &JournalEntry,
     following: &[JournalEntry],
+    held: Option<&HeldSession>,
 ) -> Option<String> {
+    if held_verdict(entry, following, held) {
+        return None;
+    }
     let JournalEvent::Evaluation {
         origin,
         outcome,
@@ -216,9 +227,12 @@ pub fn evaluation_target(
         ..
     } = &entry.event
     else {
-        return None;
+        return match &entry.event {
+            JournalEvent::Route { outcome, .. } => spec.target(&entry.node, outcome),
+            _ => None,
+        };
     };
-    if object.is_null() || held_verdict(entry, following) {
+    if object.is_null() {
         return None;
     }
     if (*origin == EvaluationOrigin::Check && outcome != "invalid")
@@ -231,9 +245,19 @@ pub fn evaluation_target(
     None
 }
 
-fn held_verdict(entry: &JournalEntry, following: &[JournalEntry]) -> bool {
-    let outcome = match &entry.event {
-        JournalEvent::Evaluation { outcome, .. } | JournalEvent::Route { outcome, .. } => outcome,
+fn held_verdict(
+    entry: &JournalEntry,
+    following: &[JournalEntry],
+    held: Option<&HeldSession>,
+) -> bool {
+    let (outcome, object) = match &entry.event {
+        JournalEvent::Evaluation {
+            outcome, object, ..
+        }
+        | JournalEvent::Route {
+            outcome,
+            input: object,
+        } => (outcome, object),
         _ => return false,
     };
     for next in following {
@@ -248,12 +272,14 @@ fn held_verdict(entry: &JournalEntry, following: &[JournalEntry]) -> bool {
             JournalEvent::Wait { .. }
             | JournalEvent::Wake { .. }
             | JournalEvent::VisitsReset { .. }
+            | JournalEvent::Resume { .. }
             | JournalEvent::Attempt { .. } => {}
             JournalEvent::Route { .. } if repeats_evaluation(next, Some(entry)) => {}
             _ => return false,
         }
     }
-    false
+    held.and_then(|held| held.verdict.as_ref())
+        .is_some_and(|verdict| verdict.node == entry.node && verdict.object == *object)
 }
 
 fn attempt_superseded(
@@ -285,6 +311,27 @@ fn attempt_superseded(
         (JournalEvent::Cancel { .. }, AttemptOutcome::Canceled) => true,
         _ => false,
     }
+}
+
+/// A held closing verdict's delayed instant and saved target, read from its sealed route.
+pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Timestamp, &'a str)> {
+    let held = record.held.as_ref()?;
+    let verdict = held.verdict.as_ref()?;
+    if verdict.target == "@wait" || verdict.target == held.attempt.node {
+        return None;
+    }
+    let delay = spec
+        .checks
+        .get(&verdict.node)?
+        .on
+        .get(verdict.object.get("outcome")?.as_str()?)?
+        .delay()?;
+    let at = verdict
+        .at
+        .unwrap_or(verdict.entered_at)
+        .checked_add(super::spec::duration(delay).ok()?)
+        .unwrap_or(Timestamp::MAX);
+    Some((at, &verdict.target))
 }
 
 /// The first bound's instant and target, for inspection: `first_bound` routed by the spec.

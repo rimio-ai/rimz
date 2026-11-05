@@ -7,13 +7,13 @@ use crate::harness::workflow::{WorkflowSpec, hops, reached};
 use crate::store::snapshot::{
     SidebarSnapshot, SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind,
 };
-use crate::store::workflow::{RunRecord, RunState};
+use crate::store::workflow::{JournalEntry, RunRecord, RunState};
 
 thread_local! {
     // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
     static SPECS: KeyedParseCache<WorkflowSpec> = KeyedParseCache::default();
-    // Names depend only on immutable specs and append-only journal bytes.
-    static REACHED: KeyedParseCache<BTreeSet<String>> = KeyedParseCache::default();
+    // Apply the current held verdict after reading the cached journal.
+    static JOURNALS: KeyedParseCache<Vec<JournalEntry>> = KeyedParseCache::default();
 }
 
 pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWorkflow> {
@@ -31,23 +31,23 @@ pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWor
                     .flatten()
             });
             let reached_nodes = spec.as_deref().and_then(|spec| {
-                REACHED.with(|cache| {
-                    cache
-                        .read_with(&paths.journal, |bytes| {
-                            let journal =
-                                crate::store::workflow::parse_journal(bytes, &paths.journal);
-                            Some(
-                                reached(&hops(spec, &journal), &journal)
-                                    .into_keys()
-                                    .map(str::to_owned)
-                                    .collect(),
-                            )
-                        })
-                        .ok()
-                        .flatten()
-                })
+                JOURNALS
+                    .with(|cache| {
+                        cache
+                            .read_with(&paths.journal, |bytes| {
+                                Some(crate::store::workflow::parse_journal(bytes, &paths.journal))
+                            })
+                            .ok()
+                            .flatten()
+                    })
+                    .map(|journal| {
+                        reached(&hops(spec, &journal, record.held.as_ref()), &journal)
+                            .into_keys()
+                            .map(str::to_owned)
+                            .collect()
+                    })
             });
-            project(record, spec.as_deref(), reached_nodes.as_deref())
+            project(record, spec.as_deref(), reached_nodes.as_ref())
         })
         .collect()
 }

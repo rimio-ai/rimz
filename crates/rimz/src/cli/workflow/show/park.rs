@@ -252,7 +252,12 @@ impl View<'_> {
     }
 
     fn sender(&self, journal: &[JournalEntry]) -> Sender {
-        match workflow::routing_hop(self.spec, journal, &self.record.node) {
+        match workflow::routing_hop(
+            self.spec,
+            journal,
+            &self.record.node,
+            self.record.held.as_ref(),
+        ) {
             Some(hop) if hop.kind == HopKind::Resume => Sender::Resume,
             Some(hop) => Sender::Edge(hop.node, hop.outcome.unwrap_or_default()),
             None => Sender::Direct,

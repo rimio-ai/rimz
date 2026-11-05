@@ -226,9 +226,13 @@ fn a_waiting_success_resets_rows_once_and_context_and_previous_attempt_restart()
             && row["node"] == "watch")
     );
     assert!(
-        hops(&super::super::spec::parse(OUTCOME_STEP).unwrap(), &journal)
-            .iter()
-            .any(|hop| { hop.node == "build" && hop.outcome.as_deref() == Some("queued") }),
+        hops(
+            &super::super::spec::parse(OUTCOME_STEP).unwrap(),
+            &journal,
+            None
+        )
+        .iter()
+        .any(|hop| { hop.node == "build" && hop.outcome.as_deref() == Some("queued") }),
         "the trail includes the reset step and outcome"
     );
 }

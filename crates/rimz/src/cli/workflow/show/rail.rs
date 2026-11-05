@@ -10,7 +10,7 @@ use super::*;
 
 impl View<'_> {
     pub(super) fn rail(&self, out: &mut impl Write) -> Result<()> {
-        let hops = workflow::hops(self.spec, self.journal);
+        let hops = workflow::hops(self.spec, self.journal, self.record.held.as_ref());
         if self.record.state != RunState::Active {
             writeln!(out)?;
             return Ok(horizontal(

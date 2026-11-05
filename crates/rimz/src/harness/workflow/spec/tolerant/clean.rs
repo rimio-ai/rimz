@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use super::super::{
-    CheckKind, Issue, Limit, RESERVED_OUTCOMES, StepKind, WorkflowSpec, duration, parse_deadline,
-    parse_window,
+    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, StepKind, WorkflowSpec, duration,
+    parse_deadline, parse_window,
 };
 use super::ignored_issue;
 use crate::harness::schedule::when::WhenExpr;
@@ -132,7 +132,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             if check
                 .on
                 .get(&case.outcome)
-                .is_some_and(|target| target == "@wait")
+                .is_some_and(|route| route.target() == "@wait")
             {
                 ignore(
                     &mut case.hold,
@@ -285,6 +285,36 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 ignored,
                 "a staying step never ends on a question; remove on.asked or use lifecycle = 'turn'",
             );
+        }
+    }
+    for (node, check) in &mut spec.checks {
+        let held_steps = spec
+            .steps
+            .iter()
+            .filter_map(|(name, step)| {
+                (step.lifecycle == Some(crate::store::workflow::StepLifecycle::Until)
+                    && step.then.as_deref() == Some(node))
+                .then_some(name.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        for (outcome, route) in &mut check.on {
+            let Route::Delayed { to, delay } = route else {
+                continue;
+            };
+            let path = format!("checks.{node}.on.{outcome}.delay");
+            sanitize(delay, &path, ignored, |raw| match duration(raw) {
+                Ok(duration) if duration.is_zero() => Err("delay must be nonzero".into()),
+                Ok(_) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            });
+            if held_steps.is_empty() || to == "@wait" || held_steps.contains(to.as_str()) {
+                ignore(
+                    delay,
+                    &path,
+                    ignored,
+                    "delay requires an until check route that closes the held session",
+                );
+            }
         }
     }
 }

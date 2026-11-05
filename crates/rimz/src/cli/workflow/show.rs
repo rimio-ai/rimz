@@ -420,7 +420,7 @@ impl View<'_> {
     }
 
     fn trail(&self, out: &mut impl Write) -> Result<()> {
-        let hops = workflow::hops(self.spec, self.journal);
+        let hops = workflow::hops(self.spec, self.journal, self.record.held.as_ref());
         let earlier = hops.len().saturating_sub(8);
         let mut trail = Vec::new();
         if earlier > 0 {

@@ -122,14 +122,21 @@ pub(super) fn render(name: &str, node: &str) -> Result<()> {
     }
     writeln!(out, "\nedges:")?;
     for edge in &edges {
+        let delay = rail::after(edge);
         let mark = edge
             .mark()
             .map(|mark| format!(", {mark}"))
             .unwrap_or_default();
         writeln!(
             out,
-            "  {} → {} ({}{mark})",
+            "  {} → {}{delay} ({}{mark})",
             edge.outcome, edge.target, edge.source
+        )?;
+    }
+    if edges.iter().any(|edge| edge.delay.is_some()) {
+        writeln!(
+            out,
+            "\nDelays apply only while an until session is held; otherwise routes go at once."
         )?;
     }
     let mut facts = render::KeyVals::new();
@@ -154,8 +161,8 @@ fn cases(out: &mut impl Write, check: &Check, edges: &[Edge], note: Option<&str>
         let target = edges
             .iter()
             .find(|edge| edge.outcome == case.outcome)
-            .map(|edge| edge.target.as_str())
-            .unwrap_or("unmapped");
+            .map(|edge| format!("{}{}", edge.target, rail::after(edge)))
+            .unwrap_or_else(|| "unmapped".into());
         let hold = case
             .hold
             .as_ref()
@@ -173,8 +180,8 @@ fn cases(out: &mut impl Write, check: &Check, edges: &[Edge], note: Option<&str>
         let target = edges
             .iter()
             .find(|edge| edge.outcome == *outcome)
-            .map(|edge| edge.target.as_str())
-            .unwrap_or("unmapped");
+            .map(|edge| format!("{}{}", edge.target, rail::after(edge)))
+            .unwrap_or_else(|| "unmapped".into());
         writeln!(out, "     none true  {outcome} → {target}")?;
     }
     Ok(())

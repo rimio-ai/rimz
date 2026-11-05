@@ -396,7 +396,7 @@ impl Row {
             {
                 row.heading.push_str(&format!(
                     " · waits ≤{timeout}, then {}",
-                    target(name, &edge.target, order)
+                    edge_target(name, edge, order)
                 ));
             }
             if let Some(window) = &check.window {
@@ -431,7 +431,7 @@ impl Row {
                                     ))
                             ),
                             outcome: case.outcome.clone(),
-                            target: target(name, &edge.target, order),
+                            target: edge_target(name, edge, order),
                             readings: Vec::new(),
                         });
                     }
@@ -449,7 +449,7 @@ impl Row {
                         number: None,
                         when: "none true".into(),
                         outcome: outcome.clone(),
-                        target: target(name, &edge.target, order),
+                        target: edge_target(name, edge, order),
                         readings: Vec::new(),
                     });
                 }
@@ -592,7 +592,7 @@ pub(super) fn case_note(node: &str, edges: &[Edge], order: &[&str]) -> Option<St
     let action = if edge.target == "@wait" {
         "waits".into()
     } else {
-        format!("goes {}", target(node, &edge.target, order))
+        format!("goes {}", edge_target(node, edge, order))
     };
     Some(format!(
         "the first true case wins; an unread term above it {action}"
@@ -604,11 +604,17 @@ fn edge_text(node: &str, edge: &Edge, order: &[&str]) -> String {
         .mark()
         .map(|mark| format!(" ({mark})"))
         .unwrap_or_default();
-    format!(
-        "{} {}{mark}",
-        edge.outcome,
-        target(node, &edge.target, order)
-    )
+    format!("{} {}{mark}", edge.outcome, edge_target(node, edge, order))
+}
+
+pub(super) fn after(edge: &Edge) -> String {
+    edge.delay
+        .as_ref()
+        .map_or_else(String::new, |delay| format!(" after {delay}"))
+}
+
+fn edge_target(node: &str, edge: &Edge, order: &[&str]) -> String {
+    format!("{}{}", target(node, &edge.target, order), after(edge))
 }
 
 fn target(node: &str, target: &str, order: &[&str]) -> String {

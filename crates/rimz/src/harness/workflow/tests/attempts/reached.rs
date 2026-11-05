@@ -19,7 +19,7 @@ fn setup_rail() -> (tempfile::TempDir, StatePaths, RunRecord) {
 fn reached_nodes(state: &StatePaths, record: &RunRecord) -> Vec<String> {
     let spec = super::super::super::spec::parse(RAIL).unwrap();
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
-    reached(&hops(&spec, &journal), &journal)
+    reached(&hops(&spec, &journal, record.held.as_ref()), &journal)
         .into_keys()
         .map(str::to_owned)
         .collect()

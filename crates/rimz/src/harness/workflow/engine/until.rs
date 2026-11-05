@@ -136,7 +136,9 @@ pub(super) fn prepare(
         )
         .map(Some);
     }
-    if eligible(&observed).is_none() {
+    if super::super::close_after(t.spec, &t.record).is_some_and(|(at, _)| t.now < at)
+        || eligible(&observed).is_none()
+    {
         if hold_changed {
             persist(t, guard)?;
         }

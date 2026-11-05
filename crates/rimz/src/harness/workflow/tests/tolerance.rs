@@ -3,11 +3,122 @@ use super::*;
 const SIMPLE: &str =
     "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
 const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@user'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
+const DELAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok={to='@done',delay='30m'}\non.pending='build'\n";
 
 fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
     let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), text).unwrap();
     load(&dir)
+}
+
+#[test]
+fn delayed_routes_load_and_only_delayed_edges_serialize_a_delay() {
+    let result = loaded(DELAY);
+    assert!(result.is_ok(), "a delayed route must load: {result:?}");
+    let spec = result.unwrap();
+    assert!(spec.ignored.is_empty(), "{:?}", spec.ignored);
+    let edges = serde_json::to_value(spec.edges("pick")).unwrap();
+    let edges = edges.as_array().unwrap();
+    assert_eq!(
+        edges.iter().find(|edge| edge["outcome"] == "ok").unwrap(),
+        &serde_json::json!({
+            "outcome":"ok", "target":"@done", "source":"explicit", "fires":"yes", "delay":"30m"
+        })
+    );
+    assert!(
+        edges
+            .iter()
+            .filter(|edge| edge["outcome"] != "ok")
+            .all(|edge| edge.get("delay").is_none()),
+        "{edges:?}"
+    );
+}
+
+#[test]
+fn invalid_or_misplaced_delays_warn_and_keep_the_route() {
+    let mut cases = vec![
+        (
+            DELAY.replace("lifecycle='until'", "lifecycle='turn'"),
+            "@done",
+        ),
+        (DELAY.replace("to='@done'", "to='@wait'"), "@wait"),
+        (DELAY.replace("to='@done'", "to='build'"), "build"),
+    ];
+    for delay in ["42", "[]", "'soon'", "'0s'"] {
+        cases.push((DELAY.replace("'30m'", delay), "@done"));
+    }
+    for (text, target) in cases {
+        let result = loaded(&text);
+        assert!(
+            result.is_ok(),
+            "an optional delay must not refuse: {result:?}"
+        );
+        let spec = result.unwrap();
+        assert_eq!(spec.target("pick", "ok").as_deref(), Some(target));
+        assert_eq!(spec.ignored.len(), 1, "{text}: {:?}", spec.ignored);
+        assert_eq!(spec.ignored[0].path, "checks.pick.on.ok.delay");
+        let edges = serde_json::to_value(spec.edges("pick")).unwrap();
+        assert!(
+            edges
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|edge| edge.get("delay").is_none())
+        );
+    }
+}
+
+#[test]
+fn delay_placement_reads_the_step_after_its_misplaced_lifecycle_is_ignored() {
+    let text = DELAY.replace(
+        "agent='claude'\nprompt-file='prompts/build.md'",
+        "run='true'\ntimeout='1m'",
+    );
+    let spec = loaded(&text).unwrap();
+    assert!(spec.steps["build"].lifecycle.is_none());
+    assert!(
+        spec.ignored
+            .iter()
+            .any(|issue| issue.path == "checks.pick.on.ok.delay"),
+        "a command step cannot make a delay valid: {:?}",
+        spec.ignored
+    );
+}
+
+#[test]
+fn route_tables_require_a_string_target_and_warn_on_unknown_keys() {
+    for (route, reason) in [
+        ("{}", "missing field `to`"),
+        ("{delay='30m'}", "missing field `to`"),
+        (
+            "{to=42,delay='30m'}",
+            "invalid type: integer `42`, expected a string",
+        ),
+    ] {
+        let error = loaded(&DELAY.replace("{to='@done',delay='30m'}", route)).unwrap_err();
+        let SpecErr::Toml { path, source } = error else {
+            panic!("{error}")
+        };
+        assert_eq!(
+            (path.as_str(), source.message()),
+            ("checks.pick.on.ok", reason)
+        );
+    }
+    let result = loaded(&DELAY.replace("delay='30m'", "delay='30m',future=true"));
+    assert!(
+        result.is_ok(),
+        "unknown route fields must only warn: {result:?}"
+    );
+    let spec = result.unwrap();
+    assert_eq!(spec.ignored.len(), 1, "{:?}", spec.ignored);
+    assert_eq!(spec.ignored[0].path, "checks.pick.on.ok.future");
+    let dead = CONDITION.replace("yes='@done'", "yes='@done',dead={delay='30m'}");
+    let result = loaded(&dead);
+    assert!(
+        result.is_ok(),
+        "a malformed dead route must only warn: {result:?}"
+    );
+    assert_eq!(result.unwrap().ignored[0].path, "checks.pick.on.dead");
 }
 
 #[test]
@@ -411,6 +522,10 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         (format!("{SIMPLE}summary='  '\n"), "checks.pick.summary"),
         (format!("{SIMPLE}timeout='soon'\n"), "checks.pick.timeout"),
         (
+            SIMPLE.replace("on.ok='@done'", "on.ok={to='@done',delay='30m'}"),
+            "checks.pick.on.ok.delay",
+        ),
+        (
             acyclic.replace("max-visits = 3", "summary='  '"),
             "steps.build.summary",
         ),
@@ -596,6 +711,12 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "prompt-file" => check.prompt_file.is_none(),
                             "wake" => check.wake.is_none(),
                             "wake.0" => check.wake.as_ref().is_some_and(Vec::is_empty),
+                            "on.ok.delay" => !serde_json::to_value(spec.edges("pick"))
+                                .unwrap()
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|edge| edge.get("delay").is_some()),
                             field => !check.on.contains_key(field.strip_prefix("on.").unwrap()),
                         }
                     }
