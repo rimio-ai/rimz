@@ -452,6 +452,32 @@ impl WhenCondition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypingHoldReplay {
+    Steer,
+    Interrupt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypingHold {
+    pub until: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<TypingHoldReplay>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
+impl TypingHold {
+    pub(super) fn with_replay(self, replay: Option<TypingHoldReplay>, force: bool) -> Self {
+        Self {
+            replay: self.replay.max(replay),
+            force: self.force || force,
+            ..self
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
@@ -534,6 +560,8 @@ pub struct MessageRecord {
     /// shared deadline for reconciliation and read-side holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typing_hold: Option<TypingHold>,
     /// The once-only sender notice for this message's long-queued state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_notice_at: Option<Timestamp>,
@@ -680,6 +708,7 @@ impl MessageRecord {
             after: Vec::new(),
             when: Vec::new(),
             retry_after: None,
+            typing_hold: None,
             queued_notice_at: None,
             auto_compact: None,
             soft_compact: None,
@@ -939,7 +968,9 @@ impl MessageRecord {
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
     ///
-    /// Queued [`DeliveryGate::Resume`] records arm nothing: [`queue_head`] excludes their control lane, so auto-continue owns their re-drive. Claimed and sent resume records still arm recovery.
+    /// Queued [`DeliveryGate::Resume`] records ordinarily arm nothing: [`queue_head`] excludes
+    /// their control lane. `queue_wake_deadline` adds active typing holds and expired-hold
+    /// retries for replay and resume records. Claimed and sent resume records still arm recovery.
     /// Steer-only wrap-ups arm cleanup after the claim TTL, including while queued.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
@@ -1059,14 +1090,33 @@ pub(super) fn queue_wake_deadline(pending: &[MessageRecord], now: Timestamp) -> 
                     now,
                 )
                 .is_some_and(|head| head.message_id != message.message_id);
-            if follower {
-                return message
+            let deadline = if follower {
+                message
                     .expires_at()
                     .into_iter()
                     .chain(message.register_by.filter(|deadline| *deadline > now))
-                    .min();
-            }
-            message.wake_deadline(now)
+                    .min()
+            } else {
+                message.wake_deadline(now)
+            };
+            deadline
+                .into_iter()
+                .chain(
+                    message
+                        .typing_hold
+                        .filter(|_| message.status == MessageStatus::Queued)
+                        .and_then(|hold| {
+                            if hold.until > now {
+                                Some(hold.until)
+                            } else if hold.replay.is_some() || message.gate == DeliveryGate::Resume
+                            {
+                                message.retry_after.or(Some(hold.until))
+                            } else {
+                                None
+                            }
+                        }),
+                )
+                .min()
         })
         .min()
 }
@@ -1150,6 +1200,7 @@ pub(crate) fn delivery_batch_indices(
     let head = &live[head_index];
     if head.status != MessageStatus::Queued
         || !head.is_deliverable(now)
+        || head.typing_hold.is_some_and(|hold| hold.until > now)
         || !claim_expired(head.last_attempt_at, now)
         || live[..head_index].iter().any(|message| {
             holds_boundary(message, now)
@@ -1177,6 +1228,7 @@ pub(crate) fn delivery_batch_indices(
         })
     {
         if !claim_expired(candidate.last_attempt_at, now)
+            || candidate.typing_hold.is_some_and(|hold| hold.until > now)
             || !batch_compatible(head, candidate, status)
         {
             break;

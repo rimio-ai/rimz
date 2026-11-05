@@ -7,6 +7,117 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn typing_hold_round_trips_boundary_and_live_replay() {
+    let record = delivery_message(1, &agent("receiver", None), DeliveryGate::Any, None);
+    let outcomes = [None, Some("steer"), Some("interrupt")].map(|replay| {
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["typing_hold"] = serde_json::json!({"until": "2026-01-01T00:00:00Z"});
+        if let Some(replay) = replay {
+            value["typing_hold"]["replay"] = serde_json::json!(replay);
+        }
+        let decoded: MessageRecord = serde_json::from_value(value.clone()).unwrap();
+        serde_json::to_value(decoded).unwrap() == value
+    });
+    assert_eq!(outcomes, [true; 3]);
+    let mut forced = serde_json::to_value(&record).unwrap();
+    forced["typing_hold"] = serde_json::json!({
+        "until": "2026-01-01T00:00:00Z", "replay": "steer", "force": true,
+    });
+    let decoded: MessageRecord = serde_json::from_value(forced.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), forced);
+}
+
+#[test]
+fn typing_hold_on_a_non_head_replay_arms_its_own_wake() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("receiver", None);
+    let mut head = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    head.retry_after = Some(now + Duration::from_secs(90));
+    let follower = delivery_message(2, &receiver, DeliveryGate::Any, None);
+    let mut value = serde_json::to_value(follower).unwrap();
+    let until = now + Duration::from_secs(10);
+    value["typing_hold"] = serde_json::json!({"until": until, "replay": "steer"});
+    let follower: MessageRecord = serde_json::from_value(value).unwrap();
+    let follower_wake = queue_wake_deadline(&[head, follower.clone()], now);
+    let head_wake = queue_wake_deadline(std::slice::from_ref(&follower), now);
+    let mut resume = follower;
+    resume.gate = DeliveryGate::Resume;
+    let resume_wake = queue_wake_deadline(&[resume], now);
+    assert_eq!([follower_wake, head_wake, resume_wake], [Some(until); 3]);
+}
+
+#[test]
+fn expired_typing_hold_does_not_mask_another_records_later_wake() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("receiver", None);
+    let mut head = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    head.retry_after = Some(now + Duration::from_secs(90));
+    let mut follower = delivery_message(2, &receiver, DeliveryGate::Any, None);
+    follower.retry_after = Some(now);
+    let mut scheduled = delivery_message(3, &agent("other", None), DeliveryGate::Any, None);
+    let later = now + Duration::from_secs(10);
+    scheduled.not_before = Some(later);
+    let observed = [0, 1].map(|held| {
+        let mut pending = [head.clone(), follower.clone(), scheduled.clone()];
+        pending[held].typing_hold = Some(TypingHold {
+            until: now,
+            replay: None,
+            force: false,
+        });
+        queue_wake_deadline(&pending, now)
+    });
+    assert_eq!(observed, [Some(later); 2]);
+}
+
+#[test]
+fn expired_replay_and_resume_holds_arm_their_moved_retry_deadlines() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("receiver", None);
+    let mut head = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    head.retry_after = Some(now + Duration::from_secs(90));
+    let retry = now + Duration::from_secs(30);
+    let until = now - Duration::from_secs(5);
+    let observed = [
+        (DeliveryGate::Any, Some(retry)),
+        (DeliveryGate::Resume, Some(retry)),
+        (DeliveryGate::Any, None),
+        (DeliveryGate::Resume, None),
+    ]
+    .map(|(gate, retry_after)| {
+        let mut held = delivery_message(2, &receiver, gate, None);
+        held.typing_hold = Some(TypingHold {
+            until,
+            replay: (gate != DeliveryGate::Resume).then_some(TypingHoldReplay::Steer),
+            force: false,
+        });
+        held.retry_after = retry_after;
+        queue_wake_deadline(&[head.clone(), held], now)
+    });
+    // An edit or a released claim clears `retry_after`; the past `until` keeps the wake due.
+    assert_eq!(
+        observed,
+        [Some(retry), Some(retry), Some(until), Some(until)]
+    );
+}
+
+#[test]
+fn typing_hold_stops_a_boundary_batch_at_each_held_member() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("receiver", None);
+    let records = [1, 2, 3].map(|id| delivery_message(id, &receiver, DeliveryGate::Any, None));
+    let observed = [0, 1].map(|index| {
+        let mut records = records.clone();
+        records[index].typing_hold = Some(TypingHold {
+            until: now + Duration::from_secs(30),
+            replay: None,
+            force: false,
+        });
+        delivery_batch_indices(&records, &records[0].message_id, AgentStatus::Idle, now)
+    });
+    assert_eq!(observed, [None, Some(vec![0])]);
+}
+
+#[test]
 fn idle_compaction_lapses_only_for_a_later_turn_on_its_card() {
     let at = Some(Timestamp::from_second(1_000).unwrap());
     let later = at.map(|at| at + Duration::from_secs(1));

@@ -138,6 +138,37 @@ fn edit_message_updates_queued_record_and_appends_event() {
 }
 
 #[test]
+fn scheduling_a_held_replay_clears_only_its_old_typing_hold() {
+    let now = Timestamp::now();
+    let observed =
+        [None, Some(None), Some(Some(now + Duration::from_secs(60)))].map(|not_before| {
+            let q = Queue::new();
+            let held = q.queue_with(1, |message| {
+                message.typing_hold = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "until": now + Duration::from_secs(30),
+                        "replay": "steer",
+                    }))
+                    .unwrap(),
+                );
+            });
+            q.edit_message(
+                &held.message_id,
+                MessageEdit {
+                    not_before,
+                    ..MessageEdit::default()
+                },
+                "session",
+            )
+            .unwrap();
+            let updated = q.by_id(&held.message_id);
+            assert_eq!(updated.not_before, not_before.flatten());
+            updated.typing_hold.is_some()
+        });
+    assert_eq!(observed, [true, true, false]);
+}
+
+#[test]
 fn edit_message_refuses_claimed_terminal_and_missing_records() {
     let q = Queue::new();
     let edit = || MessageEdit {
