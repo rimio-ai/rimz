@@ -2577,6 +2577,50 @@ fn enrich_cached(bencher: Bencher) {
 }
 
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
+fn price_book_cold_open(bencher: Bencher) {
+    let workspace = BenchWorkspace::new();
+    let models = (0..4_000)
+        .map(|index| {
+            (
+                format!("rimz-bench-model-{index:04}"),
+                serde_json::json!({
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                    "cache_creation_input_token_cost": 1e-6,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let cache_path = rimz::agents::pricing::testkit::seed_cache(
+        &workspace.runtime,
+        &serde_json::Value::Object(models).to_string(),
+    );
+    bencher
+        .with_inputs(|| {
+            rimz::agents::pricing::testkit::reset_cached_book();
+            rimz::agents::pricing::testkit::book_loads()
+        })
+        .bench_local_values(|loads| {
+            let book = rimz::agents::pricing::cached_book(divan::black_box(&cache_path));
+            assert_eq!(rimz::agents::pricing::testkit::book_loads(), loads + 1);
+            let prices = [
+                "rimz-bench-model-2000",
+                "rimz-bench-model-2000-via-bedrock",
+                "rimz-bench-unpriced",
+            ]
+            .map(|model| {
+                rimz::agents::pricing::cache_rewarm_cost_usd(
+                    &book,
+                    divan::black_box(model),
+                    1,
+                    None,
+                )
+            });
+            assert_eq!(divan::black_box(prices), [Some(1e-6), Some(1e-6), None]);
+        });
+}
+
+#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
 fn kimi_changed_session_refresh(bencher: Bencher) {
     bencher
         .with_inputs(|| changed_session_fixture(rimz::testkit::changed_kimi_session_fixture))
