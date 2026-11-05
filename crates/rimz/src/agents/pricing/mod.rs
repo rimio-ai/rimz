@@ -474,12 +474,43 @@ static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mute
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub mod testkit {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{CACHED_BOOK_MEMO, PoisonError, PricingCache, embedded, fs};
 
     static BOOK_LOADS: AtomicU64 = AtomicU64::new(0);
 
     pub fn book_loads() -> u64 {
         BOOK_LOADS.load(Ordering::Relaxed)
+    }
+
+    /// Seed the shared price cache from a LiteLLM-shaped document and return its path.
+    #[track_caller]
+    pub fn seed_cache(runtime: &crate::RuntimePaths, json: &str) -> PathBuf {
+        let path = runtime.shared_pricing_cache_path();
+        seed_cache_at(&path, json);
+        path
+    }
+
+    /// Seed an explicit price-cache path using the upstream projection parser.
+    #[track_caller]
+    pub fn seed_cache_at(path: &Path, json: &str) {
+        let cache = PricingCache {
+            models: embedded::parse(json).into_iter().collect(),
+            ..PricingCache::default()
+        };
+        fs::create_dir_all(path.parent().expect("pricing fixture parent"))
+            .expect("pricing fixture directory");
+        let bytes = serde_json::to_vec_pretty(&cache).expect("pricing fixture serialization");
+        fs::write(path, bytes).expect("pricing fixture cache");
+    }
+
+    /// Forget the process-wide book without changing the cumulative load counter.
+    pub fn reset_cached_book() {
+        *CACHED_BOOK_MEMO
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     pub(super) fn count_load() {
