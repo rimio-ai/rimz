@@ -47,6 +47,468 @@ fn reconcile(stamps: &mut AttentionStamps, snapshot: &mut SidebarSnapshot) {
     snapshot.sort_groups_for_presentation();
 }
 
+mod panes {
+    use super::*;
+
+    fn shell(raw: &str, birth_ms: i64) -> SidebarRow {
+        let mut row = activity_row(false, None, at(birth_ms), Path::new("/repo"));
+        row.id = raw.to_owned();
+        let mut pane = crate::sidebar::test_support::pane(raw, "zsh", "/repo");
+        pane.first_seen_at_ms = Some(birth_ms as u64);
+        row.pane = Some(pane);
+        row
+    }
+
+    fn pane_entry(stamps: &AttentionStamps, raw: &str) -> serde_json::Value {
+        serde_json::to_value(&stamps.panes).unwrap()[format!("zellij:{raw}")].clone()
+    }
+
+    #[test]
+    fn pane_slot_records_birth_launch_and_exit_and_keeps_the_mixed_order() {
+        let mut stamps = AttentionStamps::default();
+        let process = shell("terminal_1", 2_000);
+        let pane = process.pane.clone();
+        let mut snapshot = snapshot(vec![
+            card("old", 1_000, AgentStatus::Idle),
+            process.clone(),
+            card("new", 3_000, AgentStatus::Idle),
+        ]);
+        let mut entries = Vec::new();
+        let mut positions = Vec::new();
+        for (now_ms, tenant) in [
+            (10_000, process.clone()),
+            (12_000, {
+                let mut agent = card("agent", 2_100, AgentStatus::Idle);
+                agent.pane = pane.clone();
+                agent
+            }),
+            (13_000, process),
+        ] {
+            snapshot.now = at(now_ms);
+            let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
+            let index = rows.iter().position(|row| row.pane == pane).unwrap();
+            rows[index] = tenant;
+            reconcile(&mut stamps, &mut snapshot);
+            entries.push(pane_entry(&stamps, "terminal_1"));
+            positions.push(snapshot.rows().position(|row| row.pane == pane).unwrap());
+        }
+        assert_eq!(positions, [1; 3]);
+        assert_eq!(
+            entries,
+            [
+                serde_json::json!({
+                    "tenant": "process", "at_ms": 2_000, "active_ms": 2_000, "seen_ms": 2_000,
+                }),
+                serde_json::json!({"tenant": "agent", "at_ms": 2_100, "seen_ms": 2_000}),
+                serde_json::json!({
+                    "tenant": "process", "at_ms": 2_100, "active_ms": 13_000, "seen_ms": 2_000,
+                }),
+            ]
+        );
+        assert_eq!(snapshot.rows().nth(1).unwrap().last_activity, at(2_000));
+        assert!(
+            !stamps.reconcile(&snapshot),
+            "a stable tenant writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_new_pane_birth_replaces_either_kind_of_old_slot() {
+        for entry in [
+            serde_json::json!({"tenant": "agent", "at_ms": 1_000, "seen_ms": 1_000}),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 1_000, "active_ms": 500, "seen_ms": 1_000,
+            }),
+        ] {
+            let mut stamps = AttentionStamps::default();
+            stamps.panes.insert(
+                "zellij:terminal_1".into(),
+                serde_json::from_value(entry).unwrap(),
+            );
+            let mut snapshot = snapshot(vec![shell("terminal_1", 2_000)]);
+            stamps.derive(&mut snapshot);
+            assert_eq!(stamp(&snapshot, "terminal_1"), Some(2_000));
+            reconcile(&mut stamps, &mut snapshot);
+            assert_eq!(
+                pane_entry(&stamps, "terminal_1"),
+                serde_json::json!({
+                    "tenant": "process", "at_ms": 2_000, "active_ms": 2_000, "seen_ms": 2_000,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_resumed_agent_exit_keeps_its_stamp_and_index_despite_a_later_pane_birth() {
+        let process = shell("terminal_1", 5_000);
+        let mut agent = card("resumed", 1_000, AgentStatus::Idle);
+        agent.pane = process.pane.clone();
+        let mut snapshot = snapshot(vec![
+            card("older", 500, AgentStatus::Idle),
+            agent,
+            card("newer", 2_000, AgentStatus::Idle),
+        ]);
+        let mut stamps = AttentionStamps::default();
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(order(&snapshot), ["newer", "resumed", "older"]);
+        *row_mut(&mut snapshot, "resumed") = process;
+        snapshot.now = at(12_000);
+        let before = stamps.panes.clone();
+        stamps.derive(&mut snapshot);
+        snapshot.sort_groups_for_presentation();
+        let interim = (stamp(&snapshot, "terminal_1"), order(&snapshot));
+        assert_eq!(stamps.panes, before, "derive does not persist the exit");
+        reconcile(&mut stamps, &mut snapshot);
+        let expected = (
+            Some(1_000),
+            vec![
+                "newer".to_owned(),
+                "terminal_1".to_owned(),
+                "older".to_owned(),
+            ],
+        );
+        assert_eq!(
+            [interim, (stamp(&snapshot, "terminal_1"), order(&snapshot))],
+            [expected.clone(), expected]
+        );
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 1_000, "active_ms": 12_000, "seen_ms": 5_000,
+            })
+        );
+    }
+
+    #[test]
+    fn pane_sightings_replace_only_known_different_incarnations_not_older_stamps() {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (seen_ms, current_seen_ms, at_ms, expected_at_ms) in [
+            (Some(2_000), Some(2_000), 1_000, 1_000),
+            (Some(1_000), Some(2_000), 9_000, 2_000),
+            (None, Some(2_000), 1_000, 1_000),
+            (Some(1_000), None, 1_000, 1_000),
+        ] {
+            for agent in [false, true] {
+                let mut entry = if agent {
+                    serde_json::json!({"tenant": "agent", "at_ms": at_ms})
+                } else {
+                    serde_json::json!({"tenant": "process", "at_ms": at_ms, "active_ms": 700})
+                };
+                if let Some(seen_ms) = seen_ms {
+                    entry["seen_ms"] = serde_json::json!(seen_ms);
+                }
+                let mut stamps = AttentionStamps::default();
+                stamps.panes.insert(
+                    "zellij:terminal_1".into(),
+                    serde_json::from_value(entry).unwrap(),
+                );
+                let mut process = shell("terminal_1", 2_000);
+                process.pane.as_mut().unwrap().first_seen_at_ms = current_seen_ms;
+                let mut snapshot = snapshot(vec![process]);
+                stamps.derive(&mut snapshot);
+                let derived = stamp(&snapshot, "terminal_1");
+                reconcile(&mut stamps, &mut snapshot);
+                let recorded = pane_entry(&stamps, "terminal_1");
+                actual.push((
+                    derived,
+                    recorded["at_ms"].as_i64(),
+                    recorded["active_ms"].as_i64(),
+                    recorded["seen_ms"].as_u64(),
+                ));
+                let replaced = matches!((seen_ms, current_seen_ms), (Some(a), Some(b)) if a != b);
+                expected.push((
+                    Some(expected_at_ms),
+                    Some(expected_at_ms),
+                    Some(if replaced {
+                        2_000
+                    } else if agent {
+                        10_000
+                    } else {
+                        700
+                    }),
+                    current_seen_ms.or(seen_ms),
+                ));
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn agent_exit_keeps_hot_cooling_and_archived_bands_and_positions() {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        let facts = |snapshot: &SidebarSnapshot| {
+            let (index, row) = snapshot
+                .rows()
+                .enumerate()
+                .find(|(_, row)| row.pane.is_some())
+                .unwrap();
+            (row.attention_at_ms, row.inactive, row.archived, index)
+        };
+        for (active_ms, inactive, archived, index) in [
+            (9_500, false, false, 0),
+            (8_000, true, false, 1),
+            (7_000, true, true, 1),
+        ] {
+            let process = shell("terminal_1", 2_000);
+            let mut agent = card("agent", 2_100, AgentStatus::Idle);
+            agent.pane = process.pane.clone();
+            agent.last_activity = at(active_ms);
+            let mut older = card("archived", 500, AgentStatus::Idle);
+            older.last_activity = at(6_000);
+            let mut snapshot = snapshot(vec![card("hot", 1_000, AgentStatus::Idle), agent, older]);
+            snapshot.attention.inactive_after_secs = std::num::NonZeroU32::new(1).unwrap();
+            snapshot.attention.archive_after_secs = std::num::NonZeroU32::new(2).unwrap();
+            snapshot.score_scenario_rows();
+            let mut stamps = AttentionStamps::default();
+            reconcile(&mut stamps, &mut snapshot);
+            let before = facts(&snapshot);
+            let agent_active = pane_entry(&stamps, "terminal_1")["active_ms"].as_i64();
+            *row_mut(&mut snapshot, "agent") = process;
+            snapshot.now = at(10_500);
+            let interim_and_final = [false, true].map(|persist| {
+                if persist {
+                    stamps.reconcile(&snapshot);
+                }
+                stamps.derive(&mut snapshot);
+                snapshot.sort_groups_for_presentation();
+                facts(&snapshot)
+            });
+            let exit_active = pane_entry(&stamps, "terminal_1")["active_ms"].as_i64();
+            snapshot.now = at(10_600);
+            stamps.derive(&mut snapshot);
+            snapshot.sort_groups_for_presentation();
+            actual.push((
+                before,
+                interim_and_final,
+                facts(&snapshot),
+                agent_active,
+                exit_active,
+            ));
+            let expected_facts = (Some(2_100), inactive, archived, index);
+            expected.push((
+                expected_facts,
+                [expected_facts; 2],
+                expected_facts,
+                (inactive || archived).then_some(active_ms),
+                Some(if inactive || archived {
+                    active_ms
+                } else {
+                    10_500
+                }),
+            ));
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn legacy_attention_files_load_cards_and_gain_pane_slots() {
+        let mut stamps = AttentionStamps::from_bytes(
+            br#"{
+        "v": "rimz.attention.v1", "cards": {"known": {"zone": "calm", "at_ms": 777}}
+    }"#,
+        );
+        let mut snapshot = snapshot(vec![
+            card("known", 1_000, AgentStatus::Idle),
+            shell("terminal_1", 2_000),
+        ]);
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(stamp(&snapshot, "known"), Some(777));
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 2_000, "active_ms": 2_000, "seen_ms": 2_000,
+            })
+        );
+    }
+
+    #[test]
+    fn interim_exit_derives_the_next_slot_and_ages_busy_processes_from_exit() {
+        let mut stamps = AttentionStamps::default();
+        stamps.panes.insert(
+            "zellij:terminal_1".into(),
+            serde_json::from_value(serde_json::json!({"tenant": "agent", "at_ms": 2_100})).unwrap(),
+        );
+        let before = stamps.panes.clone();
+        let mut process = shell("terminal_1", 2_000);
+        process.inactive = true;
+        process.archived = true;
+        process.as_process_mut().unwrap().state = crate::store::snapshot::ProcessState::Busy;
+        let mut final_fold = snapshot(vec![process]);
+        final_fold.attention.inactive_after_secs = std::num::NonZeroU32::new(1).unwrap();
+        final_fold.attention.archive_after_secs = std::num::NonZeroU32::new(2).unwrap();
+        let mut interim = final_fold.clone();
+        stamps.derive(&mut interim);
+        let row = interim.rows().next().unwrap();
+        assert_eq!(
+            (row.attention_at_ms, row.inactive, row.archived),
+            (Some(2_100), false, false)
+        );
+        assert_eq!(stamps.panes, before, "derive never persists an exit");
+        reconcile(&mut stamps, &mut final_fold);
+        assert_eq!(
+            interim.worktree_groups[0].rows,
+            final_fold.worktree_groups[0].rows
+        );
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 2_100, "active_ms": 10_000, "seen_ms": 2_000,
+            })
+        );
+        let actual = [11_000, 12_000, 13_000].map(|now_ms| {
+            final_fold.now = at(now_ms);
+            stamps.derive(&mut final_fold);
+            let row = final_fold.rows().next().unwrap();
+            (
+                row.inactive,
+                row.archived,
+                row.attention_score,
+                row.last_activity,
+            )
+        });
+        assert_eq!(
+            actual,
+            [
+                (false, false, 0, at(2_000)),
+                (true, false, 0, at(2_000)),
+                (true, true, 0, at(2_000)),
+            ]
+        );
+    }
+
+    #[test]
+    fn panes_without_birth_keep_existing_slots_and_new_slots_use_the_fold_clock() {
+        for entry in [
+            None,
+            Some(serde_json::json!({"tenant": "agent", "at_ms": 1_000})),
+            Some(serde_json::json!({"tenant": "process", "at_ms": 1_000, "active_ms": 2_000})),
+        ] {
+            let mut stamps = AttentionStamps::default();
+            if let Some(entry) = &entry {
+                stamps.panes.insert(
+                    "zellij:terminal_1".into(),
+                    serde_json::from_value(entry.clone()).unwrap(),
+                );
+            }
+            let mut process = shell("terminal_1", 10_000);
+            process.pane.as_mut().unwrap().first_seen_at_ms = None;
+            let mut snapshot = snapshot(vec![process]);
+            reconcile(&mut stamps, &mut snapshot);
+            let at_ms = entry
+                .as_ref()
+                .map_or(10_000, |entry| entry["at_ms"].as_i64().unwrap());
+            let active_ms = entry
+                .as_ref()
+                .and_then(|entry| entry.get("active_ms"))
+                .map_or(10_000, |value| value.as_i64().unwrap());
+            let expected = serde_json::json!({
+                "tenant": "process", "at_ms": at_ms, "active_ms": active_ms,
+            });
+            assert_eq!(pane_entry(&stamps, "terminal_1"), expected);
+            snapshot.now = at(12_000);
+            row_mut(&mut snapshot, "terminal_1").last_activity = snapshot.now;
+            assert!(!stamps.reconcile(&snapshot));
+            assert_eq!(pane_entry(&stamps, "terminal_1"), expected);
+        }
+    }
+
+    #[test]
+    fn absent_pane_slots_prune_strictly_past_retention_and_present_panes_stay() {
+        let mut stamps = AttentionStamps::default();
+        for (id, at_ms) in [("old", 999), ("boundary", 1_000), ("present", 999)] {
+            stamps.panes.insert(
+                format!("zellij:{id}"),
+                serde_json::from_value(
+                    serde_json::json!({"tenant": "process", "at_ms": at_ms, "active_ms": at_ms}),
+                )
+                .unwrap(),
+            );
+        }
+        let mut snapshot = snapshot(vec![shell("present", 0)]);
+        snapshot.now = at(1_000 + DEFAULT_RETENTION.as_millis() as i64);
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(
+            stamps.panes.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["zellij:boundary", "zellij:present"]
+        );
+    }
+
+    #[test]
+    fn pane_slots_load_without_resetting_exit_activity() {
+        let mut stamps = AttentionStamps::from_bytes(
+            br#"{
+        "v": "rimz.attention.v1", "cards": {}, "panes": {
+            "zellij:terminal_1": {"tenant": "process", "at_ms": 2100, "active_ms": 9000}
+        }
+    }"#,
+        );
+        let mut snapshot = snapshot(vec![shell("terminal_1", 2_000)]);
+        stamps.derive(&mut snapshot);
+        assert_eq!(stamp(&snapshot, "terminal_1"), Some(2_100));
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 2_100, "active_ms": 9_000,
+            })
+        );
+        assert!(
+            stamps.reconcile(&snapshot),
+            "a legacy slot gains its sighting"
+        );
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 2_100, "active_ms": 9_000, "seen_ms": 2_000,
+            })
+        );
+        assert!(!stamps.reconcile(&snapshot));
+    }
+}
+
+#[test]
+fn agent_slots_write_activity_on_cooling_and_clear_it_on_new_activity() {
+    let mut agent = card("agent", 2_100, AgentStatus::Idle);
+    agent.pane = Some(crate::sidebar::test_support::pane(
+        "terminal_1",
+        "claude",
+        "/repo",
+    ));
+    let mut snapshot = snapshot(vec![agent]);
+    snapshot.attention.inactive_after_secs = std::num::NonZeroU32::new(1).unwrap();
+    snapshot.attention.archive_after_secs = std::num::NonZeroU32::new(2).unwrap();
+    let mut stamps = AttentionStamps::default();
+    let actual = [
+        (10_000, 10_000),
+        (12_000, 10_000),
+        (13_000, 10_000),
+        (14_000, 14_000),
+    ]
+    .map(|(now_ms, active_ms)| {
+        snapshot.now = at(now_ms);
+        row_mut(&mut snapshot, "agent").last_activity = at(active_ms);
+        snapshot.score_scenario_rows();
+        let changed = stamps.reconcile(&snapshot);
+        let entry = serde_json::to_value(&stamps.panes).unwrap();
+        (
+            changed,
+            entry["zellij:terminal_1"]["active_ms"].as_i64(),
+            snapshot.rows().next().unwrap().inactive,
+            snapshot.rows().next().unwrap().archived,
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (true, None, false, false),
+            (true, Some(10_000), true, false),
+            (false, Some(10_000), true, true),
+            (true, None, false, false),
+        ]
+    );
+}
+
 #[test]
 fn only_zone_crossings_restamp_not_prompts_results_parks_or_read_state() {
     let mut stamps = AttentionStamps::default();

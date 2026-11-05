@@ -37,6 +37,8 @@ expression: strip_sgr(&ansi)
    󰿦 158k · 󱥸 151k  6k  19k
 
   main                     ⇡3 ⇣1  +1840 -620   main
+ ⣾ cargo nextest               37%   402M     8M/s
+   integration::backend
  ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
    󰕰 ━━━━━━━━━━━━╺━╺───────────────────── 24.0%
@@ -50,8 +52,6 @@ expression: strip_sgr(&ansi)
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━──── 79.0% 󰪞  8m
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
- ⣾ cargo nextest               37%   402M     8M/s
-   integration::backend
 
   observer-lag                 ⇡1  +980 -360   main
  ⠁ opencode · GPT 5.5 · xhigh · 272k            $3.07

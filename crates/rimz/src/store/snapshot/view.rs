@@ -568,13 +568,18 @@ impl SidebarSnapshot {
         layout::sort_presented_groups(&mut self.worktree_groups, &held);
     }
 
-    pub(crate) fn sort_rows_in_order<'a>(
-        &mut self,
-        order: impl Iterator<Item = &'a str>,
-        held: &HashMap<PaneId, HeldRank>,
-    ) {
-        let held = layout::held_rows(self, held);
-        layout::sort_rows_in_order(&mut self.worktree_groups, order, &held);
+    pub(crate) fn sort_rows_in_order<'a>(&mut self, order: impl Iterator<Item = &'a str>) {
+        layout::sort_rows_in_order(&mut self.worktree_groups, order);
+    }
+
+    /// Age a process row from its pane slot without changing group activity.
+    pub(crate) fn process_attention_facts(&self, active_ms: i64) -> (bool, bool, u32) {
+        let active_at = Timestamp::from_millisecond(active_ms).unwrap_or(self.now);
+        score::attention_facts(
+            None,
+            score::age_secs(self.now, active_at),
+            aggregate::AttentionWindows::from_config(&self.attention),
+        )
     }
 
     pub(crate) fn project_stuck_stages(&mut self) {

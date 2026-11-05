@@ -1747,6 +1747,73 @@ fn order_flap_reports_reorders_explained_only_by_calm_status_churn() {
 }
 
 #[test]
+fn process_reorders_are_explained_by_derived_stamps_and_bands() {
+    let path = std::path::Path::new("/repo");
+    for (input, changed_birth) in [("stamp", 9_999), ("cooling", 8_000), ("archive", 7_000)] {
+        let frame = |at_ms, changed| {
+            let mut rows = ["a", "b"]
+                .map(|id| {
+                    let birth = if id == "b" && changed {
+                        changed_birth
+                    } else {
+                        10_000
+                    };
+                    let mut row = activity_row(
+                        false,
+                        None,
+                        jiff::Timestamp::from_millisecond(birth).unwrap(),
+                        path,
+                    );
+                    row.id = id.to_owned();
+                    let mut pane = crate::sidebar::test_support::pane(id, "zsh", "/repo");
+                    pane.first_seen_at_ms = Some(birth as u64);
+                    row.pane = Some(pane);
+                    row
+                })
+                .to_vec();
+            if changed {
+                rows.reverse();
+            }
+            let mut snapshot = SidebarSnapshot::build_with_agents(
+                WorkspaceId::from_project_root(path),
+                Vec::new(),
+                jiff::Timestamp::from_millisecond(10_000).unwrap(),
+            );
+            snapshot.panes_produced_at_ms = Some(1);
+            snapshot.attention.inactive_after_secs = std::num::NonZeroU32::new(1).unwrap();
+            snapshot.attention.archive_after_secs = std::num::NonZeroU32::new(2).unwrap();
+            snapshot.worktree_groups = vec![worktree_group(path, rows)].into();
+            crate::sidebar::attention::AttentionStamps::default().derive(&mut snapshot);
+            let frame = extract_sig(
+                &snapshot,
+                &PulledFrameSig::from_snapshot(&snapshot),
+                &EventStore::default(),
+                0,
+                0,
+                at_ms,
+            );
+            let b = frame.rows.iter().find(|row| row.row_id == "b").unwrap();
+            assert_eq!(
+                b.attention_at_ms,
+                Some(if changed { changed_birth } else { 10_000 })
+            );
+            assert_eq!(b.inactive, changed && input != "stamp");
+            assert_eq!(b.archived, changed && input == "archive");
+            assert!(!b.top);
+            frame
+        };
+        let mut observer = Observer::default();
+        observer.observe(frame(0, false));
+        observer.observe(frame(11_000, false));
+        observer.observe(frame(12_000, true));
+        assert!(
+            order_flaps(&observer.observe(frame(14_000, false))).is_empty(),
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn order_flap_is_quiet_when_zone_band_or_stamp_explains_it() {
     let actual = ["zone", "cooling", "archive", "stamp"].map(|input| {
         let frame = |at_ms, b_first, changed| {

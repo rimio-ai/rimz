@@ -231,7 +231,7 @@ lanes/workspace-spending.<prefix>.json        room spend projection
 lanes/hook-drainer-outages/<pid>              wrapper-held hook-drainer outage leases
 ```
 
-The sidebar host alone writes `lanes/attention.json` on final framed folds, tracking each card's displayed top/calm crossing by launch id (row id without one). Enrichment only reads it, and ranks a crossing the record does not hold yet at the fold's clock. Like the other `lanes/` records, reset, teardown and reboot drop it; cards then fall back to their birth stamps. Its schema, retention and cold-start rules are [attention stamps](./sidebar/state.md#attention-stamps).
+The sidebar host alone writes `lanes/attention.json` on final framed folds, tracking each card's displayed top/calm crossing by launch id (row id without one), plus pane-keyed order/activity slots. A process inherits the exiting card's order stamp and its recorded last activity when the card had cooled or archived; a hot card's shell ages from the exit sighting. Enrichment only reads the record, deriving pending crossings and exits as the next reconciliation would. Like the other `lanes/` records, reset, teardown and reboot drop it; rows then fall back to birth stamps. Its schema, retention and cold-start rules are [attention stamps](./sidebar/state.md#attention-stamps).
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:
 

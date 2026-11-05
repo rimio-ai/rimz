@@ -3033,7 +3033,9 @@ fn a_lagging_cursor_replays_only_the_latest_room_fold() {
         );
         let updates = advancing_rx.take_unseen();
         assert_eq!(updates.len(), 1, "unrelated subscriber keeps advancing");
-        assert_eq!(shown_panes(&updates[0]), ["terminal_7", &newest]);
+        let mut shown = shown_panes(&updates[0]);
+        shown.sort();
+        assert_eq!(shown, [newest.as_str(), "terminal_7"]);
     }
     assert_eq!(
         stalled_rx
@@ -3050,7 +3052,9 @@ fn a_lagging_cursor_replays_only_the_latest_room_fold() {
         1,
         "a stalled consumer retains one snapshot, not one per fold"
     );
-    assert_eq!(shown_panes(&updates[0]), ["terminal_8", "terminal_163"]);
+    let mut shown = shown_panes(&updates[0]);
+    shown.sort();
+    assert_eq!(shown, ["terminal_163", "terminal_8"]);
     let (_, context) = updates.into_iter().next().unwrap().into_parts();
     assert!(
         Arc::ptr_eq(&context.unwrap(), sink.context.as_ref().unwrap()),

@@ -1,16 +1,14 @@
 //! View-owned timed freeze following input or a focus hold's release.
 //!
 //! The view module owns focused cards' held rank keys. This module reapplies
-//! the last painted order for the settling window, appending arrivals within
-//! their partitions and new groups after live groups. Content keeps updating.
+//! the last painted order for the settling window, appending arrivals after
+//! frozen rows and new groups after live groups. Content keeps updating.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ids::PaneId;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, ViewState};
-use crate::store::snapshot::{
-    HeldRank, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
-};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 pub(super) fn arm_freeze(ui: &mut ViewState, now_ms: i64) {
     ui.freeze = Some(LayoutFreeze {
@@ -25,7 +23,6 @@ pub(super) fn apply_freeze(
     interacted: bool,
     now_ms: i64,
     parked: bool,
-    held: &HashMap<PaneId, HeldRank>,
 ) {
     if interacted {
         arm_freeze(ui, now_ms);
@@ -40,7 +37,7 @@ pub(super) fn apply_freeze(
     if let Some(hold) = ui.freeze.as_mut() {
         migrate_frozen_order(current, &mut hold.frozen);
         admit_new_items(current, &mut hold.frozen);
-        reorder_to_frozen(current, &hold.frozen, held);
+        reorder_to_frozen(current, &hold.frozen);
     }
     if ui.freeze.is_some() {
         super::selection::anchor_selection(ui, current);
@@ -118,7 +115,7 @@ pub(super) fn adopt_shared_order(
 ) {
     migrate_frozen_order(current, &mut order);
     admit_new_items(current, &mut order);
-    reorder_to_frozen(current, &order, &HashMap::new());
+    reorder_to_frozen(current, &order);
     ui.freeze = armed_ms.map(|armed_ms| LayoutFreeze {
         frozen: order,
         armed_ms,
@@ -127,11 +124,7 @@ pub(super) fn adopt_shared_order(
     ui.last_order = capture_order(current, ui);
 }
 
-pub(super) fn reorder_to_frozen(
-    current: &mut SidebarSnapshot,
-    frozen: &FrozenOrder,
-    held: &HashMap<PaneId, HeldRank>,
-) {
+pub(super) fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
     let group_pos: HashMap<&str, usize> = frozen
         .groups
         .iter()
@@ -151,7 +144,7 @@ pub(super) fn reorder_to_frozen(
     if !current.worktree_groups.iter().is_sorted_by_key(group_key) {
         std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(group_key);
     }
-    current.sort_rows_in_order(frozen.rows.iter().map(|row| row.id.as_str()), held);
+    current.sort_rows_in_order(frozen.rows.iter().map(|row| row.id.as_str()));
 }
 
 fn migrate_frozen_order(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {

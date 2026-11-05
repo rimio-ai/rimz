@@ -402,12 +402,17 @@ impl SidebarSnapshot {
                 }
                 pane.command = Some(command.to_owned());
                 pane.pane_process_start = None;
-                if let Some(next) = row_from_frame_pane(
+                if let Some(mut next) = row_from_frame_pane(
                     pane,
                     &self.wired_kinds,
                     &self.wired_default_models,
                     self.now,
                 ) {
+                    next.attention_at_ms = row.attention_at_ms;
+                    if next.is_process() {
+                        next.inactive = row.inactive;
+                        next.archived = row.archived;
+                    }
                     let worktree_path = row
                         .worktree_path
                         .clone()

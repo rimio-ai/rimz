@@ -39,11 +39,13 @@ pub struct SidebarRow {
     pub unread: bool,
     /// Producer-stamped staleness: this row's latest activity has aged past the
     /// inactive window, sinking calm and parked rows beneath hot work.
-    /// Actionable and process rows are exempt; unread does not change this sink.
+    /// Actionable rows are exempt; unread does not change this sink. Process
+    /// rows age from their pane's birth; after an agent exits, from the card's
+    /// last activity when it had cooled, else from the exit.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inactive: bool,
     /// Producer-stamped archive sink: this row has aged past the archive
-    /// window, so it parks below hot and warm rows. Actionable and process rows are exempt.
+    /// window, so it parks below hot and warm rows. Actionable rows are exempt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
     /// Producer-stamped fixed-point attention score in milli-units for every
@@ -123,10 +125,6 @@ impl SidebarRow {
 
     pub fn team(&self) -> Option<&str> {
         self.as_agent()?.team.as_deref()
-    }
-
-    pub fn launch_ordinal(&self) -> Option<u32> {
-        self.as_agent().and_then(|agent| agent.launch_ordinal)
     }
 
     /// The name to display on the card and in notifications: the agent's handle

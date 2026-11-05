@@ -157,7 +157,7 @@ How much of the card shows at rest is yours to tune with `card_density` ([themin
 
 ## Process rows
 
-A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows sit below the agent cards in their worktree, never enter the cockpit tallies, and never join the jump queue. A process stuck in uninterruptible sleep or left as a zombie does wear `!`, which flags a wedged process rather than a failed turn. Rows are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card.
+A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows share the calm agent cards' newest-first order in their worktree, below asks and failures, never enter the cockpit tallies, and never join the jump queue. A process stuck in uninterruptible sleep or left as a zombie does wear `!`, which flags a wedged process rather than a failed turn. Rows are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card. When the agent exits, the process row keeps the card's place.
 
 ## The agent lifecycle
 
@@ -234,7 +234,7 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 Inside a group, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
 
-Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards. They sort in hot, cooling, then archived bands, newest first inside each band. A new card lands at the top of the calm cards. Answering an ask or recovering from a failure puts that card at the top of the calm cards too.
+Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
 
 Within a band, prompts, clean finishes, entering or leaving a provider pause, and read receipts do not reshuffle calm cards. A second ask, or a question becoming a failure, keeps its place among the attention cards. Read state affects emphasis and the jump inbox, not this order.
 
@@ -242,11 +242,11 @@ Between groups, any project group holding an ask or failure leads, ranked by urg
 
 ### Time reshapes the order
 
-Within a group, time is measured from each card's last activity, in three windows. These bands do not order groups.
+Within a group, time is measured from each card's last activity, in three windows. Process rows use the pane's first sighting. Returning to a shell from a cooled or archived card keeps that card's last-activity clock; returning from a hot card starts aging at the exit. Busy work does not renew this clock. These bands do not order groups.
 
-1. **Inside the first hour, calm and parked cards stay hot.** Their order stays newest first; time alone does not reshuffle them inside the band.
-2. **Between one hour and twenty-four, calm and parked cards cool.** They sink below hot calm cards, still newest first within the cooling band.
-3. **Past twenty-four hours, a calm or parked card archives.** It parks at the back, still newest first within that band. This band is about age; it is unrelated to an agent sleeping on a wait.
+1. **Inside the first hour, calm cards and process rows stay hot.** Their order stays newest first; time alone does not reshuffle them inside the band.
+2. **Between one hour and twenty-four, calm cards and process rows cool.** They sink below hot calm rows, still newest first within the cooling band.
+3. **Past twenty-four hours, a calm card or process row archives.** It parks at the back, still newest first within that band. This band is about age; it is unrelated to an agent sleeping on a wait.
 
 Asks and failures are exempt from cooling and archiving while the agent is alive: an unanswered question still leads fresh running or idle work tomorrow.
 
@@ -266,22 +266,22 @@ Newly inactive work with cards waits outside the fold while the layout is held o
 
 Four partitions hold regardless of any score, so the column keeps one stable outline:
 
-- The workflow step's card leads, followed by team members when a team strip draws, then other rows. Within each section, ranked agent cards precede process rows, because shells, builds, and servers are context. A focused shell becoming an agent stays among the process rows until you leave and its settling freeze expires.
+- The workflow step's card leads, followed by team members when a team strip draws, then other rows. Within each section, asks and failures lead, followed by calm cards and process rows in one order. A focused shell becoming an agent keeps its held rank through the launch.
 - The main checkout's group stays below groups holding asks or failures and above the rest, even without an agent. Its own ask or failure puts it among the attention groups instead.
 - Inactive project groups follow every active project group, behind the inactive chip. The whole line and `i` toggle a paged peek without filtering; `+K older` loads the next 10. It follows your view across tabs and focus changes until you toggle it, and starts closed after a host restart. Opening reveals the first receipt, closing returns to the chip, and neither moves the selection.
 - Project worktrees lead and out-of-project panes tail, so the `external` divider always sorts last whatever it holds.
 
-Inside an active group, the six-row cap folds idle cards and process rows behind `+K more` after section ordering; an agent card that is working, blocked, parked, finished, unread, or selected is never folded.
+Inside an active group, the six-row cap folds idle cards and process rows behind `+K more` after section ordering, preserving their shared rank; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. When only process panes remain hot, the first hot process row stays visible as a liveness anchor; cooled shells are not exempt.
 
 The card in a pane you have focused keeps its place in the order, and its group keeps its place, until you leave that pane. Prompting it, answering its ask, or waking cooled work does not move it. Clients sharing a view can focus different panes: both cards hold. Other cards can still arrive or ask for attention above them.
 
-After you jump, browse, or leave a focused card, the column freezes its order and keeps previously selected cards open for five seconds from your last interaction, so a glance back finds the cards where they were. The hold follows your view across tabs without restarting. Arriving without a hold freezes the last order you saw for the first frame. While any client sharing your view focuses its sidebar pane, the freeze lasts thirty seconds instead; leaving the sidebar restores the five-second deadline without restarting it. During this timed freeze, new cards append within their agent or process partition, and new groups appear below the live groups. Content and read state keep updating; released order, cap exemptions, and held-open cards settle together when the timer expires. Cards still focused keep holding their place. A hidden view settles when it is next shown.
+After you jump, browse, or leave a focused card, the column freezes its order and keeps previously selected cards open for five seconds from your last interaction, so a glance back finds the cards where they were. The hold follows your view across tabs without restarting. Arriving without a hold freezes the last order you saw for the first frame. While any client sharing your view focuses its sidebar pane, the freeze lasts thirty seconds instead; leaving the sidebar restores the five-second deadline without restarting it. During this timed freeze, new rows append after the frozen rows in their group, and new groups appear below the live groups. Content and read state keep updating; released order, cap exemptions, and held-open cards settle together when the timer expires. Cards still focused keep holding their place. A hidden view settles when it is next shown.
 
 Switching tabs with the multiplexer's own keys moves the highlight without scrolling the cards. Unviewed sidebars mirror your cards, order, scroll, open cards and toggles after you pause input for about 150 ms: the neighbouring tabs first, then your previous tab, then outward. Switching before that catch-up reaches a tab briefly shows its old layout until arrival repaints it. A card arriving or changing height while you are not interacting starts catch-up immediately. With the default automatic card density, arriving on a different agent opens its card and moves the cards below it down by the added lines; the rest of the layout stays put. Figures left behind while hidden catch up on arrival; a spend roll already in progress keeps rolling across the move. Clients viewing the same sidebar share what is on screen: joining another client's tab joins their view, and leaving takes a copy that can diverge. tmux clients always share one view; Zellij clients on different tabs can scroll independently, and hidden sidebars mirror the most recently active painted view. A departed client's view is kept for the [configured reattach window](./configuration.md#sidebar-rendering); a new client joins its pane's viewers or resumes the most recently active retained view, starting fresh only when none remains. With nobody viewing a sidebar, hidden panes keep their last layout. The sidebar's own selection keys and jumps still bring an off-screen card into view. After an outside focus change, an off-screen card's name appears on the edge after a short pause. Click that marker to reveal the card without changing the selection.
 
 ## Tuning
 
-Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, or an unfinished stage with nothing running escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (calm and parked cards cool, one hour), and `archive_after_secs` (those cards archive, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
+Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, or an unfinished stage with nothing running escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (calm and parked cards and process rows cool, one hour), and `archive_after_secs` (those rows archive, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
 
 An opt-in [`harness.stall_nudge`](./configuration.md#stalled-team-nudge) leaves that `!` unchanged and sends the last-active teammate one notice at 55 minutes of quiet per unfinished stage visit, with no pending wait or real message. Keep-warm pings and reading the card move neither stall mark.
 

@@ -322,15 +322,14 @@ impl SidebarSnapshot {
 
 /// Stamp attention ranking facts: no-activity age drives the inactive sink, the
 /// archive sink, and the fixed-point score every later presentation sort reads.
-/// Process rows are exempt from the sinks because their activity clock is
-/// foreground-process start, not attention, and row ordering already seats them
-/// below every agent card. Both boundaries are strict (`>`), so the configured
-/// second is the last member of the previous band.
+/// Enrichment later ages process rows from their pane slot's active instant.
+/// Both boundaries are strict (`>`), so the configured second is the last
+/// member of the previous band.
 pub(super) fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
     for row in rows {
         let age_secs = score::age_secs(now, row.last_activity);
         (row.inactive, row.archived, row.attention_score) =
-            score::attention_facts(row.attention_status(), age_secs, windows, row.is_process());
+            score::attention_facts(row.attention_status(), age_secs, windows);
     }
 }
 
@@ -430,61 +429,28 @@ mod tests {
     }
 
     #[test]
-    fn process_rows_never_sink_inactive() {
-        let aged = now() - std::time::Duration::from_secs(7_200);
-        let mut rows = vec![
-            SidebarRow {
-                checkout: None,
-                id: "agent".into(),
-                name: "agent".into(),
-                pane: None,
-                worktree_path: None,
-                worktree_branch: None,
-                channel: None,
-                unread: false,
-                inactive: false,
-                archived: false,
-                attention_score: 0,
-                attention_at_ms: None,
-                last_activity: aged,
-                card: RowCard::Agent(std::sync::Arc::new(AgentCard {
-                    status: AgentStatus::Idle,
-                    ..Default::default()
-                })),
-            },
-            SidebarRow {
-                checkout: None,
-                id: "process".into(),
-                name: "process".into(),
-                pane: None,
-                worktree_path: None,
-                worktree_branch: None,
-                channel: None,
-                unread: false,
-                inactive: false,
-                archived: false,
-                attention_score: 0,
-                attention_at_ms: None,
-                last_activity: aged,
-                card: RowCard::Process(ProcessCard::default()),
-            },
-        ];
-
-        stamp_attention(
-            &mut rows,
-            now(),
-            AttentionWindows {
-                stalled_after_secs: 1,
-                tool_repeat_attention_after: 20,
-                inactive_after_secs: 3_600,
-                archive_after_secs: 86_400,
-            },
+    fn process_rows_cool_and_archive_at_strict_window_boundaries() {
+        let windows = AttentionWindows {
+            stalled_after_secs: 1,
+            tool_repeat_attention_after: 20,
+            inactive_after_secs: 3_600,
+            archive_after_secs: 86_400,
+        };
+        let actual = [3_600, 3_601, 86_400, 86_401].map(|age| {
+            let mut row = row_aged(age);
+            row.card = RowCard::Process(ProcessCard::default());
+            stamp_attention(std::slice::from_mut(&mut row), now(), windows);
+            (row.inactive, row.archived, row.attention_score)
+        });
+        assert_eq!(
+            actual,
+            [
+                (false, false, 0),
+                (true, false, 0),
+                (true, false, 0),
+                (true, true, 0),
+            ]
         );
-
-        assert!(rows[0].inactive, "aged agent rows sink");
-        assert!(!rows[0].archived, "aged agent rows below archive stay warm");
-        assert!(!rows[1].inactive, "aged process rows stay live");
-        assert!(!rows[1].archived, "aged process rows never archive");
     }
 
     #[test]

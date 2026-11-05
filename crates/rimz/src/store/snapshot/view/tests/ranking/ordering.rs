@@ -436,24 +436,90 @@ fn stale_attention_leads_live_work_while_parks_cool() {
 }
 
 #[test]
-fn agent_cards_lead_process_rows_even_when_inactive() {
-    let mut snapshot = room_with_agent_panes(vec![
-        agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
-            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-    ]);
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
-        .push(process_row("zsh", "/repo/main"));
-    snapshot.sort_groups_for_presentation();
+fn process_rows_interleave_calm_cards_by_stamp_and_break_ties_after_cards() {
+    let actual =
+        [(10, None), (30, None), (20, None), (20, Some(7))].map(|(process_stamp, ordinal)| {
+            let mut snapshot = room_with_agent_panes(vec![
+                agent_in("calm", "/repo/main", AgentStatus::Idle, 0).in_pane("%99"),
+            ]);
+            let calm = row_mut(&mut snapshot, "calm");
+            calm.attention_at_ms = Some(20);
+            calm.as_agent_mut().unwrap().launch_ordinal = ordinal;
+            let mut shell = process_row("%1", "/repo/main");
+            shell.attention_at_ms = Some(process_stamp);
+            std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )
+            .push(shell);
+            snapshot.sort_groups_for_presentation();
+            snapshot
+                .rows()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(
+        actual,
+        [
+            vec!["calm", "%1"],
+            vec!["%1", "calm"],
+            vec!["calm", "%1"],
+            vec!["calm", "%1"]
+        ]
+    );
+}
 
-    let order = snapshot.worktree_groups[0]
-        .rows
-        .iter()
+#[test]
+fn process_rows_follow_asks_and_failures_but_lead_older_calm_cards() {
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("ask", "/repo/main", AgentStatus::Waiting, 0),
+        agent_in("failure", "/repo/main", AgentStatus::Failed, 0),
+        agent_in("calm", "/repo/main", AgentStatus::Idle, 0),
+    ]);
+    for (id, stamp) in [("ask", 1), ("failure", 2), ("calm", 3)] {
+        row_mut(&mut snapshot, id).attention_at_ms = Some(stamp);
+    }
+    let mut shell = process_row("shell", "/repo/main");
+    shell.attention_at_ms = Some(100);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(shell);
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(
+        snapshot
+            .rows()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["failure", "ask", "shell", "calm"]
+    );
+}
+
+#[test]
+fn a_newer_process_sinks_below_an_older_hot_card_when_archived() {
+    let mut snapshot =
+        room_with_agent_panes(vec![agent_in("calm", "/repo/main", AgentStatus::Idle, 0)]);
+    row_mut(&mut snapshot, "calm").attention_at_ms = Some(10);
+    let mut shell = process_row("shell", "/repo/main");
+    shell.attention_at_ms = Some(20);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(shell);
+    snapshot.sort_groups_for_presentation();
+    let hot = snapshot
+        .rows()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let shell = row_mut(&mut snapshot, "shell");
+    shell.inactive = true;
+    shell.archived = true;
+    snapshot.sort_groups_for_presentation();
+    let archived = snapshot
+        .rows()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        order,
-        vec!["old-done", "zsh"],
-        "agent cards lead the channel; the process row tails even an inactive agent"
+        (hot, archived),
+        (
+            ["shell", "calm"].map(String::from).to_vec(),
+            ["calm", "shell"].map(String::from).to_vec()
+        )
     );
 }
 
@@ -553,8 +619,8 @@ fn live_process_keeps_mixed_group_above_inactive_groups() {
         .collect::<Vec<_>>();
     assert_eq!(
         mixed_order,
-        vec!["old-b", "zsh"],
-        "agent rows still lead inside the mixed group"
+        vec!["zsh", "old-b"],
+        "the hot process leads the archived card inside the mixed group"
     );
 }
 
@@ -940,7 +1006,6 @@ fn stamp_lifted_attention(row: &mut SidebarRow) {
             inactive_after_secs: 100,
             archive_after_secs: 101,
         },
-        row.is_process(),
     );
 }
 
