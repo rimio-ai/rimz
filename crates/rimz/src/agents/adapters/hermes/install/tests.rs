@@ -2,6 +2,18 @@ use super::*;
 use serde_json::{Value, json};
 use std::fs;
 
+#[test]
+fn wiring_inputs_include_the_hook_allowlist() {
+    let env = BTreeMap::from([("HERMES_HOME".to_owned(), "/fixture/hermes".to_owned())]);
+    assert_eq!(
+        HermesManagedIntegration.wiring_input_paths(HermesAdapter.spec(), &env),
+        vec![
+            PathBuf::from("/fixture/hermes/config.yaml"),
+            PathBuf::from("/fixture/hermes/shell-hooks-allowlist.json"),
+        ]
+    );
+}
+
 const EVENTS: &[&str] = &[
     "on_session_start",
     "on_session_reset",

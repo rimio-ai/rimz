@@ -613,7 +613,7 @@ pub(crate) fn birth_name(
 
 /// The command that repairs an account's home: `default` is the provider's
 /// own home, which `rimz hooks install` wires; a named one is re-added.
-fn home_fix(kind: &AgentKind, name: &LoginName) -> String {
+pub(super) fn home_fix(kind: &AgentKind, name: &LoginName) -> String {
     if name.is_default() {
         format!("rimz hooks install {kind}")
     } else {

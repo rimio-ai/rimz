@@ -1147,6 +1147,52 @@ pub enum HookPreflightErr {
     HooksDisabled { reason: String, fix: String },
 }
 
+/// Why RimZ can read nothing from a recognized, sessionless agent pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotTrackedReason {
+    HooksMissing,
+    HooksBlocked,
+    ModeNotFollowed,
+}
+
+/// A known reporting gap and the full action to show after `tip: `.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotTracked {
+    pub reason: NotTrackedReason,
+    pub fix: String,
+}
+
+pub(crate) fn not_tracked_hooks(
+    adapter: &AgentDefinition,
+    login_env: &BTreeMap<String, String>,
+) -> Option<NotTracked> {
+    let spec = adapter.spec();
+    if !spec.has_wired_hook_install()
+        || spec.capabilities.local_session_discovery != LocalSessionDiscovery::Unsupported
+    {
+        return None;
+    }
+    let (reason, fix) = match preflight_hooks(adapter, login_env, TurnLifecycleNeed::None) {
+        Err(HookPreflightErr::HooksMissing) => (
+            NotTrackedReason::HooksMissing,
+            login::home_fix(
+                &crate::ids::AgentKind::new_unchecked(spec.kind),
+                &crate::ids::LoginName::default(),
+            ),
+        ),
+        Err(
+            HookPreflightErr::HooksUntrusted { fix, .. }
+            | HookPreflightErr::HooksDisabled { fix, .. },
+        ) => (NotTrackedReason::HooksBlocked, fix),
+        Ok(()) | Err(HookPreflightErr::TurnLifecycleUnsupported { .. }) => return None,
+    };
+    Some(NotTracked {
+        reason,
+        fix: format!("{fix}, then restart"),
+    })
+}
+
 /// Check the hook installation, trust, and requested turn-lifecycle coverage
 /// needed before a hook-driven operation starts.
 pub fn preflight_hooks(
@@ -1313,6 +1359,8 @@ pub fn hook_trust_fix(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod not_tracked;
 
     #[test]
     fn added_directories_allow_undecided_and_home_without_starting_there() {

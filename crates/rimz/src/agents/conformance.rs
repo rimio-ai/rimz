@@ -234,7 +234,12 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
         .env(&ambient);
         let adapter = super::find_definition(kind).unwrap();
         for path in adapter.wiring_input_paths(&login_env) {
-            assert!(path.starts_with(&named), "{kind}: {path:?}");
+            // Grok also watches machine policy outside every home; its complete
+            // path set is pinned by the installer's wiring-input test.
+            assert!(
+                path.starts_with(&named) || (kind == "grok" && !path.starts_with(temp.path())),
+                "{kind}: {path:?}"
+            );
             assert!(!path.starts_with(&home), "{kind}: {path:?}");
         }
         adapter
@@ -1253,6 +1258,8 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
             ),
             "codex" => assert_eq!(paths.len(), 1, "Codex model config input"),
             "copilot" => assert_eq!(paths.len(), 2, "Copilot hook and settings inputs"),
+            "grok" => assert_eq!(paths.len(), 6, "Grok hooks and managed-policy inputs"),
+            "hermes" => assert_eq!(paths.len(), 2, "Hermes hooks and trust inputs"),
             _ if adapter.spec().capabilities.local_session_discovery
                 == LocalSessionDiscovery::Unsupported
                 && adapter.spec().has_wired_hook_install() =>
@@ -1260,6 +1267,15 @@ fn wiring_inputs_cover_every_provider_file_used_for_admission() {
                 assert!(!paths.is_empty(), "{kind} hook admission input")
             }
             _ => {}
+        }
+    }
+}
+
+#[test]
+fn bare_agent_commands_have_no_untracked_mode_fix() {
+    for adapter in BUILTINS {
+        for command in adapter.spec().bin_names {
+            assert_eq!(adapter.untracked_mode_fix(command), None, "{command}");
         }
     }
 }

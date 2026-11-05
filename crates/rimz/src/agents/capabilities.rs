@@ -186,6 +186,13 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// A fix when this command line runs a mode RimZ cannot follow. Pure: no I/O.
+    /// Return non-empty text: action first (command and arguments), about 40 cells,
+    /// with "then restart" when a running agent will not pick up the fix.
+    fn untracked_mode_fix(&self, _command_line: &str) -> Option<String> {
+        None
+    }
+
     /// The startup choice that trusts hooks before the first hook-dependent event, when offered in the pane.
     fn hook_trust_choice(&self) -> Option<&'static str> {
         None
@@ -233,10 +240,11 @@ pub trait InstallationCapability: CoreCapability {
         None
     }
 
-    /// Provider-owned files whose contents determine sidebar wiring admission
-    /// or the default launch model. The list covers every file read by
-    /// [`Self::hooks_installed`] and [`Self::default_launch_model`]. Resolving a
-    /// path performs no provider-file I/O.
+    /// Provider-owned files whose contents determine sidebar wiring admission,
+    /// reporting blockers, or the default launch model. Covers every file read by
+    /// [`Self::hooks_installed`], managed [`ManagedIntegration::hooks_disabled`]
+    /// and [`ManagedIntegration::untrusted_preflight_hooks`], and
+    /// [`Self::default_launch_model`]. Resolving paths performs no provider-file I/O.
     fn wiring_input_paths(&self, login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
         self.managed_integration()
             .map_or_else(Vec::new, |integration| {

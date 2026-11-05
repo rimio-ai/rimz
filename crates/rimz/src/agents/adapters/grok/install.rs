@@ -83,7 +83,13 @@ impl ManagedIntegration for GrokManagedIntegration {
         descriptor: &AgentSpec,
         env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        MANAGED_SOURCE.wiring_input_paths(descriptor, env)
+        let mut paths = MANAGED_SOURCE.wiring_input_paths(descriptor, env);
+        paths.extend(POLICY_FILES.map(|name| machine_path(SYSTEM_DIR).join(name)));
+        if let Some(home) = super::GrokAdapter.config_home(env) {
+            paths.extend(POLICY_FILES.map(|name| home.join(name)));
+        }
+        paths.push(machine_path(CLAUDE_MANAGED_SETTINGS));
+        paths
     }
 
     fn install_blocker(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
@@ -208,6 +214,24 @@ fn carries_rimz_handler(value: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wiring_inputs_include_all_rerooted_policy_layers() {
+        use crate::agents::capabilities::CoreCapability;
+
+        let env = BTreeMap::from([("GROK_HOME".to_owned(), "/fixture/grok".to_owned())]);
+        assert_eq!(
+            GrokManagedIntegration.wiring_input_paths(super::super::GrokAdapter.spec(), &env),
+            vec![
+                PathBuf::from("/fixture/grok/hooks/rimz.json"),
+                machine_path(SYSTEM_DIR).join("managed_config.toml"),
+                machine_path(SYSTEM_DIR).join("requirements.toml"),
+                PathBuf::from("/fixture/grok/managed_config.toml"),
+                PathBuf::from("/fixture/grok/requirements.toml"),
+                machine_path(CLAUDE_MANAGED_SETTINGS),
+            ]
+        );
+    }
 
     #[test]
     fn managed_policy_uses_the_login_home() {
