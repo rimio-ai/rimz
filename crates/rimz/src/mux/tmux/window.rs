@@ -455,7 +455,7 @@ impl TmuxBackend {
             "-t".to_owned(),
             pane_id.to_owned(),
             RIMZ_TITLE_OPTION.to_owned(),
-            sanitize_window_name(name),
+            name.to_owned(),
         ])
     }
 

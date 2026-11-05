@@ -148,12 +148,15 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
             &anchor,
             "#feat",
             TabNameIntent::Claim {
-                pane_name: "opus.fast".to_owned(),
+                pane_name: "opus.fast (@brave-fox)".to_owned(),
             },
         )
         .expect("claim in-place pane");
     assert_eq!(server.display(anchor.raw(), "#{window_name}"), "#feat");
-    assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus-fast");
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_title}"),
+        "opus.fast (@brave-fox)"
+    );
     server.output(&["select-pane", "-t", anchor.raw(), "-T", "terminal,title"]);
     let roster = list_session_panes(&server, session);
     assert_eq!(
@@ -163,12 +166,12 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
             .expect("claimed pane")
             .title
             .as_deref(),
-        Some("opus-fast"),
+        Some("opus.fast (@brave-fox)"),
     );
     let format = server.show_option(&["-t", session], "set-titles-string");
     assert_eq!(
         server.display(anchor.raw(), &format),
-        format!("{session} | opus-fast")
+        format!("{session} | opus.fast (@brave-fox)")
     );
     server
         .backend
@@ -208,7 +211,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "30".to_owned()],
-                    name: Some("codex".to_owned()),
+                    name: Some("codex (@swift-otter)".to_owned()),
                 }])],
                 focused_pane: 0,
             },
@@ -230,7 +233,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             &target,
             "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}",
         ),
-        format!("{session} | codex"),
+        format!("{session} | codex (@swift-otter)"),
     );
 
     let anchor = PaneId::from_parts(MuxName::Tmux, server.display(&target, "#{pane_id}"));
@@ -240,7 +243,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             target: SplitTarget::Pane(anchor),
             cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "30".to_owned()]),
-            title: Some("claude".to_owned()),
+            title: Some("coder (@swift-otter) › claude subagent (@gold-tower)".to_owned()),
             close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
@@ -252,7 +255,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             &target,
             "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}",
         ),
-        format!("{session} | claude"),
+        format!("{session} | coder (@swift-otter) › claude subagent (@gold-tower)"),
     );
 }
 

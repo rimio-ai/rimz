@@ -1163,7 +1163,7 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
 
     for intent in [
         TabNameIntent::Claim {
-            pane_name: "-opus".to_owned(),
+            pane_name: "-opus-4.5 (@brave-fox) › explorer subagent (@gold-tower)".to_owned(),
         },
         TabNameIntent::Status {
             observed: "#feat".to_owned(),
@@ -1252,9 +1252,10 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
         );
         if claim {
             assert!(
-                log.contains(
-                    "--session rimz-test action rename-pane --pane-id terminal_7 -- -opus"
-                ),
+                log.contains(concat!(
+                    "--session rimz-test action rename-pane --pane-id terminal_7 -- ",
+                    "-opus-4.5 (@brave-fox) › explorer subagent (@gold-tower)"
+                )),
                 "{log}"
             );
         }
