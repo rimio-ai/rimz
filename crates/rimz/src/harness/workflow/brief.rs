@@ -35,6 +35,12 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
                 // A routing hop always names its outcome.
                 let outcome = hop.outcome.as_deref().expect("routing hop outcome");
                 match spec.checks.get(&hop.node) {
+                    Some(check) if check.is_sleep() && outcome == "then" => {
+                        format!(
+                            "The run slept at {} before reaching this step.",
+                            span(&hop.node)
+                        )
+                    }
                     Some(check) if !matches!(outcome, "invalid" | "timeout" | "deadline") => {
                         let detail = record
                             .input
@@ -195,15 +201,19 @@ fn detail(check: &Check, input: &Value) -> Option<String> {
     let text = if let Some(reason) = input["reason"].as_str() {
         reason.to_owned()
     } else {
-        if check.cases.is_empty() {
+        if check.condition_cases().is_empty() {
             return None;
         }
         let readings = input["readings"].as_object()?;
         let keys = input["case"]
             .as_u64()
             .and_then(|case| usize::try_from(case).ok())
-            .and_then(|case| check.cases.get(case))
-            .and_then(|case| WhenExpr::parse(&case.when).ok())
+            .and_then(|case| {
+                check
+                    .condition_cases()
+                    .get(case)
+                    .and_then(|case| WhenExpr::parse(&case.when).ok())
+            })
             .map(|expression| {
                 expression
                     .terms()

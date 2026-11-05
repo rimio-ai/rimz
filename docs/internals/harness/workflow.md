@@ -1,6 +1,6 @@
 # Workflow engine
 
-A workflow is a durable run through a flat graph of checks and steps, defined in `workflow.toml` and sealed into the run when it starts. The run record is the only truth. Every decision reads it under the room workspace lock, a wake only asks the engine to read it again, and the journal beside it is evidence for people, never an input. A check decides where the run goes next: a `run` command, a shell command, a condition over loop facts, or a headless judge. A step launches a layout with one supervised leader or runs a command, then hands the run to a check. A loop task can start runs, and the scheduler tick re-drives every active run so its clock bounds fire on time.
+A workflow is a durable run through a flat graph of checks and steps, defined in `workflow.toml` and sealed into the run when it starts. The run record is the only truth. Every decision reads it under the room workspace lock, a wake only asks the engine to read it again, and the journal beside it is evidence for people, never an input. A check decides where the run goes next: a `run` command, a shell command, a condition over loop facts, a sleep, or a headless judge. A step launches a layout with one supervised leader or runs a command, then hands the run to a check. A loop task can start runs, and the scheduler tick re-drives every active run so its clock bounds fire on time.
 
 The [workflows guide](../../guide/workflows.md) teaches the format, and the [workflow CLI reference](../../reference/cli/workflow.md) owns every command, printed line, park reason, and JSON shape. This page owns how the engine decides.
 
@@ -33,7 +33,7 @@ Paths are under `crates/rimz/src/`.
 | Term | Meaning |
 | --- | --- |
 | node | A check or a step. The run sits at one node at a time (`RunRecord.node`), entered at `entered_at`. |
-| attempt | One evaluation of a check or one launch of a step, published on the record as a `LiveAttempt` of kind `script`, `judge`, or `agent`. Run and shell checks, conditions, and command steps use `script`. |
+| attempt | One evaluation of a check or one launch of a step, published on the record as a `LiveAttempt` of kind `script`, `judge`, or `agent`. Run and shell checks, conditions, sleeps, and command steps use `script`. |
 | seq | The attempt's number, allocated from `RunRecord.next_seq`. A settlement whose seq is no longer the live attempt's writes nothing. |
 | host | The process that owns a live attempt (`LiveAttempt.host`: PID and process-start token). For a hosted check or command step it is the `advance` running it; for an agent step it launches or stops the layout. |
 | child | A hosted check or command step's process group (`LiveAttempt.child`: leader PID and start token). |
@@ -72,8 +72,9 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Unknown fields and
 | shell | nonempty `shell` | `wake`, `timeout`, `on` | Requires `on.pass` and `on.fail`. Accepts only those plus `on.timeout` and `on.invalid`. |
 | judge | `agent`, with a required `prompt-file` | `window`, `wake`, `timeout`, `on` | Its own outcomes and `timeout`. An invalid answer retries once, then parks at `@user`, ignoring `on.invalid`. The profile's adapter must have a headless launch. |
 | condition | nonempty `cases` | required `else`, `provider`, `account`, `timeout`, `on` | Every case outcome and `else` must be routed. Other routes warn and are ignored, except `unknown`, `timeout`, and `invalid`. |
+| sleep | nonzero `sleep` duration | required `then`, optional `when`, `for`, `provider`, `account` | `then` on expiry or a matching condition; `sleeping` and unread `unknown` wait. No timeout edge. |
 
-Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Misplaced optional settings warn and are ignored; conflicting runners still refuse. A `window` holds provider-window terms only. A condition requires `provider` when a case reads a `window.*` term; an unknown provider or one without such a term is ignored, as is an `account` without a remaining provider.
+Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Misplaced optional settings warn and are ignored; conflicting runners still refuse. A `window` holds provider-window terms only. A condition or conditional sleep requires `provider` when its terms read `window.*`; an unknown provider or one without such a term is ignored, as is an `account` without a remaining provider.
 
 A condition's cases are an ordered array of tables. Write it inline in `[checks.<name>]`, one case per line (`cases = [ { when = [...], outcome = "..." }, ... ]`); the loader reads `[[checks.<name>.cases]]` blocks as the same array. Each case:
 
@@ -99,7 +100,7 @@ Both visit limits must be at least 1. `max-visits-per-outcome` accepts an intege
 
 ### Edges and the graph
 
-An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). The resolver in `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::edges` supplies check and step edges and the header deadline. A check's `timeout` and `invalid`, a step's `cap`, and the header's `deadline` default to `@user`; agent capacity defaults to `@failed`, and a condition's `unknown` to `@wait`. An explicit entry overrides a default. Engine routing, validation rows, timeout admission, cycle detection, and inspection read that resolver. A step's turn-ending outcomes resolve through `then`; an absent `on.asked` keeps the question live and is not a displayed edge. The routing lookup retains an `@user` fallback for a forced `asked` settlement or a missing `then` in an unvalidated spec.
+An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and steps share one name namespace, and a node or workflow name is nonempty ASCII letters, digits, `-`, and `_` (`crates/rimz/src/harness/schedule.rs::validate_name`). The resolver in `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::edges` supplies check and step edges and the header deadline. A check's `invalid`, a non-sleep check's `timeout`, a step's `cap`, and the header's `deadline` default to `@user`; agent capacity defaults to `@failed`, and a condition or conditional sleep's `unknown` to `@wait`. An explicit entry overrides a default. Engine routing, validation rows, timeout admission, cycle detection, and inspection read that resolver. A step's turn-ending outcomes resolve through `then`; an absent `on.asked` keeps the question live and is not a displayed edge. The routing lookup retains an `@user` fallback for a forced `asked` settlement or a missing `then` in an unvalidated spec.
 
 Each edge also carries fireability and, when it can never fire, a typed reason. `Edge::mark` owns the human wording used by validation and inspection. A judge's `invalid` route remains accepted and listed but never fires: `Transition::finish_judge` retries once, then parks independently of that edge. Capacity needs a finite wait and enabled throttle and can only give up in an automatic loop-started run. An unset header deadline is conditional on a run grant, not a never-firing edge. These annotations do not change engine behavior or admission's configured-cycle checks.
 
@@ -111,9 +112,9 @@ A check's `on` value is a target string or `{ to = "<target>", delay = "30m" }`,
 
 | Rule | Why |
 | --- | --- |
-| `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::RESERVED_OUTCOMES`). No case or `else` uses one, and no check answers one, except a condition's `unknown`. | The engine produces them for its own routes. |
+| `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved (`crates/rimz/src/harness/workflow/spec.rs::RESERVED_OUTCOMES`). No case or `else` uses one, and no check answers one, except a condition or conditional sleep's `unknown`. | The engine produces them for its own routes. |
 | `on.timeout` cannot be `@wait`. | The timeout clock has already expired. |
-| A check with any resolved `@wait` edge needs a `timeout`. | Otherwise a wait never ends. |
+| A check with any resolved `@wait` edge needs a `timeout`, except a sleep. | A sleep has its own finite duration; other waits need a bound. |
 | A cycle through steps needs a `max-visits` on one of them. | A per-outcome cap alone cannot bound a check that names a new outcome or key every time. |
 | A surviving cap's `reset-on` needs `max-visits` and outcomes found on checks' non-reserved edges. | Resets must be answerable and cannot remove the run's only bound. Errors use `steps.<step>.max-visits-per-outcome.reset-on`; dropped caps get no reset errors. |
 | A check-only cycle needs a wait edge. A hold is not an edge and does not count. | Otherwise one advance would loop without pause. |
@@ -209,7 +210,7 @@ Three windows stay open. Only the hosting process writes the step log, so when a
 
 ### Check answers
 
-A run check or a judge answers exactly one JSON object: a required string `outcome`, an optional string `reason`, an RFC 3339 `recheck_at`, and a string or integer `key`. Other fields stay in the object as payload. The full normalized object (`crates/rimz/src/harness/workflow/state.rs::normalize_object`) becomes the next node's input, and a missing key inherits the run's current key.
+A run check or a judge answers exactly one JSON object: a required string `outcome`, an optional string `reason`, an RFC 3339 `recheck_at`, and a string or integer `key`. Other fields stay in the object as payload. The full normalized object (`crates/rimz/src/harness/workflow/state.rs::normalize_object`) becomes the next node's input, and a missing key inherits the run's current key. A sleep journals its own answers but forwards its incoming input and key unchanged on every route, including invalid and deadline parks; the next step's visit bucket therefore still uses the incoming outcome.
 
 For a run check, these route `invalid` with an engine object: a nonzero exit, stdout that is not one object, a wrong field type, an unrouted or reserved outcome, a bad `recheck_at`, and a `run` file that no longer resolves. A judge's failures settle differently ([Headless judges](#headless-judges)).
 
@@ -234,6 +235,14 @@ The evaluator reads the cache once, then reads fresh local HEAD in the scope pat
 No probe cadence or signal changes accompany the fence. A local HEAD change nudges one probe; if it beats the forge, the next probe uses the repository TTL (20 seconds hot, 300 seconds idle). CI signals fire only on verdict changes, so `failed` at an old commit becoming `failed` at the new one is sampled by the minute workflow tick rather than a CI signal. The wait therefore adds up to a tick after the cache catches up.
 
 Settlement under the lock decides holds, never the off-lock evaluator. A winning case with `for` merges a wait keyed by `(outcome, case)`, with outcome `hold`, the case's outcome as detail, and the case index in `Wait.case`. A hold keeps the run's routed input and key. Once `now - first >= for`, the case routes its own outcome and any matching visit reset fires. Any other answer closes the hold, and a later true case starts it again. Ordinary check evaluations recompute the bounded `first + for` recheck, so a wake keeps `first`. The tick re-samples an ordinary hold before its recheck time, and a transition that falls entirely between two samples goes unseen. A kept until wait instead has no recheck and evaluates only at the next eligible leader turn end.
+
+### Sleeps
+
+A sleep evaluates in-process with no child, digest, or stderr. Its nonzero `sleep` duration runs from `record.entered_at`; entry through a route or a parked resume restarts it. Its required `then` names a node or terminal/park target, never `@wait`. An until step cannot name a sleep as its `then` check, because that check samples leader turn ends rather than running an independent timer. Sleep ignores `wake`, every `on` route, `timeout`, `else`, `window`, and `prompt-file` with dotted warnings.
+
+Expiry is checked first and answers `{outcome: then, reason: "slept <sleep>"}`. Before expiry, a plain sleep answers `{outcome: sleeping, recheck_at: <entered_at + sleep>}`. That stored edge is clamped to an earlier deadline, and the tick does not spawn before it. A plain sleep journals just its entry and expiry evaluations.
+
+With `when`, `Check::condition_cases` supplies one derived case with outcome `then` and the optional `for`; the same condition evaluator supplies freshness, unread handling, subscriptions and hold settlement, with fallback `sleeping`. `sleeping` and `unknown` store no recheck, so the minute tick keeps sampling, and matching signals wake it earlier. Expiry may be about a minute late and wins over an unfinished hold. `for` warns and is ignored when invalid, zero, absent `when`, or at least `sleep`. Sleeps have real `sleeping → @wait` and, with `when`, `unknown → @wait` edges, so they bound check-only cycles without a timeout. Definition views hide those default edges and the derived case, printing `sleep`, `when`, `for`, and `then` instead. List detail and the show headline read `sleeping 12m/30m when ci=passed → fix`, omitting `when` for a plain sleep and never appending a recheck clock.
 
 ### Waits and parks
 
@@ -374,7 +383,7 @@ On a match the helper clears the record's and the wait's `recheck_at`, journals 
 
 ### Subscriptions
 
-A check's subscriptions come from its `wake` list, or, for a condition, from its terms (`Check::subscriptions`):
+A check's subscriptions come from its `wake` list, or, for a condition or conditional sleep, from its terms (`Check::subscriptions`). A plain sleep has none:
 
 | Condition term | Derived selector |
 | --- | --- |
@@ -395,7 +404,7 @@ Room teardown cancels supervised runs without waking workflows, and the next adv
 
 `crates/rimz/src/harness/schedule/fire.rs::fire_due_tasks` ends every scheduler tick, from the room host or the external timer, by calling `tick_workflows` for the root. It reads the room's run records and spawns `rimz --root <root> workflow advance <id>` for each due active run. A run is due when it has no `recheck_at`, when its `recheck_at` or its unfired deadline has passed, while it holds a condition case, or while an until session is held. Parked and terminal runs are never spawned. The engine decides everything else (bounds, window, occupancy, capacity, a live host). The tick reads `recheck_at` so that early advances do not inflate an ordinary wait's `×N` count, and it never clears backoff the way the signal helper does. Under the systemd timer the spawned advance leaves the oneshot service's cgroup, as a loop run does.
 
-Spawns are paced by the runtime cache `lanes/workflow-tick.json`, a map of run id to last spawn: at most one spawn per run per 60 seconds (`WORKFLOW_TICK_SECS`), except that a `recheck_at` or deadline that passed since the last spawn fires at once. The tick writes the cache before spawning and drops runs no longer active. A read failure counts as an empty cache, and a write failure warns and skips that tick's spawns. `fire.rs` is in the sidebar import graph, so it writes only that cache and spawns, and the invariant grep keeps it off the writer and the wake socket.
+Spawns are paced by the runtime cache `lanes/workflow-tick.json`, a map of run id to last spawn: at most one spawn per run per 60 seconds (`WORKFLOW_TICK_SECS`), except that a `recheck_at` or deadline that passed since the last spawn fires at once. A plain sleep stores its end as `recheck_at`, so it gets no intermediate spawn; a conditional sleep stores no end backoff, so it keeps sampling each minute, including during a hold. The tick writes the cache before spawning and drops runs no longer active. A read failure counts as an empty cache, and a write failure warns and skips that tick's spawns. `fire.rs` is in the sidebar import graph, so it writes only that cache and spawns, and the invariant grep keeps it off the writer and the wake socket.
 
 For workflow authors, an ordinary check's `@wait` without `recheck_at` is re-evaluated about every minute, so a check that wants a slower pace names `recheck_at`. An until session's kept `@wait` checks only at the next eligible turn end. A live step is observed every tick, so a descendant's ask or provider limit is noticed within a minute.
 

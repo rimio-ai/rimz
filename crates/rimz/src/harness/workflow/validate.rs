@@ -96,7 +96,7 @@ pub(super) fn validate_spec(
         if check.kind().is_none() {
             report.error(
                 &path,
-                "set exactly one of run, shell, agent, or cases (nonempty)",
+                "set exactly one of run, shell, agent, sleep, or cases (nonempty)",
             );
         }
         if let Some(CheckKind::Run(run)) = check.kind()
@@ -124,8 +124,28 @@ pub(super) fn validate_spec(
             );
         }
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        let sleep = check.is_sleep();
         if condition {
             report.condition_fields(&path, check, project_root);
+        }
+        if sleep {
+            if let Some(raw) = &check.sleep {
+                match spec::duration(raw) {
+                    Ok(duration) if duration.is_zero() => {
+                        report.error(&format!("{path}.sleep"), "sleep must be nonzero")
+                    }
+                    Err(error) => report.error(&format!("{path}.sleep"), error),
+                    Ok(_) => {}
+                }
+            }
+            match check.then.as_deref() {
+                None | Some("@wait") => report.error(
+                    &format!("{path}.then"),
+                    "a sleep requires then routing away from @wait",
+                ),
+                Some(target) => report.target(spec, &format!("{path}.then"), target),
+            }
+            report.condition_terms(&path, check, project_root);
         }
         if let Some(CheckKind::Agent(agent)) = check.kind() {
             report.agent_fields(dir, &path, agent, check.prompt_file.as_deref(), definitions);
@@ -150,6 +170,7 @@ pub(super) fn validate_spec(
             .iter()
             .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
             && check.timeout.is_none()
+            && !sleep
         {
             report.error(
                 &format!("{path}.timeout"),
@@ -178,6 +199,7 @@ pub(super) fn validate_spec(
                 Some(CheckKind::Run(_)) => "run",
                 Some(CheckKind::Shell(_)) => "shell",
                 Some(CheckKind::Condition) => "condition",
+                Some(CheckKind::Sleep) => "sleep",
                 _ => "agent",
             }
             .into(),
@@ -298,6 +320,18 @@ pub(super) fn validate_spec(
             report.error(
                 &format!("{path}.then"),
                 "then must name a check, never a step or @done",
+            );
+        }
+        if step.lifecycle == Some(StepLifecycle::Until)
+            && step
+                .then
+                .as_ref()
+                .and_then(|node| spec.checks.get(node))
+                .is_some_and(|check| check.is_sleep())
+        {
+            report.error(
+                &format!("{path}.then"),
+                "an until step cannot use a sleep as its turn-end check",
             );
         }
         if agent && let Some(target) = &step.on.capacity {
@@ -428,8 +462,6 @@ impl Validation {
     }
 
     fn condition_fields(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
-        use crate::harness::schedule::{condition_stages, when::WhenExpr};
-
         let mut outcomes = BTreeSet::new();
         if let Some(outcome) = &check.else_outcome {
             if RESERVED_OUTCOMES.contains(&outcome.as_str()) {
@@ -439,7 +471,6 @@ impl Validation {
         } else {
             self.error(&format!("{path}.else"), "a condition check requires else");
         }
-        let mut expressions = Vec::new();
         for (index, case) in check.cases.iter().enumerate() {
             let case_path = format!("{path}.cases.{index}");
             outcomes.insert(case.outcome.as_str());
@@ -449,18 +480,6 @@ impl Validation {
                     "choose a non-reserved outcome",
                 );
             }
-            match WhenExpr::parse(&case.when) {
-                Ok(expression) => {
-                    if expression
-                        .terms()
-                        .any(|term| term.values.iter().any(|value| value == "unknown"))
-                    {
-                        self.error(&format!("{case_path}.when"), "unread terms answer the unknown outcome; route on.unknown instead of matching unknown");
-                    }
-                    expressions.push((index, expression));
-                }
-                Err(error) => self.error(&format!("{case_path}.when"), error),
-            }
         }
         for outcome in &outcomes {
             if !check.on.contains_key(*outcome) {
@@ -468,6 +487,42 @@ impl Validation {
                     &format!("{path}.on.{outcome}"),
                     "route every case and else outcome in on",
                 );
+            }
+        }
+        self.condition_terms(path, check, project_root);
+    }
+
+    fn condition_terms(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
+        use crate::harness::schedule::{condition_stages, when::WhenExpr};
+
+        let cases = check.condition_cases();
+        let when_path = |index| {
+            if check.is_sleep() {
+                format!("{path}.when")
+            } else {
+                format!("{path}.cases.{index}.when")
+            }
+        };
+        let mut expressions = Vec::new();
+        for (index, case) in cases.iter().enumerate() {
+            match WhenExpr::parse(&case.when) {
+                Ok(expression) => {
+                    if expression
+                        .terms()
+                        .any(|term| term.values.iter().any(|value| value == "unknown"))
+                    {
+                        self.error(
+                            &when_path(index),
+                            if check.is_sleep() {
+                                "unread terms answer the unknown outcome; do not match unknown"
+                            } else {
+                                "unread terms answer the unknown outcome; route on.unknown instead of matching unknown"
+                            },
+                        );
+                    }
+                    expressions.push((index, expression));
+                }
+                Err(error) => self.error(&when_path(index), error),
             }
         }
         let window = expressions.iter().any(|(_, expression)| {
@@ -499,9 +554,8 @@ impl Validation {
             }
         };
         for (index, _) in expressions {
-            if let Err(error) = WhenExpr::parse_with_stages(&check.cases[index].when, Some(&stages))
-            {
-                self.error(&format!("{path}.cases.{index}.when"), error);
+            if let Err(error) = WhenExpr::parse_with_stages(&cases[index].when, Some(&stages)) {
+                self.error(&when_path(index), error);
             }
         }
     }

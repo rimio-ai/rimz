@@ -2,7 +2,7 @@
 
 A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and `--verify` can re-prompt that turn until a command passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as loop tasks, that plan lives in prompts and in an agent's context, and a dead or compacted agent loses it.
 
-A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a shell command, a script you write, or a model call) and answers with an outcome word. A step does work: it launches a fresh agent, optionally with companions, or runs a command. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues from that record. An interrupted check can run again; a command step whose host died goes to its next check rather than repeating the action.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a shell command, a script you write, or a model call), or sleeps, and answers with an outcome word. A step does work: it launches a fresh agent, optionally with companions, or runs a command. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues from that record. An interrupted check can run again; a command step whose host died goes to its next check rather than repeating the action.
 
 ## Write a workflow
 
@@ -58,7 +58,7 @@ To give a later failure new tries after a success, use `max-visits-per-outcome =
 
 Keep `max-visits` to cap the total: a check naming a new outcome or key each time must not retry forever, and a per-outcome bound alone does not bound a cycle. Both limits must be positive, and the per-outcome limit must be below the total when both are set. `reset-on` requires a total bound and outcomes that a check can answer. A cap without `reset-on` warns when only one outcome reaches a non-start step with no incoming `then`: it repeats `max-visits` unless a check answers keys. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-outcome"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
 
-Select exactly one of `run`, `shell`, `agent`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
+Select exactly one of `run`, `shell`, `agent`, `sleep`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined. `sleep` waits for a duration, optionally ending early on a condition.
 
 Run, shell, and agent checks accept an optional `wake` list of signal subscriptions. Condition checks derive their subscriptions from their terms, so an explicit `wake` warns and is ignored; see [waiting on the outside world](#wait-on-the-outside-world).
 
@@ -328,9 +328,36 @@ wake = ["ci.failed", { signal = "deploy.finished", match = { env = "prod" } }]
 
 Each entry is a selector string or a table with a required string `signal` and optional `match`; unknown table keys warn and are ignored. Selectors and match values use the [loop signal grammar](../reference/cli/loop.md#signals). `ci` and `pr` default to the run's checkout `path`, unless the entry explicitly matches `path` or `branch`. `team.stage` defaults to the run's current board, unless the entry matches `team`, `instance`, or `board`; relinking the checkout changes which board wakes it. Other families, such as `review.ready`, are room-wide unless given match filters. For example, `{ signal = "ci.failed", match = { path = "*" } }` accepts any checkout. Project-scoped runs use the project root for these defaults. An invalid selector or match, an agent lifecycle selector, or a team selector other than exact `team.stage` warns and drops only that entry, keeping the others.
 
-A check that can wait must have a `timeout`. It starts each time the run enters the check and runs across every wait there. When it passes, the run parks. Here each return from `sweep` starts a new two days.
+A check that can wait must have a `timeout`, except a sleep, which has its own duration. The timeout starts each time the run enters the check and runs across every wait there. When it passes, the run parks. Here each return from `sweep` starts a new two days.
 
 Keep `run` for custom, many-outcome answers. A rate limit is another thing to wait for: when the last attempt ended as `limited`, `context.json` carries `prev_attempt.limited.reset_at`, and a script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py` in the RimZ repository](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this, and waits ten minutes after an attempt that died.
+
+## Sleep between nodes
+
+Use a sleep check for a pause without an agent or a script. Its required `then` is where to go when the time runs out, or when its optional `when` becomes true:
+
+```toml
+[checks.cooldown]
+sleep = "30m"
+then = "fix"
+
+[checks.cooldown2]
+sleep = "30m"
+when = ["ci=passed"]
+for = "2m"
+then = "fix"
+
+[checks.drain]
+sleep = "6h"
+when = ["!pr.queue=queued"]
+then = "next"
+```
+
+The first pauses for 30 minutes. The second waits at most 30 minutes, waking early once CI has stayed passed for two minutes. The third sleeps while the PR is queued, for at most six hours. `when` uses the same ANDed term array and unread rules as condition cases: missing data never wakes it, including under `!`, and forge readings must be probed at or after this sleep's entry. It derives the same signal subscriptions; otherwise conditions are sampled about once a minute. The full duration wins even if a `for` hold is still running, and a conditional sleep can end about a minute late.
+
+`sleep` is a nonzero duration in `s`, `m`, `h`, or `d`. `for` needs `when` and must be nonzero and shorter than `sleep`; otherwise it warns and is ignored. `then` may name a node, `@done`, `@failed`, or `@user`, never `@wait`. The example's `fix` and `next` are nodes you define. An until step cannot use a sleep as its turn-end `then` check; use a route delay to postpone closing that session instead. `wake`, `on`, `timeout`, `else`, `window`, and `prompt-file` on a sleep warn and are ignored. Window terms use `provider` and optional `account` just as conditions do.
+
+A sleep forwards the input and key it received, so the next step still reads the preceding check's answer and counts visits under that outcome. Re-entering or resuming a parked sleep starts its clock again. A plain sleep has no signal subscription and does not re-evaluate between entry and its end. `workflow list` and `show` read `sleeping 12m/30m → fix`, adding `when ci=passed` before the arrow when configured. A cycle such as `poll → cooldown → poll` needs no extra timeout: the sleep supplies its wait.
 
 ## Let a model decide
 
@@ -441,6 +468,8 @@ The engine stays simple because nodes follow four rules.
 2. **Say what to do with a dirty tree.** A stopped attempt can leave uncommitted work behind. An agent step's prompt tells the agent to keep it, commit it, or discard it; a command must handle that state itself.
 3. **Tune an agent step through its sign, never its prompt file.** A sign is a file, `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, that RimZ adds after the agent step's prompt at every launch until someone deletes it. A judge can write one to steer the next attempt, and so can you before a resume. The prompt file is shared by every run of the workflow.
 4. **Keep judges read-only.** A judge reads and answers. Work belongs in a step.
+
+Use a sleep check, not a command that sleeps, for a pause between nodes. It does not count a visit or replace the previous attempt, input, or key.
 
 `notes/` is scratch for your nodes, and RimZ never reads it. A check that walks a list can record there the items it finished. Name each file after the item it records, so a repeat overwrites its own file and never adds a second one.
 

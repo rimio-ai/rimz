@@ -17,6 +17,7 @@ pub(super) fn render(name: &str, node: &str) -> Result<()> {
             Some(CheckKind::Shell(_)) => "shell",
             Some(CheckKind::Agent(_)) => "agent",
             Some(CheckKind::Condition) => "condition",
+            Some(CheckKind::Sleep) => "sleep",
             None => "invalid runner",
         };
         ("check", runner, &check.summary)
@@ -122,6 +123,11 @@ pub(super) fn render(name: &str, node: &str) -> Result<()> {
     }
     writeln!(out, "\nedges:")?;
     for edge in &edges {
+        if check.is_some_and(|check| check.is_sleep())
+            && matches!(edge.outcome.as_str(), "sleeping" | "unknown" | "invalid")
+        {
+            continue;
+        }
         let delay = rail::after(edge);
         let mark = edge
             .mark()
@@ -200,6 +206,16 @@ fn field(facts: &mut render::KeyVals, key: &str, value: Option<impl Display>) {
 }
 
 fn check_facts(facts: &mut render::KeyVals, check: &Check) {
+    field(facts, "sleep", check.sleep.as_ref());
+    field(
+        facts,
+        "when",
+        check
+            .when
+            .as_ref()
+            .and_then(|when| WhenExpr::parse(when).ok()),
+    );
+    field(facts, "for", check.hold.as_ref());
     field(facts, "run", check.run.as_ref());
     field(facts, "shell", check.shell.as_ref());
     field(facts, "agent", check.agent.as_ref());

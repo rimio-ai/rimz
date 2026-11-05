@@ -218,9 +218,10 @@ impl View<'_> {
 
     fn cases(&self, row: &mut Row) -> Result<()> {
         let check = &self.spec.checks[&row.name];
-        if check.cases.is_empty() {
+        if !matches!(check.kind(), Some(workflow::CheckKind::Condition)) {
             return Ok(());
         }
+        let cases = check.condition_cases();
         let wait = self
             .record
             .wait
@@ -261,7 +262,7 @@ impl View<'_> {
             if mark == CaseMark::NotReached {
                 continue;
             }
-            let expression = WhenExpr::parse(&check.cases[index].when)?;
+            let expression = WhenExpr::parse(&cases[index].when)?;
             for term in expression.terms() {
                 if mark != CaseMark::Unread || !seen.insert(term.key.clone()) {
                     continue;
@@ -286,7 +287,7 @@ impl View<'_> {
                 case.when = format!(
                     "{expression} holding {} of {}",
                     render::age_short(wait.first, self.now.min(at)),
-                    check.cases[index].hold.as_deref().unwrap_or_default()
+                    cases[index].hold.as_deref().unwrap_or_default()
                 );
                 if workflow::next_bound(self.spec, self.record, Some(index as u32), self.now)?
                     .is_some_and(|(next, target)| {

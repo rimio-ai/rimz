@@ -71,7 +71,7 @@ pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
                 source,
             });
         }
-        if !optional(&path) {
+        if !optional(&value, &path) {
             return Err(SpecErr::Toml {
                 path: original_path(&path, &indices),
                 source,
@@ -178,13 +178,17 @@ fn missing_required(value: &toml::Value, path: &[String]) -> Option<&'static str
         .find(|field| !table.contains_key(*field))
 }
 
-fn optional(path: &[String]) -> bool {
+fn optional(value: &toml::Value, path: &[String]) -> bool {
     let parts = path.iter().map(String::as_str).collect::<Vec<_>>();
     match parts.as_slice() {
         [] | ["workflow"] | ["workflow", "scope" | "start", ..] => false,
         ["workflow", "on", ..] | ["checks" | "steps", _, "on"] => false,
         ["checks", _, "cases", _, "for", ..] => true,
         ["checks", _, "cases", ..] => false,
+        ["checks", _, "sleep", ..] => false,
+        ["checks", _, "when", ..] => at(value, &path[..2])
+            .and_then(toml::Value::as_table)
+            .is_none_or(|check| !check.contains_key("sleep")),
         ["checks", _, "wake", _, "signal", ..] => false,
         _ => true,
     }

@@ -96,6 +96,11 @@ pub(super) fn evaluate(
             result.object = condition::evaluate(state, &spec.checks[&record.node], record);
             return result;
         }
+        Some(spec::CheckKind::Sleep) => {
+            let mut result = Evaluation::failed("invalid", "sleep evaluation interrupted");
+            result.object = evaluate_sleep(state, &spec.checks[&record.node], record);
+            return result;
+        }
         Some(spec::CheckKind::Run(run)) => run,
         None => return Evaluation::failed("invalid", "check needs exactly one runner"),
     };
@@ -161,6 +166,26 @@ pub(super) fn evaluate(
         }
     }
     result
+}
+
+fn evaluate_sleep(
+    state: &StatePaths,
+    check: &super::Check,
+    record: &RunRecord,
+) -> Result<Value, String> {
+    // CheckKind::Sleep requires sleep to be present.
+    let sleep = check.sleep.as_deref().expect("sleep runner");
+    let end = record
+        .entered_at
+        .checked_add(spec::duration(sleep).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    if Timestamp::now() >= end {
+        return Ok(json!({"outcome":"then", "reason":format!("slept {sleep}")}));
+    }
+    if check.when.is_some() {
+        return condition::evaluate(state, check, record);
+    }
+    Ok(json!({"outcome":"sleeping", "recheck_at":end}))
 }
 
 fn evaluate_shell(

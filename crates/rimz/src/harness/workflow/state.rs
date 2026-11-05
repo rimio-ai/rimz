@@ -149,10 +149,12 @@ impl Transition<'_> {
                 EvaluationOrigin::Engine,
             ),
         };
-        if matches!(check.kind(), Some(super::spec::CheckKind::Condition))
-            && let Some(case) = case_index(&object)
+        if matches!(
+            check.kind(),
+            Some(super::spec::CheckKind::Condition | super::spec::CheckKind::Sleep)
+        ) && let Some(case) = case_index(&object)
             && check
-                .cases
+                .condition_cases()
                 .get(case as usize)
                 .is_some_and(|case| case.hold.is_some())
             && !self
@@ -294,7 +296,7 @@ impl Transition<'_> {
         let case = (outcome == "hold").then(|| case_index(object)).flatten();
         let detail = if let Some(case) = case {
             Some(
-                self.spec.checks[&self.record.node].cases[case as usize]
+                self.spec.checks[&self.record.node].condition_cases()[case as usize]
                     .outcome
                     .clone(),
             )
@@ -357,6 +359,11 @@ impl Transition<'_> {
         if self.record.state.is_terminal() {
             return Ok(());
         }
+        let sleep = self
+            .spec
+            .checks
+            .get(&self.record.node)
+            .is_some_and(|check| check.is_sleep());
         if let Some(held) = &mut self.record.held {
             held.verdict = Some(Verdict {
                 node: self.record.node.clone(),
@@ -410,7 +417,7 @@ impl Transition<'_> {
             }
         }
         self.record.attempt = None;
-        if self.record.wait.as_ref().is_some_and(Wait::is_hold) {
+        if sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold) {
             return Ok(());
         }
         self.record.key = object
@@ -857,7 +864,10 @@ fn normalize_object(
         .ok_or("outcome must be a string")?;
     if (RESERVED_OUTCOMES.contains(&outcome)
         && !(outcome == "unknown"
-            && matches!(check.kind(), Some(super::spec::CheckKind::Condition))))
+            && matches!(
+                check.kind(),
+                Some(super::spec::CheckKind::Condition | super::spec::CheckKind::Sleep)
+            )))
         || !edges.iter().any(|edge| edge.outcome == outcome)
     {
         return Err(format!("reserved or unrouted outcome {outcome:?}"));

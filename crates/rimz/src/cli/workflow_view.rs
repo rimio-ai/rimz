@@ -51,6 +51,21 @@ pub(super) fn wait(
     now: Timestamp,
 ) -> Option<String> {
     let wait = record.wait.as_ref()?;
+    if let Some(check) = spec.and_then(|spec| spec.checks.get(&wait.node))
+        && check.is_sleep()
+    {
+        let when = check
+            .when
+            .as_ref()
+            .and_then(|when| rimz::harness::schedule::when::WhenExpr::parse(when).ok())
+            .map_or_else(String::new, |expression| format!(" when {expression}"));
+        return Some(format!(
+            "sleeping {}/{}{when} → {}",
+            render::age_short(record.entered_at, now),
+            check.sleep.as_deref().unwrap_or_default(),
+            check.then.as_deref().unwrap_or_default()
+        ));
+    }
     if wait.outcome == "capacity" {
         return Some(format!(
             "{} · {}",
@@ -62,9 +77,15 @@ pub(super) fn wait(
         "hold" => {
             let hold = spec
                 .and_then(|spec| spec.checks.get(&wait.node))
-                .and_then(|check| wait.case.and_then(|index| check.cases.get(index as usize)))
-                .and_then(|case| case.hold.as_deref())
-                .unwrap_or("?");
+                .and_then(|check| {
+                    wait.case.and_then(|index| {
+                        check
+                            .condition_cases()
+                            .get(index as usize)
+                            .and_then(|case| case.hold.clone())
+                    })
+                })
+                .unwrap_or_else(|| "?".into());
             format!(
                 "holding {} {}/{hold}",
                 render::one_line(wait.detail.as_deref().unwrap_or("—")),
@@ -365,6 +386,32 @@ mod tests {
                 None
             ),
             "with you · checking ruled"
+        );
+    }
+
+    #[test]
+    fn sleeps_replace_every_wait_phrase_with_the_entry_based_clock() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(12);
+        let actual = ["", "when=['ci=passed']\n"].map(|when| {
+            let spec: WorkflowSpec = toml::from_str(&format!(
+                "[workflow]\nscope='worktree'\nstart='ruled'\n\
+                 [checks.ruled]\nsleep='30m'\nthen='fix'\n{when}"
+            ))
+            .unwrap();
+            ["sleeping", "unknown", "hold"].map(|outcome| {
+                let mut record = record();
+                record.node = "ruled".into();
+                waiting(&mut record, outcome);
+                record.wait.as_mut().unwrap().recheck_at = Some(now);
+                detail(&record, Some(&spec), now, None)
+            })
+        });
+        assert_eq!(
+            actual,
+            [
+                std::array::from_fn(|_| "sleeping 12m/30m → fix".to_owned()),
+                std::array::from_fn(|_| "sleeping 12m/30m when ci=passed → fix".to_owned()),
+            ]
         );
     }
 

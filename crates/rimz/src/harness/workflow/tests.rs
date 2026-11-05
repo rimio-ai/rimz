@@ -126,6 +126,7 @@ mod commands;
 mod conditions;
 mod graph;
 mod inspection;
+mod sleep;
 mod tolerance;
 mod turns;
 

@@ -387,10 +387,30 @@ impl Row {
                 Some(CheckKind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
                 Some(CheckKind::Agent(agent)) => format!("{agent}, headless"),
                 Some(CheckKind::Condition) => "condition".into(),
+                Some(CheckKind::Sleep) => {
+                    format!("sleep {}", check.sleep.as_deref().unwrap_or_default())
+                }
                 None => "invalid runner; see workflow validate".into(),
             };
             row.heading = format!("check  {runner}");
             row.summary.clone_from(&check.summary);
+            if check.is_sleep() {
+                if let Some(when) = &check.when {
+                    row.details.push(format!(
+                        "when {}",
+                        WhenExpr::parse(when)
+                            .map(|expression| expression.to_string())
+                            .unwrap_or_else(|_| format!("invalid condition: {when:?}"))
+                    ));
+                }
+                if let Some(hold) = &check.hold {
+                    row.details.push(format!("for {hold}"));
+                }
+                if let Some(then) = &check.then {
+                    row.details
+                        .push(format!("then {}", target(name, then, order)));
+                }
+            }
             if let Some(timeout) = &check.timeout
                 && let Some(edge) = live.iter().find(|edge| edge.outcome == "timeout")
             {
@@ -456,6 +476,11 @@ impl Row {
             }
             let mut routes = Vec::new();
             for edge in live {
+                if check.is_sleep()
+                    && matches!(edge.outcome.as_str(), "then" | "sleeping" | "unknown")
+                {
+                    continue;
+                }
                 if edge.outcome == "timeout"
                     || edge.outcome == "deadline"
                     || (edge.outcome == "invalid" && edge.source == EdgeSource::Default)

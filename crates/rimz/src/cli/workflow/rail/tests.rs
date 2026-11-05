@@ -1552,3 +1552,28 @@ mod horizontal_sweep {
         );
     }
 }
+
+#[test]
+fn a_sleep_rail_prints_its_spelling_and_points_then_along_the_walk() {
+    let spec: WorkflowSpec = toml::from_str(
+        "[workflow]\nscope='worktree'\nstart='poll'\n\
+         [checks.poll]\nshell='true'\non={pass='@done',fail='cooldown'}\n\
+         [checks.cooldown]\nsleep='30m'\nwhen=['ci=passed']\nfor='2m'\nthen='poll'\n",
+    )
+    .unwrap();
+    let mut out = anstream::StripStream::new(Vec::new());
+    Rail::definition(&spec).write(&mut out, 140).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    for line in [
+        "cooldown  check  sleep 30m",
+        "when ci=passed",
+        "for 2m",
+        "then ↑ poll",
+    ] {
+        assert_eq!(text.matches(line).count(), 1, "{line}: {text}");
+    }
+    assert!(
+        !text.contains("sleeping") && !text.contains("unknown"),
+        "{text}"
+    );
+}

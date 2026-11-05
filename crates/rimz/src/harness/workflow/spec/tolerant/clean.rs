@@ -34,22 +34,26 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             |raw| parse_window(raw).map(|_| ()),
         );
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        let sleep = check.is_sleep();
         let agent = matches!(check.kind(), Some(CheckKind::Agent(_)));
         let shell = matches!(check.kind(), Some(CheckKind::Shell(_)));
-        if condition {
+        if condition || sleep {
             ignore(
                 &mut check.wake,
                 &format!("{path}.wake"),
                 ignored,
                 "field is not supported by this check kind",
             );
-        } else {
+        }
+        if !condition {
             ignore(
                 &mut check.else_outcome,
                 &format!("{path}.else"),
                 ignored,
                 "field is not supported by this check kind",
             );
+        }
+        if !condition && !sleep {
             ignore(
                 &mut check.provider,
                 &format!("{path}.provider"),
@@ -59,6 +63,51 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             ignore(
                 &mut check.account,
                 &format!("{path}.account"),
+                ignored,
+                "field is not supported by this check kind",
+            );
+        }
+        if sleep {
+            ignore(
+                &mut check.timeout,
+                &format!("{path}.timeout"),
+                ignored,
+                "field is not supported by this check kind",
+            );
+            sanitize(&mut check.hold, &format!("{path}.for"), ignored, |raw| {
+                let hold = duration(raw).map_err(|error| error.to_string())?;
+                if hold.is_zero() {
+                    return Err("for must be nonzero".to_owned());
+                }
+                if check.when.is_none() {
+                    return Err("for requires when".into());
+                }
+                if check
+                    .sleep
+                    .as_deref()
+                    .and_then(|sleep| duration(sleep).ok())
+                    .is_some_and(|sleep| hold >= sleep)
+                {
+                    return Err("for must be shorter than sleep".into());
+                }
+                Ok(())
+            });
+        } else if check.kind().is_some() {
+            ignore(
+                &mut check.when,
+                &format!("{path}.when"),
+                ignored,
+                "field is not supported by this check kind",
+            );
+            ignore(
+                &mut check.hold,
+                &format!("{path}.for"),
+                ignored,
+                "field is not supported by this check kind",
+            );
+            ignore(
+                &mut check.then,
+                &format!("{path}.then"),
                 ignored,
                 "field is not supported by this check kind",
             );
@@ -111,7 +160,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                     && !outcomes.contains(outcome.as_str())
                     && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid")
             };
-            if engine || dead {
+            if sleep || engine || dead {
                 ignored.push(ignored_issue(
                     &format!("{path}.on.{outcome}"),
                     "dead route: this check cannot answer that outcome",
@@ -142,7 +191,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 );
             }
         }
-        if condition {
+        if condition || sleep {
             sanitize(
                 &mut check.provider,
                 &format!("{path}.provider"),
@@ -154,7 +203,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 },
             );
             let window = check
-                .cases
+                .condition_cases()
                 .iter()
                 .filter_map(|case| WhenExpr::parse(&case.when).ok())
                 .any(|expr| expr.terms().any(|term| term.key.starts_with("window.")));

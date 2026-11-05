@@ -343,7 +343,7 @@ pub fn next_bound(
 ) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
     Ok(
         first_bound(spec, record, hold, now)?.and_then(|(at, outcome)| {
-            spec.target(&record.node, outcome)
+            spec.target(&record.node, &outcome)
                 .map(|target| (at, target))
         }),
     )
@@ -351,23 +351,25 @@ pub fn next_bound(
 
 /// Earliest unfired deadline, timeout or supplied hold case, in that order on ties, with the
 /// outcome it settles. Engine rechecks take the instant alone, so timing never waits on routing.
-pub(super) fn first_bound<'a>(
-    spec: &'a WorkflowSpec,
+pub(super) fn first_bound(
+    spec: &WorkflowSpec,
     record: &RunRecord,
     hold: Option<u32>,
     now: Timestamp,
-) -> Result<Option<(Timestamp, &'a str)>, TimeInputErr> {
+) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
     let deadline = record
         .deadline
         .filter(|_| !record.deadline_fired)
-        .map(|at| (at, "deadline"));
-    let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout"));
+        .map(|at| (at, "deadline".into()));
+    let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout".into()));
     let hold = match hold {
         Some(index) => hold_until(spec, record, index, now)?.zip(
-            spec.checks
-                .get(&record.node)
-                .and_then(|check| check.cases.get(index as usize))
-                .map(|case| case.outcome.as_str()),
+            spec.checks.get(&record.node).and_then(|check| {
+                check
+                    .condition_cases()
+                    .get(index as usize)
+                    .map(|case| case.outcome.clone())
+            }),
         ),
         None => None,
     };
@@ -417,12 +419,12 @@ pub fn hold_until(
     case: u32,
     now: Timestamp,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
-    let Some(hold) = spec
-        .checks
-        .get(&record.node)
-        .and_then(|check| check.cases.get(case as usize))
-        .and_then(|case| case.hold.as_deref())
-    else {
+    let Some(hold) = spec.checks.get(&record.node).and_then(|check| {
+        check
+            .condition_cases()
+            .get(case as usize)
+            .and_then(|case| case.hold.clone())
+    }) else {
         return Ok(None);
     };
     let first = record
@@ -430,5 +432,5 @@ pub fn hold_until(
         .as_ref()
         .filter(|wait| wait.is_hold() && wait.case == Some(case))
         .map_or(now, |wait| wait.first);
-    Ok(first.checked_add(super::spec::duration(hold)?).ok())
+    Ok(first.checked_add(super::spec::duration(&hold)?).ok())
 }
