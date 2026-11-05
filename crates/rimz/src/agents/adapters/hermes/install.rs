@@ -97,7 +97,15 @@ impl ManagedIntegration for HermesManagedIntegration {
         _spec: &AgentSpec,
         env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        config_path(env).into_iter().collect()
+        config_path(env)
+            .into_iter()
+            .flat_map(|path| {
+                [
+                    path.clone(),
+                    path.with_file_name("shell-hooks-allowlist.json"),
+                ]
+            })
+            .collect()
     }
 
     fn untrusted_installed_hooks(&self, env: &BTreeMap<String, String>) -> Vec<String> {

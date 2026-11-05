@@ -63,6 +63,8 @@ pub trait ManagedIntegration: Sync {
         None
     }
 
+    /// All files read by installed, disabled, preflight-trust, and default-model
+    /// probes. Resolving paths performs no provider-file I/O.
     fn wiring_input_paths(
         &self,
         _descriptor: &AgentSpec,

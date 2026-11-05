@@ -354,7 +354,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::take_frontend finalizes frontend arguments before compilation (+1).
 # SessionCapability::is_untracked_frontend identifies frontends without session feeds (+1).
 # is_untracked_frontend shares the per-kind display fallback with the pane fold (+1).
-surface-budget = 1252
+# NotTracked, NotTrackedReason, not_tracked_hooks and untracked_mode_fix share reporting gaps (+4).
+surface-budget = 1256
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -7109,7 +7110,7 @@ reason = "The shared launch chokepoint asks the provider whether its effective d
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::InstallationCapability"
-reason = "The six install defaults no adapter overrides stay trait defaults: the trait default is the single home for 'this agent does not do that' (agents/AGENTS.md), AgentDefinition forwards by Deref, and an inherent move is 41 lines out for 41 in (pass 18a)."
+reason = "Installation defaults no adapter overrides stay trait defaults: the trait default is the single home for 'this agent does not do that' (agents/AGENTS.md), and AgentDefinition forwards by Deref (pass 18a)."
 
 [[verdict]]
 kind = "item"
@@ -7155,6 +7156,26 @@ reason = "Public AskQueueEdit fields expose this private observation type; the r
 kind = "item"
 key = "agents::preflight_hooks"
 reason = "The lifecycle flag has three live policies: login and dispatch use None, reply and scheduled sends use NotUnsupported, supervised launch uses Wired (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::NotTracked"
+reason = "Projection publications and process cards carry the same known reporting gap and full fix."
+
+[[verdict]]
+kind = "item"
+key = "agents::NotTrackedReason"
+reason = "One serde vocabulary for hooks_missing, hooks_blocked and mode_not_followed crosses projection and snapshot seams."
+
+[[verdict]]
+kind = "item"
+key = "agents::not_tracked_hooks"
+reason = "The sidebar derives kind-wide reporting gaps through the shared hook preflight, without provider policy in the caller."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::InstallationCapability::untracked_mode_fix"
+reason = "The pane ladder asks integrations for a pure command-line reporting gap; the default is None."
 
 [[verdict]]
 kind = "item"
