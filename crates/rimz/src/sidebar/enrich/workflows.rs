@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::StatePaths;
 use crate::disk::parse_cache::KeyedParseCache;
-use crate::harness::workflow::WorkflowSpec;
+use crate::harness::workflow::{WorkflowSpec, hops, reached};
 use crate::store::snapshot::{
     SidebarSnapshot, SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind,
 };
@@ -12,6 +12,8 @@ use crate::store::workflow::{RunRecord, RunState};
 thread_local! {
     // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
     static SPECS: KeyedParseCache<WorkflowSpec> = KeyedParseCache::default();
+    // Names depend only on immutable specs and append-only journal bytes.
+    static REACHED: KeyedParseCache<BTreeSet<String>> = KeyedParseCache::default();
 }
 
 pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWorkflow> {
@@ -19,16 +21,33 @@ pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWor
         .iter()
         .filter(|record| !record.state.is_terminal())
         .filter_map(|record| {
-            let path = state.workflow(&record.id).spec;
+            let paths = state.workflow(&record.id);
             let spec = SPECS.with(|cache| {
                 cache
-                    .read_with(&path, |bytes| {
+                    .read_with(&paths.spec, |bytes| {
                         crate::harness::workflow::parse(std::str::from_utf8(bytes).ok()?).ok()
                     })
                     .ok()
                     .flatten()
             });
-            project(record, spec.as_deref())
+            let reached_nodes = spec.as_deref().and_then(|spec| {
+                REACHED.with(|cache| {
+                    cache
+                        .read_with(&paths.journal, |bytes| {
+                            let journal =
+                                crate::store::workflow::parse_journal(bytes, &paths.journal);
+                            Some(
+                                reached(&hops(spec, &journal), &journal)
+                                    .into_keys()
+                                    .map(str::to_owned)
+                                    .collect(),
+                            )
+                        })
+                        .ok()
+                        .flatten()
+                })
+            });
+            project(record, spec.as_deref(), reached_nodes.as_deref())
         })
         .collect()
 }
@@ -61,7 +80,11 @@ pub(super) fn bind_agents(snapshot: &mut SidebarSnapshot, records: &[RunRecord])
     }
 }
 
-fn project(record: &RunRecord, spec: Option<&WorkflowSpec>) -> Option<SidebarWorkflow> {
+fn project(
+    record: &RunRecord,
+    spec: Option<&WorkflowSpec>,
+    reached: Option<&BTreeSet<String>>,
+) -> Option<SidebarWorkflow> {
     if record.state.is_terminal() {
         return None;
     }
@@ -90,6 +113,7 @@ fn project(record: &RunRecord, spec: Option<&WorkflowSpec>) -> Option<SidebarWor
                 } else {
                     WorkflowNodeKind::Check
                 },
+                reached: reached.is_some_and(|nodes| nodes.contains(&node.node)),
             })
             .collect()
     } else {
@@ -146,6 +170,7 @@ fn project(record: &RunRecord, spec: Option<&WorkflowSpec>) -> Option<SidebarWor
         current: SidebarWorkflowNode {
             name: name.to_owned(),
             kind,
+            reached: reached.is_some_and(|nodes| nodes.contains(name)),
         },
         detour_parent,
         visits: record.visits.get(name).map_or(0, |visits| visits.total),
@@ -222,7 +247,8 @@ mod tests {
             "fix".into(),
             serde_json::from_value(json!({"total":2, "outcomes":[]})).unwrap(),
         );
-        let projected = project(&record, Some(&spec));
+        let reached = ["sweep", "watch", "fix"].map(str::to_owned).into();
+        let projected = project(&record, Some(&spec), Some(&reached));
         assert!(projected.is_some(), "active run projects");
         let projected = projected.unwrap();
         assert_eq!(
@@ -234,6 +260,20 @@ mod tests {
             ["sweep", "watch", "clean", "triage"]
         );
         assert_eq!(projected.current.name, "fix");
+        assert_eq!(
+            projected
+                .track
+                .iter()
+                .map(|node| (node.name.as_str(), node.reached))
+                .collect::<Vec<_>>(),
+            [
+                ("sweep", true),
+                ("watch", true),
+                ("clean", false),
+                ("triage", false)
+            ]
+        );
+        assert!(projected.current.reached);
         assert_eq!(projected.detour_parent.as_deref(), Some("watch"));
         assert_eq!(projected.visits, 2);
         assert!(projected.capped);
@@ -254,7 +294,7 @@ mod tests {
             seq: 1,
             role: crate::agents::WorkflowAttemptRole::Step,
         });
-        let projected = project(&record, Some(&spec)).unwrap();
+        let projected = project(&record, Some(&spec), None).unwrap();
         assert_eq!(projected.current.name, "triage");
         assert!(
             projected.agent.is_none(),
@@ -285,7 +325,7 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            let projected = project(&record, Some(&spec));
+            let projected = project(&record, Some(&spec), None);
             assert!(projected.is_some(), "live outcome {outcome} projects");
             let projected = projected.unwrap();
             assert_eq!(projected.word, expected);
@@ -295,15 +335,18 @@ mod tests {
                 (outcome == "hold").then_some("30m")
             );
         }
-        let projected = project(&record, None);
+        let projected = project(&record, None, None);
         assert_eq!(
             projected.and_then(|run| run.hold_limit).as_deref(),
             Some("?")
         );
         record.wait = None;
-        assert_eq!(project(&record, Some(&spec)).unwrap().word, "checking");
+        assert_eq!(
+            project(&record, Some(&spec), None).unwrap().word,
+            "checking"
+        );
         record.node = "clean".into();
-        let projected = project(&record, Some(&spec)).unwrap();
+        let projected = project(&record, Some(&spec), None).unwrap();
         assert_eq!(projected.word, "running");
         assert_eq!(projected.since, record.entered_at);
         record.state = RunState::Parked;
@@ -311,7 +354,7 @@ mod tests {
             serde_json::from_value(json!({"reason":"user", "at":record.created_at, "text":null}))
                 .unwrap(),
         );
-        let projected = project(&record, Some(&spec)).unwrap();
+        let projected = project(&record, Some(&spec), None).unwrap();
         assert_eq!(projected.word, "parked");
         assert_eq!(projected.since, record.created_at);
     }
@@ -322,7 +365,7 @@ mod tests {
         let spec = spec();
         record.node = "gone".into();
         for spec in [None, Some(&spec)] {
-            let projected = project(&record, spec);
+            let projected = project(&record, spec, None);
             assert!(
                 projected.is_some(),
                 "a missing track still projects its current node"
@@ -333,7 +376,7 @@ mod tests {
         }
         for state in [RunState::Done, RunState::Failed, RunState::Canceled] {
             record.state = state;
-            assert!(project(&record, Some(&spec)).is_none());
+            assert!(project(&record, Some(&spec), None).is_none());
         }
     }
 }

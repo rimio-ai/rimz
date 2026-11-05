@@ -39,7 +39,8 @@ fn rowless_active_and_parked_groups_supply_the_run_scope_to_git_demand() {
         group.workflow = Some(
             serde_json::from_value(serde_json::json!({
                 "run": crate::ids::WorkflowRunId::new(), "workflow":"land", "scope_path":path,
-                "state":state, "track":[], "current":{"name":"watch", "kind":"check"},
+                "state":state, "track":[],
+                "current":{"name":"watch", "kind":"check", "reached":false},
                 "detour_parent":null, "visits":0, "capped":false, "word":"queued",
                 "since":snapshot.now, "hold_limit":null, "entered_at":snapshot.now,
                 "created_at":snapshot.now, "agent":null

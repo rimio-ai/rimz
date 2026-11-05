@@ -15,6 +15,56 @@ fn run(snapshot: &mut SidebarSnapshot) -> &mut SidebarWorkflow {
         .unwrap()
 }
 
+fn move_current(run: &mut SidebarWorkflow, name: &str) {
+    run.current.name = name.to_owned();
+    run.current.reached = true;
+    if let Some(position) = run.track.iter().position(|node| node.name == name) {
+        for (index, node) in run.track.iter_mut().enumerate() {
+            node.reached = index <= position;
+        }
+    }
+}
+
+#[test]
+fn workflow_marks_history_instead_of_nodes_before_the_current_position() {
+    for set in ["unicode", "nerd-font"] {
+        let mut snapshot = snapshot();
+        let run = run(&mut snapshot);
+        move_current(run, "triage");
+        run.track[1].reached = false;
+        run.track[2].reached = false;
+        snapshot.theme.glyphs.set = Some(set.to_owned());
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 96);
+        let strip = &lines[1];
+        let text = line_texts(&lines)[1].clone();
+        for (glyph, count, style) in [
+            (
+                '●',
+                1,
+                theme.styled(Component::PipelinePassed, Modifier::empty()),
+            ),
+            (
+                '◆',
+                1,
+                theme.styled(Component::PipelinePassed, Modifier::empty()),
+            ),
+            ('○', 1, theme.muted()),
+            ('◇', 2, theme.muted()),
+        ] {
+            assert_eq!(text.matches(glyph).count(), count, "{set}: {text}");
+            for span in strip
+                .spans
+                .iter()
+                .filter(|span| span.content == glyph.to_string())
+            {
+                assert_eq!(span.style, style, "{set}: {glyph}");
+            }
+        }
+        assert_eq!(text.matches('◉').count(), 1, "{set}: {text}");
+    }
+}
+
 fn snapshot_to_screen_for_theme(
     snapshot: &SidebarSnapshot,
     no_color: bool,
@@ -81,7 +131,7 @@ fn rowless_workflow_header_drops_churn_before_its_name() {
 fn workflow_narrow_trim_boundaries_keep_the_current_name_whole() {
     let mut snapshot = snapshot();
     let run = run(&mut snapshot);
-    run.current.name = "fix".to_owned();
+    move_current(run, "fix");
     run.detour_parent = Some("watch".to_owned());
     run.visits = 2;
     run.capped = true;
@@ -171,7 +221,7 @@ fn workflow_strip_states_have_one_current_and_keep_the_state_word() {
     ] {
         let mut snapshot = snapshot();
         let run = run(&mut snapshot);
-        run.current.name = node.to_owned();
+        move_current(run, node);
         run.word = word.to_owned();
         if node == "fix" {
             run.detour_parent = Some("watch".to_owned());
@@ -266,7 +316,7 @@ fn workflow_card_section_tone_click_and_ordinals_agree() {
     group.rows = rows.into();
     group.workflow = Some(workflow);
     let workflow = group.workflow.as_mut().unwrap();
-    workflow.current.name = "sweep".to_owned();
+    move_current(workflow, "sweep");
     workflow.current.kind = WorkflowNodeKind::Step;
     workflow.agent = Some((
         crate::ids::AgentKind::new_unchecked(&step.name),
@@ -317,7 +367,7 @@ fn workflow_card_section_tone_click_and_ordinals_agree() {
         snapshot_to_screen_for_theme(&snapshot, false, 64, 32),
     );
 
-    run(&mut snapshot).current.name = "triage".to_owned();
+    move_current(run(&mut snapshot), "triage");
     run(&mut snapshot).word = "held".to_owned();
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     std::sync::Arc::make_mut(&mut group.rows)
@@ -339,7 +389,7 @@ fn workflow_card_section_tone_click_and_ordinals_agree() {
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     assert_eq!(block.interactions.target_at(4, 1), None);
     assert!(line_texts(&block.lines)[1].contains("held"));
-    run(&mut snapshot).current.name = "sweep".to_owned();
+    move_current(run(&mut snapshot), "sweep");
     run(&mut snapshot).word = "takeover".to_owned();
     assert_snapshot(
         "workflow_takeover_with_team",

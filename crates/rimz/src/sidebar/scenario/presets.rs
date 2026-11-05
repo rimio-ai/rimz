@@ -125,6 +125,7 @@ fn add_workflow_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     .map(|(name, kind)| SidebarWorkflowNode {
         name: name.to_owned(),
         kind,
+        reached: matches!(name, "sweep" | "watch"),
     });
     group.workflow = Some(SidebarWorkflow {
         run: "wf_0123456789abcdef0123456789abcdef"

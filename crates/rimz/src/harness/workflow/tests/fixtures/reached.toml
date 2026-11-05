@@ -1,0 +1,32 @@
+[workflow]
+scope = 'worktree'
+start = 'build'
+
+[steps.build]
+agent = 'claude'
+prompt-file = 'prompt.md'
+then = 'gate'
+max-visits = 1
+
+[checks.gate]
+run = 'cat answer.json'
+timeout = '1h'
+on.again = 'build'
+on.next = 'middle'
+
+[steps.middle]
+agent = 'claude'
+prompt-file = 'prompt.md'
+then = 'review'
+max-visits = 1
+
+[checks.review]
+run = 'cat answer.json'
+timeout = '1h'
+on.next = 'finish'
+
+[steps.finish]
+agent = 'claude'
+prompt-file = 'prompt.md'
+then = 'gate'
+max-visits = 1
