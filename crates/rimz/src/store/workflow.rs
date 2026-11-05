@@ -1,7 +1,7 @@
 //! Durable workflow records and append-only history; transitions belong to the harness.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -798,9 +798,8 @@ pub fn append(paths: &WorkflowPaths, entry: &JournalEntry, _guard: &WorkspaceLoc
 }
 
 pub fn journal(paths: &WorkflowPaths) -> Result<Vec<JournalEntry>> {
-    use std::io::{BufRead, BufReader};
-    let file = match std::fs::File::open(&paths.journal) {
-        Ok(file) => file,
+    let bytes = match std::fs::read(&paths.journal) {
+        Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
             return Err(WorkflowStoreErr::Io {
@@ -809,17 +808,23 @@ pub fn journal(paths: &WorkflowPaths) -> Result<Vec<JournalEntry>> {
             });
         }
     };
+    Ok(parse_journal(&bytes, &paths.journal))
+}
+
+/// Decode readable rows, ignoring torn or unknown entries as the file reader does.
+pub(crate) fn parse_journal(bytes: &[u8], path: &Path) -> Vec<JournalEntry> {
     let mut entries = Vec::new();
-    for line in BufReader::new(file).split(b'\n') {
-        let line = line.map_err(WorkflowStoreErr::io(&paths.journal))?;
-        match serde_json::from_slice(&line) {
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        match serde_json::from_slice(line) {
             Ok(entry) => entries.push(entry),
             Err(err) => {
-                tracing::debug!(path = %paths.journal.display(), %err, "skipping unreadable workflow history row")
+                tracing::debug!(
+                    path = %path.display(), %err, "skipping unreadable workflow history row"
+                )
             }
         }
     }
-    Ok(entries)
+    entries
 }
 
 pub fn list(state: &StatePaths) -> Result<Vec<RunRecord>> {

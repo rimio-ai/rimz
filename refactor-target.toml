@@ -3754,7 +3754,8 @@ path = "crates/rimz/src/store"
 # HeldRank and SidebarSnapshot::{capture_held_rank, sort_groups_with_holds, sort_rows_in_order} keep focus and frozen partition keys inside the view (+4).
 # SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind, RunRecord::{session_attempt, step_agent},
 # and SidebarWorktreeGroup::has_rows_or_workflow share live run groups (+6).
-surface-budget = 543
+# workflow::parse_journal shares lenient row decoding with cached sidebar reads (+1).
+surface-budget = 544
 
 [[verdict]]
 kind = "item"
@@ -10579,6 +10580,11 @@ reason = "Workflow codecs share lock-free reads and caller-locked durable writes
 kind = "item"
 key = "store::workflow::journal"
 reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::parse_journal"
+reason = "The journal file reader and stat-gated sidebar projection share one lenient byte parser."
 
 [[verdict]]
 kind = "item"
