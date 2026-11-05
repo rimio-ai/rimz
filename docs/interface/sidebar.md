@@ -111,9 +111,9 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 
 | mark | meaning |
 |------|---------|
-| `⑂ name` | a worktree group, named by its branch |
+| `⑂ name` | a checkout group named by its branch, or a channel named by a listed worktree's marker |
 | `↩ name` | a worktree group whose work has landed |
-| `# name` | an explicit `--channel` lane with no git state |
+| `# name` | a channel with no listed marker-backed checkout |
 | `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
 | `#522→#530→#540,#541` | a same-repository PR stack, bottom first; comma-separated branches end the stack |
@@ -185,7 +185,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | muted subagent headline | no live child pane: a click goes to the parent; error labels keep their italic emphasis |
 | `▎` ... `🮇` | the selection lane: every row of the group that holds the selection |
 | `┄` | the dotted seal on the selected group's header |
-| `┄ external ┄` | the group for panes outside the project |
+| `┄ external ┄` | panes with no channel or known containing place |
 | `─` | a section rule |
 | `▐` / `▕` on the right edge | scrollbar thumb and track, drawn over the right spines while the cards scroll |
 | `┤ Tab ├` | the active dashboard tab under `NO_COLOR` |
@@ -222,7 +222,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 
 Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. Spend that grew while you were on another tab shows its current figure when you arrive, without counting up. It never decreases inside one window and resets when the window rolls. Antigravity reports current usage that cannot be summed over time, so its cost shows on its card and stays out of this total. How every figure is computed is [Token Insight](../guide/insight.md).
 
-The room's scope is a path prefix: the project root and each grouped worktree root. A checkout you reach through a symlink spelled differently from the path in the agent's transcript can count as outside the room until the two paths agree.
+The spend scope uses the project root, listed worktree roots, and the configured worktree home, so cleaned-up checkouts still count. Grouping instead uses the deepest known place and follows no symlinks: a shell whose cwd resolves outside those places goes to `external`.
 
 The `⑃ N` colour reads each worktree's own pull request, since stacked pull requests carry no CI: red when any fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
 
@@ -552,7 +552,7 @@ Each group starts with a header. Its left side names the work, and its right sid
 ▎↩ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, each PR number opens its pull request. A same-repository stack on GitHub or Gitea replaces the single badge with its levels, bottom first: `#522→#530→#540,#541`. Commas join PRs branching from the same level, where the display stops. The stack appears only when the entire run fits beside the full name and CI; otherwise only the branch's own PR number remains. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
+On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, each PR number opens its pull request. A same-repository stack on GitHub or Gitea replaces the single badge with its levels, bottom first: `#522→#530→#540,#541`. Commas join PRs branching from the same level, where the display stops. The stack appears only when the entire run fits beside the full name and CI; otherwise only the branch's own PR number remains. A group outside the project root and not among its listed worktrees always adds a muted `· repo` qualifier naming its repo folder, even when that repeats the label. Colliding branch labels use the shortest path suffix that tells the checkouts apart; foreign groups deepen their qualifier by the same rule. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
 
 On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
 
@@ -604,13 +604,13 @@ No selection, compact cards:
 ▎  add tests                                           🮇
 ▎  ▢ ──────────────────────────────────────  0.0%      🮇
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1     ← panes outside the project, with its own ? and ! count
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1     ← panes with no channel and no known place, with its own ? and ! count
  ? claude
    Deploy staging?
    ▢ ──────────────────────────────────────  0.0%
 ```
 
-Panes outside the project (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. It keeps a `? n` or `! n` count so an ask from outside the project still shows.
+Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
 
 A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold header with the directory's name, with no glyph or git figures, because a plain directory has no trunk to compare against.
 

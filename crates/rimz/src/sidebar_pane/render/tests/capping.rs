@@ -1175,7 +1175,7 @@ fn group(
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
-        worktree_backed: false,
+        place: None,
         root_lane: false,
         inactive: None,
         clean: None,

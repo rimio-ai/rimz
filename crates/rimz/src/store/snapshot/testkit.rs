@@ -99,8 +99,27 @@ pub(super) fn room_with_agent_panes_and_capacities(
         agent.pane = Some(pane.clone());
         panes.push(pane);
     }
-    SidebarSnapshot::build_with_agents(workspace(), agents, epoch())
-        .with_live_panes_and_provider_capacities(panes, None, &provider_capacities)
+    list_agent_checkouts(SidebarSnapshot::build_with_agents(
+        workspace(),
+        agents,
+        epoch(),
+    ))
+    .with_live_panes_and_provider_capacities(panes, None, &provider_capacities)
+}
+
+/// List every agent's checkout as `git worktree list` would for agents each
+/// working in their own checkout, so each makes its own place even without a
+/// branch. Takes effect at the next regrouping fold (`with_live_panes`).
+pub(super) fn list_agent_checkouts(snapshot: SidebarSnapshot) -> SidebarSnapshot {
+    let roots = snapshot
+        .agents
+        .iter()
+        .filter_map(|agent| agent.worktree_path.as_deref())
+        .map(std::path::PathBuf::from)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    snapshot.with_worktree_roots(roots, std::collections::BTreeMap::new())
 }
 
 pub(super) fn provider_capacity(

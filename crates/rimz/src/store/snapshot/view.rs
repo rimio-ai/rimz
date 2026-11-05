@@ -42,7 +42,7 @@ use model::cohort_team;
 pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
     ProviderPlan, RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarInactive,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarUnitKey, SidebarWorkflow,
     SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, ThrottleNotice,
     UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
@@ -81,7 +81,7 @@ pub struct HookDrainerOutageAgent {
 }
 
 /// Serde default for [`SidebarSnapshot::root_class`]: `Repo` keeps a pre-class
-/// snapshot (and the pure reducer path) on the prior repo-room grouping.
+/// snapshot (and the pure reducer path) on repo-room grouping.
 fn default_root_class() -> RootClass {
     RootClass::Repo
 }
@@ -96,7 +96,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 76;
+pub const SNAPSHOT_VERSION: u32 = 77;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -211,41 +211,36 @@ pub struct SidebarSnapshot {
     /// leave it `false`; the producer fills it from the live pane list.
     #[serde(default)]
     pub only_daemon_view_remains: bool,
-    /// The project's canonical root. Grouping uses it to tell a project
-    /// worktree (the main checkout, or `<root>/.claude/worktrees/*`) from a
-    /// pane whose cwd sits outside the project entirely (a home shell, `/tmp`),
-    /// which folds into the `external` catch-all instead of minting its own
-    /// pod. Like `display_name`, this is workspace identity the reducer can't
-    /// read from the store, so the pure path leaves it `None` (every cwd keeps
-    /// per-path grouping) and the `rimz sidebar snapshot` CLI fills it.
+    /// The project's canonical root, one of the known places containing rows.
+    /// Subfolder panes join it unless a deeper known place or channel owns them.
+    /// Like `display_name`, this is workspace identity the reducer can't read
+    /// from the store, so the pure path leaves it `None` and enrichment fills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<PathBuf>,
     /// The repo's enumerated worktree checkout roots, as `git worktree list`
-    /// reports them. A pane whose cwd is inside any of these is one of the
-    /// project's worktrees and earns its own pod — *including a worktree parked
-    /// outside `project_root`*, which the `project_root` prefix test alone would
-    /// miss. Git-backed rows also contribute their own resolved worktree root
-    /// during grouping, so directory rooms do not scan children. Like
-    /// `project_root`, this is workspace identity the reducer can't read from
-    /// the store, so the pure path leaves it empty (row-derived roots and the
-    /// `project_root` prefix test then stand alone) and the `rimz sidebar
-    /// snapshot` CLI fills it.
+    /// reports them. Panes beneath a listed root share that place, including
+    /// worktrees outside `project_root`. Agents carrying a path and branch also
+    /// contribute git roots during grouping, so directory rooms scan no children.
+    /// The pure reducer leaves this empty; enrichment installs the enumeration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
+    /// Listed checkout roots whose RimZ markers name a channel. Installed with
+    /// `worktree_roots` from the same enumeration; empty on the pure reducer path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub worktree_channels: BTreeMap<PathBuf, String>,
     /// The repo's durable worktree-home directory — the resolved `[agents.worktree]
     /// dir` template (default `…/<repo>-worktrees`). It widens the cockpit
     /// spend scope: a session recorded under a worktree that cleanup has since
     /// removed still counts toward the room's headline figure, because the home
     /// is a stable path prefix while `worktree_roots` tracks only the live `git
-    /// worktree list`. It also folds unstamped rows inside RimZ-owned worktrees
-    /// into their `#channel` pod so grouping agrees with message addressing.
+    /// worktree list`. Grouping does not read this prefix.
     /// Like `project_root`, the `rimz sidebar snapshot` enrichment fills it from
     /// `MachineConfig`; the pure path leaves it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_home: Option<PathBuf>,
     /// The room root's class from the workspace record. Grouping reads it to
     /// give a non-repo room's root pod the name-only [`SidebarWorktreeKind::Root`]
-    /// kind while a repo room's own checkout keeps per-path pods. Like
+    /// kind while a repo room's own checkout keeps its branch-labelled group. Like
     /// `project_root`, workspace identity the reducer can't read from the
     /// store: the pure path and any pre-class snapshot default to `Repo`
     /// (the prior behavior) and the producing reads fill it from the record.
@@ -428,6 +423,7 @@ impl SidebarSnapshot {
             only_daemon_view_remains: false,
             project_root: None,
             worktree_roots: Vec::new(),
+            worktree_channels: BTreeMap::new(),
             worktree_home: None,
             root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
@@ -492,29 +488,28 @@ impl SidebarSnapshot {
             .flat_map(|group| Arc::make_mut(&mut group.rows).iter_mut())
     }
 
-    /// Record the project root so a frame-admitted row whose cwd is neither
-    /// under it nor inside one of the repo's worktrees lands in the `external`
-    /// catch-all instead of its own pod. Callers set this from the workspace
-    /// record after construction (the reducer can't read it), mirroring how
-    /// `display_name` is filled.
+    /// Record the project's root place. Callers set this from the workspace
+    /// record after construction, mirroring how `display_name` is filled.
     pub fn with_project_root(mut self, project_root: Option<PathBuf>) -> Self {
         self.project_root = project_root;
         self
     }
 
-    /// Record the repo's worktree checkout roots so a worktree parked *outside*
-    /// `project_root` still earns its own pod rather than folding into
-    /// `external`. Like `with_project_root`, the `rimz sidebar snapshot` CLI
-    /// fills this from `git worktree list` after construction; git-backed rows
-    /// add their own roots during grouping, and the pure path leaves this empty.
-    pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
+    /// Install the listed checkout places and their marker-named channels from
+    /// one enumeration. Agents also add git roots during grouping; the pure
+    /// reducer leaves both collections empty.
+    pub fn with_worktree_roots(
+        mut self,
+        worktree_roots: Vec<PathBuf>,
+        worktree_channels: BTreeMap<PathBuf, String>,
+    ) -> Self {
         self.worktree_roots = worktree_roots;
+        self.worktree_channels = worktree_channels;
         self
     }
 
     /// Record the repo's durable worktree-home directory so the cockpit spend
-    /// scope counts sessions from worktrees cleanup has since removed and
-    /// unstamped RimZ-owned worktree rows fold into their `#channel` pod.
+    /// scope counts sessions from worktrees cleanup has since removed.
     /// Filled from `MachineConfig`'s `[agents.worktree] dir` after construction,
     /// like `with_worktree_roots`; the pure path leaves it `None`.
     pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {

@@ -20,8 +20,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use rimz::ids::{MuxName, PaneId};
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::ids::{AgentSessionId, MuxName, PaneId};
 use rimz::pane::PaneRef;
+use rimz::store::event::EventEnvelope;
+use rimz::store::event_log;
 use serde_json::Value;
 
 use crate::common::Env;
@@ -76,8 +79,9 @@ impl Fixture {
         let _ = env.store();
 
         // Pane cwd is the worktree. With no recorded workspace, the snapshot's
-        // project root is `None`, so each cwd groups as a `Worktree` and the git
-        // probes run against it.
+        // project root is `None` and lists no worktrees, so a shell alone makes
+        // no group: tests that need the git probes root an agent in each pane
+        // (`register_pane_agents`).
         let mut panes = Vec::with_capacity(count);
         for idx in 0..count {
             let worktree = if count == 1 {
@@ -272,6 +276,60 @@ impl Fixture {
             .expect("spawn rimz sidebar snapshot --no-produce")
     }
 
+    /// Root an agent in each fixture pane at the pane's checkout: a shell alone
+    /// in an unlisted checkout makes no group, while the agent's checkout is
+    /// the place whose `Worktree` group the git probes serve.
+    pub(crate) fn register_pane_agents(&self) {
+        let panes: Vec<PaneRef> =
+            serde_json::from_slice(&std::fs::read(&self.panes_path).expect("read panes"))
+                .expect("parse panes");
+        for (slot, pane) in panes.iter().enumerate() {
+            self.register_agent(
+                slot,
+                "claude",
+                Some(pane),
+                Path::new(pane.cwd.as_ref().unwrap()),
+            );
+        }
+    }
+
+    /// Register agent `slot` of `kind`, bound to `pane` when given, at
+    /// `checkout` on that checkout's branch. The registration is dated ten
+    /// minutes back, past the git activity window, so it leaves the checkout's
+    /// diff-stats cadence idle.
+    pub(crate) fn register_agent(
+        &self,
+        slot: usize,
+        kind: &str,
+        pane: Option<&PaneRef>,
+        checkout: &Path,
+    ) {
+        let branch = Command::new(&self.real_git)
+            .arg("-C")
+            .arg(checkout)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .expect("read checkout branch");
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(format!("agent-{slot}"))),
+            LifecycleSignal::Registered,
+        );
+        observation.worktree_path = Some(checkout.to_string_lossy().into_owned());
+        observation.worktree_branch =
+            Some(String::from_utf8_lossy(&branch.stdout).trim().to_owned());
+        observation.pane_id = pane.map(|pane| pane.pane_id.clone());
+        let mut event = EventEnvelope::agent_lifecycle(
+            self.env.workspace_id.clone(),
+            format!("sess-{slot}"),
+            kind,
+            "SessionStart",
+            &observation,
+        );
+        event.timestamp = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(10);
+        event_log::append(&self.env.store().paths().events_log, &event)
+            .expect("append agent registration");
+    }
+
     /// Trace-log commands mentioning the per-worktree `git` forks, by marker.
     pub(crate) fn git_forks(&self, marker: &str) -> usize {
         self.git_log_contents().matches(marker).count()
@@ -328,6 +386,7 @@ fn diff_stats_single_flights_across_many_worktrees() {
     let Some(fixture) = Fixture::with_worktrees(WORKTREES) else {
         return;
     };
+    fixture.register_pane_agents();
 
     let cold = fixture.run_snapshot();
     assert!(
@@ -379,6 +438,7 @@ fn diff_stats_single_flights_and_serves_warm_consumers() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
+    fixture.register_pane_agents();
 
     const TABS: usize = 4;
     let children: Vec<_> = (0..TABS)

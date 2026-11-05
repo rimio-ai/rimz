@@ -24,7 +24,7 @@ Claude Code solves part of this. `claude --worktree` opens the session in a fres
 
 - **The whole layout lands in the tree.** `vim,codex+term` roots your editor, the agent, and a shell in one checkout, and a [team](./teams.md) isolates as a unit. Everyone in the tree works on the same files, so you edit what the agent edits and run its build in the shared shell.
 - **The tree opens ready to run.** Two committed manifests seed every new tree with the local files and shared directories a fresh checkout does not carry ([seed the tree](#seed-the-tree)).
-- **The tree is addressable.** Its name is also a [channel](./messaging.md#channels) name, so `@coder#feat-a` reaches the coder in that tree, and the sidebar groups the tree's panes as one block.
+- **The tree is addressable.** Its name is also a [channel](./messaging.md#channels) name, so `@coder#feat-a` reaches the coder in that tree. The sidebar groups its agents and shells as one block, including shells in subfolders, once the checkout appears in the cached worktree list.
 - **Cleanup proves the work landed.** RimZ reclaims a tree only once its content is verifiably on its base branch, and only a tree it created itself; worktrees from your own workflow keep running beside RimZ's, untouched ([cleanup](#cleanup-once-work-lands)).
 
 The wrapper stays thin: every step is plain Git, a file operation, or your own shell command ([what `-w` does on your machine](#what--w-does-on-your-machine)).

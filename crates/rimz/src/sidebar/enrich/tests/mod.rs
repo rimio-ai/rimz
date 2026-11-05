@@ -8,7 +8,7 @@ use crate::ids::LinkTier;
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile};
 use crate::sidebar::refresh::daemon_reap::{CodexDaemonReap, codex_daemon_reap_path};
-use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache};
+use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::utils::time::unix_now_ms;
 use jiff::SignedDuration;
@@ -620,6 +620,7 @@ fn channel_group(label: &str, path: &Path) -> crate::store::snapshot::SidebarWor
     group.key = format!("channel:{label}");
     group.label = label.to_owned();
     group.kind = SidebarWorktreeKind::Channel;
+    group.place = None;
     group
 }
 
@@ -638,15 +639,14 @@ fn channel_snapshot(name: &str, marked: bool) -> (tempfile::TempDir, PathBuf, Si
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![channel_group(name, &worktree)].into();
-    (dir, worktree, snapshot)
-}
-
-fn roots_cache_with_marker(path: &Path, name: &str) -> WorktreeRootsCache {
-    WorktreeRootsCache {
-        refreshed_at_ms: unix_now_ms(),
-        roots: vec![path.to_path_buf()],
-        marker_names: BTreeMap::from([(path.to_path_buf(), name.to_owned())]),
+    if marked {
+        Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
+            Some(crate::store::snapshot::SidebarPlace {
+                path: worktree.clone(),
+                foreign: false,
+            });
     }
+    (dir, worktree, snapshot)
 }
 
 #[test]

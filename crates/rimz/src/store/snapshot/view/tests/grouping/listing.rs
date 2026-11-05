@@ -48,7 +48,7 @@ fn listing_roster_mirrors_sidebar_root_pin_and_actionable_tier() {
         .iter()
         .filter_map(|agent| agent.pane.clone())
         .collect();
-    let snapshot = room(agents)
+    let snapshot = list_agent_checkouts(room(agents))
         .with_project_root(Some(PathBuf::from("/repo")))
         .with_live_panes(panes, None);
     let refs = snapshot.agents.iter().collect::<Vec<_>>();
@@ -93,7 +93,7 @@ fn groups_by_worktree_attention_first_external_last_uncapped() {
             .worktree("/repo/main"),
         );
     }
-    let snapshot = room(agents);
+    let snapshot = list_agent_checkouts(room(agents));
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -252,14 +252,23 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
 }
 
 #[test]
-fn listing_roster_folds_unstamped_rimz_worktree_agents_into_channel_pod() {
+fn listing_roster_and_sidebar_share_marked_channel_places() {
     let worktree = "/repo/rimz-worktrees/message-channel";
     let mut stamped = agent("claude", "stamped", AgentStatus::Running, 20).worktree(worktree);
     stamped.channel = Some("message-channel".to_owned());
     let unstamped = agent("codex", "bare", AgentStatus::Idle, 10).worktree(worktree);
-    let snapshot = room(vec![stamped, unstamped])
-        .with_project_root(Some(std::path::PathBuf::from("/repo/rimz")))
-        .with_worktree_home(Some(std::path::PathBuf::from("/repo/rimz-worktrees")));
+    let snapshot = room_with_agent_panes(vec![stamped, unstamped])
+        .with_project_root(Some(PathBuf::from("/repo/rimz")))
+        .with_worktree_roots(
+            vec![PathBuf::from(worktree)],
+            BTreeMap::from([(PathBuf::from(worktree), "message-channel".to_owned())]),
+        );
+    let panes = snapshot
+        .agents
+        .iter()
+        .filter_map(|agent| agent.pane.clone())
+        .collect();
+    let snapshot = snapshot.with_live_panes(panes, None);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -272,6 +281,13 @@ fn listing_roster_folds_unstamped_rimz_worktree_agents_into_channel_pod() {
     assert_eq!(groups[0].kind, SidebarWorktreeKind::Channel);
     assert_eq!(groups[0].label, "message-channel");
     assert_eq!(groups[0].agents.len(), 2);
+    assert_eq!(
+        groups[0].place.as_ref().map(|place| place.path.as_path()),
+        Some(std::path::Path::new(worktree))
+    );
+    assert_eq!(groups[0].key, snapshot.worktree_groups[0].key);
+    assert_eq!(groups[0].place, snapshot.worktree_groups[0].place);
+    assert!(snapshot.worktree_groups[0].worktree_backed());
 }
 
 #[test]
@@ -286,7 +302,7 @@ fn listing_roster_mirrors_individual_zone_order_and_group_attention_rank() {
     second.pane = Some(pane("%1", "claude", "/repo/a"));
     second = second.active_ago(22 * 3_600);
     let other = agent("claude", "other-running", AgentStatus::Running, 40).worktree("/repo/b");
-    let snapshot = room(vec![second, other, first]);
+    let snapshot = list_agent_checkouts(room(vec![second, other, first]));
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);

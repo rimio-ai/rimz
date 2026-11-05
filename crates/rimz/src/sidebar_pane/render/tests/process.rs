@@ -41,7 +41,9 @@ fn process_row_resource_stats_follow_busy_state() {
         ("zsh", 1, "○ zsh", "C   1%|M 512M|8M/s", None),
     ] {
         let pane = pane("%1", command, "/repo/main");
-        let mut snapshot = snapshot_with(Vec::new()).with_live_panes(vec![pane], None);
+        let mut snapshot = snapshot_with(Vec::new())
+            .with_worktree_roots(vec!["/repo/main".into()], Default::default())
+            .with_live_panes(vec![pane], None);
         let row = &mut std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
         )[0];

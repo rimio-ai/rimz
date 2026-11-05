@@ -65,7 +65,7 @@ pub use view::{
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan, RedeemForecast,
     RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarInactive,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPlace, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarUnitKey,
     SidebarWorkflow, SidebarWorkflowNode, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
     ThrottleNotice, TruthNotice, UnitStatus, WorkflowNodeKind, WorktreeCi, WorktreePrQueue,

@@ -13,6 +13,7 @@ fn staged() -> SidebarSnapshot {
         agent.team = Some("crew".into());
         agent.role = Some(role.into());
         agent.worktree_path = Some("/repo/main".into());
+        agent.worktree_branch = Some("main".into());
         agent.pane = Some(
             serde_json::from_value(serde_json::json!({
                 "pane_id": format!("tmux:%{role}"), "session_name": "test",

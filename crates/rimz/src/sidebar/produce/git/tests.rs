@@ -148,7 +148,7 @@ fn project_group_roots_publishes_exact_marker_names() {
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &legacy).unwrap();
     let before = std::fs::read(runtime.diff_stats_path()).unwrap();
 
-    let roots = project_group_roots(&main, RootClass::Repo, &runtime, Some(floor));
+    let (roots, channels) = project_group_roots(&main, RootClass::Repo, &runtime, Some(floor));
     assert_eq!(
         std::fs::read(runtime.diff_stats_path()).unwrap(),
         before,
@@ -164,6 +164,7 @@ fn project_group_roots_publishes_exact_marker_names() {
         Some("feature")
     );
     assert!(!cache.marker_names.contains_key(&main));
+    assert_eq!(channels, cache.marker_names);
 }
 
 #[test]
@@ -171,10 +172,11 @@ fn project_group_roots_serves_a_fresh_lane_without_forks_or_writes() {
     let room = tempfile::tempdir().unwrap();
     let (_dir, runtime) = runtime_for(room.path());
     let roots = vec![room.path().join("cached")];
+    let channels = std::collections::BTreeMap::from([(roots[0].clone(), "feature".to_owned())]);
     let stamp = unix_now_ms();
     atomic::write_temp_then_rename_cache(
         &runtime.group_roots_path(),
-        &serde_json::json!({ "refreshed_at_ms": stamp, "roots": roots, "marker_names": {} }),
+        &serde_json::json!({ "refreshed_at_ms": stamp, "roots": roots, "marker_names": channels }),
     )
     .unwrap();
     let before = std::fs::read(runtime.group_roots_path()).unwrap();
@@ -182,7 +184,7 @@ fn project_group_roots_serves_a_fresh_lane_without_forks_or_writes() {
 
     assert_eq!(
         project_group_roots(room.path(), RootClass::Repo, &runtime, Some(stamp)),
-        roots
+        (roots, channels)
     );
     assert_eq!(spawn_count() - forks, 0);
     assert_eq!(std::fs::read(runtime.group_roots_path()).unwrap(), before);
@@ -205,7 +207,7 @@ fn project_group_roots_floor_refuses_a_fresh_lane() {
     )
     .unwrap();
     let forks = spawn_count();
-    let roots = project_group_roots(room.path(), RootClass::Repo, &runtime, Some(floor));
+    let (roots, _) = project_group_roots(room.path(), RootClass::Repo, &runtime, Some(floor));
     assert_eq!(spawn_count() - forks, 1);
     assert_eq!(roots, vec![room.path().to_path_buf()]);
     let cache = read_lane(&runtime).expect("the roots lane must hold the re-enumeration");
@@ -222,7 +224,11 @@ fn project_group_roots_backs_off_after_a_failed_probe() {
     let (_dir, runtime) = runtime_for(room.path());
     let started_ms = unix_now_ms();
     let forks = spawn_count();
-    assert!(project_group_roots(room.path(), RootClass::Repo, &runtime, None).is_empty());
+    assert!(
+        project_group_roots(room.path(), RootClass::Repo, &runtime, None)
+            .0
+            .is_empty()
+    );
     assert_eq!(spawn_count() - forks, 1);
     let cache = read_lane(&runtime).expect("a failed probe publishes its empty result for backoff");
     assert!(cache.roots.is_empty());
@@ -230,7 +236,11 @@ fn project_group_roots_backs_off_after_a_failed_probe() {
     let before = std::fs::read(runtime.group_roots_path()).unwrap();
     let forks = spawn_count();
 
-    assert!(project_group_roots(room.path(), RootClass::Repo, &runtime, None).is_empty());
+    assert!(
+        project_group_roots(room.path(), RootClass::Repo, &runtime, None)
+            .0
+            .is_empty()
+    );
     assert_eq!(spawn_count() - forks, 0);
     assert_eq!(std::fs::read(runtime.group_roots_path()).unwrap(), before);
 }
@@ -243,7 +253,7 @@ fn project_group_roots_replaces_an_unreadable_lane() {
     std::fs::write(runtime.group_roots_path(), b"garbage").unwrap();
     let forks = spawn_count();
 
-    let roots = project_group_roots(room.path(), RootClass::Repo, &runtime, None);
+    let (roots, _) = project_group_roots(room.path(), RootClass::Repo, &runtime, None);
     assert_eq!(spawn_count() - forks, 1);
     assert_eq!(roots, vec![room.path().to_path_buf()]);
     let cache =
@@ -263,7 +273,7 @@ fn project_group_roots_returns_the_enumeration_when_publication_fails() {
 
     assert_eq!(
         project_group_roots(room.path(), RootClass::Repo, &runtime, None),
-        vec![room.path().to_path_buf()]
+        (vec![room.path().to_path_buf()], Default::default())
     );
     assert!(!runtime.group_roots_path().exists());
     assert_eq!(std::fs::read(&runtime.lanes_dir).unwrap(), b"blocker");

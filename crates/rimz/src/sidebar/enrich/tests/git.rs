@@ -12,7 +12,7 @@ fn cached_fold_reads_group_roots_from_their_own_lane() {
         &serde_json::json!({
             "refreshed_at_ms": unix_now_ms(),
             "roots": roots,
-            "marker_names": {}
+            "marker_names": { roots[0].display().to_string(): "feature" }
         }),
     )
     .unwrap();
@@ -20,6 +20,10 @@ fn cached_fold_reads_group_roots_from_their_own_lane() {
 
     let folded = fold_cached(snapshot.clone(), None, &runtime);
     assert_eq!(folded.worktree_roots, roots);
+    assert_eq!(
+        folded.worktree_channels,
+        BTreeMap::from([(roots[0].clone(), "feature".to_owned())])
+    );
     std::fs::remove_file(runtime.group_roots_path()).unwrap();
     assert!(
         fold_cached(snapshot, None, &runtime)
@@ -29,10 +33,97 @@ fn cached_fold_reads_group_roots_from_their_own_lane() {
 }
 
 #[test]
+fn marked_worktree_subfolder_shells_keep_one_place_and_its_git_facts() {
+    let (dir, runtime, snapshot) = runtime();
+    let worktree = dir.path().join("worktrees/link-notices");
+    let subfolder = worktree.join(".rimz");
+    std::fs::create_dir_all(&subfolder).unwrap();
+    let roots = vec![dir.path().to_path_buf(), worktree.clone()];
+    let channels = BTreeMap::from([(worktree.clone(), "link-notices".to_owned())]);
+    atomic::write_temp_then_rename_cache(
+        &runtime.group_roots_path(),
+        &serde_json::json!({
+            "refreshed_at_ms": unix_now_ms(), "roots": roots, "marker_names": channels
+        }),
+    )
+    .unwrap();
+    let mut diff = DiffStatsCache::default();
+    diff.entries.insert(
+        worktree.display().to_string(),
+        DiffStatsCacheEntry {
+            added: Some(17),
+            removed: Some(3),
+            ..Default::default()
+        },
+    );
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();
+    let mut prs = crate::forge::pr_state::PrStateCache::default();
+    prs.states.insert(
+        worktree.display().to_string(),
+        PrLink {
+            open: None,
+            stack: Default::default(),
+            branch: None,
+            incarnation: None,
+            state: WorktreePrState::Open,
+            number: Some(91),
+            url: None,
+            ci: None,
+            ci_sha: None,
+            merge_sha: None,
+        },
+    );
+    atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &prs).unwrap();
+    let now = snapshot.now;
+    for with_agent in [true, false] {
+        for fresh in [true, false] {
+            let mut agent = root_agent("claude", "stamped", None);
+            agent.channel = Some("link-notices".to_owned());
+            agent.worktree_path = Some(worktree.display().to_string());
+            agent.worktree_branch = Some("link-notices".to_owned());
+            agent.pane = Some(pane("%1", "claude", worktree.to_str().unwrap()));
+            let mut panes = vec![pane("%2", "zsh", subfolder.to_str().unwrap())];
+            if with_agent {
+                panes.push(agent.pane.clone().unwrap());
+            }
+            let snapshot = SidebarSnapshot::build_with_agents(
+                snapshot.workspace_id.clone(),
+                if with_agent { vec![agent] } else { Vec::new() },
+                now,
+            )
+            .with_project_root(Some(dir.path().to_path_buf()))
+            .with_live_panes(panes.clone(), None);
+            let frame = crate::sidebar::frame::assemble_frame(panes, unix_now_ms(), "test");
+            let mut opts = cached_opts();
+            if fresh {
+                opts.fresh_roots = Some((roots.clone(), channels.clone()));
+            }
+            let folded = fold(snapshot, Some(&frame), &runtime, opts);
+            assert_eq!(folded.worktree_channels, channels);
+            assert_eq!(folded.worktree_groups.len(), 1);
+            let group = &folded.worktree_groups[0];
+            assert_eq!(group.key, "channel:link-notices");
+            assert_eq!(
+                group.place.as_ref().map(|place| place.path.as_path()),
+                Some(worktree.as_path())
+            );
+            assert!(group.worktree_backed());
+            assert_eq!((group.diff_added, group.diff_removed), (Some(17), Some(3)));
+            assert_eq!(group.pr_number, Some(91));
+        }
+    }
+}
+
+#[test]
 fn cached_fold_reads_channel_markers_from_the_roots_lane() {
     let (dir, runtime, mut snapshot) = runtime();
     let worktree = dir.path().join("feature");
-    snapshot.worktree_groups = vec![channel_group("feature", &worktree)].into();
+    snapshot = snapshot.with_project_root(Some(dir.path().to_path_buf()));
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("%1", "zsh", worktree.to_str().unwrap())],
+        unix_now_ms(),
+        "test",
+    );
     atomic::write_temp_then_rename_cache(
         &runtime.group_roots_path(),
         &serde_json::json!({
@@ -66,17 +157,17 @@ fn cached_fold_reads_channel_markers_from_the_roots_lane() {
     );
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &prs).unwrap();
 
-    let folded = fold_cached(snapshot.clone(), None, &runtime);
+    let folded = fold_cached(snapshot.clone(), Some(&frame), &runtime);
     let group = &folded.worktree_groups[0];
     assert!(
-        group.worktree_backed,
+        group.worktree_backed(),
         "channel identity comes from the roots lane"
     );
     assert_eq!(group.diff_added, Some(0));
     assert_eq!(group.pr_state, Some(WorktreePrState::Merged));
     std::fs::remove_file(runtime.group_roots_path()).unwrap();
-    let folded = fold_cached(snapshot, None, &runtime);
-    assert!(!folded.worktree_groups[0].worktree_backed);
+    let folded = fold_cached(snapshot, Some(&frame), &runtime);
+    assert!(!folded.worktree_groups[0].worktree_backed());
     assert_eq!(folded.worktree_groups[0].pr_state, None);
 }
 
@@ -116,18 +207,16 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
         &cache.states,
         &cache.branch_ci,
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(snapshot.worktree_groups[0].pr_stack, stack);
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).unwrap();
-    project_cached_pr_states(&mut cached, &runtime, &DiffStatsCache::default(), None);
+    project_cached_pr_states(&mut cached, &runtime, &DiffStatsCache::default());
     assert_eq!(cached.worktree_groups[0].pr_stack, stack);
     project_pr_state_map(
         &mut snapshot,
         &BTreeMap::new(),
         &BTreeMap::new(),
         &DiffStatsCache::default(),
-        None,
     );
     assert!(snapshot.worktree_groups[0].pr_stack.is_empty());
     let mut diff = DiffStatsCache::default();
@@ -139,7 +228,7 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
             ..Default::default()
         },
     );
-    project_pr_state_map(&mut cached, &cache.states, &cache.branch_ci, &diff, None);
+    project_pr_state_map(&mut cached, &cache.states, &cache.branch_ci, &diff);
     assert!(cached.worktree_groups[0].pr_stack.is_empty());
 }
 
@@ -181,7 +270,6 @@ fn pr_state_projection_uses_the_given_map() {
         &states,
         &branch_ci,
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
@@ -226,7 +314,6 @@ fn pr_state_projection_uses_the_given_map() {
         &states,
         &branch_ci,
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(
         snapshot.worktree_groups[0].ci,
@@ -237,18 +324,16 @@ fn pr_state_projection_uses_the_given_map() {
         Some(crate::store::snapshot::WorktreePrQueue::Dequeued)
     );
 
-    write_worktree_marker(&worktree, "feature");
-    let roots = WorktreeRootsCache {
-        refreshed_at_ms: 0,
-        roots: vec![worktree.clone()],
-        marker_names: BTreeMap::from([(worktree.clone(), "feature".into())]),
-    };
     for state in ["active", "parked"] {
         let mut rowless = snapshot.clone();
         let group = &mut Arc::make_mut(&mut rowless.worktree_groups)[0];
         group.key = "channel:feature".into();
         group.label = "feature".into();
         group.kind = SidebarWorktreeKind::Channel;
+        group.place = Some(crate::store::snapshot::SidebarPlace {
+            path: worktree.clone(),
+            foreign: false,
+        });
         group.rows = Vec::new().into();
         group.workflow = Some(
             serde_json::from_value(serde_json::json!({
@@ -269,7 +354,6 @@ fn pr_state_projection_uses_the_given_map() {
             &states,
             &branch_ci,
             &DiffStatsCache::default(),
-            Some(&roots),
         );
         let group = &rowless.worktree_groups[0];
         assert_eq!(group.pr_state, Some(WorktreePrState::Open));
@@ -298,7 +382,6 @@ fn pr_state_projection_uses_the_given_map() {
         &states,
         &branch_ci,
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(
         snapshot.worktree_groups[0].ci,
@@ -312,7 +395,6 @@ fn pr_state_projection_uses_the_given_map() {
         &BTreeMap::new(),
         &branch_ci,
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
@@ -324,7 +406,6 @@ fn pr_state_projection_uses_the_given_map() {
 #[test]
 fn pr_state_projection_reaches_marked_worktree_channels() {
     let (_dir, worktree, mut snapshot) = channel_snapshot("feature", true);
-    let roots_cache = roots_cache_with_marker(&worktree, "feature");
     std::fs::remove_dir_all(worktree.join(".git")).unwrap();
 
     let mut states = BTreeMap::new();
@@ -348,7 +429,6 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
         &states,
         &BTreeMap::new(),
         &DiffStatsCache::default(),
-        Some(&roots_cache),
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
@@ -381,7 +461,6 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
         &states,
         &BTreeMap::new(),
         &DiffStatsCache::default(),
-        None,
     );
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
 }
@@ -443,7 +522,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
         trunk.display().to_string(),
         crate::store::snapshot::WorktreeCi::Passing,
     )]);
-    project_pr_state_map(&mut snapshot, &states, &branch_ci, &diff_cache, None);
+    project_pr_state_map(&mut snapshot, &states, &branch_ci, &diff_cache);
 
     let trunk = &snapshot.worktree_groups[0];
     assert_eq!(trunk.pr_state, None);
@@ -473,11 +552,7 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
     cache.entries.insert(worktree.display().to_string(), entry);
     std::fs::remove_dir_all(worktree.join(".git")).unwrap();
 
-    project_diff_stats(
-        &mut snapshot,
-        &cache,
-        Some(&roots_cache_with_marker(&worktree, "codex-resets")),
-    );
+    project_diff_stats(&mut snapshot, &cache);
 
     let group = &snapshot.worktree_groups[0];
     assert_eq!(group.label, "codex-resets");
@@ -490,17 +565,15 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
 
 #[test]
 fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
-    let (_dir, worktree, mut snapshot) = channel_snapshot("codex-resets", false);
+    let (_dir, worktree, mut snapshot) = channel_snapshot("codex-resets", true);
+    std::fs::remove_dir_all(worktree.join(".git")).unwrap();
+    assert!(snapshot.worktree_groups[0].worktree_backed());
 
-    project_diff_stats(
-        &mut snapshot,
-        &DiffStatsCache::default(),
-        Some(&roots_cache_with_marker(&worktree, "codex-resets")),
-    );
+    project_diff_stats(&mut snapshot, &DiffStatsCache::default());
 
     let group = &snapshot.worktree_groups[0];
     assert!(
-        group.worktree_backed,
+        group.worktree_backed(),
         "marker-backed channel keeps worktree identity while git cache is empty"
     );
     assert_eq!(group.trunk, None, "no git facts were projected");
@@ -508,16 +581,33 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
 
 #[test]
 fn diff_projection_requires_an_exact_channel_marker_name() {
-    let (_dir, worktree, mut snapshot) = channel_snapshot("codex-resets", false);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
-
-    project_diff_stats(
-        &mut snapshot,
-        &DiffStatsCache::default(),
-        Some(&roots_cache_with_marker(&worktree, "another-channel")),
+    let (dir, worktree, snapshot) = channel_snapshot("codex-resets", false);
+    let mut agent = root_agent("claude", "stamped", None);
+    agent.channel = Some("codex-resets".to_owned());
+    agent.worktree_path = Some(worktree.display().to_string());
+    agent.worktree_branch = Some("main".to_owned());
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(snapshot.workspace_id, vec![agent], snapshot.now)
+            .with_project_root(Some(dir.path().to_path_buf()))
+            .with_worktree_roots(
+                vec![worktree.clone()],
+                BTreeMap::from([(worktree.clone(), "another-channel".to_owned())]),
+            )
+            .with_live_panes(vec![pane("%1", "claude", worktree.to_str().unwrap())], None);
+    let mut cache = DiffStatsCache::default();
+    cache.entries.insert(
+        worktree.display().to_string(),
+        DiffStatsCacheEntry {
+            added: Some(17),
+            removed: Some(3),
+            ..Default::default()
+        },
     );
-
-    assert!(!snapshot.worktree_groups[0].worktree_backed);
+    project_diff_stats(&mut snapshot, &cache);
+    let group = &snapshot.worktree_groups[0];
+    assert!(!group.worktree_backed());
+    assert_eq!(group.git_checkout(), None);
+    assert_eq!(group.diff_added, None);
 }
 
 #[test]

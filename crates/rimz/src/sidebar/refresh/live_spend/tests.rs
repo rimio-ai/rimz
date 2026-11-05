@@ -175,7 +175,7 @@ fn live_spend_adds_only_the_unflushed_delta_and_clamps_regressions() {
     let mut snapshot =
         SidebarSnapshot::build(WorkspaceId::from_project_root(wt), Vec::new(), published)
             .with_project_root(Some(Path::new("/repo").to_path_buf()))
-            .with_worktree_roots(vec![linked.to_path_buf()]);
+            .with_worktree_roots(vec![linked.to_path_buf()], Default::default());
     snapshot.agents = [
         "baselined",
         "newborn",

@@ -153,24 +153,21 @@ The trunk glyph takes the first of three sources that has a verdict:
 
 A pristine fork reads `≡ <trunk>`, and a merged PR shows the merge marker alone even when squash-merge ancestry leaves the local branch diverged. The trunk checkout keeps the plain branch glyph and carries no PR verdict. Trunk resolves per repo: `[sidebar] trunk` ([configuration.md](../../guide/configuration.md#sidebar-rendering)), then `main`, `master`, and the remote's advertised default. The facts come from [`refresh/git_stats.rs`](../../../crates/rimz/src/sidebar/refresh/git_stats.rs) and [`refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs). The landed verdict is in [worktrees.md](../harness/worktrees.md#what-the-sidebar-asks), and the look is in [the interface reference](../../interface/sidebar.md#worktree-headers).
 
-[`GroupResolver::resolve`](../../../crates/rimz/src/store/snapshot/view/layout.rs) places a row by the first rule that matches.
+[`GroupResolver::resolve`](../../../crates/rimz/src/store/snapshot/view/layout.rs) groups a row by place, then lane. Its place is the deepest known folder containing its path: the project root, a listed worktree, or an agent's git root (a row carrying both path and branch). Shells and editors never create places. The comparisons are pure path prefixes; grouping follows no symlinks.
 
 | Row | Group |
 |---|---|
-| Carries a channel | That channel's pod. |
-| Has no worktree path | A group named by its branch if it has one, otherwise `external`. |
-| Path inside the repo's RimZ-owned worktree home | That worktree's `#channel` pod, matching message addressing. |
-| Path whose deepest containing root is the project root of a repo room | Its own group per path. Only rows at the project root itself share that root's group. |
-| Path inside another group root, or the project root of a non-repo room | The deepest containing root: a checkout pod, or the name-only root pod in a directory or marker room. |
-| Path outside every root, in a room with no roots at all | Its own group per path. |
-| Path outside every root, with a branch | A group named by the branch. |
-| Anything else | `external`. |
+| Carries a non-empty channel | That channel's pod, with the listed checkout whose marker names it as its place, if any. |
+| Unstamped, in a listed marked checkout | Its marker's channel pod, with the checkout root as its place. |
+| Unstamped, in another known place | That place's pod. The repo room's main checkout keeps its branch label; a directory or marker room's root is name-only `main`. |
+| Pathless, with a branch | `branch:<name>`, with no place. |
+| No place or branch-only identity | `external`. |
 
-Group roots are the repo's checkouts from `git worktree list` in a repo room. A directory room does not scan its tree. Every row that reports both a path and a branch also adds its path as a root, and rows on several branches at one path split by branch. The `external` group (a home shell, `/tmp`, CI) renders as a dim divider, always sorts last, and keeps an attention-only tally so an out-of-project ask still surfaces. The rules are pinned in [`view/tests/grouping/`](../../../crates/rimz/src/store/snapshot/view/tests/grouping).
+Listed roots come from `git worktree list`; a directory room does not scan its tree. Rows on several branches at one path split by branch. An unlisted shell under the worktree home stays `external`; a new checkout joins its place when the cached listing refreshes. A place outside the project root and not listed is foreign; its header always adds a dim repo-folder qualifier, deepened on label collisions. With no project root, nothing is foreign. The `external` group renders as a dim divider, always sorts last, and keeps an attention-only tally. The rules are pinned in [`view/tests/grouping/`](../../../crates/rimz/src/store/snapshot/view/tests/grouping).
 
-The snapshot also keeps a group for an Active or Parked workflow run with no rows. Its scope path enters the same resolver without a channel or branch; `external` scopes add no group, and project-scoped runs join the root group. On a path whose rows split by branch, the run joins the split group holding its newest step root, else the one with the newest activity, so it never adds a bare-path group beside them. The optional `SidebarWorktreeGroup.workflow` holds the newest run by creation time. A terminal run contributes neither a projection nor a group, and pane exclusions preserve groups with rows or a live run. A run's scope supplies the checkout path when neither the key nor a row does, keeping git, PR, CI, and queue facts live even while parked ([projection contract](./state.md#the-fold-spine)).
+The snapshot also keeps a group for an Active or Parked workflow run with no rows. Its scope path enters the same resolver without a channel or branch; `external` scopes add no group, and project-scoped runs join the root group. On a path whose rows split by branch, the run joins the split group holding its newest step root, else the one with the newest activity, so it never adds a bare-path group beside them. The optional `SidebarWorktreeGroup.workflow` holds the newest run by creation time. A terminal run contributes neither a projection nor a group, and pane exclusions preserve groups with rows or a live run. The group's resolved place keeps git, PR, CI, and queue facts live even while parked ([projection contract](./state.md#the-fold-spine)).
 
-The resolver stamps `SidebarWorktreeGroup::root_lane` on the repo room's project-root path group, every branch split included, and on the non-repo root pod. Subdirectory groups, stamped channels (including `main`), other checkouts, and `external` never carry it. The marker persists as `root_lane: true` in the snapshot and is omitted when false.
+The resolver stamps `SidebarWorktreeGroup::root_lane` on the repo room's project-root group, every branch split included, and on the non-repo root pod. Subfolder panes join that group unless a deeper place or channel owns them. Stamped channels (including `main`), other checkouts, and `external` never carry it. The marker persists as `root_lane: true` in the snapshot and is omitted when false.
 
 ### Team units and pipelines
 

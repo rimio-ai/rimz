@@ -11,7 +11,7 @@ use crate::workspace::RootClass;
 use super::aggregate::AttentionWindows;
 use super::score::{self, GitRung};
 use super::{
-    SidebarInactive, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarInactive, SidebarPlace, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
     SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
 };
 
@@ -35,12 +35,15 @@ pub(super) struct GroupIdentity {
     pub key: String,
     pub label: String,
     pub root_lane: bool,
+    pub place: Option<SidebarPlace>,
 }
 
 pub(super) struct GroupResolver<'a> {
     project_root: Option<&'a Path>,
     worktree_roots: Vec<PathBuf>,
-    worktree_home: Option<&'a Path>,
+    listed_roots: &'a [PathBuf],
+    worktree_channels: &'a BTreeMap<PathBuf, String>,
+    channel_places: BTreeMap<&'a str, &'a Path>,
     root_class: RootClass,
     multi_branch_paths: BTreeSet<String>,
 }
@@ -68,10 +71,20 @@ impl<'a> GroupResolver<'a> {
             .filter(|(_, branches)| branches.len() > 1)
             .map(|(path, _)| path.to_owned())
             .collect();
+        let mut channel_places = BTreeMap::new();
+        for (path, channel) in &snapshot.worktree_channels {
+            if snapshot.worktree_roots.contains(path) {
+                channel_places
+                    .entry(channel.as_str())
+                    .or_insert(path.as_path());
+            }
+        }
         Self {
             project_root: snapshot.project_root.as_deref(),
             worktree_roots: worktree_roots.into_iter().collect(),
-            worktree_home: snapshot.worktree_home.as_deref(),
+            listed_roots: &snapshot.worktree_roots,
+            worktree_channels: &snapshot.worktree_channels,
+            channel_places,
             root_class: snapshot.root_class,
             multi_branch_paths,
         }
@@ -79,7 +92,7 @@ impl<'a> GroupResolver<'a> {
 
     pub(super) fn resolve(&self, entry: GroupEntry<'_>) -> GroupIdentity {
         if let Some(channel) = entry.channel.filter(|channel| !channel.is_empty()) {
-            return channel_group(channel);
+            return self.channel_group(channel);
         }
         let branch = entry.branch.filter(|branch| !branch.is_empty());
         let Some(path) = entry.path.filter(|path| !path.is_empty()) else {
@@ -89,29 +102,10 @@ impl<'a> GroupResolver<'a> {
     }
 
     fn resolve_path(&self, path: &str, branch: Option<&str>) -> GroupIdentity {
-        let cwd = Path::new(path);
-        if self.is_owned_worktree(cwd) {
-            return channel_group(&path_basename(cwd));
-        }
-        let matched = self.deepest_root(cwd);
-        if self.groups_per_path(matched) {
-            return GroupIdentity {
-                root_lane: self.project_root == Some(cwd),
-                ..worktree_group(path, cwd, branch, self.multi_branch_paths.contains(path))
-            };
-        }
-        if let Some(root) = matched {
-            return self.matched_root_group(root, branch, self.multi_branch_paths.contains(path));
-        }
-        branch
-            .filter(|branch| path_mentions_branch(cwd, branch))
-            .map_or_else(external_group, branch_group)
-    }
-
-    fn is_owned_worktree(&self, cwd: &Path) -> bool {
-        self.worktree_home
-            .is_some_and(|home| cwd.starts_with(home) && cwd != home)
-            && self.project_root != Some(cwd)
+        let Some(root) = self.deepest_root(Path::new(path)) else {
+            return external_group();
+        };
+        self.matched_root_group(root, branch)
     }
 
     fn deepest_root(&self, cwd: &Path) -> Option<&Path> {
@@ -123,38 +117,53 @@ impl<'a> GroupResolver<'a> {
             .max_by_key(|root| root.components().count())
     }
 
-    fn groups_per_path(&self, matched: Option<&Path>) -> bool {
-        match matched {
-            Some(root) => self.project_root == Some(root) && self.root_class == RootClass::Repo,
-            None => self.project_root.is_none() && self.worktree_roots.is_empty(),
+    fn channel_group(&self, channel: &str) -> GroupIdentity {
+        GroupIdentity {
+            kind: SidebarWorktreeKind::Channel,
+            key: format!("channel:{channel}"),
+            label: channel.to_owned(),
+            root_lane: false,
+            place: self.channel_places.get(channel).map(|path| SidebarPlace {
+                path: path.to_path_buf(),
+                foreign: false,
+            }),
         }
     }
 
-    fn matched_root_group(
-        &self,
-        root: &Path,
-        branch: Option<&str>,
-        split_by_branch: bool,
-    ) -> GroupIdentity {
+    fn matched_root_group(&self, root: &Path, branch: Option<&str>) -> GroupIdentity {
         let root_key = root.to_string_lossy().into_owned();
-        if self.project_root == Some(root) {
+        let root_lane = self.project_root == Some(root);
+        let place = SidebarPlace {
+            path: root.to_path_buf(),
+            foreign: self.project_root.is_some_and(|project| {
+                !root.starts_with(project) && !self.listed_roots.iter().any(|listed| listed == root)
+            }),
+        };
+        if root_lane && self.root_class != RootClass::Repo {
             return GroupIdentity {
                 kind: SidebarWorktreeKind::Root,
                 key: root_key,
                 label: "main".to_owned(),
                 root_lane: true,
+                place: Some(place),
             };
         }
-        worktree_group(&root_key, root, branch, split_by_branch)
-    }
-}
-
-fn channel_group(channel: &str) -> GroupIdentity {
-    GroupIdentity {
-        kind: SidebarWorktreeKind::Channel,
-        key: format!("channel:{channel}"),
-        label: channel.to_owned(),
-        root_lane: false,
+        if !root_lane
+            && self.listed_roots.iter().any(|listed| listed == root)
+            && let Some(channel) = self.worktree_channels.get(root)
+        {
+            return self.channel_group(channel);
+        }
+        GroupIdentity {
+            root_lane,
+            place: Some(place),
+            ..worktree_group(
+                &root_key,
+                root,
+                branch,
+                self.multi_branch_paths.contains(&root_key),
+            )
+        }
     }
 }
 
@@ -174,6 +183,7 @@ fn worktree_group(
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| path_basename(label_path)),
         root_lane: false,
+        place: None,
     }
 }
 
@@ -183,6 +193,7 @@ fn branch_group(branch: &str) -> GroupIdentity {
         key: format!("branch:{branch}"),
         label: branch.to_owned(),
         root_lane: false,
+        place: None,
     }
 }
 
@@ -192,32 +203,8 @@ fn external_group() -> GroupIdentity {
         key: "external".to_owned(),
         label: "external".to_owned(),
         root_lane: false,
+        place: None,
     }
-}
-
-fn path_mentions_branch(path: &Path, branch: &str) -> bool {
-    let branch = branch
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(branch);
-    if branch.is_empty() {
-        return false;
-    }
-    let dash = format!("-{branch}");
-    let underscore = format!("_{branch}");
-    let dot = format!(".{branch}");
-    path.components().any(|component| {
-        let std::path::Component::Normal(component) = component else {
-            return false;
-        };
-        let Some(component) = component.to_str() else {
-            return false;
-        };
-        component == branch
-            || component.ends_with(&dash)
-            || component.ends_with(&underscore)
-            || component.ends_with(&dot)
-    })
 }
 
 /// The display basename of a group root, falling back to the full path for a
@@ -701,6 +688,7 @@ pub struct AgentWorktreeGroup<'a> {
     pub key: String,
     pub label: String,
     pub kind: SidebarWorktreeKind,
+    pub place: Option<SidebarPlace>,
     pub agents: Vec<&'a AgentState>,
 }
 
@@ -755,6 +743,7 @@ pub fn group_live_agents_by_worktree<'a>(
                         key: identity.key,
                         label: identity.label,
                         kind: identity.kind,
+                        place: identity.place,
                         agents: Vec::new(),
                     },
                 )

@@ -117,13 +117,10 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
     for (index, pane) in panes.iter_mut().enumerate() {
         pane.cwd = Some(roots[index % roots.len()].clone());
     }
-    let store = fixture.env.store();
-    for index in 0..FLEET {
-        let mut event = registered_lifecycle(&fixture.env.workspace_id, index);
-        if index % 2 == 0 {
-            event.source = "codex".to_owned();
-        }
-        event_log::append(&store.paths().events_log, &event).unwrap();
+    for (index, pane) in panes.iter().enumerate() {
+        let kind = if index % 2 == 0 { "codex" } else { "claude" };
+        let checkout = std::path::Path::new(pane.cwd.as_ref().unwrap());
+        fixture.register_agent(index, kind, Some(pane), checkout);
     }
     std::fs::write(
         runtime.pane_frame_path(),
