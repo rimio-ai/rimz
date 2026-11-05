@@ -546,7 +546,7 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
     let transcript = session_dir.join("messages.jsonl");
     std::fs::write(&transcript, "{}\n").unwrap();
     let transcript_path = transcript.to_string_lossy().into_owned();
-    let pricing = home.path().join("pricing-cache.json");
+    let pricing = home.path().join("pricing.v1.sqlite");
 
     let fresh = KiroAdapter
         .local_context_refresh(

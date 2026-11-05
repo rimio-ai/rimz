@@ -264,7 +264,7 @@ pub(super) fn load_catalog(
         .context("reading audit agent rollup")?;
     let lifetimes = rimz::worktree::lane_lifetimes(audit.agents.iter());
     render::warn_unreadable_lanes(&lifetimes);
-    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
+    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_table_path());
     let tasks = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     let flips =
         rimz::harness::team_stage::stage_flips(&ctx.store).context("reading team stage flips")?;

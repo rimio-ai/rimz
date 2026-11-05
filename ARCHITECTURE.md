@@ -1,6 +1,6 @@
 # Architecture
 
-RimZ is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. It owns no database and no always-on state service. It builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through. Optional browser access adds a machine-wide authenticated ttyd process for writable transport and a separate unauthenticated, input-blocked process for explicitly shared rooms.
+RimZ is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. Room truth uses no database or always-on state service. It builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through. Optional browser access adds a machine-wide authenticated ttyd process for writable transport and a separate unauthenticated, input-blocked process for explicitly shared rooms.
 
 One invariant ties the runtime together:
 
@@ -143,7 +143,7 @@ Add a crate only when ownership, target type, or dependency profile demands it. 
 
 The top-level `theme` module is renderer-neutral presentation policy: it resolves schemes, semantic tones, provider identity, resolved glyph vocabulary and setup probes, and shared human value formats. The CLI and native sidebar convert its `Tone` values only at their renderer edges, so the runtime ships one interface language without coupling the core to `anstyle` or ratatui ([theme.md](./docs/internals/theme.md)).
 
-`build.rs` embeds the checked-in data artifacts at compile time, network-free: the generated token-pricing snapshot ([`agents/pricing/source.rs`](./crates/rimz/src/agents/pricing/source.rs) projects it through the hidden `rimz pricing-refresh` helper, and `cargo xtask pricing-refresh` delegates; [spending.md → Token pricing](./docs/internals/agents/spending.md#token-pricing)), the Alacritty theme catalog (`cargo xtask theme-refresh`), and the presence-plugin wasm. Hidden helper subcommands are machinery for other processes, not for humans. They are marked `#[command(hide = true)]` in [`cli/mod.rs`](./crates/rimz/src/cli/mod.rs), and their protocols live in the owning internals docs.
+`build.rs` embeds the checked-in data artifacts at compile time, network-free: the generated fresh-install token-pricing seed for the shared immutable SQLite price table ([`agents/pricing/source.rs`](./crates/rimz/src/agents/pricing/source.rs) projects it through the hidden `rimz pricing-refresh` helper, and `cargo xtask pricing-refresh` delegates; [spending.md → Token pricing](./docs/internals/agents/spending.md#token-pricing)), the Alacritty theme catalog (`cargo xtask theme-refresh`), and the presence-plugin wasm. Hidden helper subcommands are machinery for other processes, not for humans. They are marked `#[command(hide = true)]` in [`cli/mod.rs`](./crates/rimz/src/cli/mod.rs), and their protocols live in the owning internals docs.
 
 ## Tests
 

@@ -204,7 +204,7 @@ pub(super) fn run(
         },
         &mut fire.record_hold,
     );
-    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
     let (mut result, timed_out, interrupted, tail) = match output {
         Ok(output) => {
             let mut result = form.read_result(

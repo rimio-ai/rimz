@@ -800,7 +800,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     )
     .unwrap();
     let path = path.to_string_lossy().into_owned();
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let ctx = crate::agents::LocalContextRefreshCtx {
         open_permission_since: None,
         prior_permission_settle: None,
@@ -864,7 +864,7 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
     let transcript_path = transcript_path.to_string_lossy().into_owned();
     let transcript_stat =
         crate::agents::TranscriptStat::from_path(std::path::Path::new(&transcript_path)).unwrap();
-    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let pricing_cache_path = dir.path().join("pricing.v1.sqlite");
     let ctx = crate::agents::LocalContextRefreshCtx {
         open_permission_since: None,
         prior_permission_settle: None,

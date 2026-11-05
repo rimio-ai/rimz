@@ -48,7 +48,7 @@ pub(super) fn record_lifecycle_observation(
         && context_window_is_unset(store, agent.spec().kind, observation.agent_id.as_ref())
     {
         let prices =
-            rimz::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_cache_path());
+            rimz::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_table_path());
         observation.usage.context_window = agent.context_window_for_model(model, &prices);
     }
     attach_agent_owner(ingress_owner, &mut observation);

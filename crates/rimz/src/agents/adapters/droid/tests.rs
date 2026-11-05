@@ -408,12 +408,11 @@ fn local_refresh_prices_exact_cache_rows_and_fills_gauge_from_last_call() {
         r#"{"model":"gpt-5","reasoningEffort":"high","tokenUsage":{"inputTokens":100000,"outputTokens":20000,"cacheCreationTokens":10000,"cacheReadTokens":30000,"thinkingTokens":5000},"lastCallTokenUsage":{"inputTokens":6700,"outputTokens":825,"cacheCreationTokens":1200,"cacheReadTokens":56900}}"#,
     )
     .unwrap();
-    let pricing_cache = dir.path().join("pricing-cache.json");
-    std::fs::write(
+    let pricing_cache = dir.path().join("pricing.v1.sqlite");
+    crate::agents::pricing::testkit::seed_cache_at(
         &pricing_cache,
-        r#"{"schema":4,"models":{"gpt-5":{"input":0.00000125,"output":0.00001,"cache_read":0.000000125,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":400000}}}"#,
-    )
-    .unwrap();
+        r#"{"gpt-5":{"input_cost_per_token":0.00000125,"output_cost_per_token":0.00001,"cache_read_input_token_cost":0.000000125,"cache_creation_input_token_cost":0.00000125,"max_input_tokens":400000}}"#,
+    );
     let transcript_text = transcript_path.to_string_lossy().into_owned();
     let ctx = LocalContextRefreshCtx {
         open_permission_since: None,

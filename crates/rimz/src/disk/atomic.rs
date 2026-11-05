@@ -110,10 +110,6 @@ pub(crate) fn publish_staged_no_replace(staged: &Path, destination: &Path) -> Re
 
 /// Sync a complete staged file, replace the destination, and sync its parent.
 /// The caller prepares both paths on the same filesystem.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "pricing switches in the next commit")
-)]
 #[must_use = "durability barrier; check the result"]
 pub(crate) fn publish_staged_replace(staged: &Path, destination: &Path) -> Result<()> {
     sync_file_data(staged)?;

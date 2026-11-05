@@ -219,7 +219,7 @@ A [`Pricing`](../../../crates/rimz/src/agents/pricing/mod.rs) row, keyed by mode
 
 Lookups are pure and network-free. The only network access is the gated refresh in `load_for_spending`.
 
-Every price consumer uses the same book, the embedded snapshot plus the shared `pricing-cache.json`: history parsers, session and seat folds, live-card transcript costs, and hook-side transcript reconciliation. [`cached_book`](../../../crates/rimz/src/agents/pricing/mod.rs) memoizes the book by cache path, whole-second modification time, and length, and stats the cache on each call. An atomic rewrite therefore invalidates the memo, unless it keeps the length and lands within the same second (`crates/rimz/src/agents/pricing/mod.rs::cache_stamp`).
+Every price consumer uses the same book: history parsers, session and seat folds, live-card transcript costs, and hook-side transcript reconciliation. A usable shared `pricing.v1.sqlite` is the sole source; without one, readers fall back to the embedded snapshot. [`cached_book`](../../../crates/rimz/src/agents/pricing/mod.rs) stats the file on each call and memoizes by path, device, inode, nanosecond modification time, and length. A rename replacement invalidates even an equal-length, same-second file. The book opens SQLite read-only and immutable, sharing a mutexed connection and per-name result memos across workers. Its fingerprint is the build id read through that same connection, or absent for a snapshot fallback.
 
 The main statusline supplies prices lazily through `crates/rimz/src/agents/capabilities.rs::ContextCapability::context_cost`. Antigravity, Copilot, and Qwen request the book only when pricing token usage. Copilot's native AI credits need no book, and Claude's main statusline keeps provider-reported dollars without loading prices. Claude's subagent statusline still loads the book and its fingerprint for transcript pricing.
 
@@ -234,18 +234,21 @@ An unknown model heals without a binary upgrade once the chase lands its price, 
 
 ### Price table precedence
 
-The book is assembled from two ordered layers. Each layer is one projection by [`source.rs`](../../../crates/rimz/src/agents/pricing/source.rs): LiteLLM supplies the base catalogue, and the allowlisted models.dev catalogues fill missing models and fields.
+The embedded snapshot seeds only a missing or unusable table. Once a usable file exists, no snapshot is loaded or layered beneath it. Each refresh is one projection by [`source.rs`](../../../crates/rimz/src/agents/pricing/source.rs): LiteLLM supplies the base catalogue, and the allowlisted models.dev catalogues fill missing models and fields.
 
-| Layer | When | Source |
+| Build input | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | on each book assembly | the compacted snapshot `build.rs` gzips into the binary. A source checkout without the generated snapshot embeds an empty table. |
-| 2. Projected refresh | weekly, or early during an unknown-model chase | fresh LiteLLM and models.dev documents projected together into `pricing-cache.json`, overwriting embedded rows |
+| Seed | no usable table | the compacted snapshot `build.rs` gzips into the binary. A source checkout without the generated snapshot embeds an empty table. |
+| Previous rows | a usable table exists | every previous row carries forward, including models upstream dropped |
+| Projected refresh | weekly, or early during an unknown-model chase | fresh LiteLLM and models.dev documents projected together, overwriting seed or previous rows with the same key |
+
+A binary upgrade does not replace an existing table with its newer snapshot. A model present only in that snapshot waits for the next refresh or unknown-model chase. A dropped upstream model keeps its last fetched rate rather than reverting to an older snapshot.
 
 The authoritative models.dev catalogues are `anthropic`, `openai`, `google`, `xai`, `zai`, `zhipuai`, `alibaba`, and `moonshotai`, in that precedence order. They fill missing models and fields, including context capacities and request-selected context tiers.
 
 Claude adds a provider-local layer when an administrator deploys `modelPricing` in the system `managed-settings.json` or an alphabetically merged `managed-settings.d/*.json` fragment. RimZ reads the same locations as Claude Code: `/etc/claude-code` on Linux and WSL, `/Library/Application Support/ClaudeCode` on macOS, and `C:\Program Files\ClaudeCode` on Windows.
 
-- An exact override supplies the four USD-per-million-token rates. Its cache-write rate covers both cache-write durations, and fast-mode or US-data-residency surcharges are not added.
+- An exact override supplies the four USD-per-million-token rates only for its exact id, never a decorated fuzzy match. Its cache-write rate covers both cache-write durations, and fast-mode or US-data-residency surcharges are not added.
 - The optional multiplier scales every resulting Claude rate, overrides included.
 - A row no override names keeps its capacity and tier metadata while its rates scale, and an override keeps the list row's context capacity.
 - Invalid files, fields, and rows are ignored.
@@ -266,12 +269,16 @@ Both files hold ratios, so upstream stays the only source of absolute prices. A 
 
 ### The refresh
 
-The spending producer reads the embedded snapshot plus `~/.rimz/cache/providers/pricing-cache.json` while it holds the runtime spending lock. The cache is on disk because `rimz sidebar snapshot` and one-shot `rimz stats` are short-lived processes, and a walk any of them triggers may write it. The producer re-fetches when the cache is older than a week.
+The spending producer owns builds under the runtime spending lock. It reuses the memoized book between walks and re-fetches when the table's `fetched_at_secs` is older than a week. A walk with no transcript files never loads or seeds prices.
 
-- The cache carries a schema stamp and one projected model map, and a stale shape is dropped.
-- Each attempt fetches both sources and replaces the map only after both project successfully, so a partial outage keeps the last complete table.
-- A failed fetch records its attempt time and backs off an hour.
-- `RIMZ_PRICING_OFFLINE=1` skips every fetch, and `0`, `false`, and an empty value read as off. Prices then come from the embedded snapshot and any existing cache, so a source build with neither prices every token entry at zero.
+A live check of the table build needs transcripts to walk: use the [AGENTS.md bwrap recipe](../../../AGENTS.md#testing) over a copy of `~/.rimz/cache`, not an empty isolated home.
+
+- `~/.rimz/cache/providers/pricing.v1.sqlite` carries `PRAGMA user_version = 1`, typed price columns (unsigned values retain their bit pattern in signed SQLite integers), an index on normalized key and raw key, and metadata for `fetched_at_secs` and a unique `build_id`. Another version or missing metadata makes the file unusable. Future versions use another filename, so mixed binaries never rebuild over each other. The old JSON file is neither read, written, nor removed.
+- Each attempt fetches both sources and rebuilds only after both project successfully into a nonempty projection. It carries forward previous rows, then overlays the projection. A partial outage keeps the last complete table.
+- A missing or unusable table is built from a nonempty seed even offline or after a failed fetch. An empty seed with no projection publishes nothing, leaving readers on their own snapshots. A snapshot-only build has `fetched_at_secs = 0`, leaving the baseline refresh due under its retry backoff.
+- Builds use private temp siblings with SQLite journaling disabled, then sync the complete file, rename it, and sync its directory through `disk::atomic`. Published files never change in place; existing readers keep their old inode. Before building, the writer sweeps temp siblings older than an hour.
+- `pricing-refresh.v1.json` beside the table carries `last_attempt_secs`, `unknown_attempt_secs`, `unknown_backoff_secs`, and `unknown_seen`, written by cache-class temp and rename. A failed fetch records its attempt time and backs off an hour without rewriting the table. Cold readers never read this state file.
+- `RIMZ_PRICING_OFFLINE=1` skips every fetch, and `0`, `false`, and an empty value read as off. Prices come from the existing table or the fresh-install seed, so a source build with neither prices every token entry at zero.
 
 The unknown-model chase rides the same producer walk and has no timer of its own. When the [walk](#per-provider-parsing) records a priceable model the book cannot price, the refresh may run early on a 30-minute gate. While the same unknowns persist, the gate doubles (1h, 2h, and so on) up to a 24h cap, and a newly seen unknown resets it to 30 minutes. Any fetch attempt also starts a 30-minute floor, so a just-refreshed upstream has time to catch up. Failed chase attempts escalate the same way, and the chase state clears once every recorded unknown resolves.
 
@@ -287,7 +294,7 @@ The unknown-model chase rides the same producer walk and has no timer of its own
 
 ### Resolving a model
 
-`PriceBook::price` resolves a model id by exact match, then by a boundary-aware fuzzy scan: the longest stored key that is a word-boundary prefix of the normalized lookup wins. Normalization trims, lowercases, and maps `.` and `@` to `-`, so `claude-sonnet-4-20250514-via-bedrock` resolves to its base model. A purely numeric version bump that is not a date is rejected, so a new `gpt-5`-family version is never priced as the old one: it resolves to its own entry or to no price. `PriceBook::exact_price` is the strict lookup for Droid custom mappings, where only the trimmed canonical key may supply capacity or cost.
+`PriceBook::price` resolves a model id by exact match, then by boundary-aware normalized prefixes, longest first. Equal-length matches choose the smallest raw key in byte order. SQLite queries use the normalized-key index rather than scanning the table. Normalization trims, lowercases, and maps `.` and `@` to `-`, so `claude-sonnet-4-20250514-via-bedrock` resolves to its base model. A purely numeric version bump that is not a date is rejected, so a new `gpt-5`-family version is never priced as the old one: it resolves to its own entry or to no price. `PriceBook::exact_price` is the strict lookup for Droid custom mappings, where only the trimmed canonical key may supply capacity or cost.
 
 ### Computing token-priced cost
 

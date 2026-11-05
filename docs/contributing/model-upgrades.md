@@ -31,7 +31,7 @@ For definitions naming `tier:`, edit the ordered model list in machine config; s
 
 ## Pricing, for either provider
 
-Usually nothing. An unpriced model resolves to no price, never to its predecessor's: `PriceBook::price` rejects a purely numeric version bump ([Resolving a model](../internals/agents/spending.md#resolving-a-model)). Once the spend walk records the model, the unknown-model chase refetches LiteLLM and models.dev on a 30-minute gate, and `cargo xtask dist` refreshes the embedded snapshot before every release build ([The refresh](../internals/agents/spending.md#the-refresh)). Run `cargo xtask pricing-refresh` by hand only to ship a price before the next release.
+Usually nothing. An unpriced model resolves to no price, never to its predecessor's: `PriceBook::price` rejects a purely numeric version bump ([Resolving a model](../internals/agents/spending.md#resolving-a-model)). Once the spend walk records the model, the unknown-model chase refetches LiteLLM and models.dev on a 30-minute gate. The embedded snapshot seeds only a missing or unusable shared table; an existing table never layers a binary's snapshot beneath its rows. `cargo xtask dist` refreshes that fresh-install seed before every release build ([The refresh](../internals/agents/spending.md#the-refresh)). Run `cargo xtask pricing-refresh` by hand only to ship a seed price before the next release.
 
 The snapshot, `crates/rimz/pricing/litellm-pricing.json`, is generated and gitignored, so a fresh worktree has none and its builds embed an empty price book: check a key against the primary checkout's copy, or run `cargo xtask pricing-refresh` first.
 

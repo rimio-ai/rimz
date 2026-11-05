@@ -6,28 +6,28 @@
 //! counts rather than a `costUSD`. Pi normally reports `costUSD` directly and
 //! consults the table only for token-bearing records where that value is absent.
 //!
-//! Ordered pricing passes feed one [`PriceBook`]:
+//! Readers open only the shared table once it is usable. The embedded snapshot
+//! is a fresh-install seed and a read-only fallback until the spending walker
+//! builds the first nonempty table, even offline. Fresh clones without a generated
+//! snapshot embed an empty seed.
 //!
-//! 1. **Embedded snapshot** (`embedded`) — the generated LiteLLM table
-//!    `build.rs` gzips into release binaries. Fresh clones without the generated
-//!    file embed an empty table.
-//! 2. **Remote refresh** (`source`) — a weekly LiteLLM and models.dev
-//!    projection overwrites older embedded rows; an unknown-model chase can run
-//!    that same projection early.
+//! The walker alone refreshes LiteLLM and models.dev under its spending lock,
+//! carrying forward previous rows before applying the projection. Weekly refresh
+//! and an escalating unknown-model chase share a separate small state file.
+//! Failed fetches never rewrite a usable table.
 //!
-//! Lookups are pure and network-free: [`cached_book`] memoizes the merged
-//! embedded and on-disk cache data by file stamp, and `PriceBook::price`
-//! resolves a model by exact match then a boundary-aware fuzzy scan. The only
-//! network is the gated refresh in `load_for_spending`: a weekly refresh,
-//! plus an escalating unknown-model chase when a transcript names a priceable
-//! model the current book cannot resolve.
+//! Exact and boundary-aware prefix lookups are network-free. Books share a
+//! mutexed SQLite connection and per-name result memos across workers, and the
+//! process memo keeps a book until the file's identity changes. Managed rates
+//! layer exact overrides and a lazy transform over the same backing.
 
 mod embedded;
 mod overrides;
 #[doc(hidden)]
 pub mod source;
+mod sqlite;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
@@ -121,48 +121,37 @@ impl TokenSplit {
 }
 
 /// Per-token costs in USD for one model.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Pricing {
     /// Cost per (uncached) input token.
     pub input: f64,
     /// Cost per output token (output already includes reasoning tokens).
     pub output: f64,
     /// Cost per cache-read (prompt-cache-hit) input token.
-    #[serde(default)]
     pub cache_read: f64,
     /// Cost per cache-creation input token.
-    #[serde(default)]
     pub cache_create: f64,
     /// Optional cost per 1-hour cache-creation token. When absent, Anthropic's
     /// standard 2x-input rate applies.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_create_1h: Option<f64>,
     /// Whether `cache_read` came from source data rather than the input-rate
-    /// default. Kept for cache compatibility with ccusage's pricing shape.
-    #[serde(default)]
+    /// default.
     pub cache_read_explicit: bool,
     /// Cost per uncached input token above the 200k tier threshold.
-    #[serde(default)]
     pub input_above_200k: Option<f64>,
     /// Cost per output token above the 200k tier threshold.
-    #[serde(default)]
     pub output_above_200k: Option<f64>,
     /// Cost per 5-minute cache-creation token above the 200k tier threshold.
-    #[serde(default)]
     pub cache_create_above_200k: Option<f64>,
     /// Cost per cache-read token above the 200k tier threshold.
-    #[serde(default)]
     pub cache_read_above_200k: Option<f64>,
     /// Request input boundary for an all-or-nothing long-context tier.
     /// `None` keeps LiteLLM's marginal 200k semantics.
-    #[serde(default)]
     pub long_context_threshold: Option<u64>,
     /// List-price multiplier when the provider records a fast/priority turn.
-    #[serde(default = "one")]
     pub fast_multiplier: f64,
     /// Maximum accepted input/context tokens when the pricing source publishes
     /// an exact positive integer capacity.
-    #[serde(default)]
     pub max_input_tokens: Option<u64>,
 }
 
@@ -289,54 +278,78 @@ impl Pricing {
     }
 }
 
-/// A resolved model → price table.
-#[derive(Clone, Debug, Default)]
+/// A resolved model → price table. Clones share the backing and result memos.
+#[derive(Clone)]
 pub struct PriceBook {
-    entries: HashMap<String, Pricing>,
-    /// Optional base rows retained for fuzzy lookup when an exact-only overlay
-    /// replaces entries without lending those rates to related model ids.
-    fuzzy_entries: Option<Arc<HashMap<String, Pricing>>>,
-    /// Construction identity used by provider-local derived-book memos.
+    backing: Arc<Backing>,
+    layer: Option<Arc<PriceLayer>>,
     identity: Arc<()>,
-    /// Memoizes [`PriceBook::fuzzy`]'s boundary-aware scan, keyed by the trimmed
-    /// lookup name, so a model that misses the exact-match map pays the linear
-    /// scan once rather than on every per-entry `price` call across a spend
-    /// walk. Misses cache as `None` to short-circuit the unknown-model chase's
-    /// repeated lookups. `Arc<Mutex<…>>` keeps the derived `Clone` and lets the
-    /// spend walk's worker threads share one memo; entries never mutate after
-    /// construction, so a cached result can never go stale, and a rebuilt book
-    /// (the only way entries change) starts with a fresh memo.
+    // File replacement retires these per-name memos with the immutable book.
+    exact_cache: Arc<Mutex<HashMap<String, Option<Pricing>>>>,
     fuzzy_cache: Arc<Mutex<HashMap<String, Option<Pricing>>>>,
+}
+
+#[derive(Debug)]
+enum Backing {
+    Memory(HashMap<String, Pricing>),
+    Sqlite(sqlite::Table),
+}
+
+struct PriceLayer {
+    base: PriceBook,
+    transform: Box<dyn Fn(Pricing) -> Pricing + Send + Sync>,
+    overrides: HashMap<String, Pricing>,
+}
+
+impl std::fmt::Debug for PriceBook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PriceBook")
+            .field("backing", &self.backing)
+            .field("layered", &self.layer.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PriceBook {
+    fn default() -> Self {
+        Self::from_entries(HashMap::new())
+    }
 }
 
 impl PriceBook {
     /// Build a book from an arbitrary LiteLLM-shaped document (tests, tooling).
     pub fn from_litellm_json(json: &str) -> Self {
-        let entries = embedded::parse(json);
+        Self::from_entries(embedded::parse(json))
+    }
+
+    fn from_entries(entries: HashMap<String, Pricing>) -> Self {
+        Self::new(Backing::Memory(entries))
+    }
+
+    fn new(backing: Backing) -> Self {
         Self {
-            entries,
-            fuzzy_entries: None,
+            backing: Arc::new(backing),
+            layer: None,
             identity: Arc::default(),
+            exact_cache: Arc::default(),
             fuzzy_cache: Arc::default(),
         }
     }
 
     pub(super) fn derive_with_exact_overrides(
         &self,
-        mut map: impl FnMut(Pricing) -> Pricing,
+        map: impl Fn(Pricing) -> Pricing + Send + Sync + 'static,
         overrides: impl IntoIterator<Item = (String, Pricing)>,
     ) -> Self {
-        let base_entries = self
-            .entries
-            .iter()
-            .map(|(model, price)| (model.clone(), map(*price)))
-            .collect::<HashMap<_, _>>();
-        let mut entries = base_entries.clone();
-        entries.extend(overrides);
         Self {
-            entries,
-            fuzzy_entries: Some(Arc::new(base_entries)),
+            backing: Arc::clone(&self.backing),
+            layer: Some(Arc::new(PriceLayer {
+                base: self.clone(),
+                transform: Box::new(map),
+                overrides: overrides.into_iter().collect(),
+            })),
             identity: Arc::default(),
+            exact_cache: Arc::default(),
             fuzzy_cache: Arc::default(),
         }
     }
@@ -352,51 +365,39 @@ impl PriceBook {
 
     #[cfg(test)]
     pub(crate) fn write_fixture_cache(path: &Path) {
-        let fixture = Self::fixture();
-        write_cache(
-            path,
-            &PricingCache {
-                models: fixture.entries.into_iter().collect(),
-                ..PricingCache::default()
-            },
-        );
+        testkit::seed_cache_at(path, include_str!("tests/fixtures/prices.json"));
     }
 
-    /// Assemble the merged book: embedded snapshot, then the latest projected
-    /// upstream table.
-    fn assembled(cache: &PricingCache) -> Self {
-        let mut entries = embedded::load();
-        for (model, price) in &cache.models {
-            entries.insert(model.clone(), *price);
-        }
-        Self {
-            entries,
-            fuzzy_entries: None,
-            identity: Arc::default(),
-            fuzzy_cache: Arc::default(),
-        }
-    }
-
-    /// Resolve the price for `model`: exact match, then a longest-key fuzzy scan.
+    /// Resolve the price for `model`: exact match, then longest normalized prefix.
     pub(super) fn price(&self, model: &str) -> Option<Pricing> {
         let key = model.trim();
-        if let Some(price) = self.entries.get(key) {
-            return Some(*price);
+        if let Some(price) = self.exact_price(key) {
+            return Some(price);
         }
-        // The fuzzy scan is linear over every entry, so memoize it per lookup
-        // name. Read under a short lock, release it for the scan so the spend
-        // walk's worker threads never serialize on the expensive path, then
-        // record the result — a miss included — for the next call.
+        if let Some(cached) = self
+            .fuzzy_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
         {
-            let cache = self
-                .fuzzy_cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if let Some(cached) = cache.get(key) {
-                return *cached;
-            }
+            return *cached;
         }
-        let result = self.fuzzy(key);
+        let result = if let Some(layer) = &self.layer {
+            layer.base.price(key).map(&layer.transform)
+        } else {
+            let want = normalize(key);
+            match self.backing.as_ref() {
+                Backing::Memory(entries) => entries
+                    .iter()
+                    .filter_map(|(key, price)| {
+                        let norm = normalize(key);
+                        prefix_at_boundary(&want, &norm).then_some((norm.len(), key, price))
+                    })
+                    .min_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)))
+                    .map(|(_, _, price)| *price),
+                Backing::Sqlite(table) => table.fuzzy(&want).ok().flatten(),
+            }
+        };
         self.fuzzy_cache
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -408,66 +409,136 @@ impl PriceBook {
     /// spend use this conservative path so a related model cannot lend another
     /// selector its limits or rates.
     pub(super) fn exact_price(&self, model: &str) -> Option<Pricing> {
-        self.entries.get(model.trim()).copied()
+        let key = model.trim();
+        if let Some(cached) = self
+            .exact_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+        {
+            return *cached;
+        }
+        let result = if let Some(layer) = &self.layer {
+            layer
+                .overrides
+                .get(key)
+                .copied()
+                .or_else(|| layer.base.exact_price(key).map(&layer.transform))
+        } else {
+            match self.backing.as_ref() {
+                Backing::Memory(entries) => entries.get(key).copied(),
+                Backing::Sqlite(table) => table.exact(key).ok().flatten(),
+            }
+        };
+        self.exact_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.to_owned(), result);
+        result
     }
 
-    /// Longest stored key that is a boundary-prefix of the normalized lookup.
-    ///
-    /// `claude-sonnet-4-20250514-via-bedrock` resolves to its base model rather
-    /// than a shorter prefix; a purely numeric version bump (`gpt-5` ↛ a `-9`
-    /// suffix) is rejected so a new version is never silently priced as the old.
-    fn fuzzy(&self, model: &str) -> Option<Pricing> {
-        let want = normalize(model);
-        let mut best: Option<(usize, Pricing)> = None;
-        for (key, price) in self.fuzzy_entries.as_deref().unwrap_or(&self.entries) {
-            let key_norm = normalize(key);
-            if prefix_at_boundary(&want, &key_norm)
-                && best.is_none_or(|(len, _)| key_norm.len() > len)
-            {
-                best = Some((key_norm.len(), *price));
-            }
+    fn fetched_at_secs(&self) -> u64 {
+        match self.backing.as_ref() {
+            Backing::Memory(_) => 0,
+            Backing::Sqlite(table) => table.fetched_at_secs,
         }
-        best.map(|(_, price)| price)
+    }
+
+    fn fingerprint(&self) -> Option<String> {
+        match self.backing.as_ref() {
+            Backing::Memory(_) => None,
+            Backing::Sqlite(table) => Some(table.build_id.clone()),
+        }
     }
 }
 
-/// Load the price book for a spending pass, refreshing the on-disk cache at most
-/// once per TTL. A second gated trigger chases model names recorded by spend
-/// parsers when the assembled book still cannot price them, backing off from
-/// 30 minutes to the 24-hour cap while the same names persist. Best-effort: a
-/// failed or skipped fetch falls back to the cache, then to the embedded
-/// snapshot — the returned book is always usable.
-///
-/// `cache_path` is the producer's persistent shared `pricing-cache.json`.
-pub(super) fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -> PriceBook {
-    let mut cache = read_cache(cache_path);
-    let mut book = PriceBook::assembled(&cache);
+/// Load the shared book under the spending lock, building a missing table from
+/// a nonempty seed even offline. Weekly refresh and the chase share separate retry state.
+pub(super) fn load_for_spending(
+    runtime: &crate::RuntimePaths,
+    unknown_models: &BTreeSet<String>,
+) -> Arc<PriceBook> {
+    load_for_spending_with(
+        runtime,
+        unknown_models,
+        unix_secs_now,
+        source::offline(),
+        embedded::load,
+        source::fetch_litellm,
+        source::fetch_models_dev,
+    )
+}
+
+fn load_for_spending_with(
+    runtime: &crate::RuntimePaths,
+    unknown_models: &BTreeSet<String>,
+    now: impl FnOnce() -> u64,
+    offline: bool,
+    seed: impl FnOnce() -> HashMap<String, Pricing>,
+    fetch_litellm: impl FnOnce() -> Option<String>,
+    fetch_models_dev: impl FnOnce() -> Option<String>,
+) -> Arc<PriceBook> {
+    let path = runtime.shared_pricing_table_path();
+    let state_path = runtime.shared_pricing_refresh_path();
+    let mut book = cached_book(&path);
+    let mut state: RefreshState = crate::disk::atomic::read_json_cache(&state_path);
+    let previous_state = state.clone();
     let pending = unpriced_subset(&book, unknown_models);
-    let now = unix_secs_now();
-    let mut write = false;
-
+    let now = now();
     if pending.is_empty() {
-        write |= clear_unknown_chase(&mut cache);
+        clear_unknown_chase(&mut state);
     }
-
-    if should_refresh(&cache, now, source::offline(), &pending) {
-        book = refresh_cache(
-            &mut cache,
-            now,
-            pending,
-            unknown_models,
-            source::fetch_litellm,
-            source::fetch_models_dev,
-        );
-        write = true;
+    let projection = if should_refresh(&state, book.fetched_at_secs(), now, offline, &pending) {
+        state.last_attempt_secs = now;
+        if !pending.is_empty() {
+            note_chase_attempt(&mut state, now, pending);
+        }
+        fetch_projection(fetch_litellm, fetch_models_dev)
+    } else {
+        None
+    };
+    if book.fingerprint().is_none() || projection.is_some() {
+        let fetched_at = if projection.is_some() { now } else { 0 };
+        match rebuild_table(&path, &book, seed, projection, fetched_at) {
+            Ok(()) => book = cached_book(&path),
+            Err(error) => {
+                tracing::debug!(%error, path = %path.display(), "price table build failed")
+            }
+        }
     }
-    if write {
-        write_cache(cache_path, &cache);
+    if unpriced_subset(&book, unknown_models).is_empty() {
+        clear_unknown_chase(&mut state);
+    }
+    if state != previous_state
+        && let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(&state_path, &state)
+    {
+        tracing::debug!(%error, path = %state_path.display(), "pricing refresh state write failed");
     }
     book
 }
 
-type CachedBookMemo = Option<(PathBuf, Option<(u64, u64)>, Arc<PriceBook>)>;
+fn rebuild_table(
+    path: &Path,
+    book: &PriceBook,
+    seed: impl FnOnce() -> HashMap<String, Pricing>,
+    projection: Option<HashMap<String, Pricing>>,
+    fetched_at: u64,
+) -> Result<(), sqlite::TableErr> {
+    let mut rows = match book.backing.as_ref() {
+        Backing::Memory(_) => seed(),
+        Backing::Sqlite(table) => table.rows()?,
+    };
+    if let Some(projection) = projection {
+        rows.extend(projection);
+    }
+    if rows.is_empty() {
+        return Ok(());
+    }
+    sqlite::build(path, &rows, fetched_at)
+}
+
+type CacheStamp = (u64, u64, SystemTime, u64);
+type CachedBookMemo = Option<(PathBuf, Option<CacheStamp>, Arc<PriceBook>)>;
 
 static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mutex::new(None));
 
@@ -477,7 +548,7 @@ pub mod testkit {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{CACHED_BOOK_MEMO, PoisonError, PricingCache, embedded, fs};
+    use super::{CACHED_BOOK_MEMO, PoisonError, embedded, sqlite};
 
     static BOOK_LOADS: AtomicU64 = AtomicU64::new(0);
 
@@ -488,7 +559,7 @@ pub mod testkit {
     /// Seed the shared price cache from a LiteLLM-shaped document and return its path.
     #[track_caller]
     pub fn seed_cache(runtime: &crate::RuntimePaths, json: &str) -> PathBuf {
-        let path = runtime.shared_pricing_cache_path();
+        let path = runtime.shared_pricing_table_path();
         seed_cache_at(&path, json);
         path
     }
@@ -496,14 +567,7 @@ pub mod testkit {
     /// Seed an explicit price-cache path using the upstream projection parser.
     #[track_caller]
     pub fn seed_cache_at(path: &Path, json: &str) {
-        let cache = PricingCache {
-            models: embedded::parse(json).into_iter().collect(),
-            ..PricingCache::default()
-        };
-        fs::create_dir_all(path.parent().expect("pricing fixture parent"))
-            .expect("pricing fixture directory");
-        let bytes = serde_json::to_vec_pretty(&cache).expect("pricing fixture serialization");
-        fs::write(path, bytes).expect("pricing fixture cache");
+        sqlite::build(path, &embedded::parse(json), 0).expect("pricing fixture table");
     }
 
     /// Forget the process-wide book without changing the cumulative load counter.
@@ -518,19 +582,16 @@ pub mod testkit {
     }
 }
 
-/// Load the current read-only price book from the embedded snapshot and
-/// persistent shared cache, without refreshing or writing. Spending fallbacks,
-/// agent-card costs, and hook reconciliation share this path.
+/// Open the current read-only shared table, falling back to the fresh-install
+/// snapshot only when the file is unusable. Never refreshes or writes.
 pub fn cached_book(cache_path: &Path) -> Arc<PriceBook> {
     cached_book_with_fingerprint(cache_path).0
 }
 
-/// Load the memoized price book with the `(mtime, length)` fingerprint used to
-/// validate it. Consumers that persist derived pricing can use the fingerprint
-/// to retry only after the underlying cache changes.
+/// Load the memoized book and its build id, read through the connection serving
+/// its prices. A snapshot fallback has no fingerprint.
 pub fn cached_book_with_fingerprint(cache_path: &Path) -> (Arc<PriceBook>, Option<String>) {
     let stamp = cache_stamp(cache_path);
-    let fingerprint = stamp.map(|(mtime_secs, len)| format!("{mtime_secs}:{len}"));
     let mut memo = CACHED_BOOK_MEMO
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -538,59 +599,40 @@ pub fn cached_book_with_fingerprint(cache_path: &Path) -> (Arc<PriceBook>, Optio
         && memo_path == cache_path
         && *memo_stamp == stamp
     {
-        return (Arc::clone(book), fingerprint);
+        return (Arc::clone(book), book.fingerprint());
     }
-
     #[cfg(feature = "testkit")]
     testkit::count_load();
-    let book = Arc::new(PriceBook::assembled(&read_cache(cache_path)));
+    let book = Arc::new(match sqlite::Table::open(cache_path) {
+        Some(table) => PriceBook::new(Backing::Sqlite(table)),
+        None => PriceBook::from_entries(embedded::load()),
+    });
+    let fingerprint = book.fingerprint();
     *memo = Some((cache_path.to_owned(), stamp, Arc::clone(&book)));
     (book, fingerprint)
 }
 
-fn cache_stamp(path: &Path) -> Option<(u64, u64)> {
+fn cache_stamp(path: &Path) -> Option<CacheStamp> {
+    use std::os::unix::fs::MetadataExt;
     let metadata = fs::metadata(path).ok()?;
-    let mtime_secs = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    Some((mtime_secs, metadata.len()))
+    Some((
+        metadata.dev(),
+        metadata.ino(),
+        metadata.modified().ok()?,
+        metadata.len(),
+    ))
 }
 
-fn refresh_cache(
-    cache: &mut PricingCache,
-    now: u64,
-    pending: BTreeSet<String>,
-    unknown_models: &BTreeSet<String>,
+fn fetch_projection(
     fetch_litellm: impl FnOnce() -> Option<String>,
     fetch_models_dev: impl FnOnce() -> Option<String>,
-) -> PriceBook {
-    cache.last_attempt_secs = now;
-    let chasing = !pending.is_empty();
-    if chasing {
-        note_chase_attempt(cache, now, pending);
-    }
-    // Both documents or none: a LiteLLM-only table drops the authoritative
-    // families and tiers models.dev alone carries. Fetching lazily keeps a
-    // LiteLLM outage from also paying for the 3MB models.dev download.
-    if let Some(litellm) = fetch_litellm()
-        && let Some(models_dev) = fetch_models_dev()
-        && let Ok((snapshot, _)) = source::project_sources(&litellm, Some(&models_dev))
-        && let Ok(json) = serde_json::to_string(&snapshot)
-    {
-        let models = embedded::parse(&json);
-        if !models.is_empty() {
-            cache.models = models.into_iter().collect();
-            cache.fetched_at_secs = now;
-        }
-    }
-    let book = PriceBook::assembled(cache);
-    if unpriced_subset(&book, unknown_models).is_empty() {
-        clear_unknown_chase(cache);
-    }
-    book
+) -> Option<HashMap<String, Pricing>> {
+    // Both documents or none; a first-source outage skips the second download.
+    let litellm = fetch_litellm()?;
+    let models_dev = fetch_models_dev()?;
+    let (snapshot, _) = source::project_sources(&litellm, Some(&models_dev)).ok()?;
+    let models = embedded::parse(&serde_json::to_string(&snapshot).ok()?);
+    (!models.is_empty()).then_some(models)
 }
 
 // ── Disk cache ──────────────────────────────────────────────────────────────
@@ -603,40 +645,15 @@ const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// 24-hour cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 const UNKNOWN_BACKOFF_CAP_SECS: u64 = 24 * 60 * 60;
-const PRICING_CACHE_SCHEMA: u32 = 4;
-
-/// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
-/// keep the file diff-stable.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PricingCache {
-    #[serde(default)]
-    schema: u32,
-    #[serde(default)]
-    fetched_at_secs: u64,
-    #[serde(default)]
+/// Walker-only refresh and unknown-model chase state, separate from price rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+struct RefreshState {
     last_attempt_secs: u64,
-    #[serde(default)]
-    models: BTreeMap<String, Pricing>,
-    #[serde(default)]
     unknown_attempt_secs: u64,
-    #[serde(default)]
     unknown_backoff_secs: u64,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     unknown_seen: BTreeSet<String>,
-}
-
-impl Default for PricingCache {
-    fn default() -> Self {
-        Self {
-            schema: PRICING_CACHE_SCHEMA,
-            fetched_at_secs: 0,
-            last_attempt_secs: 0,
-            models: BTreeMap::new(),
-            unknown_attempt_secs: 0,
-            unknown_backoff_secs: 0,
-            unknown_seen: BTreeSet::new(),
-        }
-    }
 }
 
 fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
@@ -652,12 +669,9 @@ fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
     tokens as f64 * base
 }
 
-fn one() -> f64 {
-    1.0
-}
-
 fn should_refresh(
-    cache: &PricingCache,
+    cache: &RefreshState,
+    fetched_at_secs: u64,
     now: u64,
     offline: bool,
     pending: &BTreeSet<String>,
@@ -665,15 +679,15 @@ fn should_refresh(
     if offline {
         return false;
     }
-    baseline_refresh_due(cache, now) || unknown_refresh_due(cache, now, pending)
+    baseline_refresh_due(cache, fetched_at_secs, now) || unknown_refresh_due(cache, now, pending)
 }
 
-fn baseline_refresh_due(cache: &PricingCache, now: u64) -> bool {
-    now.saturating_sub(cache.fetched_at_secs) > REFRESH_TTL_SECS
+fn baseline_refresh_due(cache: &RefreshState, fetched_at_secs: u64, now: u64) -> bool {
+    now.saturating_sub(fetched_at_secs) > REFRESH_TTL_SECS
         && now.saturating_sub(cache.last_attempt_secs) > RETRY_BACKOFF_SECS
 }
 
-fn unknown_refresh_due(cache: &PricingCache, now: u64, pending: &BTreeSet<String>) -> bool {
+fn unknown_refresh_due(cache: &RefreshState, now: u64, pending: &BTreeSet<String>) -> bool {
     if pending.is_empty() || now.saturating_sub(cache.last_attempt_secs) <= UNKNOWN_REFRESH_TTL_SECS
     {
         return false;
@@ -690,7 +704,7 @@ fn unpriced_subset(book: &PriceBook, unknowns: &BTreeSet<String>) -> BTreeSet<St
         .collect()
 }
 
-fn note_chase_attempt(cache: &mut PricingCache, now: u64, pending: BTreeSet<String>) {
+fn note_chase_attempt(cache: &mut RefreshState, now: u64, pending: BTreeSet<String>) {
     if pending.is_empty() {
         clear_unknown_chase(cache);
         return;
@@ -705,7 +719,7 @@ fn note_chase_attempt(cache: &mut PricingCache, now: u64, pending: BTreeSet<Stri
     };
 }
 
-fn chase_gate(cache: &PricingCache, pending: &BTreeSet<String>) -> (bool, u64) {
+fn chase_gate(cache: &RefreshState, pending: &BTreeSet<String>) -> (bool, u64) {
     let new_sighting = !pending.is_subset(&cache.unknown_seen);
     let gate = if new_sighting {
         UNKNOWN_REFRESH_TTL_SECS
@@ -715,7 +729,7 @@ fn chase_gate(cache: &PricingCache, pending: &BTreeSet<String>) -> (bool, u64) {
     (new_sighting, gate)
 }
 
-fn clear_unknown_chase(cache: &mut PricingCache) -> bool {
+fn clear_unknown_chase(cache: &mut RefreshState) -> bool {
     let changed = cache.unknown_attempt_secs != 0
         || cache.unknown_backoff_secs != 0
         || !cache.unknown_seen.is_empty();
@@ -723,31 +737,6 @@ fn clear_unknown_chase(cache: &mut PricingCache) -> bool {
     cache.unknown_backoff_secs = 0;
     cache.unknown_seen.clear();
     changed
-}
-
-fn read_cache(path: &Path) -> PricingCache {
-    let Ok(bytes) = fs::read(path) else {
-        return PricingCache::default();
-    };
-    let cache = serde_json::from_slice::<PricingCache>(&bytes).unwrap_or_default();
-    if cache.schema == PRICING_CACHE_SCHEMA {
-        cache
-    } else {
-        PricingCache::default()
-    }
-}
-
-/// Atomic write: temp file + rename, matching the store durability contract.
-fn write_cache(path: &Path, cache: &PricingCache) {
-    let mut cache = cache.clone();
-    cache.schema = PRICING_CACHE_SCHEMA;
-    let Ok(bytes) = serde_json::to_vec_pretty(&cache) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, &bytes).is_ok() {
-        let _ = fs::rename(&tmp, path);
-    }
 }
 
 fn unix_secs_now() -> u64 {
@@ -762,6 +751,15 @@ fn unix_secs_now() -> u64 {
 /// Normalize a model id for comparison: trimmed, lowercased, `.`/`@` → `-`.
 fn normalize(model: &str) -> String {
     model.trim().to_ascii_lowercase().replace(['.', '@'], "-")
+}
+
+fn fuzzy_candidates(want: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(want.len())
+        .chain(want.char_indices().rev().map(|(index, _)| index))
+        .filter_map(|end| {
+            let prefix = &want[..end];
+            prefix_at_boundary(want, prefix).then_some(prefix)
+        })
 }
 
 /// `true` when `key` is a prefix of `want` ending at a word boundary, excluding a

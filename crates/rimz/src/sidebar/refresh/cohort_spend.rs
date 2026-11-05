@@ -59,7 +59,7 @@ pub(super) fn refresh_cohort_spend_for(
     let Ok((_, agents, _)) = cursor.fold(state) else {
         return;
     };
-    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
     let groups = compute_cohort_effort(
         &snapshot.worktree_groups,
         &agents.iter().collect::<Vec<_>>(),

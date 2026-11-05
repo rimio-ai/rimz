@@ -1468,8 +1468,14 @@ allowed-dependencies = [
 # paths::loop_throttle_start_stamps names the machine, workflow and step launch stamps.
 # RuntimePaths::attention_path owns the host's attention-stamp lane (+1).
 # RuntimePaths::zellij_client_input_paths owns per-session/client cache and lock paths (+1).
-# Versioned price-table and refresh-state paths and atomic::publish_staged_replace (+3).
+# Versioned price-table and refresh-state paths and atomic::publish_staged_replace (+2).
+# paths::PRICING_CACHE_VERSION ties the table schema to its versioned paths (+1).
 surface-budget = 324
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::PRICING_CACHE_VERSION"
+reason = "The immutable price table and its shared paths use one format version so a schema bump renames the file."
 
 [[verdict]]
 kind = "item"

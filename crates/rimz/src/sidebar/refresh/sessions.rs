@@ -211,7 +211,7 @@ fn refresh_session_transcript_context_core(
     let Some(adapter) = crate::agents::find_definition(kind) else {
         return Ok(false);
     };
-    let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
+    let shared_pricing_cache_path = runtime.shared_pricing_table_path();
     let kind_id = crate::ids::AgentKind::new_unchecked(kind);
     // A removed session account has no home to read; never fall back to the room default.
     let Ok(login_env) = crate::agents::session_login_env(&kind_id, login) else {

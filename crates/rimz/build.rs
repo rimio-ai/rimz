@@ -1,6 +1,6 @@
 //! Build-time embeds for generated data bundled into `rimz`.
 //!
-//! Gzips the generated, pre-compacted pricing snapshot
+//! Gzips the generated, pre-compacted fresh-install pricing seed
 //! (`pricing/litellm-pricing.json`) — or a `RIMZ_PRICING_JSON_PATH` override —
 //! into `$OUT_DIR/litellm-pricing.json.gz` for `include_bytes!` (see
 //! `src/agents/pricing/embedded.rs`).
@@ -8,8 +8,9 @@
 //! The build never touches the network, so every build is hermetic for a given
 //! commit and worktree state. Release packaging runs `cargo xtask
 //! pricing-refresh` first, which fetches LiteLLM plus authoritative models.dev
-//! fillers and rewrites the ignored snapshot; the runtime refresh
-//! (`src/agents/pricing/source.rs`) keeps prices fresh between releases.
+//! fillers and rewrites the ignored snapshot. The runtime refresh
+//! (`src/agents/pricing/source.rs`) maintains the shared table independently;
+//! an existing usable table never layers the snapshot beneath its rows.
 //!
 //! The sidebar theme catalog is checked in under `themes/alacritty/`, compacted
 //! as a sorted JSON map, and written to `$OUT_DIR/alacritty-themes.json.gz` for

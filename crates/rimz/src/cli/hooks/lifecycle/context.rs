@@ -239,7 +239,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 
     merge_observed_context(store, agent, decoded);
 
-    let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
+    let shared_pricing_cache_path = store.runtime_paths().shared_pricing_table_path();
     let locally_priced_cost_updated = {
         let prices = std::cell::LazyCell::new(|| {
             rimz::agents::pricing::cached_book(&shared_pricing_cache_path)

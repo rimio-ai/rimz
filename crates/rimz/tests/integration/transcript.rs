@@ -9,13 +9,10 @@ use crate::common::Env;
 fn agent_history_folds_keepalives_without_changing_json_turns() {
     let env = Env::new();
     env.record(&env.project_root);
-    let pricing = env.runtime_paths().shared_pricing_cache_path();
-    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
-    std::fs::write(
-        pricing,
-        r#"{"schema":4,"models":{"gpt-5-mini":{"input":0.000001,"output":0.000005}}}"#,
-    )
-    .unwrap();
+    rimz::agents::pricing::testkit::seed_cache(
+        &env.runtime_paths(),
+        r#"{"gpt-5-mini":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000005,"cache_read_input_token_cost":0.0,"cache_creation_input_token_cost":0.0}}"#,
+    );
     let session = "history-session";
     let session_dir = env.home_root.join(".copilot/session-state").join(session);
     std::fs::create_dir_all(&session_dir).unwrap();
