@@ -637,13 +637,6 @@ impl ViewContext {
             && !self.current.worktree_groups.is_empty()
             && previous_filter.is_some()
             && ui.make_up_filter.filter.is_none();
-        if let Some(peek) = &mut ui.inactive_peek {
-            if parked {
-                peek.parked_seen = true;
-            } else if peek.parked_seen {
-                super::selection::close_inactive(ui, &self.current);
-            }
-        }
         (persist_filter, held && ui.freeze.is_none())
     }
 

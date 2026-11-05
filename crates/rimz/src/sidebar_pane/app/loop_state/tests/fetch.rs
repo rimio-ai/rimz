@@ -1870,12 +1870,18 @@ fn assert_inactive_frame_closed(pair: &mut super::scroll::SharedPanes, index: us
     let text = inactive_frame(pair, index);
     assert!(text.contains("[ ▸ 25 inactive ]"), "{text}");
     assert!(!text.contains('▾'), "{text}");
-    assert!(!text.contains("old-"), "{text}");
     assert!(pair.view(index).inactive_peek.is_none());
 }
 
+fn assert_inactive_frame_open(pair: &mut super::scroll::SharedPanes, index: usize) {
+    let text = inactive_frame(pair, index);
+    assert!(text.contains("[ ▾ 25 inactive ]"), "{text}");
+    assert!(text.contains("old-"), "{text}");
+    assert!(pair.view(index).inactive_peek.is_some());
+}
+
 #[test]
-fn inactive_peek_closes_before_the_first_frame_on_a_tab_round_trip() {
+fn inactive_peek_stays_open_from_the_first_frame_on_a_tab_round_trip() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = inactive_pair(mux);
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
@@ -1886,42 +1892,28 @@ fn inactive_peek_closes_before_the_first_frame_on_a_tab_round_trip() {
         });
 
         pair.sample(&[(1, 1)]);
-        assert_inactive_frame_closed(&mut pair, 1);
-        assert!(!pair.view(1).expanded_groups.contains("old-25"));
+        assert_inactive_frame_open(&mut pair, 1);
+        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(1).expanded_groups.contains("old-25"));
         pair.panes[1].state.on_snapshot();
-        assert_inactive_frame_closed(&mut pair, 1);
+        assert_inactive_frame_open(&mut pair, 1);
+        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(1).expanded_groups.contains("old-25"));
 
         pair.sample(&[(1, 0)]);
+        assert_inactive_frame_open(&mut pair, 0);
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(0).expanded_groups.contains("old-25"));
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
         assert_inactive_frame_closed(&mut pair, 0);
+        assert!(!pair.view(0).expanded_groups.contains("old-25"));
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
         assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 1);
     }
 }
 
 #[test]
-fn inactive_peek_closes_on_a_parked_fold_in_another_tab() {
-    for mux in [MuxName::Tmux, MuxName::Zellij] {
-        let mut pair = inactive_pair(mux);
-        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
-        pair.sample(&[(1, 0)]);
-        pair.panes[0].state.on_snapshot();
-        assert!(pair.view(0).inactive_peek.unwrap().parked_seen);
-
-        pair.sample(&[(1, 1)]);
-        pair.panes[1].state.on_snapshot();
-        assert!(
-            pair.view(1).inactive_peek.is_none(),
-            "{mux:?}: parked on a different sidebar is departure"
-        );
-        assert_inactive_frame_closed(&mut pair, 1);
-
-        pair.sample(&[(1, 0)]);
-        assert_inactive_frame_closed(&mut pair, 0);
-    }
-}
-
-#[test]
-fn inactive_peek_stays_with_the_home_reader_when_co_viewers_split_tabs() {
+fn inactive_peek_copies_toggle_independently_when_co_viewers_split_tabs() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = inactive_pair(mux);
         pair.sample(&[(1, 0), (2, 0)]);
@@ -1930,18 +1922,25 @@ fn inactive_peek_stays_with_the_home_reader_when_co_viewers_split_tabs() {
         assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
 
         pair.sample(&[(1, 0), (2, 1)]);
-        assert_inactive_frame_closed(&mut pair, 1);
+        assert_inactive_frame_open(&mut pair, 1);
         pair.panes[1].state.on_snapshot();
+        assert_inactive_frame_open(&mut pair, 1);
+        assert_inactive_frame_open(&mut pair, 0);
+        let rig = &mut pair.panes[1];
+        rig.state.prepare_action();
+        rig.state
+            .apply_input([Wakeup::Key(KeyAction::ToggleInactive)], &mut rig.terminal)
+            .unwrap();
         assert_inactive_frame_closed(&mut pair, 1);
-        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+        assert_inactive_frame_open(&mut pair, 0);
 
         pair.sample(&[(1, 0), (2, 0)]);
-        assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
+        assert_inactive_frame_open(&mut pair, 0);
     }
 }
 
 #[test]
-fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
+fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = inactive_pair(mux);
         let own = pair.panes[0].state.pane.config.own_pane.clone();
@@ -1958,7 +1957,7 @@ fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
             inactive_clients(&mut pair, std::slice::from_ref(&work));
             assert!(
                 pair.view(0).inactive_peek.is_some(),
-                "{mux:?}: not armed at open"
+                "{mux:?}: stays open without sidebar focus"
             );
         }
         for _ in 0..3 {
@@ -1973,6 +1972,7 @@ fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
         pair.paint(0);
         pair.clock.advance(crate::sidebar::timing::CLICK_GUARD);
         let offset = pair.view(0).scroll_offset;
+        let selection = pair.view(0).selected_pane;
         let (column, row) = pair.panes[0]
             .state
             .pane
@@ -1983,6 +1983,7 @@ fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
         let outcome = inactive_input(&mut pair, Wakeup::MouseClick { column, row });
         assert!(outcome.effects.is_empty());
         assert_eq!(pair.view(0).scroll_offset, offset);
+        assert_eq!(pair.view(0).selected_pane, selection);
         assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
         inactive_clients(&mut pair, std::slice::from_ref(&own));
         assert!(pair.view(0).inactive_peek.is_some());
@@ -2001,10 +2002,16 @@ fn inactive_peek_waits_for_a_parked_fold_then_closes_on_pulled_departure() {
                 .is_none()
         );
         inactive_clients(&mut pair, std::slice::from_ref(&work));
-        assert!(
-            pair.view(0).inactive_peek.is_none(),
-            "{mux:?}: departure closes"
-        );
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        inactive_clients(&mut pair, std::slice::from_ref(&own));
+        pair.sample(&[(1, 1)]);
+        pair.panes[1].state.on_snapshot();
+        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.on_snapshot();
+        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
+        assert!(pair.view(0).inactive_peek.is_none());
         pair.paint(0);
         let ui = &pair.panes[0].state.pane.ui;
         assert!(
@@ -2038,12 +2045,12 @@ fn inactive_peek_stays_while_another_client_reads_the_same_view() {
             "{mux:?}: a reader remains"
         );
         inactive_clients(&mut pair, &[work.clone(), work]);
-        assert!(pair.view(0).inactive_peek.is_none(), "{mux:?}: both left");
+        assert!(pair.view(0).inactive_peek.is_some(), "{mux:?}: both left");
     }
 }
 
 #[test]
-fn inactive_peek_closes_in_the_focus_overlay_fold() {
+fn inactive_peek_stays_open_in_the_focus_overlay_fold() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = inactive_pair(mux);
         let own = pair.panes[0].state.pane.config.own_pane.clone();
@@ -2080,14 +2087,14 @@ fn inactive_peek_closes_in_the_focus_overlay_fold() {
         );
         rig.state.on_event(&mut rig.terminal, envelope);
         assert!(
-            pair.view(0).inactive_peek.is_none(),
-            "{mux:?}: fused departure closes"
+            pair.view(0).inactive_peek.is_some(),
+            "{mux:?}: fused departure keeps the peek open"
         );
     }
 }
 
 #[test]
-fn inactive_arrival_close_preserves_focus_placement() {
+fn inactive_tab_arrival_preserves_focus_placement() {
     let mut frames = Vec::new();
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         for open in [false, true] {
@@ -2103,7 +2110,7 @@ fn inactive_arrival_close_preserves_focus_placement() {
 }
 
 #[test]
-fn inactive_auto_close_preserves_focus_placement() {
+fn inactive_same_tab_jump_preserves_focus_placement() {
     let mut frames = Vec::new();
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         for open in [false, true] {
@@ -2186,7 +2193,7 @@ fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isi
     pair.panes[1].state.on_snapshot();
     assert_eq!(pair.view(1).selected_pane, Some(target_pane));
     assert!(pair.view(1).focus_placement.is_some());
-    assert!(pair.view(1).inactive_peek.is_none());
+    assert_eq!(pair.view(1).inactive_peek.is_some(), open);
     pair.paint(1);
     let ui = &pair.panes[1].state.pane.ui;
     (
@@ -2198,7 +2205,7 @@ fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isi
 }
 
 #[test]
-fn inactive_receipt_jump_closes_the_peek_but_keeps_the_focused_group_and_chip() {
+fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focused_group() {
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let mut pair = inactive_pair(mux);
         let group = &mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[1];
@@ -2217,6 +2224,7 @@ fn inactive_receipt_jump_closes_the_peek_but_keeps_the_focused_group_and_chip() 
             Arc::make_mut(&mut group.rows).push(row);
         }
         let target = group.rows[0].pane.as_ref().unwrap().pane_id.clone();
+        Arc::make_mut(&mut pair.snapshot.worktree_groups).swap(1, 11);
         let own = pair.panes[0].state.pane.config.own_pane.clone();
         inactive_clients(&mut pair, std::slice::from_ref(&own));
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
@@ -2249,13 +2257,26 @@ fn inactive_receipt_jump_closes_the_peek_but_keeps_the_focused_group_and_chip() 
                 .line_for_target(&render::HitTarget::ToggleInactive)
                 .is_none()
         );
-        inactive_clients(&mut pair, std::slice::from_ref(&target));
-        assert!(pair.view(0).inactive_peek.is_none(), "{mux:?}: jump closes");
-        assert!(!pair.view(0).expanded_groups.contains("old-01"));
-        assert_eq!(pair.view(0).selected_pane, Some(target));
-        pair.paint(0);
-        let view = pair.view(0);
-        let rig = &mut pair.panes[0];
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = target.clone();
+        });
+        let text = inactive_frame(&mut pair, 1);
+        assert!(text.contains("old-01"), "{mux:?}: {text}");
+        assert!(
+            pair.view(1).inactive_peek.is_some(),
+            "{mux:?}: jump keeps the peek open"
+        );
+        assert_eq!(pair.view(1).selected_pane, Some(target));
+        let rig = &mut pair.panes[1];
+        rig.state.prepare_action();
+        rig.state
+            .apply_input([Wakeup::Key(KeyAction::ToggleInactive)], &mut rig.terminal)
+            .unwrap();
+        assert!(pair.view(1).inactive_peek.is_none());
+        assert!(!pair.view(1).expanded_groups.contains("old-01"));
+        pair.paint(1);
+        let view = pair.view(1);
+        let rig = &mut pair.panes[1];
         assert!(
             rig.state
                 .pane

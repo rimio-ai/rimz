@@ -157,9 +157,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
-    /// Armed when the inactive peek opens or closes. The next draw reveals the
-    /// chip and its first newly shown receipt, if any, then consumes it. A passive
-    /// close yields to a pending shared focus placement.
+    /// Armed when the user toggles the inactive peek. The next draw reveals the
+    /// chip and its first newly shown receipt, if any, then consumes it.
     pub(in crate::sidebar_pane) inactive_reveal: bool,
     /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
@@ -213,7 +212,10 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
-    /// Temporary pages of inactive groups' receipts in this client view.
+    /// Open pages of inactive groups' receipts, `None` while closed. It travels
+    /// with the view across tab moves, mirrors and forks. It opens and closes
+    /// only on the user toggle (chip or `i`), `+K older` raises its page count,
+    /// and the close resets it.
     pub(in crate::sidebar_pane) inactive_peek: Option<InactivePeek>,
     /// View-owned open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
@@ -230,14 +232,12 @@ pub(in crate::sidebar_pane) struct ViewState {
 #[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct InactivePeek {
     pub(in crate::sidebar_pane) pages: NonZeroUsize,
-    pub(in crate::sidebar_pane) parked_seen: bool,
 }
 
 impl Default for InactivePeek {
     fn default() -> Self {
         Self {
             pages: NonZeroUsize::MIN,
-            parked_seen: false,
         }
     }
 }
