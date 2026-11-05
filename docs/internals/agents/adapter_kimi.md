@@ -46,7 +46,7 @@ The catalog accepts `SubagentStart`, `SubagentStop`, `TaskStarted`, `UserPromptQ
 | `TurnStarted` | `turn_started`, except for origin `user` (`UserPromptSubmit` already opened the turn), `retry`, and `system_trigger` named `subagent` | yes |
 | `PreToolUse` for `AskUserQuestion` | `awaiting_input(Question)`, unless `tool_input.background` is true. Every other tool records nothing | no |
 | `PermissionRequest` | `awaiting_input(Permission)`, or `PlanApproval` for `ExitPlanMode` | no |
-| `PermissionResult` | a non-mutating `tool_used` that closes the wait | yes |
+| `PermissionResult` | `ask_resolved`, keyed by `tool_call_id` | yes |
 | `PostToolUse` | `tool_used`. `Write` and `Edit` set edit proof, and `Bash`, `Write`, and `Edit` set mutation proof | yes |
 | `PostToolUseFailure` | a non-mutating `tool_used` | yes |
 | `Stop`, `Interrupt` | clean `turn_ended` | yes |
@@ -63,7 +63,7 @@ A permission ask opens only when Kimi's policy resolves a call to ask. Policy-ap
 
 Kimi exposes no question hook. `PreToolUse` for `AskUserQuestion` opens the wait, and the correlated post-tool hook, an interrupt, or a turn or session close resolves it. A question with `background: true` starts a background task and leaves the turn runnable, so its `PreToolUse` opens no wait.
 
-Every Kimi ask is keyless. `KimiHookPayload` drops the payload's `tool_call_id`, and no signal carries a native key, so any `tool_used` on a waiting row clears the wait, a parallel sibling tool's `PostToolUse` included ([edges](./model.md#edges)).
+Questions and permissions carry `tool_call_id` as their native key. `PostToolUse` and `PostToolUseFailure` carry the same field, so only the matching call clears a keyed wait; a sibling or keyless tool leaves it open. `PermissionResult` emits `AskResolved` keyed by that call id, closing its ask without reopening a resting row. A turn boundary also clears it ([waiting and asks](./model.md#waiting-and-asks)).
 
 ### Turn endings
 
@@ -205,7 +205,6 @@ Every spend consumer reads the main wire plus every `agents/<id>/wire.jsonl` in 
 `rimz coverage --wiring` prints the current wired, partial, and unsupported grid. The gaps below have a reason worth recording.
 
 - Structured answering stays in the Kimi UI. RimZ has no SDK, server, or ACP client that can return Kimi's typed answer, so `rimz answer` is unsupported.
-- Asks are keyless. RimZ keeps no `tool_call_id`, so a parallel sibling tool clears an open wait ([asks](#asks)).
 - Background parking is unsupported. `Notification` reports a terminal task, but it does not prove the active-task set, and a clean `Stop` does not include it. `bg` stays unsupported until the adapter joins the durable task state and can prove the parent parked with work in flight.
 - Subagent coverage is partial. A child appears at the next recorded root hook after its spawn record lands. A resumed child stays closed, because the shared derive pass has no run discriminator. A cancellation, an upstream timeout included, shows as finished, not failed. A child's compaction shows on the parent card, and a child cancelled before `PostCompact` leaves the card compacting until the next root signal.
 - The data root follows the RimZ process env, not the caller's login ([data root](#data-root)).

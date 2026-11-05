@@ -3,8 +3,9 @@ use std::path::Path;
 use serde_json::json;
 
 use super::*;
-use crate::agents::AgentHookClass;
+use crate::agents::lifecycle::{PriorTurnIds, TransitionKind, step};
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
+use crate::agents::{AgentHookClass, AgentStatus};
 
 #[test]
 fn child_wires_join_fleet_and_seat_spending_sources() {
@@ -287,6 +288,7 @@ fn turn_started_only_opens_non_user_main_turns() {
 fn native_questions_and_permissions_use_distinct_hooks() {
     let question = json!({
         "session_id": "s1",
+        "tool_call_id": "t1",
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions":[{"question":"Ship it?","options":[],"multi_select":false}]}
     });
@@ -315,7 +317,8 @@ fn native_questions_and_permissions_use_distinct_hooks() {
         }
     ));
 
-    let permission = json!({"session_id":"s1","tool_name":"Bash","action":"Run tests"});
+    let permission =
+        json!({"session_id":"s1","tool_call_id":"t1","tool_name":"Bash","action":"Run tests"});
     assert!(matches!(
         hook_signal(&KimiAdapter, "PermissionRequest", &permission),
         LifecycleSignal::AwaitingInput {
@@ -323,6 +326,16 @@ fn native_questions_and_permissions_use_distinct_hooks() {
             ..
         }
     ));
+    let keys = [
+        hook_signal(&KimiAdapter, "PreToolUse", &question),
+        hook_signal(&KimiAdapter, "PermissionRequest", &plan_permission),
+        hook_signal(&KimiAdapter, "PermissionRequest", &permission),
+    ]
+    .map(|signal| match signal {
+        LifecycleSignal::AwaitingInput { native_key, .. } => native_key,
+        other => panic!("expected ask: {other:?}"),
+    });
+    assert_eq!(keys.to_vec(), vec![Some("t1".to_owned()); 3]);
     insta::assert_snapshot!(format!("{:?}", hook_output(&KimiAdapter, "PermissionRequest", &Value::Null).json_reply().cloned()), @"None");
 }
 
@@ -331,16 +344,12 @@ fn permission_result_and_interrupt_clear_waiting_state() {
     let result = hook_lifecycle(
         &KimiAdapter,
         "PermissionResult",
-        &json!({"session_id":"s1","tool_name":"Bash","decision":"approved"}),
+        &json!({"session_id":"s1","tool_call_id":"t1","tool_name":"Bash","decision":"approved"}),
     );
     assert_eq!(
         result.signal,
-        LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-            name: None,
-            native_key: None,
-            turn_id: None,
+        LifecycleSignal::AskResolved {
+            native_key: Some("t1".to_owned()),
         }
     );
     assert!(matches!(
@@ -358,7 +367,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
     let failed = hook_lifecycle(
         &KimiAdapter,
         "PostToolUseFailure",
-        &json!({"session_id":"s1","tool_name":"AskUserQuestion"}),
+        &json!({"session_id":"s1","tool_call_id":"t1","tool_name":"AskUserQuestion"}),
     );
     assert_eq!(
         failed.signal,
@@ -366,13 +375,14 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
             mutates: false,
             edits: false,
             name: None,
-            native_key: None,
+            native_key: Some("t1".to_owned()),
             turn_id: None,
         }
     );
 
     let background = json!({
         "session_id":"s1",
+        "tool_call_id":"t1",
         "tool_name":"AskUserQuestion",
         "tool_input":{"background":true,"questions":[{"question":"Ship it?"}]}
     });
@@ -381,6 +391,53 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
         AgentHookClass::Lifecycle
     );
     assert!(hook_observation(&KimiAdapter, "PreToolUse", &background).is_none());
+}
+
+#[test]
+fn permission_wait_survives_keyed_and_keyless_siblings_until_its_result() {
+    let ask = hook_signal(
+        &KimiAdapter,
+        "PermissionRequest",
+        &json!({"session_id":"s1","tool_call_id":"a","tool_name":"Bash"}),
+    );
+    let LifecycleSignal::AwaitingInput { native_key, .. } = &ask else {
+        panic!("permission ask: {ask:?}");
+    };
+    let mut state = step(None, None, PriorTurnIds::default(), &ask).next;
+    let actual = [
+        (
+            "PostToolUse",
+            json!({"session_id":"s1","tool_call_id":"b","tool_name":"Bash"}),
+        ),
+        ("PostToolUse", json!({"session_id":"s1","tool_name":"Bash"})),
+        (
+            "PermissionResult",
+            json!({"session_id":"s1","tool_call_id":"a","decision":"approved"}),
+        ),
+    ]
+    .map(|(event, payload)| {
+        let signal = hook_signal(&KimiAdapter, event, &payload);
+        let transition = step(
+            Some(&state),
+            native_key.as_deref(),
+            PriorTurnIds::default(),
+            &signal,
+        );
+        state = transition.next;
+        (
+            state.status,
+            transition.waiting_cleared,
+            matches!(transition.kind, TransitionKind::Ignored { .. }),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (AgentStatus::Waiting, false, true),
+            (AgentStatus::Waiting, false, true),
+            (AgentStatus::Running, true, false),
+        ]
+    );
 }
 
 #[test]
@@ -438,7 +495,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
     let write = hook_lifecycle(
         &KimiAdapter,
         "PostToolUse",
-        &json!({"session_id":"s1","tool_name":"Write"}),
+        &json!({"session_id":"s1","tool_call_id":"t1","tool_name":"Write"}),
     );
     assert_eq!(
         write.signal,
@@ -446,7 +503,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
             mutates: true,
             edits: true,
             name: None,
-            native_key: None,
+            native_key: Some("t1".to_owned()),
             turn_id: None,
         }
     );
