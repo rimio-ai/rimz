@@ -1176,11 +1176,11 @@ fn rename_tab_targets_the_anchor_pane_and_encodes_the_name() {
 }
 
 #[test]
-fn tab_claim_pins_the_sanitized_pane_name_not_the_tab_name() {
+fn tab_claim_pins_the_verbatim_pane_title_not_the_tab_name() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let claim = backend
-        .claim_window_command(&pane, "#feat:one.2", "opus.fast")
+        .claim_window_command(&pane, "#feat:one.2", "opus.fast (@brave-fox)")
         .expect("tmux pane");
     assert_eq!(
         verb_args(&claim),
@@ -1190,7 +1190,7 @@ fn tab_claim_pins_the_sanitized_pane_name_not_the_tab_name() {
             "-t",
             "%7",
             "@rimz_title",
-            "opus-fast",
+            "opus.fast (@brave-fox)",
             ";",
             "rename-window",
             "-t",

@@ -497,6 +497,8 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
             "tmux",
             "agents",
             "opus",
+            "--name",
+            "brave-fox",
         ])
         .expect("quoted launch");
         server
@@ -522,7 +524,10 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
 
         let title = "opus";
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
-        assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus");
+        assert_eq!(
+            server.display(anchor.raw(), "#{@rimz_title}"),
+            "opus (@brave-fox)"
+        );
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
         assert_eq!(
             server.display(anchor.raw(), "#{pane_current_command}"),
@@ -902,9 +907,30 @@ fn assert_producer_releases_profile_tab(count: usize) {
         thread::sleep(Duration::from_millis(25));
     };
     let title = if count == 1 { "opus" } else { "opus+opus" };
+    let identities = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let pane_title = |pane: &PaneId| {
+        let agent = identities
+            .iter()
+            .find(|agent| {
+                agent.ended_at.is_none()
+                    && agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|bound| bound.pane_id == *pane)
+            })
+            .expect("launched pane identity");
+        format!("opus (@{})", agent.name.as_deref().expect("launch handle"))
+    };
     for (pane, _) in &agents {
         assert_eq!(server.display(pane.raw(), "#{window_name}"), title);
-        assert_eq!(server.display(pane.raw(), "#{@rimz_title}"), "opus");
+        assert_eq!(
+            server.display(pane.raw(), "#{@rimz_title}"),
+            pane_title(pane)
+        );
         assert_eq!(server.display(pane.raw(), "#{@rimz_tab_base}"), title);
         let founders = server.display(pane.raw(), "#{@rimz_tab_founders}");
         for (founder, _) in &agents {
@@ -925,7 +951,8 @@ fn assert_producer_releases_profile_tab(count: usize) {
                 tab.name.as_deref() == Some(title)
                     && agents.iter().all(|(pane, _)| {
                         tab.panes.iter().any(|state| {
-                            state.pane_id == *pane && state.title.as_deref() == Some("opus")
+                            state.pane_id == *pane
+                                && state.title.as_deref() == Some(pane_title(pane).as_str())
                         })
                     })
             })
@@ -977,7 +1004,10 @@ fn assert_producer_releases_profile_tab(count: usize) {
                 remaining_pid.parse().expect("remaining pid"),
                 None
             ));
-            assert_eq!(server.display(remaining.raw(), "#{@rimz_title}"), "opus");
+            assert_eq!(
+                server.display(remaining.raw(), "#{@rimz_title}"),
+                pane_title(remaining)
+            );
             assert_eq!(server.display(remaining.raw(), "#{automatic-rename}"), "0");
         }
     }
