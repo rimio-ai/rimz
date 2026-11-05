@@ -106,6 +106,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
             })
             .unwrap_or(now),
         card: RowCard::Process(ProcessCard {
+            not_tracked: None,
             state,
             command_detail,
             foreign_user,

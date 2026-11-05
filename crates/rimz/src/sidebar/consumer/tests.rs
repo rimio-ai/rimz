@@ -24,6 +24,62 @@ fn cached_opts() -> FoldOpts<'static> {
     }
 }
 
+#[test]
+fn passive_fold_keeps_published_hooks_missing_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    state.bind_runtime_checkpoint(&runtime);
+    let live = pane("terminal_1", "qodercli", &dir.path().to_string_lossy());
+    let pane_id = live.pane_id.clone();
+    let frame = assemble_frame(vec![live], unix_now_ms(), "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    let published = serde_json::json!({
+        "session_name": "rimz-test",
+        "wiring": {
+            "kinds": [], "default_models": {},
+            "untracked": {"qoder": {
+                "reason": "hooks_missing",
+                "fix": "rimz hooks install qoder, then restart"
+            }}
+        },
+        "inputs": {"by_kind": {}}, "observations": [],
+    });
+    atomic::write_temp_then_rename_cache(&runtime.agent_projection_path(), &published).unwrap();
+    let base = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
+        .with_project_root(Some(dir.path().to_owned()));
+    atomic::write_temp_then_rename(&state.latest_snapshot().unwrap(), &base).unwrap();
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .unwrap();
+    let row = snapshot.row_owning_pane(&pane_id).unwrap();
+    assert_eq!(
+        (
+            row.is_process(),
+            row.as_process()
+                .and_then(|card| card.not_tracked.as_ref())
+                .map(|note| (note.reason, note.fix.as_str())),
+            snapshot.agent_panes.len()
+        ),
+        (
+            true,
+            Some((
+                crate::agents::NotTrackedReason::HooksMissing,
+                "rimz hooks install qoder, then restart"
+            )),
+            0
+        ),
+    );
+}
+
 fn daemon_codex(
     id: &str,
     worktree: &Path,

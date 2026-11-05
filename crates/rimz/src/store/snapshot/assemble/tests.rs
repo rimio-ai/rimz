@@ -601,8 +601,8 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_place_and_row_stamp_contract_is_version_79() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 79);
+fn snapshot_place_and_row_stamp_contract_is_version_80() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 80);
 }
 
 #[test]

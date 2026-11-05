@@ -289,6 +289,53 @@ fn command_events_keep_pane_slots_and_preserve_process_sinks() {
 }
 
 #[test]
+fn command_overlay_keeps_tracking_note_and_process_sinks_only_for_an_agent() {
+    let note = crate::agents::NotTracked {
+        reason: crate::agents::NotTrackedReason::HooksBlocked,
+        fix: "enable hooks, then restart".to_owned(),
+    };
+    let actual: Vec<_> = ["codex --quiet", "zsh"]
+        .into_iter()
+        .map(|command| {
+            let live = pane("terminal_1", "codex");
+            let pane_id = live.pane_id.clone();
+            let mut snapshot = pulled(vec![live], 10);
+            snapshot.wired_kinds = vec!["codex".to_owned()];
+            snapshot
+                .untracked_kinds
+                .insert("codex".to_owned(), note.clone());
+            let row = &mut std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )[0];
+            row.inactive = true;
+            row.archived = true;
+            row.as_process_mut().unwrap().not_tracked = Some(note.clone());
+            let mut events = EventStore::default();
+            append(
+                &mut events,
+                11,
+                SidebarEvent::CommandChanged {
+                    pane_id: pane_id.clone(),
+                    command: command.to_owned(),
+                },
+            );
+            let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+            let row = fused.row_owning_pane(&pane_id).unwrap();
+            (
+                row.is_process(),
+                row.as_process().and_then(|card| card.not_tracked.clone()),
+                row.inactive,
+                row.archived,
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [(true, Some(note), true, true), (true, None, true, true)]
+    );
+}
+
+#[test]
 fn pane_opened_event_without_frame_does_not_create_a_card() {
     let snapshot = pulled(Vec::new(), 10);
     let mut store = EventStore::default();

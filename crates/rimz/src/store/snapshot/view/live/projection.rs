@@ -8,7 +8,7 @@ use crate::diag::record::DiagEvent;
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
-    LazyAgentPairingResult, PaneBinder, PaneBindingDisposition, PaneBindingIndex,
+    LazyAgentPairingResult, PaneBinder, PaneBindingDisposition, PaneBindingIndex, PaneWiring,
     compute_lazy_agent_pairings_with_index,
 };
 use crate::store::snapshot::process::row_from_process;
@@ -69,8 +69,11 @@ impl SidebarSnapshot {
         let mut binder = PaneBinder::new(
             index,
             lazy_pairings,
-            &self.wired_kinds,
-            &self.wired_default_models,
+            PaneWiring {
+                kinds: &self.wired_kinds,
+                default_models: &self.wired_default_models,
+                untracked: &self.untracked_kinds,
+            },
             self.panes_observed_at_ms.or(self.panes_produced_at_ms),
             now,
         );
@@ -94,13 +97,27 @@ impl SidebarSnapshot {
                 }
                 PaneBindingDisposition::Idle(row) => {
                     let row = *row;
-                    agent_panes.push(pane_agent_from_idle(
+                    agent_panes.push(pane_agent_from_sessionless(
                         &row,
                         pane,
+                        &row.name,
                         self.project_root.as_deref(),
                     ));
                     if !pane.is_floating {
                         rows.push(row);
+                    }
+                }
+                PaneBindingDisposition::NotTracked { kind, row } => {
+                    if let Some(kind) = kind {
+                        agent_panes.push(pane_agent_from_sessionless(
+                            &row,
+                            pane,
+                            kind.as_str(),
+                            self.project_root.as_deref(),
+                        ));
+                    }
+                    if !pane.is_floating {
+                        rows.push(*row);
                     }
                 }
                 PaneBindingDisposition::DuplicatePane => {
@@ -179,9 +196,10 @@ impl SidebarSnapshot {
     }
 }
 
-fn pane_agent_from_idle(
+fn pane_agent_from_sessionless(
     row: &SidebarRow,
     pane: &PaneRef,
+    kind: &str,
     project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     // A wired pane carries only its kind and pane — no session, pet name, or
@@ -193,7 +211,7 @@ fn pane_agent_from_idle(
             row.lane_path().map(std::path::Path::new),
             project_root,
         ),
-        kind: AgentKind::new_unchecked(row.name.clone()),
+        kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
         name_explicit: false,

@@ -97,7 +97,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 79;
+pub const SNAPSHOT_VERSION: u32 = 80;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -174,14 +174,17 @@ pub struct SidebarSnapshot {
     pub agents: Arc<Vec<AgentState>>,
     /// The agent kinds with an active observation path: installed hooks or
     /// declared local-session discovery. Gates the idle synthesis in
-    /// `rows_from_panes`: a launched-but-unbound pane for an observable agent
-    /// has a row RimZ can later enrich, while a pane with no active integration
-    /// stays a process row. Cwd binding for an existing paneless session is
+    /// `rows_from_panes` when no reporting gap is known. A pane with a known gap
+    /// or no active integration stays a process row; wiring still preserves its
+    /// sessionless pane identity. Cwd binding for an existing paneless session is
     /// separate pairing logic and does not read this idle-synthesis set.
     /// Environment, not store — the pure reducer leaves it empty; the `rimz sidebar snapshot` CLI and consumer enrichment fill it before folding live panes.
     /// The placeholder/persisted snapshot keeps it empty (a process row).
     #[serde(default)]
     pub wired_kinds: Vec<String>,
+    /// Kind-wide reporting gaps, filled beside wiring before the live-pane fold.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub untracked_kinds: BTreeMap<String, crate::agents::NotTracked>,
     /// Per-kind launch model defaults for idle synthesized agent rows, filled
     /// from adapter-owned config reads before the live-pane fold. The pure
     /// reducer leaves it empty and falls back to definition defaults.
@@ -422,6 +425,7 @@ impl SidebarSnapshot {
             worktree_groups: Vec::new().into(),
             agents: Arc::new(agents),
             wired_kinds: Vec::new(),
+            untracked_kinds: BTreeMap::new(),
             wired_default_models: BTreeMap::new(),
             agent_panes: Vec::new().into(),
             own_view: None,

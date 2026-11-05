@@ -481,6 +481,7 @@ fn fold_resolution_frame(
         Arc::make_mut(&mut snapshot.agents).iter_mut(),
     );
     snapshot.wired_kinds = wired.kinds;
+    snapshot.untracked_kinds = wired.untracked;
     snapshot.wired_default_models = wired.default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
     snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);

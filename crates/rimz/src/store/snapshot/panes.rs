@@ -186,6 +186,10 @@ pub(super) enum PaneBindingDisposition<'a> {
     /// parent has no live row.
     NestedAgent(&'a AgentState),
     Idle(Box<SidebarRow>),
+    NotTracked {
+        kind: Option<AgentKind>,
+        row: Box<SidebarRow>,
+    },
     DuplicatePane,
     Conflict {
         kind: AgentKind,
@@ -197,14 +201,19 @@ pub(super) enum PaneBindingDisposition<'a> {
     Ignored,
 }
 
+pub(super) struct PaneWiring<'a> {
+    pub(super) kinds: &'a [String],
+    pub(super) default_models: &'a BTreeMap<String, String>,
+    pub(super) untracked: &'a BTreeMap<String, crate::agents::NotTracked>,
+}
+
 pub(super) struct PaneBinder<'a> {
     index: PaneBindingIndex<'a>,
     pairings: &'a LazyAgentPairingResult,
     bound_agents: BTreeSet<AgentKey>,
     bound_agent_panes: HashMap<AgentKey, PaneId>,
     seen_panes: HashSet<PaneId>,
-    wired_kinds: &'a [String],
-    default_models: &'a BTreeMap<String, String>,
+    wiring: PaneWiring<'a>,
     panes_produced_at_ms: Option<u64>,
     now: Timestamp,
 }
@@ -213,8 +222,7 @@ impl<'a> PaneBinder<'a> {
     pub(super) fn new(
         index: PaneBindingIndex<'a>,
         pairings: &'a LazyAgentPairingResult,
-        wired_kinds: &'a [String],
-        default_models: &'a BTreeMap<String, String>,
+        wiring: PaneWiring<'a>,
         panes_produced_at_ms: Option<u64>,
         now: Timestamp,
     ) -> Self {
@@ -224,8 +232,7 @@ impl<'a> PaneBinder<'a> {
             bound_agents: BTreeSet::new(),
             bound_agent_panes: HashMap::new(),
             seen_panes: HashSet::new(),
-            wired_kinds,
-            default_models,
+            wiring,
             panes_produced_at_ms,
             now,
         }
@@ -246,13 +253,15 @@ impl<'a> PaneBinder<'a> {
             self.index.agents,
             self.pairings,
             &self.bound_agents,
-            self.wired_kinds,
-            self.default_models,
+            &self.wiring,
             self.now,
         ) {
             return match bind {
                 lazy::AgentPaneRow::Agent(agent) => self.bind(agent, pane),
                 lazy::AgentPaneRow::Idle(row) => PaneBindingDisposition::Idle(row),
+                lazy::AgentPaneRow::NotTracked { kind, row } => {
+                    PaneBindingDisposition::NotTracked { kind, row }
+                }
                 lazy::AgentPaneRow::SuppressedDuplicate { kind, agent_id } => {
                     self.conflict(kind, agent_id)
                 }

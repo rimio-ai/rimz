@@ -713,6 +713,7 @@ fn enrich_core(
     // Wiring state gates the live-pane fold (idle synthesis), so set it before
     // any pane-backed projection.
     snapshot.wired_kinds = opts.agent_projection.wiring.kinds;
+    snapshot.untracked_kinds = opts.agent_projection.wiring.untracked;
     snapshot.wired_default_models = opts.agent_projection.wiring.default_models;
 
     // Bind caller-supplied provider-local observations before context/activity
