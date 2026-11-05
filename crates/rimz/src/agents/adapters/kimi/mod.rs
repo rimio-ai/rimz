@@ -373,13 +373,6 @@ fn kimi_root_signal(
     parsed: &payloads::KimiHookPayload,
     ask_detail: Option<String>,
 ) -> Option<LifecycleSignal> {
-    let neutral_tool = || LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
-        name: None,
-        native_key: None,
-        turn_id: None,
-    };
     match event_name {
         "SessionStart" => Some(LifecycleSignal::Registered),
         "UserPromptSubmit" | "TurnStarted" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
@@ -391,7 +384,7 @@ fn kimi_root_signal(
                 kind: super::AskKind::Question,
                 ask_id: None,
                 detail: ask_detail,
-                native_key: None,
+                native_key: parsed.tool_call_id.clone(),
             })
         }
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
@@ -401,14 +394,23 @@ fn kimi_root_signal(
                 .unwrap_or(super::AskKind::Permission),
             ask_id: None,
             detail: ask_detail,
-            native_key: None,
+            native_key: parsed.tool_call_id.clone(),
         }),
-        "PermissionResult" | "PostToolUseFailure" => Some(neutral_tool()),
+        "PermissionResult" => Some(LifecycleSignal::AskResolved {
+            native_key: parsed.tool_call_id.clone(),
+        }),
+        "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: None,
+            native_key: parsed.tool_call_id.clone(),
+            turn_id: None,
+        }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: adapter.spec().tool_mutates(payload),
             edits: adapter.spec().tool_edits_files(payload),
             name: None,
-            native_key: None,
+            native_key: parsed.tool_call_id.clone(),
             turn_id: None,
         }),
         "Stop" | "Interrupt" => Some(LifecycleSignal::TurnEnded {

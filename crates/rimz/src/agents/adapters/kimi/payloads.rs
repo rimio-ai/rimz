@@ -13,6 +13,7 @@ pub(super) struct KimiHookPayload {
     #[serde(deserialize_with = "deserialize_prompt")]
     pub(super) prompt: Option<String>,
     pub(super) response: Option<String>,
+    pub(super) tool_call_id: Option<String>,
     pub(super) tool_name: Option<String>,
     pub(super) tool_input: Option<Value>,
     pub(super) error_type: Option<String>,
