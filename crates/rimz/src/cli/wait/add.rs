@@ -23,7 +23,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    let agent = caller_agent(&snapshot, caller.as_ref())?
+    let agent = caller_agent(&snapshot, caller.as_ref(), Some("armed"))?
         .context("arming a wait is only available to an agent RimZ can identify; run this command from an agent pane")?;
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");

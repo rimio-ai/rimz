@@ -75,9 +75,10 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `--file <path> is a directory; watch a file` | The path names a directory. |
 | `cannot watch PID <PID>: permission denied; choose a process owned by your user` | The caller may not signal that process. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
+| `nothing was armed: RimZ could not find the calling agent's live session from this process` | The caller's identity is set but no live session is visible, for example when a command sandbox hides the agent's process. The error names the kind and launch id, or the pane for a legacy caller. |
 | `the calling agent has not registered a real session yet` | The agent has not reported its provider session yet. |
 
-A failed arm leaves no wait row. If the RimZ home is read-only, the error keeps its original cause and adds a hint: run `rimz wait` as its own command, without a chain, pipe, redirect, or `VAR=` prefix, so its [routine permission rule](../agent-support.md#permission-modes) runs it outside the provider's command sandbox. With routine permissions off, approve the sandbox's escalation instead. Codex reads its routine rules from `rules/rimz.rules`, which RimZ rewrites at the next `rimz start` consent or `rimz hooks install codex`: if that file predates the `rimz wait` rule, refresh it from a user shell and restart the agent.
+A failed arm leaves no wait row. A sandboxed wait may refuse before any write when it cannot see the calling agent's process. If the RimZ home is read-only instead, the error keeps its original cause. Both refusals give the same hint: run `rimz wait` as its own command, without a chain, pipe, redirect, or `VAR=` prefix, so its [routine permission rule](../agent-support.md#permission-modes) runs it outside the provider's command sandbox. With routine permissions off, approve the sandbox's escalation instead. Codex reads its routine rules from `rules/rimz.rules`, which RimZ rewrites at the next `rimz start` consent or `rimz hooks install codex`: if that file predates the `rimz wait` rule, refresh it from a user shell and restart the agent.
 
 ## Triggers
 
@@ -209,9 +210,11 @@ From a user shell, text is read-only and starts with `<home-relative project roo
 
 `owner` is `self`, `loop:<task>`, or `team:<team instance>`. `parent` is the target's launched parent's full handle over the current addressable roster, or `null` for a root agent or a target or parent that is not addressable. The arm and cancel receipts' `pending` arrays equal this JSON list.
 
+If the caller's identity is set but no live session is visible, `list` refuses with exit 1 and `RimZ could not find the calling agent's live session from this process`, rather than falling back to the whole-room view. It names the kind and launch id, or legacy pane, and gives the same [sandbox remedy as arming](#arm-a-wait).
+
 ## Cancel a wait
 
-`rimz wait cancel <name>` cancels any one pending wait or subscription targeting the caller. `rimz wait cancel --all` cancels only waits you armed with `rimz wait`, leaving loop and team subscriptions intact. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``).
+`rimz wait cancel <name>` cancels any one pending wait or subscription targeting the caller. `rimz wait cancel --all` cancels only waits you armed with `rimz wait`, leaving loop and team subscriptions intact. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``). If the caller's identity is set but no live session is visible, it refuses with exit 1 and `nothing was canceled: RimZ could not find the calling agent's live session from this process`, naming the kind and launch id, or legacy pane, with the same [sandbox remedy as arming](#arm-a-wait).
 
 Cancel removes each selected row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. If RimZ cannot write the wait's home-wide state, cancellation refuses before removing the row or stopping its watcher. It prints `canceled <name>, ...` followed by your self view. The canceled line is omitted when `--all` found no self waits. `--json` prints `{"canceled": [...], "pending": [...]}` with all remaining instance deliveries, including subscriptions.
 

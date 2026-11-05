@@ -4,6 +4,7 @@ use super::Env;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 use rimz::config::Tasks;
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::pane::RuntimeOwner;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
 
@@ -46,6 +47,17 @@ pub fn register_agent(
     name: &str,
     launch: LaunchParams,
 ) {
+    register_agent_with_owner(env, session_id, launch_id, name, launch, None);
+}
+
+pub fn register_agent_with_owner(
+    env: &Env,
+    session_id: &str,
+    launch_id: &str,
+    name: &str,
+    launch: LaunchParams,
+    runtime_owner: Option<RuntimeOwner>,
+) {
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     store
@@ -63,7 +75,7 @@ pub fn register_agent(
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,
-                runtime_owner: None,
+                runtime_owner,
                 worktree_path: Some(env.project_root.display().to_string()),
                 worktree_branch: Some(name.to_owned()),
                 prompt: None,
