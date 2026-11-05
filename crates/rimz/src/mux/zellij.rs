@@ -242,6 +242,17 @@ pub struct ZellijSessionOption {
     value: ZellijOptionValue,
 }
 
+impl ZellijSessionOption {
+    pub(super) fn setting(self) -> (&'static str, serde_json::Value) {
+        let value = match self.value {
+            ZellijOptionValue::Bool(value) => serde_json::json!(value),
+            ZellijOptionValue::Int(value) => serde_json::json!(value),
+            ZellijOptionValue::Word(value) => serde_json::json!(value),
+        };
+        (self.key, value)
+    }
+}
+
 /// Values supported by RimZ's resolved session options.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ZellijOptionValue {
@@ -382,19 +393,33 @@ pub fn zellij_session_options(config: &ZellijConfig) -> Vec<ZellijSessionOption>
 /// Options consumed by the attaching client, not the session.
 fn zellij_client_options_args(config: &ZellijConfig) -> Vec<String> {
     let mut args = vec!["--default-mode".to_owned(), "locked".to_owned()];
+    for option in zellij_client_options(config) {
+        args.extend([
+            format!("--{}", option.key.replace('_', "-")),
+            option.value.plugin_configuration(),
+        ]);
+    }
+    args
+}
+
+pub(super) fn zellij_client_options(config: &ZellijConfig) -> Vec<ZellijSessionOption> {
+    let mut options = Vec::new();
     // Zellij 0.45.1 merges twice: plain merge in Setup::from_cli_args, then
     // Options::merge_from_cli in start_client. Any explicit XOR boolean
     // collapses to false, so false is expressible by flag and true is not.
     if config.mouse_mode == Some(false) {
-        args.extend(["--mouse-mode".to_owned(), "false".to_owned()]);
+        options.push(ZellijSessionOption {
+            key: "mouse_mode",
+            value: ZellijOptionValue::Bool(false),
+        });
     }
     if let Some(value) = config.support_kitty_keyboard_protocol {
-        args.extend([
-            "--support-kitty-keyboard-protocol".to_owned(),
-            value.to_string(),
-        ]);
+        options.push(ZellijSessionOption {
+            key: "support_kitty_keyboard_protocol",
+            value: ZellijOptionValue::Bool(value),
+        });
     }
-    args
+    options
 }
 
 #[derive(Debug, Default)]

@@ -224,6 +224,7 @@ lanes/{snapshot,agent-projection}.json        projections
 lanes/{sidebar-width,sidebar-filter,unread,attention}.json renderer state
 lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
 lanes/zellij-input-<session-hash>-<client>.json per-client input clocks
+lanes/room-settings.json                     asserted Zellij session and client settings
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
 lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination

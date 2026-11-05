@@ -686,6 +686,9 @@ fn upgrade_live(
         }
     }
     let room_bin = recorded.unwrap_or_else(|| staged.path.clone());
+    if *mux == MuxName::Tmux {
+        crate::mux::register_room_keys(backend.as_ref(), &machine_config.sidebar, &room_bin);
+    }
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.

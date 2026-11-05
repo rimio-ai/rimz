@@ -15,6 +15,7 @@ mod mount_proof;
 mod pane_writer;
 mod reconcile;
 pub mod recovery;
+pub mod room_settings;
 mod selection;
 pub mod tab_name;
 pub mod tmux;
@@ -28,6 +29,7 @@ pub(crate) use capabilities::{lists_full_cmdline, view_kind, wraps_osc_passthrou
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::RoomKeyBinding;
+pub(crate) use focus_key::register_room_keys;
 pub use pane_writer::PaneWriter;
 use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,

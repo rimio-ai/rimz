@@ -262,7 +262,7 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
 }
 
 #[test]
-fn named_attach_preserves_recorded_room_owner() {
+fn named_attach_preserves_owner_and_records_only_a_launched_client() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);
     let recorded_owner = env.project_root.join("previous-rimz");
@@ -279,26 +279,54 @@ fn named_attach_preserves_recorded_room_owner() {
         "live",
     );
     let shim = FakeZellij::new().with_tmux();
-
-    let output = env
-        .rimz()
-        .args(["attach", workspace.session_name.as_str(), "--print"])
-        .env("PATH", shim.bin_dir.path())
-        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
-        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
-        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-        .bounded_output()
-        .expect("run rimz attach");
-
-    assert!(
-        output.status.success(),
-        "named attach should succeed: {}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let record = rimz::workspace::record::read(&store.paths().workspace_record)
-        .expect("read workspace record");
-    assert_eq!(record.rimz_bin, Some(recorded_owner));
+    let settings = env.runtime_paths().lane_path("room-settings.json");
+    let before = serde_json::json!({
+        "version": 1,
+        "session": {},
+        "client": { "zellij.mouse_mode": false },
+    });
+    fs::write(&settings, serde_json::to_vec(&before).unwrap()).unwrap();
+    for (args, inside, launch) in [
+        (
+            vec!["attach", workspace.session_name.as_str(), "--print"],
+            false,
+            false,
+        ),
+        (vec!["attach"], false, false),
+        (vec!["attach"], true, false),
+        (vec!["start", "--no-attach"], false, false),
+        (vec!["attach", "--attach"], false, true),
+    ] {
+        let mut command = env.rimz();
+        command
+            .args(&args)
+            .env("PATH", shim.bin_dir.path())
+            .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+            .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+            .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]");
+        if inside {
+            command.env("ZELLIJ", "1");
+        }
+        let output = command.bounded_output().expect("run room entry");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let after: serde_json::Value =
+            serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        if args.contains(&"--print") {
+            let record = rimz::workspace::record::read(&store.paths().workspace_record)
+                .expect("read workspace record");
+            assert_eq!(record.rimz_bin, Some(recorded_owner.clone()));
+        }
+        if launch {
+            assert_eq!(after["client"], serde_json::json!({}));
+        } else {
+            assert_eq!(after, before, "printed {args:?} must not stamp a client");
+        }
+    }
 }
 
 #[test]

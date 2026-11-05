@@ -4,6 +4,38 @@
 
 use std::path::{Path, PathBuf};
 
+pub(crate) fn register_room_keys(
+    backend: &dyn super::MuxBackend,
+    sidebar: &crate::config::SidebarConfig,
+    rimz_bin: &Path,
+) {
+    for (name, label, args) in [
+        (
+            "focus_key",
+            crate::config::SidebarConfig::key_label(&sidebar.focus_key),
+            &["sidebar", "focus", "--toggle"][..],
+        ),
+        (
+            "zoom_key",
+            crate::config::SidebarConfig::key_label(&sidebar.zoom_key),
+            &["pane", "zoom"][..],
+        ),
+    ] {
+        let Some(label) = label else { continue };
+        let Some(binding) = RoomKeyBinding::resolve(label, rimz_bin, args) else {
+            tracing::warn!(
+                key = name,
+                value = label,
+                "ignoring invalid [sidebar] key; expected e.g. Alt+p"
+            );
+            continue;
+        };
+        if let Err(err) = backend.register_room_key(&binding) {
+            tracing::debug!(key = name, error = %err, "registering room keybind failed");
+        }
+    }
+}
+
 /// A modifier-plus-key chord such as `Alt+p`. Only modifiers a terminal can
 /// reliably deliver are supported; `Cmd` is intentionally absent because the
 /// terminal emulator swallows it.

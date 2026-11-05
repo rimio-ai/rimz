@@ -539,6 +539,16 @@ impl RoomContext {
             .attach_command(&self.workspace.session_name, &self.mux_config)
     }
 
+    /// Record the client settings immediately before launching a managed attach.
+    pub fn record_attach(&self) {
+        if self.backend.name() == MuxName::Zellij
+            && let Err(err) =
+                crate::mux::room_settings::record_attach(&self.runtime, &self.mux_config.zellij)
+        {
+            tracing::warn!(error = %err, "recording room attach settings failed");
+        }
+    }
+
     fn presence_options(&self) -> Option<PresencePluginOptions> {
         let wasm = crate::mux::zellij::presence_plugin_path()?;
         Some(PresencePluginOptions::from_config(
@@ -571,32 +581,11 @@ impl RoomContext {
     }
 
     fn register_room_keys(&self) {
-        let rimz_bin = crate::proc::rimz_exe();
-        for (name, label, args) in [
-            (
-                "focus_key",
-                crate::config::SidebarConfig::key_label(&self.machine_config.sidebar.focus_key),
-                &["sidebar", "focus", "--toggle"][..],
-            ),
-            (
-                "zoom_key",
-                crate::config::SidebarConfig::key_label(&self.machine_config.sidebar.zoom_key),
-                &["pane", "zoom"][..],
-            ),
-        ] {
-            let Some(label) = label else { continue };
-            let Some(binding) = crate::mux::RoomKeyBinding::resolve(label, &rimz_bin, args) else {
-                tracing::warn!(
-                    key = name,
-                    value = label,
-                    "ignoring invalid [sidebar] key; expected e.g. Alt+p"
-                );
-                continue;
-            };
-            if let Err(err) = self.backend.register_room_key(&binding) {
-                tracing::debug!(key = name, error = %err, "registering room keybind failed");
-            }
-        }
+        crate::mux::register_room_keys(
+            self.backend.as_ref(),
+            &self.machine_config.sidebar,
+            &crate::proc::rimz_exe(),
+        );
     }
 
     /// Assemble configured daemon view for a normal start flow.
