@@ -349,6 +349,94 @@ fn trust_claude_shim_path(env: &Env, agent_bin: &Path) {
 }
 
 #[test]
+fn exec_wrapper_publishes_kind_on_its_own_pane() {
+    assert_exec_wrapper_kind_publication(false);
+}
+
+#[test]
+fn exec_wrapper_continues_when_kind_publication_hangs() {
+    assert_exec_wrapper_kind_publication(true);
+}
+
+/// With `hang_write`, the kind write never returns: the provider still starts
+/// inside the 10 s path wait, which tmux's 30 s default deadline would miss.
+fn assert_exec_wrapper_kind_publication(hang_write: bool) {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    server
+        .backend
+        .ensure_session(&session_opts(
+            &workspace.session_name,
+            workspace.workspace_id.clone(),
+            &workspace.project_root,
+            &workspace.worktree_root,
+            Some((160, 40)),
+        ))
+        .unwrap();
+    let parent = PaneId::from_parts(
+        MuxName::Tmux,
+        server.display(&workspace.session_name, "#{pane_id}"),
+    );
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let attempt = agent_bin.join("kind-write");
+    if hang_write {
+        let real_tmux = which::which("tmux").unwrap();
+        let sleep = which::which("sleep").unwrap();
+        crate::common::write_path_shim(
+            &agent_bin,
+            "tmux",
+            &format!(
+                "for kind_arg do\n\
+                   if [ \"$kind_arg\" = @rimz_kind ]; then\n\
+                     printf '%s\\n' \"$@\" > {}\nexec {} 347\nfi\ndone\nexec {} \"$@\"",
+                shlex::try_quote(attempt.to_str().unwrap()).unwrap(),
+                shlex::try_quote(sleep.to_str().unwrap()).unwrap(),
+                shlex::try_quote(real_tmux.to_str().unwrap()).unwrap(),
+            ),
+        );
+    }
+    trust_claude_shim_path(&env, &agent_bin);
+    let ready = env.home_root.join("kind-ready");
+    let command = tmux_resume_command(&env, &agent_bin, &ready, "claude", "kind-provider");
+    let pane = server
+        .backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::Pane(parent.clone()),
+            cwd: Some(env.project_root.display().to_string()),
+            command: Some(command),
+            ..Default::default()
+        })
+        .unwrap()
+        .expect("tmux returns the new pane");
+    wait_for_path(&ready, "provider did not start after kind publication");
+    if hang_write {
+        let attempt = std::fs::read_to_string(&attempt).unwrap_or_default();
+        assert!(
+            attempt.contains(&format!("\n-t\n{}\n@rimz_kind\nclaude\n", pane.raw())),
+            "wrapper did not attempt kind publication on its own pane: {attempt}",
+        );
+    }
+    assert_eq!(
+        server.display(pane.raw(), "#{@rimz_kind}"),
+        if hang_write { "" } else { "claude" },
+    );
+    assert_eq!(server.display(parent.raw(), "#{@rimz_kind}"), "");
+}
+
+#[test]
 fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
     require_tmux!();
     for isolation in ["host", "scoped"] {
