@@ -575,6 +575,7 @@ fn host_room_grants_follow_the_users_permission_selection() {
         PathBuf::from("/room/state space"),
         PathBuf::from("/run/room/quote\""),
         PathBuf::from("/run/shared\\root"),
+        PathBuf::from("/added checkout"),
     ];
     let legacy_grant = |user_roots: &[&str]| {
         let mut values = toml_edit::Array::new();

@@ -1205,7 +1205,7 @@ pub enum LaunchDirRefusal {
 /// Check the working directory for supervised panes or headless execution.
 /// The login's `$HOME` is refused for every kind, ahead of folder trust: no
 /// one answers an unattended run's trust prompt, and Claude never saves trust
-/// there.
+/// there. Added directories may name `$HOME` because the agent does not start there.
 pub fn preflight_launch_dir(
     adapter: &AgentDefinition,
     cwd: &Path,
@@ -1215,7 +1215,9 @@ pub fn preflight_launch_dir(
 ) -> std::result::Result<(), LaunchDirRefusal> {
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.into());
     let home = login_env.get("HOME").filter(|home| !home.is_empty());
-    if home.is_some_and(|home| canonical(Path::new(home)) == canonical(cwd)) {
+    if mode != LaunchDirMode::Added
+        && home.is_some_and(|home| canonical(Path::new(home)) == canonical(cwd))
+    {
         return Err(LaunchDirRefusal::Home {
             dir: cwd.to_path_buf(),
         });
@@ -1224,17 +1226,25 @@ pub fn preflight_launch_dir(
         return Ok(());
     }
     match adapter.folder_trust(cwd, repo_root, login_env) {
-        Some(FolderTrust::Undecided(gap)) => Err(LaunchDirUntrusted {
-            kind: adapter.spec().kind,
-            dir: cwd.to_path_buf(),
-            fix: if crate::disk::paths::is_under_root(cwd, &crate::disk::paths::empty_dir_root()) {
-                gap.empty_dir_fix(adapter.spec().kind)
-            } else {
-                gap.fix(adapter.spec().kind, "rimz trust grant")
-            },
-            reason: "has no trust decision and would stop at its trust prompt",
-        }.into()),
-        Some(FolderTrust::Restricted { key }) if mode == LaunchDirMode::Supervised => {
+        Some(FolderTrust::Undecided(gap))
+            if matches!(mode, LaunchDirMode::Supervised | LaunchDirMode::Headless) =>
+        {
+            Err(LaunchDirUntrusted {
+                kind: adapter.spec().kind,
+                dir: cwd.to_path_buf(),
+                fix: if crate::disk::paths::is_under_root(
+                    cwd,
+                    &crate::disk::paths::empty_dir_root(),
+                ) {
+                    gap.empty_dir_fix(adapter.spec().kind)
+                } else {
+                    gap.fix(adapter.spec().kind, "rimz trust grant")
+                },
+                reason: "has no trust decision and would stop at its trust prompt",
+            }
+            .into())
+        }
+        Some(FolderTrust::Restricted { key }) if mode != LaunchDirMode::Headless => {
             Err(LaunchDirUntrusted {
                 kind: adapter.spec().kind,
                 dir: key,
@@ -1253,6 +1263,11 @@ pub fn preflight_launch_dir(
 pub enum LaunchDirMode {
     Supervised,
     Headless,
+    /// File access only: allow home and undecided trust, but refuse saved-untrusted decisions.
+    Added,
+    /// A checkout displaced by empty-dir placement: allow undecided trust, but refuse home
+    /// and saved-untrusted decisions.
+    Displaced,
 }
 
 fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Option<&'static str> {
@@ -1278,6 +1293,32 @@ pub fn hook_trust_fix(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn added_directories_allow_undecided_and_home_without_starting_there() {
+        let home = tempfile::tempdir().unwrap();
+        let sub = home.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let login_env = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            (
+                "RIMZ_CLAUDE_CONFIG".into(),
+                home.path().join("claude.json").display().to_string(),
+            ),
+        ]);
+        for kind in ["claude", "codex", "qoder"] {
+            for dir in [home.path(), sub.as_path()] {
+                let result = preflight_launch_dir(
+                    definition_by_kind(kind).unwrap(),
+                    dir,
+                    None,
+                    &login_env,
+                    LaunchDirMode::Added,
+                );
+                assert!(result.is_ok(), "{kind}: {result:?}");
+            }
+        }
+    }
 
     #[test]
     fn unattended_home_refuses_every_builtin_in_both_modes() {

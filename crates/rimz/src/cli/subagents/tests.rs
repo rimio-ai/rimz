@@ -36,6 +36,22 @@ struct Harness {
 }
 
 #[test]
+fn added_directories_are_accepted_in_both_launch_forms_and_fanout() {
+    let actual = [false, true].map(|explicit| {
+        let mut argv = vec!["subagents"];
+        if explicit {
+            argv.push("launch");
+        }
+        argv.extend(["claude", "Task", "--add-dir", "/one", "--add-dir", "/two"]);
+        Harness::try_parse_from(argv).is_ok()
+    });
+    let task = serde_json::from_str::<FanoutTask>(
+        r#"{"profile":"claude","prompt":"Task","add_dirs":["/one","/two"]}"#,
+    );
+    assert_eq!((actual, task.is_ok()), ([true, true], true), "{task:?}");
+}
+
+#[test]
 fn tier_flag_and_fanout_field_are_accepted() {
     let parsed = Harness::try_parse_from(["subagents", "claude", "Task", "--tier", "senior"]);
     assert!(parsed.is_ok(), "{parsed:?}");
@@ -242,7 +258,21 @@ fn waited_single_launch_accepts_json_in_both_forms() {
 
 #[test]
 fn fanout_task_matches_the_single_launch_surface() {
-    let single = parse(&["rimz", "claude", "review this", "--cwd", "/tmp/clean"]);
+    let single = parse(&[
+        "rimz",
+        "claude",
+        "review this",
+        "--cwd",
+        "/tmp/clean",
+        "--add-dir",
+        "/one",
+        "--add-dir",
+        "/two",
+    ]);
+    assert_eq!(
+        single.launch.add_dirs,
+        [PathBuf::from("/one"), PathBuf::from("/two")]
+    );
     assert_eq!(
         single.launch.cwd.as_deref(),
         Some(std::path::Path::new("/tmp/clean"))
@@ -268,6 +298,7 @@ fn fanout_task_matches_the_single_launch_surface() {
             "profile": "claude",
             "prompt": "review this",
             "cwd": "/tmp/clean",
+            "add_dirs": ["/one", "/two"],
             "model": "opus",
             "agent": "reviewer",
             "effort": "high",
@@ -307,6 +338,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     .args;
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
+    agents.launch.add_dirs = vec!["/one".into(), "/two".into()];
     assert!(launches[0].subagent);
     assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;

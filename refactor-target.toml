@@ -347,7 +347,8 @@ upward-dependencies = ["address"]
 # AgentState::settleable_permission_since gives refresh callers the one ask that proof can close.
 # LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
 # pane_title, Seat, Seat::from_launch, short_label and title share pane and tab identity (+5).
-surface-budget = 1244
+# LaunchCapability::supports_added_dirs and allow_added_dirs_args expose non-trusting file access (+2).
+surface-budget = 1246
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -692,6 +693,16 @@ reason = "CLI install, preview and upgrade checks pass machine policy without ad
 kind = "item"
 key = "agents::capabilities::LaunchCapability::configure_room_permissions"
 reason = "The process compiler delegates provider-native host room permission profiles to the adapter."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::supports_added_dirs"
+reason = "Supervised entry and launch inspection warn when a provider cannot grant non-trusting file access."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::allow_added_dirs_args"
+reason = "Launch compilation delegates non-trusting additional-directory settings to the provider."
 
 [[verdict]]
 kind = "item"
@@ -4052,7 +4063,13 @@ path = "crates/rimz/src/workspace.rs"
 # AgentShell carries the room-life bare-name shell lookup into launch and CLI readers (+1).
 # known_workspaces_read_only shares the census without repair writes or locks (+1).
 # known_workspaces_read_only_under keeps explicit-home inventories read-only (+1).
-surface-budget = 30
+# main_repo_root shares launch-directory trust resolution with added directories (+1).
+surface-budget = 31
+
+[[verdict]]
+kind = "item"
+key = "workspace::main_repo_root"
+reason = "Added-directory preflights use the same Git main-repository root as explicit launch directories."
 
 [[module]]
 path = "crates/rimz/src/wakeup"

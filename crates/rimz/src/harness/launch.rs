@@ -292,6 +292,10 @@ pub enum ProgramLookupErr {
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
     #[error(transparent)]
+    Directory(#[from] crate::agents::LaunchDirRefusal),
+    #[error(transparent)]
+    Workspace(#[from] crate::workspace::WorkspaceErr),
+    #[error(transparent)]
     Paths(#[from] crate::disk::paths::PathErr),
     #[error(transparent)]
     AccountBudget(#[from] crate::config::AccountBudgetConfigError),
@@ -1114,6 +1118,16 @@ fn compile_agent_process_with_extra_env(
         .env(&crate::agents::ambient_env()),
     };
     login_env.extend(env.clone());
+    for dir in &request.identity.params.add_dirs {
+        let repo_root = crate::workspace::main_repo_root(Path::new(dir))?;
+        crate::agents::preflight_launch_dir(
+            adapter,
+            Path::new(dir),
+            repo_root.as_deref(),
+            &login_env,
+            crate::agents::LaunchDirMode::Added,
+        )?;
+    }
     let env_warnings = adapter.finalize_launch_env(
         &login_env,
         &mut env,
@@ -1161,6 +1175,11 @@ fn compile_agent_process_with_extra_env(
     let isolation = crate::config::Isolation::ambient(extra_env).unwrap_or_default();
     if let Some(roots) = &reminders.permission_roots {
         let linked = crate::worktree::linked_worktree(cwd);
+        let roots = roots
+            .iter()
+            .cloned()
+            .chain(request.identity.params.add_dirs.iter().map(PathBuf::from))
+            .collect::<Vec<_>>();
         adapter.configure_room_permissions(
             action.extra_args_mut(),
             &login_env,
@@ -1168,7 +1187,7 @@ fn compile_agent_process_with_extra_env(
                 cwd,
                 linked.as_ref().map(|worktree| worktree.primary.as_path()),
             ),
-            roots,
+            &roots,
             isolation,
         );
     }
@@ -1259,6 +1278,14 @@ fn compile_agent_process_with_extra_env(
     if let Some(run) = &reminders.team_notes_run {
         adapter.allow_team_notes_args(
             run,
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
+    if !request.identity.params.add_dirs.is_empty() {
+        adapter.allow_added_dirs_args(
+            &request.identity.params.add_dirs,
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,

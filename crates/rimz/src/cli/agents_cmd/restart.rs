@@ -315,6 +315,8 @@ pub(in crate::cli) fn relaunch_request(
     let restart_params = rimz::agents::LaunchParams {
         automation: agent.automation.clone(),
         checkout: agent.checkout.clone(),
+        add_dirs: agent.add_dirs.clone(),
+        untrusted_checkout: agent.untrusted_checkout,
         molted_from: agent.molted_from.clone(),
         record: posture.launch.record.clone(),
         parent_agent_id: agent.parent_agent_id.clone(),
@@ -439,6 +441,8 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
         launch: rimz::agents::LaunchParams {
             automation: agent.automation.clone(),
             checkout: agent.checkout.clone(),
+            add_dirs: agent.add_dirs.clone(),
+            untrusted_checkout: agent.untrusted_checkout,
             profile: agent.profile.clone(),
             tier: posture.launch.tier.clone(),
             record: Some(rimz::agents::LaunchRecord::replay_or_new(
@@ -551,6 +555,8 @@ pub(super) fn fresh_launch_request(
     request.launch.profile = agent.profile.clone();
     request.launch.profile_scope = agent.profile_scope;
     request.launch.checkout = agent.checkout.clone();
+    request.launch.add_dirs.clone_from(&agent.add_dirs);
+    request.launch.untrusted_checkout = agent.untrusted_checkout;
     request.launch.parent_agent_id = agent.parent_agent_id.clone();
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
     request.launch.launch_depth = agent.launch_depth;

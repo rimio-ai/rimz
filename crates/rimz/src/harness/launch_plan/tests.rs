@@ -1547,6 +1547,7 @@ fn team_archive_grant_follows_a_childs_checkout_and_rejects_foreign_runs() {
 #[test]
 fn routine_permissions_cover_actions_children_and_isolations() {
     let project = tempfile::tempdir().unwrap();
+    let added = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
@@ -1594,6 +1595,10 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                     let mut request = request("claude", action_with_args(action, Vec::new()));
                     request.subagent = subagent;
                     request.identity.name = Some("otter".into());
+                    request.identity.params = serde_json::from_value(serde_json::json!({
+                        "add_dirs": [added.path()]
+                    }))
+                    .unwrap();
                     request.skills = listed.then(|| vec!["commit".parse().unwrap()]);
                     request.allowed_tools = rules.then(|| vec!["Bash(git *)".parse().unwrap()]);
                     let plan = compile(LaunchPlanInputs {
@@ -1616,6 +1621,11 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         hibernate: false,
                     })
                     .unwrap();
+                    if sandboxed {
+                        assert!(plan.sandbox.as_ref().unwrap().plan.mounts.iter().any(|mount| {
+                            matches!(mount, sandbox::Mount::Bind { source, target } if source == added.path() && target == added.path())
+                        }), "added directory must survive the temp-unit mounts");
+                    }
                     let settings = plan
                         .process()
                         .provider_argv
@@ -1645,6 +1655,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                             dirs.clear();
                         }
                         dirs.push(run.clone());
+                        dirs.push(added.path().to_path_buf());
                         assert_eq!(
                             value["permissions"]["additionalDirectories"],
                             serde_json::json!(dirs)

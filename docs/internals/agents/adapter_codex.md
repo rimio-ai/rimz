@@ -157,7 +157,9 @@ The descriptor also sets `registers_lazily`, `daemon_hooked_sessions`, `ThreadKe
 
 ### Room-root grants
 
-Codex keeps its own command sandbox at every isolation level, and RimZ only grants it the three room roots (`StatePaths.root`, `RuntimePaths.root`, `RuntimePaths.shared_root`) that `launch_plan::compile` carries in `LaunchReminders.permission_roots`. The process compiler calls `LaunchCapability::configure_room_permissions` for every launch with roots, Plan and mode-less launches included, passing the cwd, a linked checkout's main Git root, and the resolved isolation. Preflight and managed process compiles carry no roots and append nothing. The grant goes after the user's args. At host and scoped levels the adapter never selects a sandbox or changes network policy ([provider command sandboxes](../sandbox.md#provider-command-sandboxes)).
+Codex keeps its own command sandbox at every isolation level. RimZ grants it the room roots (`StatePaths.root`, `RuntimePaths.root`, `RuntimePaths.shared_root`) that `launch_plan::compile` carries in `LaunchReminders.permission_roots`, followed by the request's `add_dirs`. The process compiler calls `LaunchCapability::configure_room_permissions` for every launch with roots, Plan and mode-less launches included, passing the cwd, a linked checkout's main Git root, and the resolved isolation. Preflight and managed process compiles carry no room roots and append nothing. The grant goes after the user's args. At host and scoped levels the adapter never selects a sandbox or changes network policy ([provider command sandboxes](../sandbox.md#provider-command-sandboxes)).
+
+The launch's `add_dirs` follows the three room roots through this same grant. It never changes folder trust or loads configuration from an added root. Read-only and full-access selections need no added-directory flag, avoiding Codex's startup refusal when its permission profile cannot write cwd. A saved-untrusted added directory refuses before compilation hands it to Codex.
 
 The grant depends on which permission form the launch selects. Codex has two: the `sandbox_mode` form (`read-only`, `workspace-write`, `danger-full-access`) and named permission profiles (`default_permissions`). The adapter takes the first rule that matches, reading valued arguments with `PresetArgMatcher`. A repeated flag or config key uses its last occurrence, and a config value parses as TOML with a bare-string fallback.
 
@@ -172,9 +174,9 @@ Under sandbox isolation only, case 6 appends `--sandbox workspace-write` and the
 
 | Selection | Grant |
 | --- | --- |
-| Sandbox mode implicit or `workspace-write` | `-c sandbox_workspace_write.writable_roots=[<user roots>, <three room roots>]`; the user roots come from the last argument override, otherwise the highest-precedence config layer with that array, otherwise none |
+| Sandbox mode implicit or `workspace-write` | `-c sandbox_workspace_write.writable_roots=[<user roots>, <room and added roots>]`; the user roots come from the last argument override, otherwise the highest-precedence config layer with that array, otherwise none |
 | Sandbox mode `read-only` or `danger-full-access`; full access; an unknown mode | none |
-| Profile `:workspace` | `--add-dir <root>` for each room root, in order |
+| Profile `:workspace` | `--add-dir <root>` for each room and added root, in order |
 | Profile `:read-only`, `:danger-full-access`, any other `:` name, or a name that is not a bare TOML key | none |
 | User-defined profile `N` | `-c permissions.N.workspace_roots={"<root>"=true, ...}`; the profile's own workspace-root rules and network choice remain |
 

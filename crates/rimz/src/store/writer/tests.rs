@@ -120,6 +120,8 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         launch: LaunchParams {
             automation: None,
             checkout: None,
+            add_dirs: Vec::new(),
+            untrusted_checkout: false,
             record: None,
             parent_agent_id: Some(AgentSessionId::from("parent-session")),
             parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
@@ -148,6 +150,11 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         run_id: Some(run_id.clone()),
         prompt: Some("  build it  ".to_owned()),
     };
+    let mut request = request;
+    let mut launch = serde_json::to_value(&request.launch).unwrap();
+    launch["add_dirs"] = serde_json::json!(["/added checkout"]);
+    launch["untrusted_checkout"] = true.into();
+    request.launch = serde_json::from_value(launch).unwrap();
     let batch = store
         .begin_agent_launch_batch(
             &[request],
@@ -188,6 +195,11 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         })
         .collect::<Vec<_>>();
     assert_eq!(payloads.len(), 4);
+    for payload in &payloads {
+        let launch = serde_json::to_value(&payload.launch).unwrap();
+        assert_eq!(launch["add_dirs"], serde_json::json!(["/added checkout"]));
+        assert_eq!(launch["untrusted_checkout"], true);
+    }
     assert_eq!(
         payloads
             .iter()

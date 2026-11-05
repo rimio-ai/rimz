@@ -1504,6 +1504,23 @@ fn subagent_empty_dir_explicit_cwd_wins_silently() {
     assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("override"));
 }
 
+#[test]
+fn subagent_added_directory_is_canonical_deduplicated_and_replayed_on_restart() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("added"));
+}
+
+#[test]
+fn subagent_saved_untrusted_added_directory_refuses_without_writing() {
+    for case in ["restricted-added", "restricted-added-worktree"] {
+        assert_subagent_checkout_case(false, false, Some("absolute"), None, Some(case));
+    }
+}
+
+#[test]
+fn subagent_unsupported_added_directory_warns_and_launches() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("unsupported"));
+}
+
 #[cfg(unix)]
 #[test]
 fn subagent_empty_dir_accepts_empty_codex_stubs() {
@@ -1615,6 +1632,7 @@ fn assert_subagent_checkout_case(
     empty: Option<&str>,
 ) {
     let env = Env::new();
+    let restricted_added = empty.is_some_and(|case| case.starts_with("restricted-added"));
     let checkout = if matches!(empty, Some("root" | "revoked" | "stubs")) {
         env.project_root.clone()
     } else if repo_subdir {
@@ -1630,6 +1648,21 @@ fn assert_subagent_checkout_case(
     };
     let foreign = env.home_root.join("foreign-briefs");
     std::fs::create_dir_all(&checkout).expect("mkdir parent checkout");
+    let main_repo = if empty == Some("restricted-added-worktree") {
+        if crate::common::git::git_missing() {
+            return;
+        }
+        let main = env.home_root.join("main-checkout");
+        std::fs::create_dir(&main).unwrap();
+        crate::common::git::init_repo(&main);
+        crate::common::git::git(
+            &main,
+            &["worktree", "add", "-b", "child", checkout.to_str().unwrap()],
+        );
+        Some(main)
+    } else {
+        None
+    };
     std::fs::create_dir(&foreign).expect("mkdir foreign cwd");
     let mut prompt =
         "Read this brief from the foreign cwd, but work in the parent checkout.\n".repeat(1500);
@@ -1645,9 +1678,13 @@ fn assert_subagent_checkout_case(
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
     let kind = match empty {
+        Some("unsupported") => {
+            env.install_agent_hooks("amp");
+            "amp"
+        }
         // Missing hooks make the supervised preflight refuse after the grant.
         Some("refused") => "claude",
-        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked") => {
+        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked" | "added") => {
             env.install_agent_hooks("claude");
             "claude"
         }
@@ -1658,10 +1695,14 @@ fn assert_subagent_checkout_case(
             &env,
             "subagents",
             "researcher",
-            &format!(
-                "description: Research\nagent: {kind}\ntools: [Read]\n\
+            &if empty == Some("unsupported") {
+                format!("description: Research\nagent: {kind}")
+            } else {
+                format!(
+                    "description: Research\nagent: {kind}\ntools: [Read]\n\
                  allowed-tools: [Read]\nempty-dir: true"
-            ),
+                )
+            },
             "",
         );
         std::fs::write(
@@ -1684,6 +1725,9 @@ fn assert_subagent_checkout_case(
     }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
+    if empty == Some("added") {
+        crate::common::trust_claude_project(&env, &foreign);
+    }
     if matches!(empty, Some("grant" | "concurrent" | "refused")) {
         crate::common::trust_claude_project(&env, &checkout);
     }
@@ -1693,11 +1737,19 @@ fn assert_subagent_checkout_case(
             std::fs::write(&path, "{ malformed").unwrap();
             Some(path)
         }
-        Some("restricted") => {
+        Some("restricted" | "restricted-added" | "restricted-added-worktree") => {
             let path = env.agent_config_path("codex");
             let mut table: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
             table["projects"].as_table_mut().unwrap().insert(
-                empty_root.display().to_string(),
+                if restricted_added {
+                    main_repo
+                        .as_ref()
+                        .unwrap_or(&checkout)
+                        .display()
+                        .to_string()
+                } else {
+                    empty_root.display().to_string()
+                },
                 toml::Value::Table(toml::Table::from_iter([(
                     "trust_level".into(),
                     "untrusted".into(),
@@ -1854,6 +1906,12 @@ fn assert_subagent_checkout_case(
             std::ffi::OsStr::new(cwd)
         });
     }
+    if restricted_added || matches!(empty, Some("added" | "unsupported")) {
+        command
+            .arg("--add-dir")
+            .arg(&checkout)
+            .args(["--add-dir", "../parent-checkout"]);
+    }
     command
         .current_dir(&foreign)
         .envs(rimz::workspace::pin_env(
@@ -1882,7 +1940,18 @@ fn assert_subagent_checkout_case(
     let launched = std::sync::atomic::AtomicBool::new(false);
     let (output, second_output, binding) = std::thread::scope(|scope| {
         let binding = scope.spawn(|| {
-            if cwd == Some("missing") || matches!(empty, Some("dirty" | "malformed" | "refused")) {
+            if cwd == Some("missing")
+                || matches!(
+                    empty,
+                    Some(
+                        "dirty"
+                            | "malformed"
+                            | "refused"
+                            | "restricted-added"
+                            | "restricted-added-worktree"
+                    )
+                )
+            {
                 return; // Each of these refuses before opening a child pane.
             }
             bind_child_panes(&store, &trace_path, &workspace.session_name, &launched);
@@ -1903,6 +1972,16 @@ fn assert_subagent_checkout_case(
     });
     if let Some((path, bytes)) = &unchanged {
         assert_eq!(std::fs::read(path).unwrap(), *bytes);
+    }
+    if restricted_added {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && stderr.contains("is saved untrusted"),
+            "{stderr}"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        assert!(!trace_path.exists());
+        return;
     }
     if empty == Some("malformed") {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1958,6 +2037,14 @@ fn assert_subagent_checkout_case(
         );
     }
     binding.unwrap();
+    if empty == Some("unsupported") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("amp has no added-directory permission channel; --add-dir is ignored"),
+            "{stderr}"
+        );
+        return;
+    }
     if empty.is_some() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
@@ -2118,6 +2205,11 @@ fn assert_subagent_checkout_case(
             );
         }
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
+        if empty == Some("added") {
+            let value = serde_json::to_value(child).unwrap();
+            let target = env.home_root.join("parent-checkout");
+            assert_eq!(value["add_dirs"], json!([target]));
+        }
         assert_eq!(
             child.login.as_ref().map(|name| name.as_str()),
             switch.as_ref().and_then(|switch| switch.child_login),
@@ -2267,6 +2359,11 @@ fn assert_subagent_checkout_case(
         let payload = std::fs::read_to_string(payload).expect("exec request contents");
         let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, &payload)
             .expect("restarted child request");
+        if empty == Some("added") {
+            let value = serde_json::to_value(&decoded.identity.params).unwrap();
+            let target = env.home_root.join("parent-checkout");
+            assert_eq!(value["add_dirs"], json!([target]));
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             (

@@ -743,6 +743,11 @@ fn classify_root(root: &Path, home: &Path) -> Result<RootClass> {
     Ok(RootClass::Directory)
 }
 
+/// Resolve the main-repository root shared by a directory's linked worktrees.
+pub(crate) fn main_repo_root(start: &Path) -> Result<Option<PathBuf>> {
+    Ok(resolve_git(start)?.map(|(root, _, _)| root))
+}
+
 fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf, Option<String>)>> {
     let with_branch = git_output(
         start,

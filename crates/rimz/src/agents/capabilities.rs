@@ -596,6 +596,22 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Whether added directories can grant file access without granting folder trust.
+    fn supports_added_dirs(&self) -> bool {
+        false
+    }
+
+    /// Grant file access through launch settings, independent of routine RimZ permissions.
+    fn allow_added_dirs_args(
+        &self,
+        _dirs: &[String],
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Allow invoking profile-listed skills without a provider permission prompt.
     fn allow_listed_skill_args(
         &self,
@@ -643,7 +659,7 @@ pub trait LaunchCapability: CoreCapability {
         _extra_args: &mut Vec<String>,
         _login_env: &BTreeMap<String, String>,
         _paths: (&Path, Option<&Path>),
-        _roots: &[PathBuf; 3],
+        _roots: &[PathBuf],
         _isolation: crate::config::Isolation,
     ) {
     }

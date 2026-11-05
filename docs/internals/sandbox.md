@@ -135,6 +135,8 @@ The interval between the rename and the repair stays writable, normally for mill
 
 ## Reachable host paths
 
+The launch's additional working directories join the required paths, preserving their host access, including when the temp-unit mounts would otherwise hide a target under `/tmp` or `/var/tmp`.
+
 Replacing `/tmp` and `/var/tmp` would hide any RimZ state, socket, or project that lives under them on the host, so `sandbox::plan` rebinds those paths at their original locations. Paths stay identical inside and outside the view because process ownership comparisons and short Unix socket paths depend on it.
 
 | Candidate | Source |

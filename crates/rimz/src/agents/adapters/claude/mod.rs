@@ -931,6 +931,35 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
+    fn supports_added_dirs(&self) -> bool {
+        true
+    }
+
+    fn allow_added_dirs_args(
+        &self,
+        dirs: &[String],
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                union_settings_array(
+                    object,
+                    "permissions",
+                    "additionalDirectories",
+                    dirs.iter().cloned(),
+                )
+            },
+        )?;
+        Ok(())
+    }
+
     fn allow_routine_rimz_args(
         &self,
         (cwd, artifact_dir): (&Path, &Path),

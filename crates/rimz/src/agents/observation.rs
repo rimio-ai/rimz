@@ -210,6 +210,13 @@ pub struct LaunchParams {
     /// Absolute host checkout displaced by empty-dir placement; absent when the key did not apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
+    /// Canonical host directories granted file access at launch and carried on every relaunch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
+    /// The checkout had no folder-trust decision at launch, so empty-dir placement displaced it.
+    /// Set at launch and carried on every relaunch without re-reading provider trust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub untrusted_checkout: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub molted_from: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

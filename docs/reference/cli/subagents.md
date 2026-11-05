@@ -43,6 +43,7 @@ rimz subagents wait "$first" "$second"
 | --- | --- | --- |
 | `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
 | `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
+| `--add-dir <DIR>` | none | Repeatable additional working directory with file access, without loading its configuration. Resolved like `--cwd`, canonicalized and deduplicated in flag order. Claude and Codex support it; other kinds warn and launch without the grant. A Codex directory saved untrusted refuses. |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and answer. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
@@ -63,6 +64,8 @@ A child's permission mode comes from `--yolo`, its definition or `<kind>-<mode>`
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
 The child works in the parent's checkout, whatever directory the launch command runs from, unless `--cwd` names another directory or its profile applies [`empty-dir`](../definitions.md#agent-and-subagent-keys). By default it joins the parent's lane; with `--cwd`, its lane follows that directory's basename. When the parent's checkout no longer exists, the launch refuses instead of starting the child elsewhere. Restart and child resume reuse the child's recorded directory.
+
+`--add-dir` does not change that working directory or channel and grants no folder trust. Claude receives file access through its launch settings, not its native added-directory flag, so the added folder's hooks, settings, skills, and instruction files do not load. Codex follows the selected permission mode: read-only and full-access selections need no added-directory flag. The launch reminder names added directories even when the Environment reminder is off. Restart, resume, and fork reapply them.
 
 An `empty-dir: true` profile starts in its own directory under `~/.rimz/empty/<workspace-dir>/<handle>/`. It keeps the parent's lane and temp directory. On a fresh launch, the profile consents to granting an undecided account's folder trust when its grantable key is exactly the resolved empty root; RimZ prints the account, folder, and changed provider file and records an assist in `rimz stats`. Saved-untrusted, non-grantable, and wider-key accounts start in the parent's checkout with an `empty-dir ignored:` notice pointing to `rimz doctor`; a failed write falls back with its file and error. `--cwd` silently overrides the profile setting. A file or hidden entry beside the workspace or agent directories refuses the launch before any grant and names what to remove. Empty `.agents`, `.aws`, `.codex`, and `.git` directories that a killed Codex Linux sandbox leaves behind do not count, but anything inside one still refuses the launch. Files inside the agent's own directory are its own. Restart and follow-up resume never grant automatically: they recreate the recorded directory if missing, never switch back to the checkout, and do not delete it when the child finishes.
 
@@ -100,6 +103,7 @@ JSON
 | --- | --- | --- |
 | `profile` | yes | Profile, agent kind, or command, as for a single launch |
 | `cwd` | no | Existing working directory, as for `--cwd` on a single launch |
+| `add_dirs` | no | Array of additional directory paths, as for repeated `--add-dir`; validated with the whole list before launching any child |
 | `prompt` | one of the two | The assignment |
 | `prompt_file` | one of the two | File whose contents become the assignment; a relative path resolves from the current directory |
 | `description` | no | Child card description and fleet report task label |
