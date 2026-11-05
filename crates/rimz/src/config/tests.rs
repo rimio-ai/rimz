@@ -1851,6 +1851,18 @@ fn tmux_room_options_parse_and_defaults_are_agent_friendly() {
 }
 
 #[test]
+fn multiplexer_config_carries_machine_theme() {
+    let config = MachineConfig {
+        theme: toml::from_str(
+            "mode = '256'\nmuted = '#112233'\n[providers.claude]\ncolor = '#445566'",
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    assert_eq!(MultiplexerConfig::from(&config).theme, config.theme);
+}
+
+#[test]
 fn tmux_border_modes_parse_and_reject_unknown_values() {
     assert_eq!(
         ["top", "bottom", "off", "inherit", "unknown"].map(|mode| {
