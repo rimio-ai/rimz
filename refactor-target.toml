@@ -350,7 +350,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::supports_added_dirs and allow_added_dirs_args expose non-trusting file access (+2).
 # LaunchDirUntrusted::is_undecided distinguishes a fallback from a saved refusal (+1).
 # LaunchCapability::added_dirs_unloaded_files keeps target reminder wording in the adapter (+1).
-surface-budget = 1248
+# LaunchFrontend carries provider frontend placement and extension auto-approval (+1).
+# LaunchCapability::take_frontend finalizes frontend arguments before compilation (+1).
+surface-budget = 1250
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -520,6 +522,11 @@ reason = "The hidden CLI passes the final provider view and model to adapter-own
 kind = "item"
 key = "agents::capabilities::SessionStepOutput"
 reason = "The session step returns argv and notices; only the CLI prints and records them."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchFrontend"
+reason = "Adapters return frontend placement and extension permission handling to the process compiler after all other argument edits."
 
 [[verdict]]
 kind = "item"

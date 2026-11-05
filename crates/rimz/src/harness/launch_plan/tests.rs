@@ -3387,6 +3387,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                         "RIMZ_WORKFLOW_RUN"
                             | "RIMZ_WORKFLOW_DIR"
                             | "RIMZ_LAUNCH_FAST"
+                            | "RIMZ_LAUNCH_AUTO_APPROVE"
                             | "RIMZ_LONG_CACHE_ENV"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV

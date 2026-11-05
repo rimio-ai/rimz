@@ -5,6 +5,56 @@ use crate::transcript::{AskOption, AskQuestion};
 use serde_json::json;
 
 #[test]
+fn mini_frontend_takes_only_a_leading_subcommand_and_exact_permission_flags() {
+    let cases = [
+        (&["mini"][..], Some("mini"), &[][..], false),
+        (
+            &["--auto", "mini", "--agent", "x"],
+            Some("mini"),
+            &["--agent", "x"],
+            true,
+        ),
+        (&["mini", "--auto"], Some("mini"), &[], true),
+        (&["--yolo", "mini"], Some("mini"), &[], true),
+        (
+            &["mini", "--dangerously-skip-permissions"],
+            Some("mini"),
+            &[],
+            true,
+        ),
+        (&["--agent", "mini"], None, &["--agent", "mini"], false),
+        (&["x", "mini"], None, &["x", "mini"], false),
+        (&[], None, &[], false),
+        (&["--auto"], None, &["--auto"], false),
+        (
+            &["mini", "--auto=true"],
+            Some("mini"),
+            &["--auto=true"],
+            false,
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(args, _, _, _)| {
+            let mut args = args.iter().map(|arg| (*arg).to_owned()).collect();
+            let frontend = OpencodeAdapter.take_frontend(&mut args);
+            (frontend.subcommand, args, frontend.extension_auto_approve)
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, subcommand, args, auto)| {
+            (
+                *subcommand,
+                args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                *auto,
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn models_render_without_argv_and_restore_from_the_session() {
     let launch = OpencodeAdapter.spec().launch;
     assert_eq!(

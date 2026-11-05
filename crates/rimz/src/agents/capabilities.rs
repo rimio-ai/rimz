@@ -37,6 +37,15 @@ pub struct SessionStepOutput {
     pub notices: Vec<String>,
 }
 
+/// Frontend placement and extension-owned permission handling after argument edits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LaunchFrontend {
+    /// Removed from extra arguments and placed immediately after the program.
+    pub subcommand: Option<&'static str>,
+    /// A removed native auto-approve flag is replaced by once-only extension replies.
+    pub extension_auto_approve: bool,
+}
+
 /// A single-line reason the provider's session preparation refused the launch.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -367,6 +376,11 @@ pub struct RejectedLaunchArg {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// Remove a frontend subcommand and flags from the final extra arguments.
+    fn take_frontend(&self, _extra_args: &mut Vec<String>) -> LaunchFrontend {
+        LaunchFrontend::default()
+    }
+
     /// Prepare the session before exec, or return `None` when unsupported.
     fn session_step(
         &self,

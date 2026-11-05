@@ -167,11 +167,15 @@ fn prepare(request: &SessionStepRequest<'_>, deadline: Instant) -> CheckResult<S
         return Err(status_error("session model", response, CheckErr::Answer));
     }
     helper.finish(deadline)?;
-    let mut argv = vec![program.clone()];
+    let mut argv = request.provider_argv.to_vec();
     if request.session.is_none() {
-        argv.extend(["--session".into(), session.to_string()]);
+        let index = if args.first().is_some_and(|arg| arg == MINI_SUBCOMMAND) {
+            2
+        } else {
+            1
+        };
+        argv.splice(index..index, ["--session".into(), session.to_string()]);
     }
-    argv.extend_from_slice(args);
     Ok(SessionStepOutput { argv, notices })
 }
 

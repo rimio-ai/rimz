@@ -57,6 +57,8 @@ use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::AskAnswer;
 
+const MINI_SUBCOMMAND: &str = "mini";
+
 static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     tool_rules: crate::agents::skills::ToolRules::Unsupported,
     host_skills: crate::agents::skills::HostSkills::Unsupported,
@@ -370,6 +372,26 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn take_frontend(&self, extra_args: &mut Vec<String>) -> LaunchFrontend {
+        let flags = self.spec().launch.permission.flags;
+        let Some(index) = extra_args
+            .iter()
+            .position(|arg| !flags.contains(&arg.as_str()))
+        else {
+            return LaunchFrontend::default();
+        };
+        if extra_args[index] != MINI_SUBCOMMAND {
+            return LaunchFrontend::default();
+        }
+        extra_args.remove(index);
+        let extension_auto_approve = extra_args.iter().any(|arg| flags.contains(&arg.as_str()));
+        extra_args.retain(|arg| !flags.contains(&arg.as_str()));
+        LaunchFrontend {
+            subcommand: Some(MINI_SUBCOMMAND),
+            extension_auto_approve,
+        }
+    }
+
     fn session_step(
         &self,
         request: &SessionStepRequest<'_>,
