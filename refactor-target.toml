@@ -346,7 +346,32 @@ upward-dependencies = ["address"]
 # AgentState::permission_settled lets message conditions use that proof without changing raw matching (+1).
 # AgentState::settleable_permission_since gives refresh callers the one ask that proof can close.
 # LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
-surface-budget = 1239
+# pane_title, Seat, Seat::from_launch, short_label and title share pane and tab identity (+5).
+surface-budget = 1244
+
+[[module]]
+path = "crates/rimz/src/agents/pane_title.rs"
+surface-budget = 4
+
+[[verdict]]
+kind = "item"
+key = "agents::pane_title"
+reason = "One provider-neutral composer supplies pane display titles and short tab labels to harness, launcher, CLI and sidebar."
+
+[[verdict]]
+kind = "item"
+key = "agents::pane_title::Seat"
+reason = "The same borrowed seat represents a stored row or an allocated launch identity without copying its labels."
+
+[[verdict]]
+kind = "item"
+key = "agents::pane_title::short_label"
+reason = "Initial tab labels, survivor labels and pane titles share the profile-else-kind rule."
+
+[[verdict]]
+kind = "item"
+key = "agents::pane_title::title"
+reason = "Every agent pane spawn uses one bounded, parent-aware seat and handle title rule."
 
 [[verdict]]
 kind = "item"
