@@ -180,6 +180,38 @@ fn session_lifecycle_reaches_the_published_record() {
 }
 
 #[test]
+fn subagent_pane_title_names_its_parent() {
+    let fixture = Fixture::new();
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(parent) = open_fresh(
+        fixture.fresh.clone(),
+        Some(fixture.leader()),
+        &mut Unattended,
+        &backend,
+    )
+    .unwrap() else {
+        panic!("parent launch did not open");
+    };
+    let mut child = fixture.fresh.clone();
+    child.name = Some("child".into());
+    child.ancestry = Some(LaunchAncestry::Subagent {
+        parent_agent_id: parent.identities[0].agent_id.clone(),
+        parent_agent_kind: parent.identities[0].kind.clone(),
+        launch_generation: 1,
+    });
+    let LaunchOutcome::Opened(_) =
+        open_fresh(child, Some(fixture.leader()), &mut Unattended, &backend).unwrap()
+    else {
+        panic!("child launch did not open");
+    };
+    let tabs = backend.tabs.lock().unwrap();
+    assert_eq!(
+        tabs[1].panes.columns[0].panes[0].name.as_deref(),
+        Some("claude (@leader) › claude subagent (@child)")
+    );
+}
+
+#[test]
 fn pending_record_and_bound_waiter_precede_an_instant_completion_at_open() {
     let fixture = Fixture::new();
     let store = fixture.fresh.context.store.clone();
