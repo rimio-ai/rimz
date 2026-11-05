@@ -6,6 +6,7 @@
 //!   [`write_temp_then_rename_cache`] (rename-atomic, no fsync) for whole
 //!   files.
 //! - `publish_staged_no_replace` for already-synced staged files or directories.
+//! - `publish_staged_replace` for staged files needing a durable replacement.
 //! - [`append_record_bytes`] for the event log — one `write()` per record,
 //!   no fsync; durability rides the write tail's debounced `sync_file_data`
 //!   group barrier and the pre-rotation sync.
@@ -104,6 +105,19 @@ pub(crate) fn publish_staged_no_replace(staged: &Path, destination: &Path) -> Re
             AtomicErr::io(destination)(source)
         }
     })?;
+    sync_parent_dir(destination)
+}
+
+/// Sync a complete staged file, replace the destination, and sync its parent.
+/// The caller prepares both paths on the same filesystem.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "pricing switches in the next commit")
+)]
+#[must_use = "durability barrier; check the result"]
+pub(crate) fn publish_staged_replace(staged: &Path, destination: &Path) -> Result<()> {
+    sync_file_data(staged)?;
+    std::fs::rename(staged, destination).map_err(AtomicErr::io(destination))?;
     sync_parent_dir(destination)
 }
 
@@ -613,6 +627,32 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn staged_replacement_syncs_and_keeps_open_readers_on_the_old_file() {
+        use std::io::Read;
+
+        let dir = tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        let destination = dir.path().join("published");
+        std::fs::write(&destination, b"old").unwrap();
+        let mut reader = File::open(&destination).unwrap();
+        std::fs::write(&staged, b"new").unwrap();
+        let before = testkit::fsync_count();
+        publish_staged_replace(&staged, &destination).unwrap();
+        let syncs = testkit::fsync_count() - before;
+        let mut old = String::new();
+        reader.read_to_string(&mut old).unwrap();
+        assert_eq!(
+            (
+                std::fs::read(&destination).unwrap(),
+                old,
+                staged.exists(),
+                syncs
+            ),
+            (b"new".to_vec(), "old".to_owned(), false, 2)
+        );
+    }
 
     #[test]
     fn staged_publication_refuses_existing_entries_without_consuming_the_stage() {
