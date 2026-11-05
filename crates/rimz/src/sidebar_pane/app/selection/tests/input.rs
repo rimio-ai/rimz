@@ -1269,6 +1269,130 @@ fn inactive_expansion_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) 
     (snapshot, selected)
 }
 
+#[test]
+fn inactive_receipt_unfold_survives_focus_entering_and_leaving_the_group() {
+    let (mut snapshot, selected) = inactive_expansion_snapshot(0);
+    let mut view = ViewState {
+        inactive_peek: Some(Default::default()),
+        ..Default::default()
+    };
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(selected.clone()));
+    paint(&mut view, &mut ui, &snapshot, 64);
+    let receipt = HitTarget::ExpandGroup {
+        key: "inactive".into(),
+        row: "done".into(),
+    };
+    let (column, line) = ui.interactions.line_for_target(&receipt).unwrap();
+    let focused = PaneId::from_parts(MuxName::Zellij, "terminal_done");
+    let outcome = handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(focused.clone())]);
+
+    snapshot.focused_pane = Some(focused);
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(
+        view.expanded_groups.contains("inactive"),
+        "the user's unfold must survive the click's own focus change"
+    );
+
+    snapshot.focused_pane = Some(selected);
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(view.expanded_groups.contains("inactive"));
+    assert!(ui.interactions.line_for_target(&receipt).is_none());
+    let roster = view.visible_roster(&snapshot);
+    for id in ["done", "second"] {
+        let ordinal = roster.ordinal_of_id(id).unwrap();
+        assert!(ui.interactions.line_for_row(ordinal).is_some());
+    }
+}
+
+#[test]
+fn revealed_inactive_header_never_creates_an_expansion() {
+    for reveal in ["focus", "hold", "lens"] {
+        let (mut snapshot, _) = inactive_expansion_snapshot(0);
+        let mut view = ViewState {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        };
+        match reveal {
+            "focus" => {
+                snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_done"));
+            }
+            "hold" => {
+                view.freeze = Some(render::LayoutFreeze {
+                    frozen: render::FrozenOrder {
+                        visible: std::collections::HashSet::from(["done".into()]),
+                        ..Default::default()
+                    },
+                    armed_ms: snapshot.now.as_millisecond(),
+                });
+            }
+            "lens" => {
+                view.make_up_filter.query = Some("inactive-click".into());
+            }
+            _ => unreachable!(),
+        }
+        let mut ui = UiState::default();
+        paint(&mut view, &mut ui, &snapshot, 64);
+        let (column, line) = ui
+            .interactions
+            .line_for_target(&HitTarget::ToggleGroup("inactive".into()))
+            .unwrap();
+        assert!(!view.expanded_groups.contains("inactive"));
+        let outcome = handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
+        assert!(outcome.effects.is_empty());
+        assert!(
+            !view.expanded_groups.contains("inactive"),
+            "{reveal} must not create a hidden unfold"
+        );
+    }
+}
+
+#[test]
+fn inactive_unfold_drops_when_the_group_leaves_or_has_nothing_left_to_fold() {
+    for removed in [true, false] {
+        let (mut snapshot, _) = inactive_expansion_snapshot(0);
+        let mut view = ViewState {
+            inactive_peek: Some(Default::default()),
+            expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+            ..Default::default()
+        };
+        let mut ui = UiState::default();
+        paint(&mut view, &mut ui, &snapshot, 64);
+        assert!(view.expanded_groups.contains("inactive"));
+        let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+        if removed {
+            groups.pop();
+        } else {
+            groups.last_mut().unwrap().inactive = None;
+        }
+        paint(&mut view, &mut ui, &snapshot, 64);
+        assert!(
+            !view.expanded_groups.contains("inactive"),
+            "removed={removed}"
+        );
+    }
+}
+
+#[test]
+fn closed_inactive_section_drops_a_key_carried_from_an_active_group() {
+    let (snapshot, _) = inactive_expansion_snapshot(0);
+    let mut view = ViewState {
+        expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+        ..Default::default()
+    };
+    let mut ui = UiState::default();
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(!view.expanded_groups.contains("inactive"));
+    let roster = view.visible_roster(&snapshot);
+    for id in ["done", "second"] {
+        assert!(
+            roster.ordinal_of_id(id).is_none(),
+            "{id} drawn below the chip"
+        );
+    }
+}
+
 fn inactive_pages_snapshot() -> (SidebarSnapshot, PaneId) {
     let (mut snapshot, selected) = inactive_click_snapshot(0);
     let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
@@ -1718,6 +1842,90 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let outcome = handle_mouse_click(0, less_line, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(!ui.expanded_groups.contains(&group_key));
+}
+
+#[test]
+fn more_unfold_survives_focus_entering_and_leaving_the_capped_tail() {
+    let panes = (0..7)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect();
+    let mut snapshot = snapshot_with_panes(&workspace(), panes);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    paint(&mut view, &mut ui, &snapshot, 64);
+    let target = HitTarget::ToggleGroup(group_key.clone());
+    let (column, line) = ui.interactions.line_for_target(&target).unwrap();
+    handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
+
+    snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_6"));
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(
+        view.expanded_groups.contains(&group_key),
+        "focus on the only calm overflow row must not erase an unfold"
+    );
+
+    snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_0"));
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(view.expanded_groups.contains(&group_key));
+    assert_eq!(view.visible_roster(&snapshot).len(), 7);
+    for ordinal in 0..7 {
+        assert!(ui.interactions.line_for_row(ordinal).is_some());
+    }
+    let text = inactive_frame(&view, &mut ui, &snapshot, 64).join("\n");
+    assert!(text.contains("− less"), "{text}");
+}
+
+#[test]
+fn process_only_inactive_group_keeps_its_more_unfold_below_the_closed_chip() {
+    let panes = (0..7)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect();
+    let mut snapshot = snapshot_with_panes(&workspace(), panes);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
+        Some(crate::store::snapshot::SidebarInactive::Landed);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    paint(&mut view, &mut ui, &snapshot, 64);
+    let target = HitTarget::ToggleGroup(group_key.clone());
+    let (column, line) = ui.interactions.line_for_target(&target).unwrap();
+    handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
+
+    paint(&mut view, &mut ui, &snapshot, 64);
+    assert!(view.expanded_groups.contains(&group_key));
+    let text = inactive_frame(&view, &mut ui, &snapshot, 64).join("\n");
+    assert!(text.contains("− less"), "{text}");
+}
+
+#[test]
+fn more_unfold_drops_when_the_tail_is_unread_or_non_idle() {
+    for unread in [true, false] {
+        let panes = (0..7)
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .collect();
+        let mut snapshot = snapshot_with_panes(&workspace(), panes);
+        let group_key = snapshot.worktree_groups[0].key.clone();
+        let mut view = ViewState {
+            expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+            ..Default::default()
+        };
+        let mut ui = UiState::default();
+        paint(&mut view, &mut ui, &snapshot, 64);
+        assert!(view.expanded_groups.contains(&group_key));
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        let tail = &mut std::sync::Arc::make_mut(&mut group.rows)[6];
+        tail.unread = unread;
+        if !unread {
+            tail.card = crate::store::snapshot::RowCard::Agent(Default::default());
+            tail.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Running;
+        }
+        paint(&mut view, &mut ui, &snapshot, 64);
+        assert!(
+            !view.expanded_groups.contains(&group_key),
+            "unread={unread}"
+        );
+    }
 }
 
 #[test]

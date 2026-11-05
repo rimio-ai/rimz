@@ -191,6 +191,10 @@ impl<'a> VisibleRoster<'a> {
     }
 }
 
+pub(super) fn group_can_fold(group: &SidebarWorktreeGroup) -> bool {
+    project_group(group, &BodyLens::default(), false, None, None).natural_hidden_count > 0
+}
+
 struct GroupProjection<'a> {
     rows: Vec<&'a SidebarRow>,
     natural_hidden_count: usize,
@@ -313,7 +317,8 @@ fn project_rows<'a>(
         })
         .flatten();
     // Keep a collapsing roster whole while focus or the layout freeze anchors any
-    // member. Once both clear, every row collapses into the receipt together.
+    // member. Without a user expansion, every row collapses into the receipt
+    // together once both clear.
     let revealed = collapses
         && source.iter().any(|row| {
             row_is_focused(row, focused_pane) || held.is_some_and(|ids| ids.contains(&row.id))

@@ -696,7 +696,7 @@ A live workflow blocks folding while its checkout is unlanded. Once landed, the 
 
 ### Row cap and inactive groups
 
-A group shows at most six rows in their section order, folding excess idle cards and process rows, including not-tracked rows, behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. When only process panes remain hot, the first hot process row is also exempt, but cooled shells are not. While a filter is active the cap is off, and rows and groups that do not match are hidden.
+A group shows at most six rows in their section order, folding excess idle cards and process rows, including not-tracked rows, behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. The unfold survives focus changes and layout-hold expiry; it clears when you fold it or no row past the cap can hide. Working, waiting, failed, paused, done, unread, and selected cards are never folded. When only process panes remain hot, the first hot process row is also exempt, but cooled shells are not. While a filter is active the cap is off, and rows and groups that do not match are hidden.
 
 ```
  ⑂ main
@@ -719,7 +719,7 @@ A group becomes inactive once its latest agent launch or non-keepalive prompt is
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with time since the latest agent activity pinned right. This compact age is always present, plain and muted without a glyph, even under five minutes (`30s`, `12m`, `2h`). Cache pings do not move it, and process activity counts only in groups without agents. Cost and tokens cover every session the team ran in this worktree, resumed sessions and subagents included; the sidebar shows no work-time figure. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click a member's name or status glyph on a folded group's first receipt line to show the cards and focus that member's live pane, bringing its card into view. Clicking anywhere else on the receipt, or its folded header, does the same for the first receipt member. A member without a live pane opens the cards without moving focus. Focusing any member also shows the cards, in place without changing fold membership or count. Newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
+Click a member's name or status glyph on a folded group's first receipt line to show the cards and focus that member's live pane, bringing its card into view. Clicking anywhere else on the receipt, or its folded header, does the same for the first receipt member. A member without a live pane opens the cards without moving focus. The cards stay unfolded through focus changes and layout-hold expiry until you fold the expanded header, close the inactive peek, or the group leaves the roster or has nothing left to fold. Focusing any member also shows the cards, in place without changing fold membership or count. Without a user unfold, newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only folds a user unfold; it does not move focus. A header click on cards revealed only by focus, a layout hold, or a filter leaves that reveal unchanged. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
 Inactive groups follow all active project work and `external`, at the very bottom. At 54 columns, the closed inactive chip replaces their headers and receipts:
 
@@ -1138,10 +1138,10 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a subagents and waits line | toggle its entries, select the card and focus its own live pane |
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click `+K older` | append older entries, select the card and focus the parent's live pane |
-| click `+K more`, `− less` | expand or cap the group without moving focus |
+| click `+K more`, `− less` | expand or cap the group without moving focus; an unfold survives focus changes |
 | click a member's name or status glyph on a folded inactive group's first receipt line | show its cards and focus that member's live pane, revealing its card |
 | click a folded inactive group's header or any other receipt cell | show its cards and focus the first receipt member's live pane, revealing its card |
-| click an expanded inactive group's header | collapse its cards without moving focus |
+| click an expanded inactive group's header | fold cards you unfolded without moving focus; cards focus, a layout hold, or a filter reveals stay shown |
 | click anywhere on the inactive chip, or press `i` | show or hide a paged peek at inactive receipts without filtering; opening reveals the first receipt, closing returns to the chip and resets paging |
 | click the inactive peek's `+K older` | reveal the next 10 inactive groups, keeping the viewport and selection |
 | click a dashboard tab | switch provider |

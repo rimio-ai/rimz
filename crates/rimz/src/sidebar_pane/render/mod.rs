@@ -62,7 +62,9 @@ use std::time::Duration;
 use crate::agents::{AgentStatus, TurnPhase};
 use crate::config::{AnimationRole, CardDensityMode};
 use crate::sidebar_pane::pets::PetAction;
+#[cfg(test)]
 use crate::sidebar_pane::view::VisibleRoster;
+use crate::sidebar_pane::view::group_can_fold;
 use crate::store::snapshot::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::buffer::CellDiffOption;
@@ -275,13 +277,17 @@ fn draw_help_overlay(
     Some(rect)
 }
 
+/// Keeps a key only while its group can still fold, and never for a collapsing
+/// inactive group while the inactive section is closed: an active group's
+/// `+K more` key would otherwise outlive its turning inactive and draw it
+/// unfolded below the chip. A process-only group draws there anyway and keeps
+/// its `+K more` toggle.
 fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
-    let roster = VisibleRoster::baseline(snapshot);
+    let peek_open = ui.inactive_peek.is_some();
     ui.expanded_groups.retain(|key| {
-        roster
-            .groups()
-            .iter()
-            .any(|group| group.source().key == *key && group.natural_hidden_count() > 0)
+        snapshot.worktree_groups.iter().any(|group| {
+            group.key == *key && (peek_open || !group.collapses()) && group_can_fold(group)
+        })
     });
 }
 

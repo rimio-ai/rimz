@@ -2266,7 +2266,36 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
             pair.view(1).inactive_peek.is_some(),
             "{mux:?}: jump keeps the peek open"
         );
-        assert_eq!(pair.view(1).selected_pane, Some(target));
+        assert_eq!(pair.view(1).selected_pane, Some(target.clone()));
+        let away = pair
+            .snapshot
+            .worktree_groups
+            .iter()
+            .find(|group| group.key == "old-24")
+            .unwrap()
+            .rows[0]
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone();
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = away.clone();
+        });
+        pair.paint(1);
+        pair.clock.advance(Duration::from_secs(31));
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = away.clone();
+        });
+        pair.paint(1);
+        assert!(
+            pair.view(1).expanded_groups.contains("old-01"),
+            "{mux:?}: the user's unfold survives focus leaving and hold expiry"
+        );
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = target.clone();
+        });
+        pair.paint(1);
         let rig = &mut pair.panes[1];
         rig.state.prepare_action();
         rig.state
