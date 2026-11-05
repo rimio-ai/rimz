@@ -179,7 +179,7 @@ impl TopologyClients {
                 .collect(),
             presence: crate::mux::ClientPresence {
                 human_clients,
-                last_input_ms: None,
+                client_input_ms: Default::default(),
             },
             viewed_panes: viewed_panes
                 .into_iter()

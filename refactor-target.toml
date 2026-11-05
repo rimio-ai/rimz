@@ -3049,7 +3049,8 @@ path = "crates/rimz/src/mux"
 # SidebarTarget::zellij_step shares the bounded grid with controllers and live tests (+1).
 # TmuxBackend::apply_room_options shares the existing-session apply with reload (+1).
 # TmuxBackend::set_pane_kind publishes the exec wrapper's provider for border coloring (+1).
-surface-budget = 301
+# ClientPresence::last_input_ms and ClientView::attended_until share per-client input clocks (+2).
+surface-budget = 303
 
 [[verdict]]
 kind = "item"
