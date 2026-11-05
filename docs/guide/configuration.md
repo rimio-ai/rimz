@@ -723,6 +723,17 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 
+For OpenCode 2.2.5's mini frontend, use a TOML profile in a trusted project's `.rimz/config.toml` (Markdown definitions accept no raw `args`):
+
+```toml
+[profiles.mini]
+agent = "opencode"
+args = "mini"
+mode = "yolo"
+```
+
+Launch it with `rimz agents mini`. RimZ selects `mini` as the frontend when it is the first argument after skipping permission flags, placing it immediately after `opencode` on launch, resume, restart, and restore. Yolo works through RimZ's OpenCode integration instead of mini's unsupported `--auto`; refresh the integration with `rimz hooks install opencode` when upgrading. Keep `--session`, `--continue`, `--fork`, `--prompt`, `--model`, and `--auto` out of profile args: RimZ owns the conversation and prompt, and the profile's `model` and `mode` cover model and permission choices. Other occurrences of `mini`, such as `--agent mini`, pass through unchanged.
+
 #### Customizing a pack item
 
 Copying a shipped profile into your home tree lets you edit it, but freezes every setting and prompt you copied. To keep following the pack while changing only a few fields, create an inheriting override instead:

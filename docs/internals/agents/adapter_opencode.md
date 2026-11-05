@@ -127,12 +127,14 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 
 ## Launch and resume
 
-`OPENCODE_DESCRIPTOR.launch` renders:
+`OPENCODE_DESCRIPTOR.launch` supplies the base argv; the process compiler places a selected frontend after the program:
 
 | Action | Argv |
 | --- | --- |
 | launch | `opencode --standalone [--auto] [--prompt <text>]` |
 | resume | `opencode --session <id> --standalone` |
+| mini launch | `opencode mini --standalone [args…] [--prompt <text>]` |
+| mini resume | `opencode mini --session <id> --standalone [args…]` |
 | compact | `/compact`, typed into the pane |
 
 | Permission mode | Arguments |
@@ -141,6 +143,10 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 | Yolo | `--auto` |
 
 An unset mode defaults to Auto through the common [permission settlement](../../reference/agent-support.md#permission-modes). The recorded mode is the mapped request, not a reading of OpenCode's configuration or an in-session switch.
+
+`crates/rimz/src/agents/capabilities.rs::LaunchCapability::take_frontend` runs after every other extra-argument mutation in `crates/rimz/src/harness/launch.rs::compile_agent_process_with_extra_env`. OpenCode takes `mini` only when it is the first extra argument after skipping the descriptor's exact permission-flag spellings, then removes those flags and returns frontend placement plus extension auto-approval. This covers raw profile args and leading `-- mini` passthrough alike; option values and later words stay untouched. Passthrough lasts for that launch only: a restart, rebirth, or lane resume replays the current profile's args and drops passthrough ([restart](../../reference/cli/agents.md#restart)), so `rimz agents opencode -- mini` comes back in the full TUI on the same session. A profile with raw `args = "mini …"` keeps mini across relaunches. The compiler inserts the subcommand at argv index 1 for every action and stamps `RIMZ_LAUNCH_AUTO_APPROVE=1` when a native permission flag was removed; otherwise it clears and unsets the key, even when inherited. Permission settlement and its recorded grant happen before this rewrite; non-mini argv is unchanged. The [server activation](#server-activation) claim, feed ordering, and inert paths govern the replies.
+
+For a model-selected fresh launch, `crates/rimz/src/agents/adapters/opencode/session_step.rs::prepare` inserts `--session <new id>` after `mini`, before `--standalone`, keeping the prompt. An explicit resume-model override retains its existing argv and session flag. Launch, restart, rebirth, and lane resume all apply the same compiler rule to the args they compile. Mini support targets OpenCode 2.2.5 without raising the adapter's general version floor.
 
 Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model and effort selection is verified on 2.2.0, without raising the 2.0.0 floor. Fork is unsupported; unsupported fast and auto-compact settings warn and launch without the setting.
 

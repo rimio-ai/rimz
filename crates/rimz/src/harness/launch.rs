@@ -36,6 +36,8 @@ const ENV_LAUNCH_REMINDERS: &str = "RIMZ_LAUNCH_REMINDERS";
 /// `1` when RimZ's extension requests priority serving for this launch;
 /// cleared on every other launch so a nested launch never inherits it.
 const ENV_LAUNCH_FAST: &str = "RIMZ_LAUNCH_FAST";
+/// `1` when the integration replaces native auto-approval for this frontend.
+const ENV_LAUNCH_AUTO_APPROVE: &str = "RIMZ_LAUNCH_AUTO_APPROVE";
 /// The exact `KEY=VALUE` pair this launch set for long prompt-cache retention.
 const ENV_LONG_CACHE_ENV: &str = "RIMZ_LONG_CACHE_ENV";
 /// Stable RimZ launch identity. The provider may replace the provisional
@@ -1307,7 +1309,8 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
-    let provider_argv = compile_provider_argv_with_headless(
+    let frontend = adapter.take_frontend(action.extra_args_mut());
+    let mut provider_argv = compile_provider_argv_with_headless(
         adapter,
         kind,
         &action,
@@ -1315,6 +1318,9 @@ fn compile_agent_process_with_extra_env(
         request.headless.as_ref(),
         (artifact_dir, &mut settings_artifact),
     )?;
+    if let Some(subcommand) = frontend.subcommand {
+        provider_argv.insert(1, subcommand.to_owned());
+    }
     let provider_program =
         provider_argv
             .first()
@@ -1341,6 +1347,12 @@ fn compile_agent_process_with_extra_env(
     } else {
         env.remove(ENV_LAUNCH_FAST);
         unset.insert(ENV_LAUNCH_FAST.to_owned());
+    }
+    if frontend.extension_auto_approve {
+        env.insert(ENV_LAUNCH_AUTO_APPROVE.to_owned(), "1".to_owned());
+    } else {
+        env.remove(ENV_LAUNCH_AUTO_APPROVE);
+        unset.insert(ENV_LAUNCH_AUTO_APPROVE.to_owned());
     }
     let inherited_cache = skill_env
         .get(ENV_LONG_CACHE_ENV)

@@ -2140,6 +2140,104 @@ fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
 }
 
 #[test]
+fn process_compiler_places_mini_before_options_and_translates_auto_approve() {
+    let project = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            ExecAction::Launch {
+                prompt: Some("--auto".into()),
+                extra_args: ["--auto", "mini"].map(str::to_owned).to_vec(),
+            },
+            vec!["opencode", "mini", "--standalone", "--prompt", "--auto"],
+            true,
+        ),
+        (
+            ExecAction::Resume {
+                session_id: "ses_saved".into(),
+                extra_args: ["mini", "--auto"].map(str::to_owned).to_vec(),
+            },
+            vec!["opencode", "mini", "--session", "ses_saved", "--standalone"],
+            true,
+        ),
+        (
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: vec!["--auto".into()],
+            },
+            vec!["opencode", "--standalone", "--auto"],
+            false,
+        ),
+        (
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: vec!["mini".into()],
+            },
+            vec!["opencode", "mini", "--standalone"],
+            false,
+        ),
+        (
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: ["--agent", "mini", "--auto"].map(str::to_owned).to_vec(),
+            },
+            vec!["opencode", "--standalone", "--agent", "mini", "--auto"],
+            false,
+        ),
+    ];
+    let (actual, expected): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .map(|(action, argv, auto)| {
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &request("opencode", action),
+                project.path(),
+                &BTreeMap::from([("RIMZ_LAUNCH_AUTO_APPROVE".into(), "1".into())]),
+                &LaunchReminders::default(),
+            )
+            .unwrap();
+            (
+                (
+                    process.provider_argv,
+                    process.env.get("RIMZ_LAUNCH_AUTO_APPROVE").cloned(),
+                    process.unset.contains("RIMZ_LAUNCH_AUTO_APPROVE"),
+                ),
+                (
+                    argv.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                    auto.then(|| "1".to_owned()),
+                    !auto,
+                ),
+            )
+        })
+        .unzip();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn process_compiler_clears_auto_approve_for_other_providers() {
+    let project = tempfile::tempdir().unwrap();
+    let actual: Vec<_> = ["pi", "claude"]
+        .into_iter()
+        .map(|kind| {
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &team_request(kind),
+                project.path(),
+                &BTreeMap::from([("RIMZ_LAUNCH_AUTO_APPROVE".into(), "1".into())]),
+                &LaunchReminders::default(),
+            )
+            .unwrap();
+            (
+                process.env.get("RIMZ_LAUNCH_AUTO_APPROVE").cloned(),
+                process.unset.contains("RIMZ_LAUNCH_AUTO_APPROVE"),
+            )
+        })
+        .collect();
+    assert_eq!(actual, [(None, true), (None, true)]);
+}
+
+#[test]
 fn process_compiler_carries_reminders_in_extension_env_off_argv() {
     let project = tempfile::tempdir().expect("project");
     let team = team();

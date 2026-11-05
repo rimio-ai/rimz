@@ -47,6 +47,7 @@ fn step_command(
     model: &str,
     session: Option<&str>,
     effort: Option<&str>,
+    mini: bool,
 ) -> std::process::Command {
     let dir = fake_opencode(env);
     let mut command = env.rimz();
@@ -58,6 +59,9 @@ fn step_command(
         command.args(["--session", session]);
     }
     command.arg("--").arg(dir.join("opencode"));
+    if mini {
+        command.arg("mini");
+    }
     if let Some(session) = session {
         command.args(["--session", session]);
     }
@@ -99,7 +103,14 @@ fn final_args(root: &Path) -> Vec<String> {
 
 #[test]
 fn hidden_step_creates_or_switches_then_execs_without_changing_environment() {
-    for session in [None, Some("ses_existing")] {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (mini, session) in [
+        (false, None),
+        (false, Some("ses_existing")),
+        (true, None),
+        (true, Some("ses_existing")),
+    ] {
         let env = Env::new();
         let route = if session.is_some() {
             "POST /api/session/ses_existing/model"
@@ -113,7 +124,7 @@ fn hidden_step_creates_or_switches_then_execs_without_changing_environment() {
             ],
             2,
         );
-        let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", session, None);
+        let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", session, None, mini);
         let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -157,16 +168,18 @@ fn hidden_step_creates_or_switches_then_execs_without_changing_environment() {
                 env.project_root.to_str().unwrap()
             );
         }
-        assert_eq!(
-            final_args(&env.home_root),
-            [
-                "--session",
-                id,
-                "--standalone",
-                "--prompt",
-                "a task; $(not a command)"
-            ]
-        );
+        actual.push(final_args(&env.home_root));
+        let mut args = vec![
+            "--session",
+            id,
+            "--standalone",
+            "--prompt",
+            "a task; $(not a command)",
+        ];
+        if mini {
+            args.insert(0, "mini");
+        }
+        expected.push(args.into_iter().map(str::to_owned).collect::<Vec<_>>());
         assert!(!env.home_root.join("helper-alive").exists());
         assert_eq!(
             std::fs::read_to_string(env.home_root.join("closed")).unwrap(),
@@ -217,6 +230,7 @@ fn hidden_step_creates_or_switches_then_execs_without_changing_environment() {
                 .any(|line| line.starts_with("OPENCODE_PASSWORD="))
         );
     }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -248,7 +262,7 @@ fn hidden_step_refuses_unknown_models_and_http_errors_without_exec() {
         let env = Env::new();
         let requests = routes.len();
         let (origin, server) = crate::oauth_usage::serve_http_routes(routes, requests);
-        let output = step_command(&env, &origin, model, session, None)
+        let output = step_command(&env, &origin, model, session, None, false)
             .bounded_output()
             .unwrap();
         assert_eq!(output.status.code(), Some(78));
@@ -290,9 +304,16 @@ fn hidden_step_applies_offered_effort_to_created_and_resumed_sessions() {
             ],
             2,
         );
-        let output = step_command(&env, &origin, "deepseek-v4.1-flash", session, Some("high"))
-            .bounded_output()
-            .unwrap();
+        let output = step_command(
+            &env,
+            &origin,
+            "deepseek-v4.1-flash",
+            session,
+            Some("high"),
+            false,
+        )
+        .bounded_output()
+        .unwrap();
         assert!(
             output.status.success(),
             "{}",
@@ -341,9 +362,16 @@ fn hidden_step_refuses_unoffered_effort_without_posting_or_execing() {
             vec![("GET /api/model?", 200, catalog.to_string())],
             1,
         );
-        let output = step_command(&env, &origin, "deepseek-v4.1-flash", None, Some(effort))
-            .bounded_output()
-            .unwrap();
+        let output = step_command(
+            &env,
+            &origin,
+            "deepseek-v4.1-flash",
+            None,
+            Some(effort),
+            false,
+        )
+        .bounded_output()
+        .unwrap();
         assert_eq!(
             output.status.code(),
             Some(78),
@@ -378,7 +406,7 @@ fn killing_the_step_closes_the_helpers_stdin_lease() {
         requested.send(line).unwrap();
         let _ = released.recv_timeout(Duration::from_secs(15));
     });
-    let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", None, None);
+    let mut command = step_command(&env, &origin, "deepseek-v4.1-flash", None, None, false);
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
