@@ -4959,6 +4959,12 @@ fn parent_message_recreates_missing_empty_dir_before_resuming_child() {
 
 #[cfg(unix)]
 #[test]
+fn parent_message_recreates_empty_dir_and_reapplies_the_recorded_target() {
+    assert_parent_follow_up_case(Some(true), None, ResumeFollowUpCase::Fallback);
+}
+
+#[cfg(unix)]
+#[test]
 fn parent_message_refuses_revoked_empty_dir_grant_before_opening() {
     assert_parent_message_resumes_child(Some(false), None);
 }
@@ -4983,6 +4989,7 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResumeFollowUpCase {
     Ordinary,
+    Fallback,
     TeamRole,
     Late,
     InFlight,
@@ -5201,6 +5208,12 @@ fn assert_parent_follow_up_case(
                 agent_name_explicit: true,
                 launch: LaunchParams {
                     checkout: checkout.clone(),
+                    add_dirs: if case == ResumeFollowUpCase::Fallback {
+                        vec![env.project_root.display().to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    untrusted_checkout: case == ResumeFollowUpCase::Fallback,
                     channel: channel.map(str::to_owned),
                     parent_agent_id: Some("parent".into()),
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
@@ -5563,6 +5576,70 @@ fn assert_parent_follow_up_case(
         cwd.is_dir(),
         "child resume must recreate its recorded empty directory before opening a pane"
     );
+    if case == ResumeFollowUpCase::Fallback {
+        let log = std::fs::read_to_string(&trace).unwrap();
+        let args = log
+            .lines()
+            .find(|line| line.contains("\tnew-tab\t"))
+            .unwrap()
+            .split('\t')
+            .collect::<Vec<_>>();
+        let path = args
+            .windows(2)
+            .find(|pair| pair[0] == "--layout")
+            .unwrap_or_else(|| panic!("no resumed layout: {log}"))[1];
+        let layout = std::fs::read_to_string(path).unwrap();
+        let layout: kdl::KdlDocument = layout.parse().unwrap();
+        let mut documents = vec![&layout];
+        let mut payload = None;
+        while let Some(document) = documents.pop() {
+            for node in document.nodes() {
+                if let Some(children) = node.children() {
+                    if let Some(args) = children.get("args") {
+                        let argv = args
+                            .entries()
+                            .iter()
+                            .filter_map(|entry| entry.value().as_string())
+                            .collect::<Vec<_>>();
+                        if let Some(pair) = argv.windows(2).find(|pair| pair[0] == "--request-file")
+                        {
+                            payload = Some(std::fs::read_to_string(pair[1]).unwrap());
+                        }
+                    }
+                    documents.push(children);
+                }
+            }
+        }
+        let payload = payload.expect("resumed pane carries the exec request");
+        let decoded = rimz::harness::launch::decode_exec_request("claude", None, &payload).unwrap();
+        assert_eq!(
+            decoded.identity.params.add_dirs,
+            [env.project_root.display().to_string()]
+        );
+        assert!(decoded.identity.params.untrusted_checkout);
+        let output = env
+            .rimz()
+            .args(["agents", "explain", "@otter", "--json"])
+            .env(
+                "SHELL",
+                crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+            )
+            .env("PATH", path_with_front(&shim))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            plan["prompt"]["reminder"]
+                .as_str()
+                .unwrap()
+                .contains("- target:")
+        );
+    }
     env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
     let records = store.list_messages().unwrap();
     let message = records
@@ -5599,6 +5676,12 @@ fn assert_parent_follow_up_case(
     request.identity.launch_id = Some(launch_id.to_string());
     request.identity.params = LaunchParams {
         checkout,
+        add_dirs: if case == ResumeFollowUpCase::Fallback {
+            vec![env.project_root.display().to_string()]
+        } else {
+            Vec::new()
+        },
+        untrusted_checkout: case == ResumeFollowUpCase::Fallback,
         channel: channel.map(str::to_owned),
         parent_agent_id: Some("parent".into()),
         parent_agent_kind: Some(AgentKind::new_unchecked("claude")),

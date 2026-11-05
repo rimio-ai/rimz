@@ -797,6 +797,9 @@ mod tests {
     #[test]
     fn fork_validation_inherits_lane_identity_and_drops_cohort_identity() {
         let mut agent = source("session-1");
+        agent.checkout = Some("/target".into());
+        agent.add_dirs = vec!["/target".into()];
+        agent.untrusted_checkout = true;
         agent.profile = Some("planner".to_owned());
         agent.channel = Some("auth".to_owned());
         agent.team = Some("forge".to_owned());
@@ -822,6 +825,9 @@ mod tests {
         .expect("valid fork");
 
         assert_eq!(seed.launch.login, agent.login);
+        assert_eq!(seed.launch.checkout, agent.checkout);
+        assert_eq!(seed.launch.add_dirs, agent.add_dirs);
+        assert!(seed.launch.untrusted_checkout);
         assert_eq!(seed.source_session_id, AgentSessionId::from("session-1"));
         assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));

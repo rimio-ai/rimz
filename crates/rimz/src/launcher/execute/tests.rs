@@ -101,6 +101,7 @@ impl Fixture {
                 entry: RoomEntry::Birth,
                 soft_name: false,
                 throttle_turn: None,
+                fallback_assist: None,
             },
         }
     }

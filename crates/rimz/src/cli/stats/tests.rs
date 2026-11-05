@@ -2912,6 +2912,33 @@ fn empty_dir_grant_has_its_own_category_benefit_and_forensics() {
 }
 
 #[test]
+fn untrusted_cwd_fallback_has_its_own_category_benefit_and_forensics() {
+    let record = serde_json::from_value(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "untrusted_cwd_fallback",
+        "kind": "claude", "login": "claude@work", "profile": "researcher",
+        "target": "/untrusted", "cwd": "/empty/room/child"
+    }));
+    assert!(record.is_ok(), "fallback assists must decode: {record:?}");
+    let stats = assists::AssistStats::from_records("all", vec![record.unwrap()]);
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["untrusted_cwd_fallbacks"],
+        1
+    );
+    let rows = assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline).join("\n");
+    assert!(rows.contains("Untrusted cwd:"), "{rows}");
+    let benefit = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        benefit.contains("claude (work)") && benefit.contains("/untrusted"),
+        "{benefit}"
+    );
+    let forensic = assists::forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        forensic.contains("/empty/room/child") && forensic.contains("researcher"),
+        "{forensic}"
+    );
+}
+
+#[test]
 fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
     let record = serde_json::from_value(serde_json::json!({
         "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
@@ -3226,6 +3253,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             judge_declines: 0,
             model_aliases: 0,
             empty_dir_grants: 0,
+            untrusted_cwd_fallbacks: 0,
             tier_fallbacks: 0,
             redeems: 1,
             resets: 1,

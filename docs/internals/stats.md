@@ -218,6 +218,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
 | port forward | it has no error; the local supervisor opened the forward |
 | empty-dir grant | always: the provider-file write succeeded, independently of later launch preflights |
+| untrusted cwd fallback | the child launched in its private directory; preparation and refused launches do not count |
 | spend rebuild | always: the helper writes a record only after at least one replacement append |
 | molt, idle-stop withdrawal, judge decline, workflow transitions, resident launch, model alias, tier fallback, compact command, room resume | always: each counts as recorded |
 
@@ -226,6 +227,8 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 `port_forward` events count under `port_forwards`, with failed opens under `held.port_forwards`. They are written on the laptop, so only that RimZ home's stats include them. A listener returning after a close counts as a new forward; reopening an existing forward after a master replacement does not ([forward lifecycle](./remote.md#port-auto-forwarding)).
 
 `empty_dir_grant` events count under `empty_dir_grants` and the `Empty-dir trust:` category. The benefit names the provider, account, trusted folder, and profile when present; the forensic line adds the provider file. Failed writes and a concurrent writer's completed grant produce no assist.
+
+`untrusted_cwd_fallback` events count under `untrusted_cwd_fallbacks` and `Untrusted cwd:`. They carry `kind`, account `login`, `target`, private `cwd`, and optional `profile`. The benefit names the provider, account, target, and profile; forensics add cwd. Repeated target/profile starts group by account as empty-root grants do, without merging the two categories. An explicit empty start has no fallback assist.
 
 `soft_compact` counts the wrap-up steer under `soft_compacts` (`Soft compact:`), only when delivered. A miss remains in `held.soft_compacts` and the forensic timeline. Its later compact-first command counts separately under `compacts` (`Auto-compact:`); a continue record adds no assist.
 

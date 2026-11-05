@@ -1522,6 +1522,71 @@ fn subagent_unsupported_added_directory_warns_and_launches() {
 }
 
 #[test]
+fn subagent_undecided_cwd_falls_back_without_trusting_the_target() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("fallback"));
+}
+
+#[test]
+fn subagent_codex_fallback_honors_workspace_and_read_only_permissions() {
+    for case in ["fallback-codex", "fallback-readonly"] {
+        assert_subagent_checkout_case(false, false, Some("absolute"), None, Some(case));
+    }
+}
+
+#[test]
+fn subagent_fanout_undecided_cwd_uses_each_childs_empty_directory() {
+    assert_subagent_checkout_case(true, false, Some("absolute"), None, Some("fallback"));
+}
+
+#[test]
+fn subagent_fallback_quotes_the_reusable_command() {
+    assert_subagent_checkout_case(
+        false,
+        false,
+        Some("absolute"),
+        None,
+        Some("fallback-quoted"),
+    );
+}
+
+#[test]
+fn subagent_fallback_reusable_command_preserves_agent_override() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("fallback-agent"));
+}
+
+#[test]
+fn subagent_fanout_fallback_reusable_command_preserves_agent_override() {
+    assert_subagent_checkout_case(true, false, Some("absolute"), None, Some("fallback-agent"));
+}
+
+#[test]
+fn subagent_budget_refused_fallback_records_no_assist() {
+    assert_subagent_checkout_case(
+        false,
+        false,
+        Some("absolute"),
+        None,
+        Some("fallback-budget"),
+    );
+}
+
+#[test]
+fn subagent_unusable_fallback_refuses_with_both_causes_without_writing() {
+    assert_subagent_checkout_case(
+        false,
+        false,
+        Some("absolute"),
+        None,
+        Some("fallback-restricted"),
+    );
+}
+
+#[test]
+fn subagent_saved_untrusted_cwd_still_refuses() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("restricted-cwd"));
+}
+
+#[test]
 fn subagent_explicit_empty_directory_displaces_cwd_and_preserves_its_lane() {
     assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("explicit"));
 }
@@ -1664,6 +1729,8 @@ fn assert_subagent_checkout_case(
     empty: Option<&str>,
 ) {
     let env = Env::new();
+    let fallback = empty.is_some_and(|case| case.starts_with("fallback"));
+    let agent = (empty == Some("fallback-agent")).then_some("codex");
     let restricted_added = empty.is_some_and(|case| case.starts_with("restricted-added"));
     let checkout = if matches!(empty, Some("root" | "revoked" | "stubs")) {
         env.project_root.clone()
@@ -1678,7 +1745,11 @@ fn assert_subagent_checkout_case(
     } else {
         env.home_root.join("parent-checkout")
     };
-    let foreign = env.home_root.join("foreign-briefs");
+    let foreign = env.home_root.join(if empty == Some("fallback-quoted") {
+        "foreign ' $HOME"
+    } else {
+        "foreign-briefs"
+    });
     std::fs::create_dir_all(&checkout).expect("mkdir parent checkout");
     let main_repo = if empty == Some("restricted-added-worktree") {
         if crate::common::git::git_missing() {
@@ -1696,6 +1767,12 @@ fn assert_subagent_checkout_case(
         None
     };
     std::fs::create_dir(&foreign).expect("mkdir foreign cwd");
+    if matches!(
+        empty,
+        Some("fallback-codex" | "fallback-readonly" | "fallback-restricted" | "fallback-agent")
+    ) {
+        crate::common::git::init_repo(&foreign);
+    }
     let mut prompt =
         "Read this brief from the foreign cwd, but work in the parent checkout.\n".repeat(1500);
     prompt.truncate(93 * 1024 - 1);
@@ -1716,13 +1793,17 @@ fn assert_subagent_checkout_case(
         }
         // Missing hooks make the supervised preflight refuse after the grant.
         Some("refused") => "claude",
-        Some("grant" | "malformed" | "concurrent" | "dirty" | "revoked" | "added" | "explicit") => {
+        Some(
+            "grant" | "malformed" | "concurrent" | "dirty" | "revoked" | "added" | "explicit"
+            | "fallback" | "fallback-quoted" | "fallback-budget",
+        ) => {
             env.install_agent_hooks("claude");
             "claude"
         }
         _ => "codex",
     };
     if empty.is_some() {
+        let profile_kind = if agent.is_some() { "claude" } else { kind };
         crate::common::write_definition(
             &env,
             "subagents",
@@ -1731,19 +1812,24 @@ fn assert_subagent_checkout_case(
                 format!("description: Research\nagent: {kind}")
             } else {
                 format!(
-                    "description: Research\nagent: {kind}\ntools: [Read]\n\
+                    "description: Research\nagent: {profile_kind}\ntools: [Read]\n\
                      allowed-tools: [Read]\nempty-dir: {}",
-                    !matches!(
-                        empty,
-                        Some("explicit" | "explicit-restricted" | "restricted-checkout")
-                    )
+                    !fallback
+                        && !matches!(
+                            empty,
+                            Some("explicit" | "explicit-restricted" | "restricted-checkout")
+                        )
                 )
             },
             "",
         );
         std::fs::write(
             env.rimz_home().join("config.toml"),
-            "[agents]\nisolation = 'host'\n",
+            if empty == Some("fallback-budget") {
+                "[agents]\nisolation = 'host'\n[harness]\nbudget = '0/day'\n"
+            } else {
+                "[agents]\nisolation = 'host'\n"
+            },
         )
         .unwrap();
     }
@@ -1760,7 +1846,31 @@ fn assert_subagent_checkout_case(
         }
     }
     trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
+    if matches!(
+        empty,
+        Some("fallback-codex" | "fallback-readonly" | "fallback-agent")
+    ) {
+        let path = env.agent_config_path("codex");
+        let mut config: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        config.insert(
+            "default_permissions".into(),
+            if empty == Some("fallback-readonly") {
+                ":read-only"
+            } else {
+                ":workspace"
+            }
+            .into(),
+        );
+        std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    }
+    trust_codex_project(
+        &env,
+        if cwd.is_some() && !fallback {
+            &foreign
+        } else {
+            &checkout
+        },
+    );
     if matches!(empty, Some("added" | "explicit")) {
         crate::common::trust_claude_project(&env, &foreign);
     }
@@ -1778,12 +1888,14 @@ fn assert_subagent_checkout_case(
             | "restricted-added"
             | "restricted-added-worktree"
             | "explicit-restricted"
-            | "restricted-checkout",
+            | "restricted-checkout"
+            | "restricted-cwd"
+            | "fallback-restricted",
         ) => {
             let path = env.agent_config_path("codex");
             let mut table: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
             table["projects"].as_table_mut().unwrap().insert(
-                if empty == Some("restricted-checkout") {
+                if matches!(empty, Some("restricted-checkout" | "restricted-cwd")) {
                     foreign.display().to_string()
                 } else if restricted_added {
                     main_repo
@@ -1931,14 +2043,18 @@ fn assert_subagent_checkout_case(
     let mut command = env.rimz();
     command.args(["--mux", "zellij", "subagents"]);
     if fanout {
-        if empty == Some("explicit") {
+        if empty == Some("explicit") || fallback {
             std::fs::write(
                 foreign.join("tasks.json"),
                 serde_json::to_vec(&json!([
-                    {"profile":"researcher", "prompt_file":"brief.md", "cwd":foreign,
-                     "add_dirs":[foreign], "empty_dir":true},
-                    {"profile":"researcher", "prompt_file":"brief.md", "cwd":foreign,
-                     "add_dirs":[foreign], "empty_dir":true}
+                    {"profile":"researcher", "agent":agent,
+                     "prompt_file":"brief.md", "cwd":foreign,
+                     "add_dirs":if fallback { vec![] } else { vec![foreign.clone()] },
+                     "empty_dir":!fallback},
+                    {"profile":"researcher", "agent":agent,
+                     "prompt_file":"brief.md", "cwd":foreign,
+                     "add_dirs":if fallback { vec![] } else { vec![foreign.clone()] },
+                     "empty_dir":!fallback}
                 ]))
                 .unwrap(),
             )
@@ -1955,6 +2071,9 @@ fn assert_subagent_checkout_case(
             "--prompt-file",
             "brief.md",
         ]);
+        if let Some(agent) = agent {
+            command.args(["--agent", agent]);
+        }
     }
     if let Some(cwd) = cwd.filter(|_| !fanout) {
         command.arg("--cwd").arg(if cwd == "absolute" {
@@ -2019,6 +2138,9 @@ fn assert_subagent_checkout_case(
                             | "restricted-added-worktree"
                             | "explicit-restricted"
                             | "restricted-checkout"
+                            | "restricted-cwd"
+                            | "fallback-restricted"
+                            | "fallback-budget"
                     )
                 )
             {
@@ -2043,7 +2165,40 @@ fn assert_subagent_checkout_case(
     if let Some((path, bytes)) = &unchanged {
         assert_eq!(std::fs::read(path).unwrap(), *bytes);
     }
-    if restricted_added || empty == Some("restricted-checkout") {
+    if empty == Some("fallback-budget") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{stderr}");
+        assert!(
+            stderr.contains("has no Claude folder-trust decision; started as"),
+            "{stderr}"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        let trace = std::fs::read_to_string(&trace_path).unwrap_or_default();
+        assert!(!trace.contains("\taction\tnew-tab\t"), "{trace}");
+        assert!(!trace.contains("\taction\tnew-pane\t"), "{trace}");
+        let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        assert_eq!(
+            assists
+                .iter()
+                .filter(|record| matches!(
+                    record.assist,
+                    rimz::harness::assist_log::Assist::UntrustedCwdFallback { .. }
+                ))
+                .count(),
+            0,
+            "a refused launch must not count as a fallback: {assists:?}"
+        );
+        let stats = env
+            .rimz()
+            .args(["stats", "--assists", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(stats.status.success());
+        let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+        assert_eq!(stats["rollup"]["untrusted_cwd_fallbacks"], 0);
+        return;
+    }
+    if restricted_added || matches!(empty, Some("restricted-checkout" | "restricted-cwd")) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !output.status.success() && stderr.contains("is saved untrusted"),
@@ -2057,6 +2212,19 @@ fn assert_subagent_checkout_case(
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !output.status.success()
+                && stderr.contains("empty-dir ignored:")
+                && stderr.contains("saved the empty folder as untrusted"),
+            "{stderr}"
+        );
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        assert!(!trace_path.exists());
+        return;
+    }
+    if empty == Some("fallback-restricted") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success()
+                && stderr.contains("rimz trust grant --agents codex")
                 && stderr.contains("empty-dir ignored:")
                 && stderr.contains("saved the empty folder as untrusted"),
             "{stderr}"
@@ -2234,10 +2402,11 @@ fn assert_subagent_checkout_case(
         checkout.to_str()
     );
     let lane_path = if cwd.is_some() { foreign } else { checkout };
-    let applied = matches!(
-        empty,
-        Some("root" | "named" | "revoked" | "grant" | "stubs" | "explicit")
-    );
+    let applied = fallback
+        || matches!(
+            empty,
+            Some("root" | "named" | "revoked" | "grant" | "stubs" | "explicit")
+        );
     let checkout = if applied {
         let child = agents
             .iter()
@@ -2304,7 +2473,7 @@ fn assert_subagent_checkout_case(
             );
         }
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
-        if matches!(empty, Some("added" | "explicit")) {
+        if fallback || matches!(empty, Some("added" | "explicit")) {
             let value = serde_json::to_value(child).unwrap();
             let target = if empty == Some("added") {
                 env.home_root.join("parent-checkout")
@@ -2312,6 +2481,94 @@ fn assert_subagent_checkout_case(
                 lane_path.clone()
             };
             assert_eq!(value["add_dirs"], json!([target]));
+            assert_eq!(
+                value["untrusted_checkout"].as_bool().unwrap_or(false),
+                fallback
+            );
+        }
+        if fallback {
+            let address = format!(
+                "@{}#{}",
+                child.name.as_deref().unwrap(),
+                child.channel().unwrap()
+            );
+            let mut inspect = env.rimz();
+            inspect.args(["agents", "show", &address, "--json"]).envs(
+                command
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            );
+            let shown = inspect.bounded_output().unwrap();
+            assert!(
+                shown.status.success(),
+                "{}",
+                String::from_utf8_lossy(&shown.stderr)
+            );
+            let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+            assert_eq!(shown["agent"]["checkout"], json!(lane_path));
+            assert_eq!(shown["agent"]["add_dirs"], json!([lane_path]));
+            assert_eq!(shown["agent"]["untrusted_checkout"], true);
+            let explain = env
+                .rimz()
+                .args(["agents", "explain", &address, "--json"])
+                .envs(
+                    command
+                        .get_envs()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .bounded_output()
+                .unwrap();
+            assert!(
+                explain.status.success(),
+                "{}",
+                String::from_utf8_lossy(&explain.stderr)
+            );
+            let explain: serde_json::Value = serde_json::from_slice(&explain.stdout).unwrap();
+            assert!(
+                explain["prompt"]["reminder"]
+                    .as_str()
+                    .unwrap()
+                    .contains("- target:")
+            );
+            let argv = explain["provider_argv"].as_array().unwrap();
+            if kind == "claude" {
+                assert!(!argv.iter().any(|word| word == "--add-dir"));
+                let settings: serde_json::Value = serde_json::from_str(
+                    argv.windows(2)
+                        .find(|pair| pair[0] == "--settings")
+                        .unwrap()[1]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    settings["permissions"]["additionalDirectories"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(lane_path))
+                );
+                let config: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(env.home_root.join(".claude.json")).unwrap(),
+                )
+                .unwrap();
+                assert!(config["projects"][lane_path.to_str().unwrap()].is_null());
+            } else {
+                assert_eq!(
+                    argv.windows(2)
+                        .any(|pair| pair[0] == "--add-dir" && pair[1] == json!(lane_path)),
+                    empty != Some("fallback-readonly")
+                );
+                let config: toml::Table = std::fs::read_to_string(env.agent_config_path("codex"))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(
+                    !config["projects"]
+                        .as_table()
+                        .unwrap()
+                        .contains_key(lane_path.to_str().unwrap())
+                );
+            }
         }
         assert_eq!(
             child.login.as_ref().map(|name| name.as_str()),
@@ -2467,7 +2724,7 @@ fn assert_subagent_checkout_case(
         let payload = std::fs::read_to_string(payload).expect("exec request contents");
         let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, &payload)
             .expect("restarted child request");
-        if matches!(empty, Some("added" | "explicit")) {
+        if fallback || matches!(empty, Some("added" | "explicit")) {
             let value = serde_json::to_value(&decoded.identity.params).unwrap();
             let target = if empty == Some("added") {
                 env.home_root.join("parent-checkout")
@@ -2475,6 +2732,10 @@ fn assert_subagent_checkout_case(
                 lane_path.clone()
             };
             assert_eq!(value["add_dirs"], json!([target]));
+            assert_eq!(
+                value["untrusted_checkout"].as_bool().unwrap_or(false),
+                fallback
+            );
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
@@ -2492,6 +2753,109 @@ fn assert_subagent_checkout_case(
             ),
             "restart: {stderr}"
         );
+    }
+    if fallback {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let provider = if kind == "claude" { "Claude" } else { "Codex" };
+        let target = if empty == Some("fallback-quoted") {
+            shlex::try_join([lane_path.to_str().unwrap()]).unwrap()
+        } else {
+            "~/foreign-briefs".to_owned()
+        };
+        assert!(
+            stderr.contains(&format!(
+                "warning: {target} has no {provider} folder-trust decision; started as\n"
+            )),
+            "{stderr}"
+        );
+        let override_arg = agent.map_or(String::new(), |agent| format!(" --agent {agent}"));
+        let equivalent = format!(
+            "rimz subagents researcher{override_arg} --cwd {target} --empty-dir --add-dir {target} \"<brief>\""
+        );
+        assert!(
+            stderr.contains(&format!("  {equivalent}\n  (in an empty directory, ")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains('—'));
+        let assists = || {
+            rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+                .into_iter()
+                .map(|record| serde_json::to_value(record).unwrap())
+                .filter(|record| record["assist"] == "untrusted_cwd_fallback")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(assists().len(), expected_count);
+        let stats = env
+            .rimz()
+            .args(["stats", "--assists", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(stats.status.success());
+        let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+        assert_eq!(stats["rollup"]["untrusted_cwd_fallbacks"], expected_count);
+        if !fanout || agent.is_some() {
+            let trace = env.project_root.join("replayed-launch.log");
+            let launched = std::sync::atomic::AtomicBool::new(false);
+            let mut replay = Command::new("/bin/sh");
+            replay
+                .arg("-c")
+                .arg(equivalent.replace("<brief>", "read the target"))
+                .env_clear()
+                .envs(
+                    command
+                        .get_envs()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+                .current_dir(&env.project_root);
+            let binary = env.rimz();
+            replay.env(
+                "PATH",
+                std::env::join_paths(
+                    std::iter::once(
+                        std::path::Path::new(binary.get_program())
+                            .parent()
+                            .unwrap()
+                            .to_path_buf(),
+                    )
+                    .chain(std::env::split_paths(&path_with_front(&agent_bin))),
+                )
+                .unwrap(),
+            );
+            let output = std::thread::scope(|scope| {
+                let binding = scope
+                    .spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
+                let output = replay.bounded_output().unwrap();
+                launched.store(true, std::sync::atomic::Ordering::Relaxed);
+                binding.join().unwrap();
+                output
+            });
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let agents = store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents;
+            let child = agents
+                .iter()
+                .find(|child| child.parent_agent_id.is_some() && !child.untrusted_checkout)
+                .unwrap();
+            assert_eq!(child.kind.as_str(), kind);
+            assert_eq!(child.checkout.as_deref(), lane_path.to_str());
+            assert_eq!(child.add_dirs, [lane_path.display().to_string()]);
+            assert!(
+                std::path::Path::new(child.worktree_path.as_deref().unwrap())
+                    .starts_with(&empty_root)
+            );
+            assert_eq!(
+                assists().len(),
+                expected_count,
+                "the explicit command must not append a fallback assist"
+            );
+        }
     }
 }
 

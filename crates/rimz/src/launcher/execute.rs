@@ -92,6 +92,7 @@ pub(super) struct FreshLaunch {
     pub(super) entry: RoomEntry,
     pub(super) soft_name: bool,
     pub(super) throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub(super) fallback_assist: Option<crate::harness::assist_log::Assist>,
 }
 
 pub struct OpenedRun {
@@ -222,7 +223,7 @@ fn execute_fresh(
 }
 
 fn open_fresh(
-    fresh: FreshLaunch,
+    mut fresh: FreshLaunch,
     leader: Option<LeaderRun>,
     interaction: &mut dyn Interaction,
     backend: &dyn crate::mux::MuxBackend,
@@ -499,6 +500,12 @@ fn open_fresh(
             let _ = store.fail_agent_launch_batch(&batch);
         }
     })?;
+    if let Some(assist) = fresh.fallback_assist.take() {
+        crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+            at: jiff::Timestamp::now(),
+            assist,
+        });
+    }
     let run = record.zip(leader).map(|(record, leader)| OpenedRun {
         response_path: leader
             .response_receipt

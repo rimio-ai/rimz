@@ -34,6 +34,12 @@ pub(super) struct AgentReportEntry {
     pub name: Option<String>,
     pub name_explicit: bool,
     pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub untrusted_checkout: bool,
     pub role: Option<String>,
     pub team: Option<String>,
     pub mode: Option<PermissionMode>,
@@ -381,6 +387,9 @@ pub(super) fn build_entry(
         name: agent.name.clone(),
         name_explicit: agent.name_explicit,
         profile: agent.profile.clone(),
+        checkout: agent.checkout.clone(),
+        add_dirs: agent.add_dirs.clone(),
+        untrusted_checkout: agent.untrusted_checkout,
         role: agent.role.clone(),
         team: agent.team.clone(),
         mode: agent.mode,

@@ -1189,7 +1189,21 @@ pub struct LaunchDirUntrusted {
     pub kind: &'static str,
     pub dir: PathBuf,
     pub fix: String,
-    reason: &'static str,
+    reason: LaunchDirTrustReason,
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+enum LaunchDirTrustReason {
+    #[error("has no trust decision and would stop at its trust prompt")]
+    Undecided,
+    #[error("is saved untrusted and will stop at its Folder access prompt on every launch")]
+    Restricted,
+}
+
+impl LaunchDirUntrusted {
+    pub fn is_undecided(&self) -> bool {
+        matches!(self.reason, LaunchDirTrustReason::Undecided)
+    }
 }
 
 /// Why an unattended run may not start in its working directory. The home
@@ -1240,7 +1254,7 @@ pub fn preflight_launch_dir(
                 } else {
                     gap.fix(adapter.spec().kind, "rimz trust grant")
                 },
-                reason: "has no trust decision and would stop at its trust prompt",
+                reason: LaunchDirTrustReason::Undecided,
             }
             .into())
         }
@@ -1252,8 +1266,9 @@ pub fn preflight_launch_dir(
                     "{}; RimZ leaves the saved decision alone",
                     FolderTrust::RESTRICTED_FIX
                 ),
-                reason: "is saved untrusted and will stop at its Folder access prompt on every launch",
-            }.into())
+                reason: LaunchDirTrustReason::Restricted,
+            }
+            .into())
         }
         _ => Ok(()),
     }

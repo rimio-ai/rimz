@@ -70,6 +70,29 @@ impl Interaction for CliInteraction {
                 render::err(),
                 "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
             )?,
+            Notice::UntrustedCwdFallback {
+                provider,
+                profile,
+                agent,
+                target,
+                cwd,
+            } => {
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let target = fallback_shell_path(target, home.as_deref());
+                let cwd = fallback_shell_path(cwd, home.as_deref());
+                let command = super::usage::shell_command(
+                    ["rimz", "subagents", profile]
+                        .into_iter()
+                        .chain(agent.into_iter().flat_map(|agent| ["--agent", agent])),
+                );
+                writeln!(
+                    render::err(),
+                    "warning: {target} has no {provider} folder-trust decision; started as\n  \
+                     {command} --cwd {target} --empty-dir --add-dir {target} \"<brief>\"\n  \
+                     (in an empty directory, {cwd}, so nothing from the repo loads; \
+                     the child can read the repo)"
+                )?;
+            }
             Notice::RoomReset { session, report } => {
                 render::room::print_automatic_reset(session, report)?
             }
@@ -111,6 +134,16 @@ impl Interaction for CliInteraction {
         }
         Ok(())
     }
+}
+
+fn fallback_shell_path(path: &Path, home: Option<&Path>) -> String {
+    if let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) {
+        let relative = relative.to_string_lossy();
+        if super::usage::shell_command([relative.as_ref()]) == relative {
+            return format!("~/{relative}");
+        }
+    }
+    super::usage::shell_command([path.to_string_lossy().as_ref()])
 }
 
 pub(super) fn admit_lsp(checkout: &Path, machine: &rimz::config::MachineConfig) -> Result<()> {

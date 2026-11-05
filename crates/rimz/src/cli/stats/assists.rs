@@ -30,6 +30,7 @@ pub(super) struct AssistRollup {
     pub(super) workflow_ends: usize,
     pub(super) port_forwards: usize,
     pub(super) empty_dir_grants: usize,
+    pub(super) untrusted_cwd_fallbacks: usize,
     pub(super) molts: usize,
     pub(super) stall_notices: usize,
     pub(super) stall_nudges: usize,
@@ -66,6 +67,15 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    UntrustedCwdFallback {
+        at: Timestamp,
+        kind: AgentKind,
+        login: rimz::ids::LoginKey,
+        target: std::path::PathBuf,
+        cwd: std::path::PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     SpendRebuild {
         at: Timestamp,
         days: Vec<jiff::civil::Date>,
@@ -454,6 +464,7 @@ impl AssistStats {
             match event {
                 AssistEvent::SpendRebuild { .. } => rollup.spend_rebuilds += 1,
                 AssistEvent::EmptyDirGrant { .. } => rollup.empty_dir_grants += 1,
+                AssistEvent::UntrustedCwdFallback { .. } => rollup.untrusted_cwd_fallbacks += 1,
                 AssistEvent::PortForward { .. } => rollup.port_forwards += 1,
                 AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
                 AssistEvent::WorkflowStep { .. } => rollup.workflow_steps += 1,
@@ -586,6 +597,7 @@ impl AssistEvent {
             | Self::ResidentLaunch { .. }
             | Self::ModelAlias { .. }
             | Self::EmptyDirGrant { .. }
+            | Self::UntrustedCwdFallback { .. }
             | Self::TierFallback { .. }
             | Self::Compact { .. }
             | Self::Resume { .. } => true,
@@ -603,6 +615,7 @@ impl AssistEvent {
             Self::SpendRebuild { .. } => "spend_rebuilds",
             Self::PortForward { .. } => "port_forwards",
             Self::EmptyDirGrant { .. } => "empty_dir_grants",
+            Self::UntrustedCwdFallback { .. } => "untrusted_cwd_fallbacks",
             Self::WorkflowStart { .. } => "workflow_starts",
             Self::WorkflowStep { .. } => "workflow_steps",
             Self::WorkflowRoute { .. } => "workflow_routes",
@@ -638,6 +651,20 @@ impl AssistEvent {
 
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::UntrustedCwdFallback {
+                kind,
+                login,
+                target,
+                cwd,
+                profile,
+            } => Self::UntrustedCwdFallback {
+                at: record.at,
+                kind,
+                login,
+                target,
+                cwd,
+                profile,
+            },
             Assist::SpendRebuild {
                 days,
                 files,
@@ -1166,6 +1193,7 @@ impl AssistEvent {
             Self::PortForward { at, .. }
             | Self::SpendRebuild { at, .. }
             | Self::EmptyDirGrant { at, .. }
+            | Self::UntrustedCwdFallback { at, .. }
             | Self::Molt { at, .. }
             | Self::WorkflowStart { at, .. }
             | Self::WorkflowStep { at, .. }
@@ -1395,7 +1423,8 @@ impl AssistEvent {
             | Self::WorkflowPark { run, .. }
             | Self::WorkflowEnd { run, .. } => RepeatSubject::Workflow(run),
             Self::PortForward { host, remote, .. } => RepeatSubject::Forward(host, *remote),
-            Self::EmptyDirGrant { kind, login, .. } => RepeatSubject::Account(kind, login),
+            Self::EmptyDirGrant { kind, login, .. }
+            | Self::UntrustedCwdFallback { kind, login, .. } => RepeatSubject::Account(kind, login),
             Self::ModelAlias {
                 kind, login, alias, ..
             } => RepeatSubject::Alias(kind, login, alias),
@@ -1480,6 +1509,9 @@ impl AssistEvent {
             } => RepeatKey::Redeem(*reason, outcome.as_deref()),
             Self::ModelAlias { from, to, .. } => RepeatKey::Alias(from, to),
             Self::EmptyDirGrant { key, profile, .. } => RepeatKey::Grant(key, profile.as_deref()),
+            Self::UntrustedCwdFallback {
+                target, profile, ..
+            } => RepeatKey::Grant(target, profile.as_deref()),
             Self::Resume { cause, .. } => RepeatKey::Resume(*cause),
             Self::WorkflowStart { .. } | Self::TmpEvict { .. } | Self::Gc { .. } => {
                 RepeatKey::Plain
@@ -1661,6 +1693,12 @@ pub(super) fn category_entries(
     };
     row("Stall notice:", "stall_notices", rollup.stall_notices, None);
     row("Stall nudge:", "stall_nudges", rollup.stall_nudges, None);
+    row(
+        "Untrusted cwd:",
+        "untrusted_cwd_fallbacks",
+        rollup.untrusted_cwd_fallbacks,
+        None,
+    );
     row(
         "Empty-dir trust:",
         "empty_dir_grants",
@@ -1923,6 +1961,20 @@ fn row_benefit_line(
             "{time} {kind} ({}) trusted the empty folder {}{}",
             login.name,
             key.display(),
+            profile
+                .as_ref()
+                .map_or_else(String::new, |profile| format!(" for {profile}"))
+        ),
+        AssistEvent::UntrustedCwdFallback {
+            kind,
+            login,
+            target,
+            profile,
+            ..
+        } => format!(
+            "{time} {kind} ({}) started privately for {}{}",
+            login.name,
+            target.display(),
             profile
                 .as_ref()
                 .map_or_else(String::new, |profile| format!(" for {profile}"))
@@ -2358,6 +2410,9 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
         AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
         AssistEvent::EmptyDirGrant { path, .. } => {
             format!("{at} {benefit} · provider file {}", path.display())
+        }
+        AssistEvent::UntrustedCwdFallback { cwd, .. } => {
+            format!("{at} {benefit} · cwd {}", cwd.display())
         }
         AssistEvent::TierFallback { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
         AssistEvent::Redeem {
