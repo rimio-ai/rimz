@@ -34,6 +34,7 @@ pub(crate) fn fmt_staged(root: &Path) -> Result<()> {
         ],
     )?;
     let mut refused = Vec::new();
+    let mut unjudged = 0usize;
     for name in paths
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
@@ -52,7 +53,10 @@ pub(crate) fn fmt_staged(root: &Path) -> Result<()> {
         let problem = match rustfmt(root, &source) {
             Ok(formatted) if formatted == source => continue,
             Ok(_) => "index copy not formatted; ".to_owned(),
-            Err(error) => format!("index copy could not be formatted: {error:#}; "),
+            Err(error) => {
+                unjudged += 1;
+                format!("index copy could not be formatted: {error:#}; ")
+            }
         };
         let outcome = match format_working_copy(root, path) {
             Ok(true) => "working copy formatted; review the diff and re-stage".to_owned(),
@@ -61,15 +65,35 @@ pub(crate) fn fmt_staged(root: &Path) -> Result<()> {
         };
         refused.push(format!("{path:?}: {problem}{outcome}"));
     }
-    if !refused.is_empty() {
+    if refused.is_empty() {
+        return Ok(());
+    }
+    if unjudged == refused.len() {
+        // Every refusal is rustfmt failing, not a formatting diff: the files may
+        // already be formatted, so point at the rustfmt error rather than at a
+        // reformat.
         bail!(
-            "{}\nstaged Rust files above were not formatted; only their working copies were \
-             formatted where possible, nothing was re-staged. Review the diff, re-stage, and \
-             commit again.",
+            "{}\nrustfmt failed to run on the staged Rust files above, so their formatting \
+             was not judged. Fix the rustfmt error printed for each file first (a syntax \
+             error, or a broken toolchain or compiler cache), then commit again.",
             refused.join("\n")
         );
     }
-    Ok(())
+    if unjudged > 0 {
+        bail!(
+            "{}\nrustfmt failed to run on {unjudged} of the staged Rust files above; fix the \
+             rustfmt error printed for each first. The others were not formatted; only their \
+             working copies were formatted where possible, nothing was re-staged. Review the \
+             diff, re-stage, and commit again.",
+            refused.join("\n")
+        );
+    }
+    Err(anyhow!(
+        "{}\nstaged Rust files above were not formatted; only their working copies were \
+         formatted where possible, nothing was re-staged. Review the diff, re-stage, and \
+         commit again.",
+        refused.join("\n")
+    ))
 }
 
 fn format_working_copy(root: &Path, path: &Path) -> Result<bool> {

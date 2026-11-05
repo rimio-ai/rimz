@@ -204,6 +204,11 @@ fn index_parse_error_is_reported_and_a_valid_working_copy_is_formatted() {
     assert!(err.contains("unclosed delimiter"), "{err}");
     assert!(err.contains("rustfmt failed with exit status"), "{err}");
     assert!(err.contains("working copy formatted"), "{err}");
+    assert!(
+        err.contains("rustfmt failed to run on the staged Rust files above"),
+        "{err}"
+    );
+    assert!(!err.contains("were not formatted;"), "{err}");
     assert_eq!(
         fs::read(root.path().join("example.rs")).unwrap(),
         FORMATTED.as_bytes()
@@ -212,6 +217,22 @@ fn index_parse_error_is_reported_and_a_valid_working_copy_is_formatted() {
         git(root.path(), &["rev-parse", ":example.rs"]),
         index_before
     );
+}
+
+#[test]
+fn mixed_refusal_counts_the_files_rustfmt_could_not_judge() {
+    let root = repo(&[("broken.rs", ""), ("plain.rs", "")]);
+    fs::write(root.path().join("broken.rs"), "fn broken(\n").unwrap();
+    fs::write(root.path().join("plain.rs"), UNFORMATTED).unwrap();
+    git(root.path(), &["add", "."]);
+
+    let err = fmt_staged(root.path()).unwrap_err().to_string();
+
+    assert!(
+        err.contains("rustfmt failed to run on 1 of the staged Rust files above"),
+        "{err}"
+    );
+    assert!(err.contains("The others were not formatted"), "{err}");
 }
 
 #[test]
