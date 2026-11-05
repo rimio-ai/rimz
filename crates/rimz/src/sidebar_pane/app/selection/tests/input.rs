@@ -1395,6 +1395,84 @@ fn folded_inactive_header_and_receipt_lines_expand_and_focus_first_member() {
 }
 
 #[test]
+fn folded_inactive_receipt_member_and_separator_clicks_focus_their_targets() {
+    let (snapshot, selected) = inactive_expansion_snapshot(0);
+    assert!(
+        snapshot
+            .rows()
+            .find(|row| row.id == "second")
+            .unwrap()
+            .pane
+            .is_some()
+    );
+    for (column, member) in [(13, "second"), (12, "done")] {
+        let mut ui = render::ViewState {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        };
+        let mut pane_ui = UiState::default();
+        reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+        let theme = pane_ui.theme(&snapshot.theme);
+        let composed =
+            render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+        let receipt = composed
+            .lines
+            .iter()
+            .position(|line| line.to_string().starts_with(" ▸ ✓ claude  ✓ claude"))
+            .expect("both member chips fit at width 54");
+        pane_ui.interactions = composed.interactions;
+        remember_roster(&mut ui, &mut pane_ui, &snapshot);
+        let expected = PaneId::from_parts(MuxName::Zellij, format!("terminal_{member}"));
+        assert_eq!(
+            handle_mouse_click(column, receipt as u16, &mut ui, &mut pane_ui, &snapshot),
+            InputOutcome {
+                redraw: true,
+                effects: vec![InputEffect::Focus(expected.clone())],
+            }
+        );
+        assert!(ui.expanded_groups.contains("inactive"));
+        assert_eq!(ui.selected_pane, Some(expected));
+        assert_eq!(ui.reveal_row.as_deref(), Some(member));
+        assert!(ui.inactive_peek.is_some());
+    }
+}
+
+#[test]
+fn folded_inactive_receipt_member_without_a_pane_expands_without_focus() {
+    let (mut snapshot, selected) = inactive_expansion_snapshot(0);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+            .last_mut()
+            .unwrap()
+            .rows,
+    )[1]
+    .pane = None;
+    let mut ui = render::ViewState {
+        inactive_peek: Some(Default::default()),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    let receipt = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().starts_with(" ▸ ✓ claude  ✓ claude"))
+        .expect("both member chips fit at width 54");
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(
+        handle_mouse_click(13, receipt as u16, &mut ui, &mut pane_ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert!(ui.expanded_groups.contains("inactive"));
+    assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.reveal_row, None);
+    assert!(ui.inactive_peek.is_some());
+}
+
+#[test]
 fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
     let (mut snapshot, selected) = inactive_expansion_snapshot(0);
     std::sync::Arc::make_mut(

@@ -375,6 +375,174 @@ fn inactive_chip_hit_columns_follow_a_wide_dotted_glyph() {
     }
 }
 
+fn receipt_snapshot() -> SidebarSnapshot {
+    let mut snapshot = super::worktree::pipeline_snapshot();
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    let mut reviewer = group.rows[0].clone();
+    reviewer.id = "reviewer".to_owned();
+    std::sync::Arc::make_mut(&mut group.rows).push(reviewer);
+    for row in std::sync::Arc::make_mut(&mut group.rows) {
+        let handle = row.id.clone();
+        let agent = row.as_agent_mut().unwrap();
+        agent.status = AgentStatus::Success;
+        agent.handle = Some(handle);
+    }
+    group.inactive = Some(SidebarInactive::Landed);
+    group.pipeline.as_mut().unwrap().stage = "Done".to_owned();
+    group.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
+        cost_usd: Some(4.02),
+        ..Default::default()
+    });
+    snapshot
+}
+
+fn assert_receipt_targets(
+    block: &RenderedBlock,
+    key: &str,
+    width: u16,
+    members: &[(std::ops::Range<u16>, &str)],
+) {
+    let target = |row: &str| HitTarget::ExpandGroup {
+        key: key.to_owned(),
+        row: row.to_owned(),
+    };
+    let chips = block
+        .interactions
+        .regions()
+        .iter()
+        .filter(|hit| hit.rows == (1..2) && hit.columns != (0..u16::MAX))
+        .map(|hit| (hit.columns.clone(), hit.target.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chips,
+        members
+            .iter()
+            .map(|(columns, row)| (columns.clone(), target(row)))
+            .collect::<Vec<_>>()
+    );
+    for line in 0..3 {
+        for column in 0..width {
+            let row = if line == 1 {
+                members
+                    .iter()
+                    .find(|(columns, _)| columns.contains(&column))
+                    .map_or("planner", |(_, row)| *row)
+            } else {
+                "planner"
+            };
+            assert_eq!(
+                block.interactions.target_at(column, line),
+                Some(target(row)),
+                "width {width}, line {line}, column {column}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inactive_receipt_chips_target_each_member_without_claiming_other_cells() {
+    let snapshot = receipt_snapshot();
+    let group = &snapshot.worktree_groups[0];
+    let theme = Theme::fixed(true);
+    let costs = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &costs);
+    let block = worktree_group_block(&ctx, group, false, None);
+    let receipt = &line_texts(&block.lines)[1];
+    assert!(receipt.starts_with(" ▸ forge · Done  ✓ planner  ✓ coder  ✓ reviewer"));
+    assert!(receipt.trim_end().ends_with("$4.02"));
+    assert_receipt_targets(
+        &block,
+        &group.key,
+        60,
+        &[(17..26, "planner"), (28..35, "coder"), (37..47, "reviewer")],
+    );
+}
+
+#[test]
+fn inactive_receipt_member_targets_stop_at_the_chip_admission_boundary() {
+    let snapshot = receipt_snapshot();
+    let group = &snapshot.worktree_groups[0];
+    let theme = Theme::fixed(true);
+    let costs = CostRolls::default();
+    for width in [52, 53, 54] {
+        let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &costs);
+        let block = worktree_group_block(&ctx, group, false, None);
+        let receipt = &line_texts(&block.lines)[1];
+        assert_eq!(receipt.contains("✓ reviewer"), width == 54, "{receipt}");
+        assert_eq!(receipt.contains("+1"), width < 54, "{receipt}");
+        let mut members = vec![(17..26, "planner"), (28..35, "coder")];
+        if width == 54 {
+            members.push((37..47, "reviewer"));
+        }
+        assert_receipt_targets(&block, &group.key, width as u16, &members);
+    }
+}
+
+#[test]
+fn inactive_receipt_member_columns_follow_wide_glyphs_and_names() {
+    let mut snapshot = receipt_snapshot();
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    std::sync::Arc::make_mut(&mut group.rows)[1]
+        .as_agent_mut()
+        .unwrap()
+        .handle = Some("界文".to_owned());
+    let theme = Theme::fixed_for_theme(
+        true,
+        &toml::from_str("[glyphs.unicode.status]\ndone = '界'").unwrap(),
+    );
+    let group = &snapshot.worktree_groups[0];
+    let costs = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 64, 0, 0, &costs);
+    let block = worktree_group_block(&ctx, group, false, None);
+    assert!(line_texts(&block.lines)[1].contains("界 planner  界 界文  界 reviewer"));
+    assert_receipt_targets(
+        &block,
+        &group.key,
+        64,
+        &[(17..27, "planner"), (29..36, "coder"), (38..49, "reviewer")],
+    );
+}
+
+#[test]
+fn workflow_receipt_has_no_member_regions_and_stays_inert_without_rows() {
+    let mut snapshot = receipt_snapshot();
+    let workflow = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO)
+        .worktree_groups[0]
+        .workflow
+        .clone();
+    let theme = Theme::fixed(true);
+    let costs = CostRolls::default();
+    for rowless in [false, true] {
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.workflow = workflow.clone();
+        if rowless {
+            group.rows = Default::default();
+        }
+        let group = &snapshot.worktree_groups[0];
+        let ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &costs);
+        let block = worktree_group_block(&ctx, group, false, None);
+        let receipt_hits = block
+            .interactions
+            .regions()
+            .iter()
+            .filter(|hit| hit.rows == (1..2))
+            .collect::<Vec<_>>();
+        assert_eq!(receipt_hits.len(), usize::from(!rowless));
+        assert!(receipt_hits.iter().all(|hit| hit.columns == (0..u16::MAX)));
+        for column in 0..60 {
+            assert_eq!(
+                block.interactions.target_at(column, 1),
+                (!rowless).then(|| HitTarget::ExpandGroup {
+                    key: group.key.clone(),
+                    row: "planner".to_owned(),
+                })
+            );
+        }
+    }
+}
+
 #[test]
 fn inactive_chip_is_one_target_in_both_states() {
     let mut snapshot = inactive_snapshot();

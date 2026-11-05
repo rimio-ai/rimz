@@ -283,7 +283,7 @@ fn inactive_group_collapses_unread_success_until_revealed() {
         texts.iter().all(|line| !line.contains('$')),
         "absent costs keep the terminal toggle bare: {texts:?}"
     );
-    assert_eq!(more_hits.len(), 3);
+    assert_eq!(more_hits.len(), 5);
     assert_eq!(more_hits[0].rows, 0..1);
     assert_eq!(
         more_hits[0].target,
@@ -292,17 +292,29 @@ fn inactive_group_collapses_unread_success_until_revealed() {
             row: "success-unread".into()
         }
     );
-    assert_eq!(more_hits[1].rows, 1..2);
+    for (hit, row) in more_hits[1..3].iter().zip(["success-unread", "success"]) {
+        assert_eq!(hit.rows, 1..2);
+        assert_ne!(hit.columns, 0..u16::MAX);
+        assert_eq!(
+            hit.target,
+            HitTarget::ExpandGroup {
+                key: group.key.clone(),
+                row: row.into(),
+            }
+        );
+    }
+    assert_eq!(more_hits[3].rows, 1..2);
+    assert_eq!(more_hits[3].columns, 0..u16::MAX);
     assert_eq!(
-        more_hits[1].target,
+        more_hits[3].target,
         HitTarget::ExpandGroup {
             key: group.key.clone(),
             row: "success-unread".into()
         }
     );
-    assert_eq!(more_hits[2].rows, 2..3);
+    assert_eq!(more_hits[4].rows, 2..3);
     assert_eq!(
-        more_hits[2].target,
+        more_hits[4].target,
         HitTarget::ExpandGroup {
             key: group.key.clone(),
             row: "success-unread".into()
