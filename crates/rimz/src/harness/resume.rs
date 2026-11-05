@@ -2718,10 +2718,11 @@ fn plan_resume_candidates_detailed(
             candidate.identity.kind.clone(),
             candidate.identity.session_id.clone(),
         );
-        let pane_name = crate::harness::spec::agent_pane_name(
+        let pane_name = crate::agents::pane_title::short_label(
             candidate.identity.profile.as_deref(),
             &candidate.identity.kind,
-        );
+        )
+        .to_owned();
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd {

@@ -158,7 +158,10 @@ impl Cell {
 
     pub(super) fn pane_name(&self) -> String {
         match self {
-            Self::Agent(cell) => agent_pane_name(cell.launch.profile.as_deref(), &cell.kind),
+            Self::Agent(cell) => {
+                crate::agents::pane_title::short_label(cell.launch.profile.as_deref(), &cell.kind)
+                    .to_owned()
+            }
             Self::Command { argv } => {
                 argv.first()
                     .map_or_else(crate::proc::shell_pane_name, |program| {
@@ -170,10 +173,6 @@ impl Cell {
             }
         }
     }
-}
-
-pub(super) fn agent_pane_name(profile: Option<&str>, kind: &AgentKind) -> String {
-    profile.map_or_else(|| kind.to_string(), str::to_owned)
 }
 
 /// A profile chain flattened to the concrete adapter kind that can be executed.

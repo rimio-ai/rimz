@@ -35,6 +35,7 @@ pub(crate) mod managed_statusline;
 pub mod model_display;
 mod observation;
 mod open_ask;
+pub mod pane_title;
 mod park;
 pub(crate) mod payload;
 pub mod petname;
