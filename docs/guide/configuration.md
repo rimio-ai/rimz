@@ -432,7 +432,7 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 
 ### Multiplexer room options
 
-RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without your editing the global Zellij or tmux config. `rimz reload` also re-applies options to live tmux sessions and their current windows. These tables are the only ones this page does not list in full: `rimz config init --print` gives every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
+RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without your editing the global Zellij or tmux config. `rimz reload` also re-applies options to live tmux sessions and their current windows, and sends Zellij's live options through its presence plugin. Before tmux 3.7, a `history_limit` change affects only new panes, not existing panes' scrollback. Reload names settings waiting for the next room start or attach. These tables are the only ones this page does not list in full: `rimz config init --print` gives every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
 
 ```toml
 [mux]
@@ -450,7 +450,7 @@ pane_border_status = "top"    # default; "bottom", "off", or "inherit"
 
 `[mux] status_bar` selects the room's status bar. On tmux, `"full"` (the default) leaves your bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. See [large rooms](./multiplexer.md#large-rooms) for the compact bar's trade-offs.
 
-On Zellij, `"full"` and `"compact"` both keep Zellij's one-row compact bar, and `"off"` omits it. A change reaches tabs RimZ opens at once and the rest of the room at its next birth; `rimz reload` does not change a Zellij room's bar. See [large rooms](./multiplexer.md#large-rooms) for what the Zellij bar shows and when a change applies.
+On Zellij, `"full"` and `"compact"` both keep Zellij's one-row compact bar, and `"off"` omits it. A change reaches tabs RimZ opens at once and the rest of the room at its next birth; `rimz reload` names the pending change without changing existing bars. See [large rooms](./multiplexer.md#large-rooms) for what the Zellij bar shows and when a change applies.
 
 The two backends differ in what an unset key means.
 

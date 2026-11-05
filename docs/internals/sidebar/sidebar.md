@@ -503,7 +503,7 @@ Across attach rounds the supervisor also checks that its pane still exists. A fr
 
 ## Reload and repair
 
-Reload replaces the running binary and keeps every pane. Repair fixes the pane structure. `rimz reload --repair` completes the upgrade, then runs repair as a separate operation.
+Reload replaces the running binary and keeps every pane. Repair fixes the pane structure. `rimz reload --repair` upgrades each room, then repairs it before reporting its resulting state; standalone `rimz sidebar repair` keeps its own report and exit rules.
 
 ### Build promotion
 

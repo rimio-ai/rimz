@@ -648,11 +648,10 @@ fn play(
     Ok(())
 }
 
-/// Run the structural pass directly; `rimz reload --repair` composes this
-/// entry after its independent upgrade transaction.
+/// Run the independent structural pass without publishing a new build.
 pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
     let outcome = rimz::reload::repair_user_sidebars();
-    repair_report(&mut render::out(), &outcome)
+    repair_report(&mut render::out(), &outcome.repair_totals())
 }
 
 fn repair_report(out: &mut impl Write, outcome: &rimz::reload::ReloadOutcome) -> Result<()> {

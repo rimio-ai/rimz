@@ -4146,7 +4146,7 @@ fn lsp_reload_retires_a_dormant_outdated_broker_and_preserves_its_leases() {
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
     let output = reload_as_installed(&env, &stub);
     output.assert().success().stdout(predicates::str::contains(
-        "Retired 1 outdated language-server broker",
+        "Also: 1 language-server broker retired",
     ));
     let deadline = Instant::now() + Duration::from_secs(10);
     while broker.try_wait().unwrap().is_none() {
@@ -4179,7 +4179,7 @@ fn lsp_reload_marks_a_serving_outdated_broker_until_its_next_stop() {
         .assert()
         .success()
         .stdout(predicates::str::contains(
-            "still serving; each retires when its server next stops.",
+            "1 broker retires when its server stops",
         ));
     assert!(broker.try_wait().unwrap().is_none());
     env.rimz()

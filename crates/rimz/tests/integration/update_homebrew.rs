@@ -140,6 +140,36 @@ fn update_holds_widening_packs_without_a_terminal_and_names_the_retry() {
     assert_eq!(fs::read(record_path).unwrap(), before);
 }
 
+#[test]
+fn update_runs_pack_updates_after_reload_exits_nonzero() {
+    if git_missing() {
+        return;
+    }
+    let mut fixture = HomebrewUpdateFixture::new(false);
+    fixture.install_pack("following", None);
+    fixture.formula_prefix = fixture.env.home_root.join("active");
+    fs::create_dir_all(fixture.formula_prefix.join("bin")).unwrap();
+    write_executable(
+        &fixture.formula_prefix.join("bin/rimz"),
+        r#"printf '%s\n' "$*" >> "$RIMZ_TEST_ACTIVE_LOG"
+[ "$1" != reload ] || exit 1
+exec "$RIMZ_TEST_REAL_BIN" "$@"
+"#,
+    );
+    let output = fixture.run();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(fixture.env.home_root.join("active.log")).unwrap(),
+        "reload\npacks update\n",
+        "packs still update after reload fails"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(" reload` exited with exit status: 1; see its fixes above"),
+        "{stderr}"
+    );
+}
+
 fn publish(repo: &Path) {
     git(repo, &["add", "."]);
     git(repo, &["commit", "-m", "fixture update"]);

@@ -46,20 +46,28 @@ pub fn run(args: UpdateArgs, _globals: &GlobalFlags) -> Result<()> {
 
     let after_id = rimz::build_id::of_file(&active_exe)
         .with_context(|| format!("reading updated RimZ binary {}", active_exe.display()))?;
-    if before_id != after_id {
+    let reload_error = if before_id != after_id {
         writeln!(render::out(), "Reloading running RimZ surfaces…")?;
-        let status = Command::new(&active_exe)
-            .arg("reload")
-            .status()
-            .with_context(|| format!("starting {} reload", active_exe.display()))?;
-        if !status.success() {
-            bail!(
-                "RimZ updated, but `{}` reload exited with {status}; rerun `rimz reload`",
+        match Command::new(&active_exe).arg("reload").status() {
+            Ok(status) if status.success() => None,
+            Ok(status) => Some(anyhow::anyhow!(
+                "RimZ updated, but `{} reload` exited with {status}; see its fixes above",
                 active_exe.display()
-            );
+            )),
+            Err(error) => Some(anyhow::anyhow!(
+                "RimZ updated, but `{} reload` could not start: {error}",
+                active_exe.display()
+            )),
         }
+    } else {
+        None
+    };
+    let packs = update_packs(&active_exe);
+    match (reload_error, packs) {
+        (Some(reload), Ok(())) => Err(reload),
+        (Some(reload), Err(packs)) => Err(packs.context(reload)),
+        (None, packs) => packs,
     }
-    update_packs(&active_exe)
 }
 
 fn update_packs(active_exe: &Path) -> Result<()> {

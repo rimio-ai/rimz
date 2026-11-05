@@ -3340,7 +3340,43 @@ reason = "The drainer publishes boot-safe claims, applications, skips and drops 
 path = "crates/rimz/src/reload.rs"
 # RecordWatch/RecordChange and their cadence move from the sidebar; RoomBuildFollower and exec_current_args serve every rimzd process (+12).
 # ReloadOutcome reports reopened daemon views and failed reopens (+2).
-surface-budget = 24
+# Per-room results and machine problem vocabulary reach the CLI through reload (+4).
+surface-budget = 28
+
+[[verdict]]
+kind = "item"
+key = "reload::report::ReloadReport"
+reason = "Reload and repair preserve each live room's identity and return machine results separately."
+
+[[verdict]]
+kind = "item"
+key = "reload::report::RoomReload"
+reason = "One room result supplies the row, pending notices, closing fixes and exit decision."
+
+[[verdict]]
+kind = "item"
+key = "reload::report::MachineReload"
+reason = "Machine-wide broker, dashboard, cleanup and web outcomes do not belong to any room."
+
+[[verdict]]
+kind = "item"
+key = "reload::report::RoomState"
+reason = "The library judges needs-you, settling and healthy precedence; the CLI only presents it."
+
+[[verdict]]
+kind = "item"
+key = "reload::report::RoomProblem"
+reason = "Typed room problems drive both row phrases and one targeted closing fix per cause."
+
+[[verdict]]
+kind = "item"
+key = "reload::report::MachineProblem"
+reason = "The same closing tally counts machine problems without fabricating a room."
+
+[[verdict]]
+kind = "item"
+key = "cli::render::truncate_left_width"
+reason = "The sessions picker and reload share one Unicode-width-aware path truncator."
 
 [[verdict]]
 kind = "item"

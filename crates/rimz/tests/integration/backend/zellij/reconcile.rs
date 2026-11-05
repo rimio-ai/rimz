@@ -784,13 +784,15 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
             )),
         );
         heartbeat.build = Some("vanished-temp-build".to_owned());
+        let path = runtime
+            .heartbeat_dir
+            .join(format!("sidebar.{}.json", pane.id));
         std::fs::write(
-            runtime
-                .heartbeat_dir
-                .join(format!("sidebar.{}.json", pane.id)),
+            &path,
             serde_json::to_vec(&heartbeat).expect("serialize stale heartbeat"),
         )
         .expect("write stale heartbeat");
+        crate::common::room::date_heartbeat_as_live(&path);
     }
     assert_eq!(receivers.len(), 3, "fixture has one sidebar in each tab");
 
@@ -838,13 +840,14 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         .expect("run bare reload");
     assert!(
         output.status.success(),
-        "bare reload failed: {}",
+        "bare reload failed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("3 sidebars still converging"),
-        "stale sidebars should be visible as unconverged: {stdout}",
+        stdout.contains("3 settling, retries on its own"),
+        "stale sidebars should be visible as settling: {stdout}",
     );
     let mux_log = std::fs::read_to_string(&zellij_log).expect("read zellij trace log");
     for mutation in ["action new-pane", "action close-pane", "action resize"] {
