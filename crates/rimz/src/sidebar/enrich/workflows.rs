@@ -135,7 +135,13 @@ fn project(
         .filter(|wait| wait.outcome == "hold")
         .map(|wait| {
             spec.and_then(|spec| spec.checks.get(&wait.node))
-                .and_then(|check| check.cases.get(wait.case? as usize)?.hold.clone())
+                .and_then(|check| {
+                    check
+                        .condition_cases()
+                        .get(wait.case? as usize)?
+                        .hold
+                        .clone()
+                })
                 .unwrap_or_else(|| "?".into())
         });
     let word = if record.state == RunState::Parked {

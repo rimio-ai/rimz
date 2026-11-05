@@ -281,7 +281,7 @@ fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
         "{}lifecycle='forever'\nthrottle=5\ntakeover='yes'\n",
         VALID.replace("max-visits = 3", "max-visits = '3'").replace(
             "[checks.pick]",
-            "[checks.pick]\nwake=[5,'review.ready',false,'team.stage']"
+            "[checks.pick]\nwhen=7\nwake=[5,'review.ready',false,'team.stage']"
         )
     ));
     assert!(
@@ -314,6 +314,7 @@ fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
             vec![
                 "checks.pick.wake.0",
                 "checks.pick.wake.2",
+                "checks.pick.when",
                 "steps.build.lifecycle",
                 "steps.build.max-visits",
                 "steps.build.takeover",

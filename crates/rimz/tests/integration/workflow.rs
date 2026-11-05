@@ -11,6 +11,7 @@ mod inspection;
 mod judges;
 mod scope;
 mod shells;
+mod sleep;
 mod ticks;
 mod tolerance;
 mod wakes;

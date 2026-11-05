@@ -443,6 +443,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                 render::cell(&row.kind),
                 render::cell(match row.runner.as_str() {
                     "condition" => "condition",
+                    "sleep" => "sleep",
                     "run" => row.run.as_deref().unwrap_or("—"),
                     "shell" => row.shell.as_deref().unwrap_or("—"),
                     _ => row.agent.as_deref().unwrap_or("—"),

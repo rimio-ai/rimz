@@ -745,6 +745,7 @@ fn prepare(
     } else {
         match spec.checks[&t.record.node].kind() {
             Some(spec::CheckKind::Agent(_)) => AttemptKind::Judge,
+            Some(spec::CheckKind::Sleep) => AttemptKind::Script,
             _ => AttemptKind::Script,
         }
     };

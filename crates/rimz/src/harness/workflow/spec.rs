@@ -46,7 +46,7 @@ impl WorkflowSpec {
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
         for check in self.checks.values() {
-            if !matches!(check.kind(), Some(CheckKind::Condition)) {
+            if !matches!(check.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
                 for wake in check.wake.iter().flatten() {
                     let (selector, matches) = wake.subscription()?;
                     if schedule::arm::default_signal_match_key(&selector, &matches) == Some("path")
@@ -56,7 +56,7 @@ impl WorkflowSpec {
                 }
                 continue;
             }
-            for case in &check.cases {
+            for case in check.condition_cases().iter() {
                 let expression = WhenExpr::parse(&case.when)?;
                 if expression.reads_forge() {
                     branches
@@ -133,6 +133,11 @@ pub struct Check {
     pub run: Option<String>,
     pub shell: Option<String>,
     pub agent: Option<String>,
+    pub sleep: Option<String>,
+    pub when: Option<Vec<String>>,
+    #[serde(rename = "for")]
+    pub hold: Option<String>,
+    pub then: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
     pub(super) wake: Option<Vec<Wake>>,
@@ -294,15 +299,16 @@ pub enum CheckKind<'a> {
     Shell(&'a str),
     Agent(&'a str),
     Condition,
+    Sleep,
 }
 
 impl Check {
     pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
-        if !matches!(self.kind(), Some(CheckKind::Condition)) {
+        if !matches!(self.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
             return self.wake.iter().flatten().map(Wake::subscription).collect();
         }
         let mut subscriptions = Vec::new();
-        for case in &self.cases {
+        for case in self.condition_cases().iter() {
             let expression = WhenExpr::parse(&case.when)?;
             subscriptions.extend(
                 expression
@@ -315,12 +321,46 @@ impl Check {
     }
 
     pub fn kind(&self) -> Option<CheckKind<'_>> {
-        match (&self.run, &self.shell, &self.agent, self.cases.is_empty()) {
-            (Some(run), None, None, true) => Some(CheckKind::Run(run)),
-            (None, Some(shell), None, true) => Some(CheckKind::Shell(shell)),
-            (None, None, Some(agent), true) => Some(CheckKind::Agent(agent)),
-            (None, None, None, false) => Some(CheckKind::Condition),
+        match (
+            &self.run,
+            &self.shell,
+            &self.agent,
+            &self.sleep,
+            self.cases.is_empty(),
+        ) {
+            (Some(run), None, None, None, true) => Some(CheckKind::Run(run)),
+            (None, Some(shell), None, None, true) => Some(CheckKind::Shell(shell)),
+            (None, None, Some(agent), None, true) => Some(CheckKind::Agent(agent)),
+            (None, None, None, None, false) => Some(CheckKind::Condition),
+            (None, None, None, Some(_), true) => Some(CheckKind::Sleep),
             _ => None,
+        }
+    }
+
+    pub fn is_sleep(&self) -> bool {
+        matches!(self.kind(), Some(CheckKind::Sleep))
+    }
+
+    pub fn condition_cases(&self) -> std::borrow::Cow<'_, [Case]> {
+        match self.kind() {
+            Some(CheckKind::Condition) => std::borrow::Cow::Borrowed(&self.cases),
+            Some(CheckKind::Sleep) => match &self.when {
+                Some(when) => std::borrow::Cow::Owned(vec![Case {
+                    when: when.clone(),
+                    outcome: "then".into(),
+                    hold: self.hold.clone(),
+                }]),
+                None => std::borrow::Cow::Borrowed(&[]),
+            },
+            _ => std::borrow::Cow::Borrowed(&[]),
+        }
+    }
+
+    pub(super) fn fallback_outcome(&self) -> Option<&str> {
+        if self.is_sleep() {
+            Some("sleeping")
+        } else {
+            self.else_outcome.as_deref()
         }
     }
 }

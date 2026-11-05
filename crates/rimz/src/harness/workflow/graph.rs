@@ -232,20 +232,26 @@ impl WorkflowSpec {
     pub(super) fn resolved_edges(&self, node: &str) -> Option<Vec<Edge>> {
         let mut edges = self.node_edges(node)?;
         let outcomes = if let Some(check) = self.checks.get(node) {
-            check
-                .cases
-                .iter()
-                .map(|case| case.outcome.clone())
-                .chain(check.else_outcome.iter().cloned())
-                .chain(
-                    check
-                        .on
-                        .keys()
-                        .filter(|outcome| !CHECK_TRIGGERS.contains(&outcome.as_str()))
-                        .cloned(),
-                )
-                .chain(CHECK_TRIGGERS.map(str::to_owned))
-                .collect::<Vec<_>>()
+            if check.is_sleep() {
+                ["then", "sleeping", "unknown", "invalid", "deadline"]
+                    .map(str::to_owned)
+                    .to_vec()
+            } else {
+                check
+                    .cases
+                    .iter()
+                    .map(|case| case.outcome.clone())
+                    .chain(check.else_outcome.iter().cloned())
+                    .chain(
+                        check
+                            .on
+                            .keys()
+                            .filter(|outcome| !CHECK_TRIGGERS.contains(&outcome.as_str()))
+                            .cloned(),
+                    )
+                    .chain(CHECK_TRIGGERS.map(str::to_owned))
+                    .collect::<Vec<_>>()
+            }
         } else {
             STEP_TRIGGERS.map(str::to_owned).to_vec()
         };
@@ -326,7 +332,8 @@ impl WorkflowSpec {
                 .edges()
                 .into_iter()
                 .map(|(outcome, target)| {
-                    let explicit = check.on.contains_key(&outcome);
+                    let explicit =
+                        check.on.contains_key(&outcome) || (outcome == "then" && check.is_sleep());
                     (outcome, (target, explicit))
                 })
                 .collect()
@@ -358,6 +365,19 @@ impl WorkflowSpec {
 
 impl Check {
     fn edges(&self) -> BTreeMap<String, String> {
+        if self.is_sleep() {
+            let mut edges = BTreeMap::from([
+                ("sleeping".into(), "@wait".into()),
+                ("invalid".into(), "@user".into()),
+            ]);
+            if let Some(target) = &self.then {
+                edges.insert("then".into(), target.clone());
+            }
+            if self.when.is_some() {
+                edges.insert("unknown".into(), "@wait".into());
+            }
+            return edges;
+        }
         let mut edges = self
             .on
             .iter()

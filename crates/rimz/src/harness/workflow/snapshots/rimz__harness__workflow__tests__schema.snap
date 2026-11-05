@@ -57,6 +57,12 @@ expression: value
             "null"
           ]
         },
+        "for": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "on": {
           "additionalProperties": {
             "$ref": "#/$defs/Route"
@@ -88,7 +94,19 @@ expression: value
             "null"
           ]
         },
+        "sleep": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "then": {
           "type": [
             "string",
             "null"
@@ -103,6 +121,15 @@ expression: value
         "wake": {
           "items": {
             "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "when": {
+          "items": {
+            "type": "string"
           },
           "type": [
             "array",

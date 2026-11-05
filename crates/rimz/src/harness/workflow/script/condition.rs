@@ -37,7 +37,7 @@ pub(super) fn evaluate(
     let now = Timestamp::now();
     let windows = WindowReadings::new(Some(&runtime), now);
     let expressions = check
-        .cases
+        .condition_cases()
         .iter()
         .map(|case| WhenExpr::parse(&case.when).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -111,12 +111,13 @@ fn answer(
     if ci_unread.is_some() {
         readings.insert("ci".into(), None);
     }
-    let mut object = json!({"outcome":check.else_outcome, "readings":readings});
+    let cases = check.condition_cases();
+    let mut object = json!({"outcome":check.fallback_outcome(), "readings":readings});
     for (index, expression) in expressions.iter().enumerate() {
         match expression.truth(&readings) {
             Some(false) => continue,
             Some(true) => {
-                let case = &check.cases[index];
+                let case = &cases[index];
                 object["outcome"] = json!(case.outcome);
                 object["case"] = json!(index);
             }
@@ -156,6 +157,7 @@ pub fn case_marks(
     object: &Value,
     wait: Option<&Wait>,
 ) -> Result<CaseMarks, SpecErr> {
+    let condition_cases = check.condition_cases();
     let selected = wait
         .filter(|wait| wait.is_hold())
         .and_then(|wait| wait.case)
@@ -166,10 +168,10 @@ pub fn case_marks(
                 .and_then(Value::as_u64)
                 .map(|case| (case, CaseMark::Winner))
         })
-        .filter(|(case, _)| *case < check.cases.len() as u64);
+        .filter(|(case, _)| *case < condition_cases.len() as u64);
     if let Some((selected, mark)) = selected {
         return Ok(CaseMarks {
-            cases: (0..check.cases.len() as u64)
+            cases: (0..condition_cases.len() as u64)
                 .map(|index| match index.cmp(&selected) {
                     std::cmp::Ordering::Less => CaseMark::False,
                     std::cmp::Ordering::Equal => mark,
@@ -187,7 +189,7 @@ pub fn case_marks(
         .map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned)))
         .collect();
     let mut cases = Vec::new();
-    for case in &check.cases {
+    for case in condition_cases.iter() {
         let mark = match WhenExpr::parse(&case.when)?.truth(&readings) {
             Some(false) => CaseMark::False,
             Some(true) => CaseMark::Winner,
@@ -195,7 +197,7 @@ pub fn case_marks(
         };
         cases.push(mark);
         if mark != CaseMark::False {
-            cases.resize(check.cases.len(), CaseMark::NotReached);
+            cases.resize(condition_cases.len(), CaseMark::NotReached);
             return Ok(CaseMarks {
                 cases,
                 else_mark: CaseMark::NotReached,

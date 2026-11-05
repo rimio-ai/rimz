@@ -153,16 +153,20 @@ impl View<'_> {
             forecast = bound;
             state
         } else if let Some(wait) = workflow_view::wait(record, Some(self.spec), self.now) {
-            if self.spec.checks.contains_key(&record.node) {
+            if let Some(check) = self.spec.checks.get(&record.node) {
                 if let Some((at, target)) = workflow::next_bound(self.spec, record, None, self.now)?
                 {
                     forecast = format!(" · gives up {}, then {target}", self.clock(at));
                 }
-                format!(
-                    "waiting at {} {}: {wait}",
-                    record.node,
-                    render::age_short(record.entered_at, self.now)
-                )
+                if check.is_sleep() {
+                    wait
+                } else {
+                    format!(
+                        "waiting at {} {}: {wait}",
+                        record.node,
+                        render::age_short(record.entered_at, self.now)
+                    )
+                }
             } else {
                 format!("{} {wait}", record.node)
             }
@@ -262,6 +266,14 @@ impl View<'_> {
     }
 
     fn hold(&self) -> Result<Option<(String, String)>> {
+        if self
+            .spec
+            .checks
+            .get(&self.record.node)
+            .is_some_and(|check| check.is_sleep())
+        {
+            return Ok(None);
+        }
         let Some(wait) = self
             .record
             .wait
@@ -280,7 +292,7 @@ impl View<'_> {
             .spec
             .checks
             .get(&wait.node)
-            .and_then(|check| check.cases.get(index as usize))
+            .and_then(|check| check.condition_cases().get(index as usize).cloned())
         else {
             return Ok(None);
         };

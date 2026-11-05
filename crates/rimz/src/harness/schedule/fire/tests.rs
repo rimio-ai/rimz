@@ -106,6 +106,7 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     let mut actual = Vec::new();
     let mut expected_stamps = Vec::new();
     for (now, recheck, held, expected) in [
+        (999, Some(1000), false, 0),
         (1000, None, false, 1000),
         (1029, Some(1030), false, 1000),
         (1030, Some(1030), false, 1030),
@@ -141,7 +142,10 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
         let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
             crate::disk::atomic::read_json_cache(&cache);
         actual.push((now, stamps.get(&record.id).copied()));
-        expected_stamps.push((now, Some(Timestamp::from_second(expected).unwrap())));
+        expected_stamps.push((
+            now,
+            (expected != 0).then(|| Timestamp::from_second(expected).unwrap()),
+        ));
     }
     assert_eq!(actual, expected_stamps);
     record.held = None;

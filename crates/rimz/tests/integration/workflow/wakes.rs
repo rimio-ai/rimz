@@ -38,6 +38,47 @@ fn assert_woken(env: &Env, id: &str, name: &str, payload: Value) {
 }
 
 #[test]
+fn sleep_when_wakes_from_its_derived_subscription_without_the_minute_tick() {
+    let check = "[checks.pr]\nsleep='30m'\nwhen=['pr=merged']\nthen='@done'\n";
+    let (env, _) = fixture(&format!("{HEADER}{check}"), "");
+    let id = start(&env);
+    until(&env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "unknown" && value["record"]["attempt"].is_null()
+    });
+    let runtime = env.runtime_paths();
+    fs::write(
+        runtime.lane_path("workflow-tick.json"),
+        serde_json::to_vec(
+            &json!({(id.as_str()):jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let path = runtime.lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "branch_ci":{}, "path_repos":{(env.project_root.to_string_lossy().as_ref()):"repo"},
+            "repos":{"repo":{"refreshed_at_ms":jiff::Timestamp::now().as_millisecond(),"ok":true}},
+            "states":{(env.project_root.to_string_lossy().as_ref()):{"state":"merged"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let began = Instant::now();
+    wake(&env, "pr.merged", json!({"path":env.project_root}));
+    let done = settled(&env, &id, "done");
+    assert!(began.elapsed() < Duration::from_secs(10), "{done}");
+    assert_eq!(events(&done, "wake").len(), 1, "{done}");
+    assert_eq!(
+        events(&done, "evaluation").last().unwrap()["object"]["outcome"],
+        "then"
+    );
+    assert!(done["record"]["input"].is_null());
+}
+
+#[test]
 fn checks_without_subscriptions_keep_their_backoff_and_wait_count() {
     for check in [
         WAIT.to_owned(),
