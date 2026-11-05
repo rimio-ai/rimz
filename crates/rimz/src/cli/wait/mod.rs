@@ -163,7 +163,7 @@ const SANDBOX_REMEDY: &str = "Run `rimz wait …` as its own command, without a 
     predate this RimZ, refresh them with `rimz hooks install codex` from a user shell and \
     restart the agent";
 
-fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
+fn home_write_hint(error: anyhow::Error, action: Option<&str>) -> anyhow::Error {
     if !error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -171,8 +171,11 @@ fn home_write_hint(error: anyhow::Error, action: &str) -> anyhow::Error {
     }) {
         return error;
     }
+    let unchanged = action
+        .map(|action| format!("nothing was {action}: "))
+        .unwrap_or_default();
     error.context(format!(
-        "nothing was {action}: this command cannot write the RimZ home, for example inside a \
+        "{unchanged}this command cannot write the RimZ home, for example inside a \
          provider's command sandbox. {SANDBOX_REMEDY}"
     ))
 }
@@ -196,7 +199,7 @@ mod tests {
                 ))
                 .context("updating wait");
                 let original = format!("{error:#}");
-                let report = format!("{:#}", home_write_hint(error, action));
+                let report = format!("{:#}", home_write_hint(error, Some(action)));
                 if kind != std::io::ErrorKind::ReadOnlyFilesystem {
                     assert_eq!(report, original);
                     continue;

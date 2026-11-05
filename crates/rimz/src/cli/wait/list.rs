@@ -20,7 +20,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.resolution_snapshot()?;
     let agent = caller_agent(&snapshot, caller.as_ref(), None)?;
     let rows = if agent.is_some() {
-        pending_rows(&ctx, agent, &snapshot)?
+        pending_rows(&ctx, agent, &snapshot).map_err(|error| home_write_hint(error, None))?
     } else {
         room_rows(&ctx, &snapshot)?
     };
