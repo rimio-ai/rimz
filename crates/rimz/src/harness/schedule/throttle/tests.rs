@@ -384,29 +384,6 @@ fn enqueue_as(fake: &FakeHost, pid: u32, run: &Run) -> PathBuf {
 }
 
 #[test]
-fn pressure_parses_the_some_line_of_real_proc_text() {
-    let text = "some avg10=22.92 avg60=23.06 avg300=31.40 total=1234567\n\
-                full avg10=0.00 avg60=1.50 avg300=2.00 total=99\n";
-    assert_eq!(
-        parse_pressure(text),
-        Some(Pressure {
-            avg10: 22.92,
-            avg60: 23.06
-        })
-    );
-    // `/proc/pressure/cpu` on an older kernel carries only the `some` line.
-    assert_eq!(
-        parse_pressure("some avg10=0.00 avg60=0.10 avg300=0.05 total=5\n"),
-        Some(Pressure {
-            avg10: 0.0,
-            avg60: 0.1
-        })
-    );
-    assert_eq!(parse_pressure("full avg10=0.00 avg60=0.00\n"), None);
-    assert_eq!(parse_pressure(""), None);
-}
-
-#[test]
 fn nothing_configured_writes_no_ticket() {
     let fake = FakeHost::new();
     let mut candidate = run("nightly");

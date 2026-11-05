@@ -16,6 +16,7 @@ mod macos;
 mod memo;
 pub(crate) mod memory;
 mod pane_probe;
+pub(crate) mod pressure;
 
 pub(crate) use bounded::{
     BoundedOutput, KillScope, pump_child, run_bounded_output, run_bounded_output_hosted,

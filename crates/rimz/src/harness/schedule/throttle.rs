@@ -23,6 +23,7 @@ use crate::disk::atomic::AtomicErr;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LoginName, WorkspaceId};
+use crate::proc::pressure::{Pressure, Resource};
 use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
 
@@ -80,24 +81,8 @@ pub enum ThrottleError {
 
 type Result<T, E = ThrottleError> = std::result::Result<T, E>;
 
-/// A pressure-stall resource RimZ can hold a start on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Resource {
-    Cpu,
-    Io,
-    Memory,
-}
-
 impl Resource {
     const ALL: [Self; 3] = [Self::Cpu, Self::Io, Self::Memory];
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Cpu => "cpu",
-            Self::Io => "io",
-            Self::Memory => "memory",
-        }
-    }
 
     const fn label(self) -> &'static str {
         match self {
@@ -116,37 +101,10 @@ impl Resource {
     }
 }
 
-/// The `some` line of one pressure file, in percent of wall time stalled.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Pressure {
-    pub(super) avg10: f32,
-    pub(super) avg60: f32,
-}
-
 impl Pressure {
     fn worst(self) -> f32 {
         self.avg10.max(self.avg60)
     }
-}
-
-/// Parse the `some` line of a `/proc/pressure/<resource>` file.
-fn parse_pressure(text: &str) -> Option<Pressure> {
-    let mut fields = text
-        .lines()
-        .find_map(|line| line.strip_prefix("some "))?
-        .split_ascii_whitespace();
-    let mut average = |key: &str| {
-        fields
-            .next()?
-            .strip_prefix(key)?
-            .strip_prefix('=')?
-            .parse::<f32>()
-            .ok()
-    };
-    Some(Pressure {
-        avg10: average("avg10")?,
-        avg60: average("avg60")?,
-    })
 }
 
 /// The process that owns a ticket until its launch is reported.
@@ -284,9 +242,7 @@ impl Host for SystemHost {
     }
 
     fn pressure(&self, resource: Resource) -> Result<Pressure, String> {
-        let path = format!("/proc/pressure/{}", resource.name());
-        let text = std::fs::read_to_string(&path).map_err(|err| format!("{path}: {err}"))?;
-        parse_pressure(&text).ok_or_else(|| format!("{path}: no `some` line"))
+        crate::proc::pressure::read(resource).map_err(|err| err.to_string())
     }
 
     fn memory_available(&self) -> Result<u64, String> {
