@@ -7,7 +7,7 @@ const MORE: &str = "`$RIMZ_WORKFLOW_DIR/context.json` holds this run's input and
 const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, RimZ closes your pane and runs the check `watch`. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires";
 const STOPS: &str =
     "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
-const CHECK: &str = "The check `watch` tests `cat answer.json`.";
+const CHECK: &str = "The check `watch` runs `cat answer.json`. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.";
 const STAY: &str = "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check `watch`.";
 const UNTIL: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
 const LATER: &str =

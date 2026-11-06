@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{Check, Fireability, HopKind, Step, WorkflowSpec, routing_hop};
+use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::harness::schedule::{
     catalog::TaskCatalog, span, trigger_clause, verbatim, when::WhenExpr,
@@ -268,14 +268,30 @@ fn check_note(spec: &WorkflowSpec, name: &str) -> Option<String> {
             span(name)
         ));
     }
-    let test = check
-        .summary
-        .as_deref()
-        .or(check.run.as_deref())
-        .or(check.shell.as_deref())
-        .or(check.prompt_file.as_deref())
-        .or(check.sleep.as_deref())?;
-    Some(format!("The check {} tests {}.", span(name), span(test)))
+    let name = span(name);
+    let summary = check.summary.as_deref().map(span);
+    let clause = summary
+        .as_ref()
+        .map_or_else(String::new, |summary| format!(" ({summary})"));
+    Some(match check.kind()? {
+        CheckKind::Run(command) => format!(
+            "The check {name} runs {}{clause}. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.",
+            span(command)
+        ),
+        CheckKind::Shell(command) => format!(
+            "The check {name} runs {}{clause} through `sh -c`; it runs from the checkout. `$RIMZ_WORKFLOW_DEFINITION` names the definition folder for a script there. You may run this command yourself.",
+            span(command)
+        ),
+        CheckKind::Agent(_) => summary.map_or_else(
+            || format!("The check {name} is an agent judge."),
+            |summary| format!("The check {name} tests {summary}."),
+        ),
+        CheckKind::Sleep => format!(
+            "The check {name} tests {}.",
+            span(check.summary.as_deref().or(check.sleep.as_deref())?)
+        ),
+        CheckKind::Condition => unreachable!("condition cases returned their note above"),
+    })
 }
 
 pub(super) fn push(spec: &WorkflowSpec, record: &RunRecord) -> Result<String, super::SpecErr> {
