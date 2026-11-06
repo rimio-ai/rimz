@@ -17,6 +17,50 @@ fn entry() -> AgentReportEntry {
 }
 
 #[test]
+fn context_cards_use_published_capacity_but_keep_usable_window_fill() {
+    for (kind, window, capacity, used, label) in [
+        ("opencode", 200_000, 400_000, 26_000, "400k"),
+        ("opencode", 983_010, 1_048_576, 127_791, "1M"),
+        ("codex", 828_400, 872_000, 107_692, "872k"),
+    ] {
+        let mut state = rimz::testkit::agent_state(kind, "capacity", jiff::Timestamp::UNIX_EPOCH);
+        state.usage.context_window = Some(window);
+        state.usage.context_capacity = (kind == "opencode").then_some(capacity);
+        state.usage.total_tokens = Some(used);
+        state.usage.fresh_input_tokens = Some(used);
+        if kind == "codex" {
+            state.context = Some(rimz::agents::AgentContext {
+                model_id: Some("gpt-6.1-sol".into()),
+                model_context_limits: Some(rimz::agents::context::ModelContextLimits {
+                    model: "gpt-6.1-sol".into(),
+                    max_window: Some(capacity),
+                    usable_percent: Some(95),
+                    own_compact_limit: None,
+                }),
+                ..Default::default()
+            });
+        }
+        let entry = build_entry(
+            &Default::default(),
+            &state,
+            None,
+            None,
+            "@capacity".into(),
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            ReportOverrides::default(),
+        );
+        let text = strip(|w| render_context_section(w, &entry, jiff::Timestamp::UNIX_EPOCH));
+        assert!(text.contains(&format!("13% of {label}")), "{kind}: {text}");
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["context"]["window"], window);
+        assert_eq!(json["context"]["capacity"], capacity);
+        assert_eq!(json["context"]["fill_pct"], 13);
+        assert_eq!(json["context"]["used_tokens"], used);
+    }
+}
+
+#[test]
 fn permission_ask_visibility_uses_the_show_snapshot_clock() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = rimz::ResolvedWorkspace {
@@ -244,6 +288,7 @@ fn card_projection_show_context_distinguishes_occupancy_and_spend() {
     let mut entry = entry();
     entry.context.fill_pct = Some(31);
     entry.context.window = Some(272_000);
+    entry.context.capacity = Some(272_000);
     entry.context.used_tokens = Some(84_320);
     entry.stats.total_tokens = Some(3_000_000);
     entry.stats.cache_read_tokens = Some(2_000_000);

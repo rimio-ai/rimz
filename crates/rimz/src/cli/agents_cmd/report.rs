@@ -111,6 +111,7 @@ pub(super) struct ContextReport {
     pub fill_pct: Option<u8>,
     pub used_tokens: Option<u64>,
     pub window: Option<u64>,
+    pub capacity: Option<u64>,
     pub severity: Option<ContextSeverity>,
     pub compactions: u32,
     pub compacting: bool,
@@ -414,6 +415,10 @@ pub(super) fn build_entry(
                 .map(|pct| pct.round().clamp(0.0, 100.0) as u8),
             used_tokens: agent.context_used_tokens(),
             window: agent.resolved_context_window(),
+            capacity: agent
+                .native_compaction()
+                .map(|limits| limits.capacity)
+                .or_else(|| agent.resolved_context_window()),
             severity: card.and_then(|card| card.context_severity),
             compactions: agent.compaction_count,
             compacting: agent.is_compacting(now),

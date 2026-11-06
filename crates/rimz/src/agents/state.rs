@@ -2174,6 +2174,23 @@ impl AgentState {
         )
     }
 
+    /// Provider-native display limits from the current window and model-matched catalog facts.
+    pub fn native_compaction(&self) -> Option<super::registry::NativeCompaction> {
+        let limits = self.context.as_ref().and_then(|context| {
+            context
+                .model_context_limits
+                .as_ref()
+                .filter(|limits| context.model_id.as_deref() == Some(limits.model.as_str()))
+        });
+        super::registry::native_compaction(
+            self.kind.as_str(),
+            self.record.as_ref().and_then(|record| record.auto_compact),
+            self.resolved_context_window()?,
+            self.usage.context_capacity,
+            limits,
+        )
+    }
+
     /// The window denominator: the folded statusline's `context_window_size`,
     /// else the adapter-resolved `context_window`, else the model definition's
     /// default.

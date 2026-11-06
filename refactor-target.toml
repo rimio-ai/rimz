@@ -355,7 +355,8 @@ upward-dependencies = ["address"]
 # SessionCapability::is_untracked_frontend identifies frontends without session feeds (+1).
 # is_untracked_frontend shares the per-kind display fallback with the pane fold (+1).
 # NotTracked, NotTrackedReason, not_tracked_hooks and untracked_mode_fix share reporting gaps (+4).
-surface-budget = 1256
+# AgentState::native_compaction shares model-matched display limits with CLI reports and doctor (+1).
+surface-budget = 1257
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

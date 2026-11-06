@@ -37,6 +37,7 @@ expression: report
       "fill_pct": null,
       "used_tokens": null,
       "window": 272000,
+      "capacity": 286315,
       "severity": null,
       "compactions": 0,
       "compacting": false
