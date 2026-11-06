@@ -88,10 +88,11 @@ pub(super) fn agent_lead_cell(
 /// The fast-mode bolt follows the model in bold amber, still at rest and
 /// crackling only while running.
 /// The context label pairs the compaction point and model capacity (`372k/1M`)
-/// when the meter scales to native compaction, else shows the window (`258k`,
-/// `1M`). The window takes the context-sidecar reading first, then the row's
-/// carried/default fallback. A paired label yields width after the other
-/// capabilities and cost: point/capacity, point alone, then nothing, never cut.
+/// when the meter scales to native compaction, else shows the capacity (`872k`,
+/// `1M`), falling back to the usable window when unpublished. The usable window
+/// takes the context-sidecar reading first, then the row's carried/default
+/// fallback. A paired label yields width after the other capabilities and
+/// cost: point/capacity, point alone, then nothing, never cut.
 /// It rides only non-idle cards; idle cards keep model and reasoning configuration but drop the
 /// window until work starts.
 /// The whole capability cluster rides behind a resolved model: with none named,
@@ -190,10 +191,11 @@ pub(super) fn agent_identity_line(
                     }
                 }
             } else {
+                let capacity = meter.capacity.unwrap_or(window);
                 left.push(Span::styled(value_seam(theme), theme.muted()));
                 left.push(Span::styled(
-                    window_short(window),
-                    window_style(theme, window),
+                    window_short(capacity),
+                    window_style(theme, capacity),
                 ));
             }
         }

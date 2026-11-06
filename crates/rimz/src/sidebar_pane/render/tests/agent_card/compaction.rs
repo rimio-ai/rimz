@@ -36,6 +36,78 @@ fn compaction_snapshot() -> SidebarSnapshot {
     snapshot_with(vec![state])
 }
 
+fn opencode_compaction_snapshot() -> SidebarSnapshot {
+    let mut snapshot = compaction_snapshot();
+    let row = snapshot.rows_mut().next().unwrap();
+    row.name = "opencode".into();
+    let card = row.as_agent_mut().unwrap();
+    card.model = Some("HY4".into());
+    card.handle = Some("opencode-docsmith".into());
+    card.fast = true;
+    card.tier_moved = true;
+    card.auto_compact = None;
+    card.usage.context_window = Some(983_010);
+    card.usage.context_capacity = Some(1_048_576);
+    card.context = Some(AgentContext {
+        cost: Some(AgentCost {
+            total_cost_usd: Some(1.2),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    snapshot
+}
+
+#[test]
+fn opencode_capacity_yields_at_the_exact_label_boundary() {
+    for set in ["unicode", "nerd_font"] {
+        let mut snapshot = opencode_compaction_snapshot();
+        snapshot.theme.glyphs.set = Some(set.into());
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        for width in [53, 54, 55, 58] {
+            let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+            let identity = lines
+                .iter()
+                .find(|line| line.to_string().contains("opencode-docsmith"))
+                .unwrap();
+            let text = identity.to_string();
+            assert!(text.contains("835k"), "{set}, {width}: {text}");
+            assert_eq!(
+                text.contains("835k/1M"),
+                width >= 54,
+                "{set}, {width}: {text}"
+            );
+            assert!(text.trim_end().ends_with("$1.20"), "{text}");
+        }
+        assert_snapshot(
+            &format!("opencode_compaction_capacity_{set}"),
+            snapshot_to_screen(&snapshot, 58, 17),
+        );
+    }
+}
+
+#[test]
+fn window_scale_labels_and_tints_the_published_opencode_capacity() {
+    let mut snapshot = opencode_compaction_snapshot();
+    snapshot.theme.display.context_meter.scale = ContextMeterScale::Window;
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, 58);
+    let identity = lines
+        .iter()
+        .find(|line| line.to_string().contains("opencode-docsmith"))
+        .unwrap();
+    assert_eq!(
+        identity
+            .spans
+            .iter()
+            .find(|span| span.content == "1M")
+            .map(|span| span.style),
+        Some(crate::sidebar_pane::render::labels::window_style(
+            &theme, 1_048_576
+        ))
+    );
+}
+
 #[test]
 fn codex_identity_shows_compaction_only_after_a_reported_window() {
     for window in [None, Some(828_400)] {

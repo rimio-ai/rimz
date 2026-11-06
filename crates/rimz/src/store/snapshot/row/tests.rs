@@ -211,7 +211,7 @@ fn codex_meter_matches_limits_to_the_live_model_and_keeps_the_usable_window() {
             window.compact_at,
             window.percent
         ),
-        (Some(217_600), Some(217_600), None, Some(50))
+        (Some(217_600), Some(872_000), None, Some(50))
     );
     row.as_agent_mut()
         .unwrap()
@@ -228,6 +228,48 @@ fn codex_meter_matches_limits_to_the_live_model_and_keeps_the_usable_window() {
         ),
         (Some(217_600), Some(229_052), Some(206_146))
     );
+}
+
+#[test]
+fn opencode_meter_separates_the_published_size_from_both_scales() {
+    let mut row = meter_row();
+    row.name = "opencode".into();
+    let card = row.as_agent_mut().unwrap();
+    card.auto_compact = None;
+    card.context = None;
+    card.usage = AgentUsageSummary {
+        context_window: Some(983_010),
+        context_capacity: Some(1_048_576),
+        context_pct: Some(50),
+        total_tokens: Some(491_505),
+        fresh_input_tokens: Some(491_505),
+        ..Default::default()
+    };
+    let compaction = row.context_meter(ContextMeterScale::Compaction);
+    assert_eq!(
+        (
+            compaction.window,
+            compaction.capacity,
+            compaction.compact_at,
+            compaction.percent
+        ),
+        (Some(983_010), Some(1_048_576), Some(835_559), Some(58))
+    );
+    assert!((compaction.precise_percent.unwrap() - 58.823494).abs() < 0.000001);
+    let window = row.context_meter(ContextMeterScale::Window);
+    assert_eq!(
+        (
+            window.window,
+            window.capacity,
+            window.compact_at,
+            window.percent
+        ),
+        (Some(983_010), Some(1_048_576), None, Some(50))
+    );
+    row.as_agent_mut().unwrap().usage.context_capacity = None;
+    let legacy = row.context_meter(ContextMeterScale::Compaction);
+    assert_eq!(legacy.capacity, Some(983_010));
+    assert_eq!(legacy.compact_at, Some(835_559));
 }
 
 #[test]
