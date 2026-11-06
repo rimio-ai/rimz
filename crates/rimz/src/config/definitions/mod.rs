@@ -637,7 +637,11 @@ fn load_resolved(
     // Only kind bases have been materialized yet; each family keeps its own base prompt.
     let families: BTreeSet<_> = tiers
         .entries(super::tiers::ModelTier::Intern)
-        .map(|(_, kind, _)| kind)
+        .filter_map(|(_, kind, _)| kind)
+        .chain(
+            crate::agents::known_kinds()
+                .filter(|kind| crate::agents::runs_other_providers_models(kind)),
+        )
         .collect();
     let mut renders = BTreeMap::new();
     let mut exclusions = BTreeMap::new();

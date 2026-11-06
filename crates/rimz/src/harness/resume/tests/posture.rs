@@ -683,6 +683,57 @@ fn recorded_base_replays_and_missing_base_degrades() {
 }
 
 #[test]
+fn tier_stamped_model_clients_restart_without_degrading() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex", "pi", "opencode"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base.\n---\nBase.",
+        )
+        .unwrap();
+    }
+    for kind in ["pi", "opencode"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}-worker.md")),
+            format!(
+                "---\ndescription: Worker.\nagent: {kind}\ntier: junior\ntools: [Bash]\n---\nCraft."
+            ),
+        )
+        .unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &crate::config::CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let stamp = tier_stamp("sol");
+    let actual: Vec<_> = ["pi", "opencode"]
+        .map(|kind| {
+            let posture = resolve_posture(
+                PostureRequest {
+                    record: None,
+                    profile: Some(&format!("{kind}-worker")),
+                    kind: &AgentKind::new_unchecked(kind),
+                    stamped_mode: None,
+                    stamped_tier: Some(&stamp),
+                },
+                &loaded.agent_profiles,
+            );
+            (posture.degraded, posture.launch.model)
+        })
+        .into();
+    assert_eq!(
+        actual,
+        [(None, Some("sol".into())), (None, Some("sol".into()))]
+    );
+}
+
+#[test]
 fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("definitions");

@@ -3074,7 +3074,7 @@ pub struct ResumeOverrides<'a> {
     pub permission_mode: Option<PermissionMode>,
     pub preset: crate::agents::LaunchPreset,
     pub agent: Option<&'a str>,
-    /// Select only this row and the session's provider; never climb to a higher tier.
+    /// Select only this row on the session's engine; never climb to a higher tier.
     pub tier: Option<(
         crate::config::tiers::ModelTier,
         &'a crate::config::tiers::TierConfig,
@@ -3198,13 +3198,17 @@ fn restore_resume_cell(
         let mut first = None;
         let model = tiers
             .entries(tier)
-            .filter(|(row, family, _)| *row == tier && *family == kind.as_str())
-            .find_map(|(_, family, model)| {
+            .filter(|(row, family, _)| {
+                *row == tier
+                    && (crate::agents::runs_other_providers_models(&kind)
+                        || *family == Some(kind.as_str()))
+            })
+            .find_map(|(_, _, model)| {
                 first.get_or_insert_with(|| model.to_owned());
                 if tiers.routing == crate::config::tiers::Routing::Fallback
                     && let Some(reason) = overrides
                         .unavailable
-                        .and_then(|unavailable| unavailable(family, model))
+                        .and_then(|unavailable| unavailable(&kind, model))
                 {
                     skipped.push(crate::agents::TierSkip {
                         model: model.to_owned(),
@@ -3222,7 +3226,11 @@ fn restore_resume_cell(
             .ok_or_else(|| {
                 let working = tiers
                     .entries(crate::config::tiers::ModelTier::Intern)
-                    .filter_map(|(tier, family, _)| (family == kind.as_str()).then_some(tier))
+                    .filter_map(|(tier, family, _)| {
+                        (crate::agents::runs_other_providers_models(&kind)
+                            || family == Some(kind.as_str()))
+                        .then_some(tier)
+                    })
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .map(|tier| tier.to_string())

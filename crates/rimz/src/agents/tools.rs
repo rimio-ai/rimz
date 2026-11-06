@@ -208,7 +208,7 @@ pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
 }
 
 /// Whether `kind` runs models named by other providers' vocabularies.
-pub(crate) fn runs_other_providers_models(kind: &str) -> bool {
+pub fn runs_other_providers_models(kind: &str) -> bool {
     definitions(kind).runs_other_providers_models
 }
 

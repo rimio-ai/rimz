@@ -191,6 +191,56 @@ fn recorded_agent_override_rebases_model_and_records_base() {
 }
 
 #[test]
+fn resume_tier_on_model_clients_uses_the_exact_row_on_the_engine() {
+    let tiers = crate::config::tiers::TierConfig::default();
+    let actual: Vec<_> = ["pi", "opencode"]
+        .map(|kind| {
+            let mut planner = profile(kind);
+            planner.definition_renders = Some(crate::config::tiers::DefinitionRenders {
+                preference: crate::config::tiers::TierPreference {
+                    family: Some(kind.into()),
+                    model: None,
+                },
+                renders: BTreeMap::from([(kind.into(), profile(kind))]),
+                exclusions: BTreeMap::new(),
+                effort: None,
+            });
+            let saved = AgentState {
+                profile: Some("planner".into()),
+                ..agent(kind, "saved", "/repo", 0)
+            };
+            let (plan, _) = single(
+                &saved,
+                &profiles("planner", planner),
+                SingleResumeOptions {
+                    overrides: ResumeOverrides {
+                        tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                        unavailable: Some(&|family, _| {
+                            assert_eq!(family, kind);
+                            None
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            if !plan.skipped.is_empty() {
+                return Err(format!("{:?}", plan.skipped));
+            }
+            let request = decode_exec_request(&single_pane_argv(&plan));
+            Ok((request.kind.to_string(), request.identity.params.model))
+        })
+        .into();
+    assert_eq!(
+        actual,
+        [
+            Ok(("pi".into(), Some("sol".into()))),
+            Ok(("opencode".into(), Some("sol".into())))
+        ],
+    );
+}
+
+#[test]
 fn recorded_tier_override_selects_same_provider_and_records_model() {
     let tiers = crate::config::tiers::TierConfig::default();
     let request = request(ResumeOverrides {

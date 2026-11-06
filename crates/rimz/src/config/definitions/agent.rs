@@ -315,14 +315,24 @@ impl Resolver<'_> {
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
         let mut renders = BTreeMap::new();
         let mut exclusions = BTreeMap::new();
-        for (_, kind, model) in self.scope.tiers.entries(ModelTier::Intern) {
+        let candidates = self
+            .scope
+            .tiers
+            .entries(ModelTier::Intern)
+            .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
+            .chain(
+                agents::known_kinds()
+                    .filter(|kind| agents::runs_other_providers_models(kind))
+                    .map(|kind| (kind, fm.model.as_deref())),
+            );
+        for (kind, model) in candidates {
             if renders.contains_key(kind) || exclusions.contains_key(kind) {
                 continue;
             }
             let mut candidate = profile.clone();
             candidate.agent = kind.to_owned();
             let mut candidate_fm = fm.clone();
-            candidate_fm.model = Some(model.to_owned());
+            candidate_fm.model = model.map(str::to_owned);
             match self.finish(name, candidate_fm, candidate) {
                 Ok(rendered) => {
                     renders.insert(kind.to_owned(), rendered);
@@ -355,7 +365,7 @@ impl Resolver<'_> {
                         ),
                     )
                 })?;
-            // The probe loop rendered or excluded every table family, and the walk passes the excluded ones.
+            // The probe covers native families and model-client engines; the walk skips exclusions.
             let mut selected = renders[&pick.kind].clone();
             selected.model = Some(pick.model.clone());
             selected.effort = fm.effort.clone();

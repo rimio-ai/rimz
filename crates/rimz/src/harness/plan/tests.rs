@@ -863,6 +863,52 @@ fn launch_availability_follows_the_spend_ladder() {
 }
 
 #[test]
+fn launch_availability_reads_model_client_account_facts() {
+    use crate::agents::account::{AccountsCache, ProviderRecord};
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: ["pi", "opencode"]
+                .map(|kind| {
+                    (
+                        crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                        ProviderRecord {
+                            consecutive_failures: 0,
+                            version_probed_at_ms: None,
+                            inputs_stamp: None,
+                            profile: None,
+                            probe_error: None,
+                            login: None,
+                            probed_at_ms: 1,
+                            ok: true,
+                            account: None,
+                        },
+                    )
+                })
+                .into(),
+        },
+    )
+    .unwrap();
+    let availability = LaunchAvailability::read(
+        &runtime,
+        &state,
+        &MachineConfig::default(),
+        Timestamp::UNIX_EPOCH,
+    );
+    assert_eq!(
+        ["pi", "opencode"].map(|kind| availability.unavailable(kind, "opus")),
+        [
+            Some(TierSkipReason::LoggedOut),
+            Some(TierSkipReason::LoggedOut)
+        ],
+    );
+}
+
+#[test]
 fn launch_availability_judges_the_pinned_account_not_the_rooms() {
     use crate::agents::account::{
         AccountsCache, ProviderRecord, RateLimitCacheEntry, RateLimitsCache,
