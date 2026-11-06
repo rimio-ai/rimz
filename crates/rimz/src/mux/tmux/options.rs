@@ -317,9 +317,7 @@ fn pane_border_format(theme: &ThemeConfig) -> String {
     [
         "#{?#{==:#{pane_title},",
         SIDEBAR_CHROME_TITLE,
-        "},",
-        &muted,
-        " rimz ,#{?#{@rimz_title},",
+        "},,#{?#{@rimz_title},",
         &title_style,
         " #{@rimz_title} ,",
         &muted,
@@ -452,7 +450,7 @@ mod tests {
         let theme = toml::from_str("muted = '#112233'\nbody = '#445566'").unwrap();
         let format = pane_border_format(&theme);
         assert!(
-            format.contains("#{==:#{pane_title},rimz-sidebar},#[fg=#112233] rimz ,"),
+            format.contains("#{==:#{pane_title},rimz-sidebar},,#{?#{@rimz_title},"),
             "{format}"
         );
         assert!(

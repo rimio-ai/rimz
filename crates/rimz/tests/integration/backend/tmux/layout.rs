@@ -2144,7 +2144,7 @@ fn rimz_borders_label_every_pane_in_a_background_stack_window() {
             .trim_end_matches('\n')
             .to_owned()
     };
-    assert_eq!(border(&background), "#[fg=#112233] rimz ");
+    assert_eq!(border(&background), "");
     assert_eq!(border(new.raw()), "#[fg=#d97757] @coder ");
     for kind in ["", "unknown-agent"] {
         server.tmux(&["set-option", "-p", "-t", new.raw(), "@rimz_kind", kind]);
