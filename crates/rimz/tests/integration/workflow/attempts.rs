@@ -595,7 +595,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         );
     }
     let dir = room.env.rimz_home().join("workflows/review");
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pick'\nmax-visits=2\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
     fs::write(dir.join("checks/pr.sh"), "test -d \"$RIMZ_WORKFLOW_DIR/notes\" && test -d \"$RIMZ_WORKFLOW_DIR/signs\" || exit 1\nwhile read -r item; do\n if ! grep -qxF \"$item\" \"$RIMZ_WORKFLOW_DIR\"/notes/*.done 2>/dev/null; then printf '{\"outcome\":\"ready\",\"key\":\"%s\"}' \"$item\"; exit; fi\ndone < items.txt\nprintf '{\"outcome\":\"none\"}'\n").unwrap();
     let id = room.start();
     for item in ["one", "two"] {
@@ -1464,8 +1464,16 @@ impl Room {
     }
 
     fn with_kind(extra: &str, kind: &str) -> Self {
+        let lifecycle = if toml::from_str::<toml::Table>(extra)
+            .unwrap()
+            .contains_key("lifecycle")
+        {
+            ""
+        } else {
+            "lifecycle='turn'\n"
+        };
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.go = 'build'\n[steps.build]\nagent = '{kind}'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 2\n{extra}\n[checks.after]\nrun = 'sh checks/pr.sh'\non.done = '@done'\n"
+            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.go = 'build'\n[steps.build]\nagent = '{kind}'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 2\n{lifecycle}{extra}\n[checks.after]\nrun = 'sh checks/pr.sh'\non.done = '@done'\n"
         );
         let (env, _) = fixture(
             &spec,

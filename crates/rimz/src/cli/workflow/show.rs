@@ -31,7 +31,7 @@ pub(super) fn render(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let journal = records::journal(&run.paths)?;
-    let spec = workflow::load(&run.paths.home);
+    let spec = workflow::load_run(&run.paths.home, &run.record);
     if json {
         let mut value = serde_json::json!({
             "address":run.record.address().to_string(),

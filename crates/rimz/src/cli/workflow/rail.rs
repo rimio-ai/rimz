@@ -502,7 +502,7 @@ impl Row {
                 Some(StepKind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
                 Some(StepKind::Agent(agent)) => format!(
                     "{agent} · {}",
-                    match step.lifecycle.unwrap_or_default() {
+                    match step.lifecycle() {
                         StepLifecycle::Turn => "1 turn",
                         StepLifecycle::Stay => "lifecycle stay",
                         StepLifecycle::Until => "lifecycle until",
@@ -702,11 +702,12 @@ pub(super) fn defaults(spec: &WorkflowSpec) -> Vec<&'static str> {
         .chain(spec.steps.keys())
         .flat_map(|name| spec.edges(name))
         .collect::<Vec<_>>();
-    if spec.steps.values().any(|step| {
-        matches!(step.kind(), Some(StepKind::Agent(_)))
-            && step.lifecycle.unwrap_or_default().is_turn()
-    }) {
-        sentences.push("A step goes on to its next check however its turn ends.");
+    if spec
+        .steps
+        .values()
+        .any(|step| matches!(step.kind(), Some(StepKind::Agent(_))) && step.lifecycle().is_turn())
+    {
+        sentences.push("A turn step goes on to its next check when its turn ends cleanly or its provider exits.");
     }
     if edges.iter().any(|edge| {
         edge.outcome == "invalid"

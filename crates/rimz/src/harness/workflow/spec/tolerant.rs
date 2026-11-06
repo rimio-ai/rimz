@@ -6,7 +6,10 @@ use super::{Issue, SpecErr, WorkflowSpec, issue};
 
 mod clean;
 
-pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
+pub(super) fn parse(
+    mut value: toml::Value,
+    default: crate::store::workflow::StepLifecycle,
+) -> Result<WorkflowSpec, SpecErr> {
     let mut ignored = Vec::new();
     let mut indices = BTreeMap::new();
     let mut invalid_routes = Vec::new();
@@ -17,6 +20,11 @@ pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
         let error =
             match serde_path_to_error::deserialize::<_, WorkflowSpec>(deserializer) {
                 Ok(mut spec) => {
+                    if default.is_turn() {
+                        for step in spec.steps.values_mut().filter(|step| step.agent.is_some()) {
+                            step.lifecycle.get_or_insert(default);
+                        }
+                    }
                     ignored.extend(unknown.into_iter().map(|path| {
                         ignored_issue(&original_path(&path, &indices), "unknown field")
                     }));

@@ -305,10 +305,8 @@ pub(super) fn validate_spec(
                     .is_wired(),
             )
         });
-        if matches!(
-            step.lifecycle.unwrap_or_default(),
-            StepLifecycle::Turn | StepLifecycle::Until
-        ) && do_background == Some(false)
+        if matches!(step.lifecycle(), StepLifecycle::Turn | StepLifecycle::Until)
+            && do_background == Some(false)
         {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
@@ -322,7 +320,7 @@ pub(super) fn validate_spec(
                 "then must name a check, never a step or @done",
             );
         }
-        if step.lifecycle == Some(StepLifecycle::Until)
+        if step.lifecycle() == StepLifecycle::Until
             && step
                 .then
                 .as_ref()
@@ -331,7 +329,7 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("{path}.then"),
-                "an until step cannot use a sleep as its turn-end check",
+                "an until step cannot use a sleep as its turn-end check; use lifecycle = \"turn\"",
             );
         }
         if agent && let Some(target) = &step.on.capacity {
@@ -383,15 +381,34 @@ pub(super) fn validate_spec(
         .auto_continue
     {
         for row in &report.rows {
-            if spec
-                .steps
-                .get(&row.node)
-                .is_some_and(|step| !step.lifecycle.unwrap_or_default().is_turn())
-            {
-                continue;
-            }
             if row.agent.is_some() {
-                report.warnings.push(issue(&format!("{}.{}", if row.kind == "step" { "steps" } else { "checks" }, row.node), "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"));
+                let (kind, message) = if row.kind == "step" {
+                    (
+                        "steps",
+                        "auto-continue is off; a step paused on a provider limit waits for you",
+                    )
+                } else if row
+                    .agent
+                    .as_deref()
+                    .and_then(|agent| {
+                        crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
+                            .ok()
+                    })
+                    .is_some_and(|profile| profile.kind.as_str() == "codex")
+                {
+                    (
+                        "checks",
+                        "auto-continue is off; a failed Codex judge retries once, then parks",
+                    )
+                } else {
+                    (
+                        "checks",
+                        "auto-continue is off; a provider limit mid-attempt ends the attempt as limited",
+                    )
+                };
+                report
+                    .warnings
+                    .push(issue(&format!("{kind}.{}", row.node), message));
             }
         }
     }

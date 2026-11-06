@@ -35,6 +35,45 @@ fn delayed_routes_load_and_only_delayed_edges_serialize_a_delay() {
 }
 
 #[test]
+fn omitted_lifecycle_keeps_delays_bans_sleep_and_explains_turn_only_fields() {
+    let text = DELAY.replace("lifecycle='until'\n", "");
+    let spec = loaded(&text).unwrap();
+    let delay_kept = spec.checks["pick"].on["ok"].delay() == Some("30m");
+    let (_home, dir) = fixture();
+    fs::write(
+        dir.join("workflow.toml"),
+        text.replace("run='true'\ntimeout='1h'", "sleep='1m'\nthen='@done'"),
+    )
+    .unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    let sleep_refused_with_fix = report.errors.iter().any(|issue| {
+        issue.path == "steps.build.then" && issue.message.contains("lifecycle = \"turn\"")
+    });
+    let spec = loaded(&text.replace(
+        "max-visits=3",
+        "max-visits=3\ntimeout='1m'\non.asked='pick'",
+    ))
+    .unwrap();
+    let cleanup = ["steps.build.timeout", "steps.build.on.asked"].map(|path| {
+        spec.ignored
+            .iter()
+            .any(|issue| issue.path == path && issue.message.contains("lifecycle = \"turn\""))
+    });
+    assert_eq!(
+        (
+            delay_kept,
+            sleep_refused_with_fix,
+            spec.steps["build"].timeout.is_none(),
+            spec.steps["build"].on.asked.is_none(),
+            cleanup,
+        ),
+        (true, true, true, true, [true, true]),
+        "default lifecycle must use until rules: {report:?}; {:?}",
+        spec.ignored
+    );
+}
+
+#[test]
 fn invalid_or_misplaced_delays_warn_and_keep_the_route() {
     let mut cases = vec![
         (
@@ -278,11 +317,14 @@ fn unknown_keys_warn_at_every_table_including_wake_bindings() {
 #[test]
 fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
     let actual = loaded(&format!(
-        "{}lifecycle='forever'\nthrottle=5\ntakeover='yes'\n",
-        VALID.replace("max-visits = 3", "max-visits = '3'").replace(
-            "[checks.pick]",
-            "[checks.pick]\nwhen=7\nwake=[5,'review.ready',false,'team.stage']"
-        )
+        "{}throttle=5\ntakeover='yes'\n",
+        VALID
+            .replace("lifecycle = \"turn\"", "lifecycle='forever'")
+            .replace("max-visits = 3", "max-visits = '3'")
+            .replace(
+                "[checks.pick]",
+                "[checks.pick]\nwhen=7\nwake=[5,'review.ready',false,'team.stage']"
+            )
     ));
     assert!(
         actual.is_ok(),
@@ -405,7 +447,7 @@ fn required_fields_refuse_at_the_exact_dotted_path() {
 #[test]
 fn wrong_typed_live_routes_refuse_but_dead_routes_warn() {
     let command = VALID.replace(
-        "agent = \"claude\"\nprompt-file = \"prompts/build.md\"",
+        "agent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
         "shell='true'\ntimeout='1m'",
     );
     let cases = [
@@ -477,7 +519,10 @@ fn wrong_typed_live_routes_refuse_but_dead_routes_warn() {
             false,
         ),
         (
-            format!("{VALID}lifecycle='stay'\non.asked=5\n"),
+            format!(
+                "{}on.asked=5\n",
+                VALID.replace("lifecycle = \"turn\"", "lifecycle='stay'")
+            ),
             "steps.build.on.asked",
             false,
         ),
@@ -508,7 +553,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
     let acyclic = VALID.replace("then = \"pick\"", "then='after'");
     let acyclic = format!("{acyclic}[checks.after]\nrun='true'\non.ok='@done'\n");
     let command = acyclic.replace(
-        "agent = \"claude\"\nprompt-file = \"prompts/build.md\"",
+        "agent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
         "shell='true'\ntimeout='1m'",
     );
     let mut cases = vec![
@@ -649,10 +694,9 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             ("on.asked", "'@user'", "steps.build.on.asked"),
         ] {
             cases.push((
-                acyclic.replace(
-                    "then='after'",
-                    &format!("lifecycle='{lifecycle}'\n{field}={value}\nthen='after'"),
-                ),
+                acyclic
+                    .replace("lifecycle = \"turn\"", &format!("lifecycle='{lifecycle}'"))
+                    .replace("then='after'", &format!("{field}={value}\nthen='after'")),
                 path,
             ));
         }
@@ -765,7 +809,7 @@ fn cross_field_refusals_see_the_spec_after_drops() {
         ),
         (
             VALID.replace(
-                "agent = \"claude\"\nprompt-file = \"prompts/build.md\"",
+                "agent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
                 "run='true'\ntimeout='soon'",
             ),
             "steps.build.timeout",

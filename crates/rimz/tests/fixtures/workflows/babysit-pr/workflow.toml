@@ -21,6 +21,7 @@ timeout = "3d"
 
 [steps.sweep]
 agent = "sweeper"
+lifecycle = "turn"
 prompt-file = "prompts/sweep.md"
 takeover = true
 then = "pr"
@@ -29,6 +30,7 @@ timeout = "6h"
 
 [steps.triage]
 agent = "yagni"
+lifecycle = "turn"
 prompt-file = "prompts/triage.md"
 window = "5h.left>=42"
 takeover = true

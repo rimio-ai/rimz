@@ -11,6 +11,8 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, RunId, WorkflowRunId};
 
+pub const VERSION: u32 = 3;
+
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
     #[error(transparent)]
@@ -270,7 +272,10 @@ pub struct Ending {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiveAttempt {
     pub kind: AttemptKind,
-    #[serde(default, skip_serializing_if = "StepLifecycle::is_turn")]
+    #[serde(
+        default = "turn_lifecycle",
+        skip_serializing_if = "StepLifecycle::is_turn"
+    )]
     pub lifecycle: StepLifecycle,
     pub seq: u64,
     pub node: String,
@@ -339,15 +344,16 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StepLifecycle {
-    #[default]
     Turn,
     Stay,
     Until,
+}
+
+fn turn_lifecycle() -> StepLifecycle {
+    StepLifecycle::Turn
 }
 
 impl StepLifecycle {
@@ -482,6 +488,8 @@ impl Wait {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
+    #[serde(default = "turn_lifecycle")]
+    pub default_lifecycle: StepLifecycle,
     pub id: WorkflowRunId,
     pub workflow: String,
     #[serde(default)]
@@ -720,7 +728,7 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
             path: paths.record.clone(),
             source,
         })?;
-    if !matches!(record.version, 1 | 2) {
+    if !matches!(record.version, 1 | 2 | VERSION) {
         return Err(WorkflowStoreErr::Version {
             path: paths.record.clone(),
             version: record.version,

@@ -184,6 +184,7 @@ timeout = "1d"
 [steps.build]
 agent = "claude"
 prompt-file = "prompts/build.md"
+lifecycle = "turn"
 then = "pick"
 max-visits = 3
 "#;
@@ -398,8 +399,16 @@ fn validation_accepts_step_layouts() {
             VALID.replace("agent = \"claude\"", "agent = 'claude-auto,term'"),
             None,
         ),
-        ("stay", format!("{VALID}lifecycle='stay'\n"), None),
-        ("until", format!("{VALID}lifecycle='until'\n"), None),
+        (
+            "stay",
+            VALID.replace("lifecycle = \"turn\"", "lifecycle='stay'"),
+            None,
+        ),
+        (
+            "until",
+            VALID.replace("lifecycle = \"turn\"", "lifecycle='until'"),
+            None,
+        ),
         (
             "no agent",
             VALID.replace("agent = \"claude\"", "agent = 'term'"),
@@ -457,14 +466,13 @@ fn validation_accepts_step_layouts() {
 }
 
 #[test]
-fn until_warns_about_unreported_background_work_but_not_auto_continue() {
+fn until_warns_about_unreported_background_work_and_auto_continue() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        format!(
-            "{}lifecycle='until'\n",
-            VALID.replace("agent = \"claude\"", "agent = 'codex'")
-        ),
+        VALID
+            .replace("agent = \"claude\"", "agent = 'codex'")
+            .replace("lifecycle = \"turn\"", "lifecycle='until'"),
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -478,7 +486,7 @@ fn until_warns_about_unreported_background_work_but_not_auto_continue() {
         report.warnings
     );
     assert!(
-        !report
+        report
             .warnings
             .iter()
             .any(|issue| issue.message.contains("auto-continue")),
@@ -823,7 +831,8 @@ fn validation_accepts_command_steps_without_agent_warnings() {
                     "agent = \"claude\"",
                     &format!("{runner} = 'echo ready'\ntimeout='1m'"),
                 )
-                .replace("prompt-file = \"prompts/build.md\"", "");
+                .replace("prompt-file = \"prompts/build.md\"", "")
+                .replace("lifecycle = \"turn\"", "");
             fs::write(dir.join("workflow.toml"), text).unwrap();
             let report = validate(&dir, &LoadedDefinitions::default(), None);
             let valid = report.errors.is_empty()
@@ -888,7 +897,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
         "run = \"python3 checks/pick.py\"",
         "agent = 'claude'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
     );
-    fs::write(dir.join("workflow.toml"), text).unwrap();
+    fs::write(dir.join("workflow.toml"), &text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
@@ -899,9 +908,16 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
             .iter()
             .filter(|issue| issue
                 .message
-                .contains("a provider limit mid-attempt ends the attempt as limited"))
+                .contains("auto-continue is off; a step paused on a provider limit waits for you"))
             .count(),
-        2
+        1
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|issue| issue.path == "checks.pick"
+                && issue.message.contains("ends the attempt as limited"))
     );
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
@@ -911,15 +927,34 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
         && edge.source == EdgeSource::Explicit));
+    fs::write(
+        dir.join("workflow.toml"),
+        text.replace("agent = 'claude'", "agent = 'codex'"),
+    )
+    .unwrap();
+    let codex = validate(&dir, &LoadedDefinitions::default(), None);
+    assert!(
+        codex
+            .warnings
+            .iter()
+            .any(|issue| issue.path == "checks.pick"
+                && issue.message.contains("retries once, then parks")
+                && !issue.message.contains("ends the attempt as limited")),
+        "{codex:?}"
+    );
     let cases = [
-        ("", None),
+        ("lifecycle='turn'", None),
         ("lifecycle='stay'", None),
-        ("on.asked='pick'", Some("pick")),
+        ("lifecycle='turn'\non.asked='pick'", Some("pick")),
     ];
     let actual: Vec<_> = cases
         .iter()
         .map(|(extra, _)| {
-            fs::write(dir.join("workflow.toml"), format!("{VALID}\n{extra}\n")).unwrap();
+            fs::write(
+                dir.join("workflow.toml"),
+                format!("{}\n{extra}\n", VALID.replace("lifecycle = \"turn\"", "")),
+            )
+            .unwrap();
             let report = validate(&dir, &LoadedDefinitions::default(), None);
             assert!(report.errors.is_empty(), "{report:?}");
             report

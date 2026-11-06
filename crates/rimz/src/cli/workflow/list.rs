@@ -58,7 +58,7 @@ pub(super) fn render(
         .collect::<Vec<_>>();
     let specs = live
         .iter()
-        .map(|run| workflow::load(&run.paths.home).ok())
+        .map(|run| workflow::load_run(&run.paths.home, &run.record).ok())
         .collect::<Vec<_>>();
     if json {
         let rows = live

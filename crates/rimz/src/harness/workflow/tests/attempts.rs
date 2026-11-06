@@ -8,13 +8,13 @@ use crate::store::workflow::{
 };
 use serde_json::{Value, json};
 
-const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
-const OUTCOME_CAPPED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-outcome=2\n";
+const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
+const OUTCOME_CAPPED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-outcome=2\n";
 
 const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
     [checks.watch]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',blue='build',queued='@wait'}\n\
     [checks.judge]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',queued='@wait'}\n\
-    [steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n\
+    [steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n\
     max-visits-per-outcome={limit=2,reset-on='queued'}\n";
 
 mod brief;
@@ -27,7 +27,8 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();
     let spec: WorkflowSpec = toml::from_str(text).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":1, "id":WorkflowRunId::new(), "workflow":"test", "spec_dir":dir.path(),
+        "version":3, "default_lifecycle":"until", "id":WorkflowRunId::new(),
+        "workflow":"test", "spec_dir":dir.path(),
         "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":spec.workflow.start,
@@ -64,6 +65,59 @@ fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value
         observed.borrow_mut().status = RunStatus::Running;
     }));
     advance_ok(state, &record.id, host)
+}
+
+#[test]
+fn legacy_run_keeps_its_omitted_lifecycle_after_record_upgrade() {
+    use crate::store::workflow::StepLifecycle;
+
+    let definition = STEP
+        .replace("lifecycle='turn'\n", "timeout='1h'\non.asked='@user'\n")
+        .replace("start='build'", "start='begin'")
+        .replace("then='@done'", "then='nap'")
+        + "[checks.begin]\nrun='cat answer.json'\ntimeout='1m'\non.next='build'\n[checks.nap]\nsleep='1m'\nthen='@done'\n";
+    let (_dir, state, record) = setup(&definition);
+    let paths = state.workflow(&record.id);
+    let mut legacy = serde_json::to_value(&record).unwrap();
+    legacy["version"] = json!(2);
+    legacy.as_object_mut().unwrap().remove("default_lifecycle");
+    fs::write(&paths.record, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let record = records::load(&paths).unwrap();
+    let spec = super::spec::load_run(&paths.home, &record).unwrap();
+    assert_eq!(spec.steps["build"].lifecycle(), StepLifecycle::Turn);
+    assert_eq!(spec.steps["build"].timeout.as_deref(), Some("1h"));
+    assert!(
+        spec.edges("build")
+            .iter()
+            .any(|edge| edge.outcome == "asked")
+    );
+    let validation = super::super::validate::validate_spec(
+        record.spec_dir.as_path(),
+        "test",
+        &spec,
+        &LoadedDefinitions::default(),
+        None,
+    );
+    assert!(
+        validation.errors.is_empty(),
+        "legacy turn steps may use sleep checks: {validation:?}"
+    );
+    fs::write(record.spec_dir.join("answer.json"), r#"{"outcome":"next"}"#).unwrap();
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(live.version, records::VERSION);
+    assert_eq!(
+        live.attempt.as_ref().unwrap().lifecycle,
+        StepLifecycle::Turn
+    );
+    let spec = super::spec::load_run(&paths.home, &live).unwrap();
+    assert_eq!(spec.steps["build"].timeout.as_deref(), Some("1h"));
+    assert!(
+        spec.edges("build")
+            .iter()
+            .any(|edge| edge.outcome == "asked")
+    );
+    assert_eq!(advance_ok(&state, &record.id, &host), live);
 }
 
 #[test]
@@ -133,7 +187,7 @@ fn resuming_a_cap_keeps_the_refused_bucket_and_grants_one_more_visit() {
 #[test]
 fn cap_routed_into_a_different_step_counts_under_cap() {
     let text = format!(
-        "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n",
         OUTCOME_STEP
     );
     let (_dir, state, record) = setup(&text);
@@ -265,8 +319,9 @@ fn reset_keeps_the_total_cap_and_visit_grants_count_from_the_reset() {
 #[test]
 fn step_then_forwards_the_routed_outcome_into_the_next_context() {
     let text = OUTCOME_STEP.replace("then='watch'", "then='finish'");
-    let text =
-        format!("{text}[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n");
+    let text = format!(
+        "{text}[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n"
+    );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red", "key":7}));
@@ -809,7 +864,7 @@ fn signs_cannot_read_outside_the_node_writable_work_directory() {
 #[test]
 fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
     use crate::store::workflow::{Asked, Asking, Limited};
-    let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
+    let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='stay'"));
     let host = FakeHost::new();
     let mut live = advance_ok(&state, &record.id, &host);
     let now = jiff::Timestamp::now();
@@ -863,7 +918,8 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
 #[test]
 fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
     for lifecycle in ["turn", "stay", "until"] {
-        let (_dir, state, record) = setup(&format!("{STEP}lifecycle='{lifecycle}'\n"));
+        let (_dir, state, record) =
+            setup(&STEP.replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'")));
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
         assert_eq!(
@@ -1055,7 +1111,7 @@ fn step_timeout_pauses_from_ask_open_and_rejudges_after_the_answer() {
 #[test]
 fn stay_deadline_beats_completed_observation_and_cancel_stops() {
     for cause in ["deadline", "cancel"] {
-        let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
+        let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='stay'"));
         let host = FakeHost::new();
         let mut live = advance_ok(&state, &record.id, &host);
         host.observed.borrow_mut().status = RunStatus::Completed;

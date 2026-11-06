@@ -4,6 +4,7 @@ start = 'build'
 
 [steps.build]
 agent = 'claude'
+lifecycle = 'turn'
 prompt-file = 'prompt.md'
 then = 'gate'
 max-visits = 1
@@ -16,6 +17,7 @@ on.next = 'middle'
 
 [steps.middle]
 agent = 'claude'
+lifecycle = 'turn'
 prompt-file = 'prompt.md'
 then = 'review'
 max-visits = 1
@@ -27,6 +29,7 @@ on.next = 'finish'
 
 [steps.finish]
 agent = 'claude'
+lifecycle = 'turn'
 prompt-file = 'prompt.md'
 then = 'gate'
 max-visits = 1

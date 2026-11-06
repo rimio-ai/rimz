@@ -319,20 +319,18 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 "a command step takes no prompt; it reads context.json",
             );
         }
-        if matches!(step.kind(), Some(StepKind::Agent(_)))
-            && !step.lifecycle.unwrap_or_default().is_turn()
-        {
+        if matches!(step.kind(), Some(StepKind::Agent(_))) && !step.lifecycle().is_turn() {
             ignore(
                 &mut step.timeout,
                 &format!("{path}.timeout"),
                 ignored,
-                "a staying step has no step timeout; remove timeout or use lifecycle = 'turn'",
+                "a staying step has no step timeout; remove timeout or use lifecycle = \"turn\"",
             );
             ignore(
                 &mut step.on.asked,
                 &format!("{path}.on.asked"),
                 ignored,
-                "a staying step never ends on a question; remove on.asked or use lifecycle = 'turn'",
+                "a staying step never ends on a question; remove on.asked or use lifecycle = \"turn\"",
             );
         }
     }
@@ -341,7 +339,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             .steps
             .iter()
             .filter_map(|(name, step)| {
-                (step.lifecycle == Some(crate::store::workflow::StepLifecycle::Until)
+                (step.lifecycle() == crate::store::workflow::StepLifecycle::Until
                     && step.then.as_deref() == Some(node))
                 .then_some(name.as_str())
             })

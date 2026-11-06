@@ -204,7 +204,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
 fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     let spec = spec(
         "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait'}\ntimeout='1d'",
-        "agent='claude'\nthen='gate'\non={asked='gate',cap='@user',capacity='@failed'}",
+        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',cap='@user',capacity='@failed'}",
     );
     let outcomes = |node| {
         spec.edges(node)

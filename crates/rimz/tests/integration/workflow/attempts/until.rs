@@ -87,7 +87,7 @@ fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
     opened_turn(&room, &id, &run);
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = until(&room.env, &id, decided);
-    assert_eq!(value["record"]["version"], 2);
+    assert_eq!(value["record"]["version"], 3);
     assert_eq!(value["record"]["node"], "build");
     assert_eq!(
         value["record"]["attempt"]["run"]["run_id"],
@@ -288,7 +288,7 @@ fn delayed_close_views(target: &str) {
     fs::write(
         &spec,
         format!(
-            "{}\n[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nmax-visits=1\n",
+            "{}\n[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='after'\nmax-visits=1\n",
             fs::read_to_string(&spec).unwrap().replace(
                 "on.done = '@done'",
                 &format!("on.done = {{to='{target}',delay='30m'}}\nwake=['review.ready']"),

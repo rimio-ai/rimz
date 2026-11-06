@@ -191,7 +191,7 @@ impl WorkflowSpec {
                     .is_none_or(|step| match edge.outcome.as_str() {
                         "asked" => {
                             matches!(step.kind(), Some(StepKind::Agent(_)))
-                                && step.lifecycle.unwrap_or_default().is_turn()
+                                && step.lifecycle().is_turn()
                         }
                         "capacity" => matches!(step.kind(), Some(StepKind::Agent(_))),
                         _ => true,
