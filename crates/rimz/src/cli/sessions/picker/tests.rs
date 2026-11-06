@@ -287,6 +287,24 @@ fn banner_lines_have_uniform_width() {
 }
 
 #[test]
+fn banner_blocks_use_brand_amber_and_preserve_shading_and_no_color() {
+    for no_color in [false, true] {
+        let theme = PickerTheme::resolve(&ThemeConfig::default(), true, no_color);
+        for line in BANNER {
+            for span in banner_line(line, &theme).spans {
+                if no_color {
+                    assert_eq!(span.style.fg, None);
+                } else if span.content.chars().all(|character| character == '█') {
+                    assert_eq!(span.style.fg, Some(Color::Rgb(255, 180, 84)));
+                } else {
+                    assert_eq!(span.style, theme.rule());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn filter_matches_displayed_repo_name_and_path_then_attaches() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows(), now());

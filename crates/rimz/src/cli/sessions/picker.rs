@@ -814,6 +814,10 @@ impl PickerTheme {
         self.style(self.palette.identity(Identity::Money))
     }
 
+    fn logo(&self) -> Style {
+        self.style(self.palette.identity(Identity::Rimio))
+    }
+
     fn alarm(&self) -> Style {
         self.style(self.palette.alarm())
     }
@@ -909,7 +913,7 @@ fn banner_line(line: &str, theme: &PickerTheme) -> Line<'static> {
         let is_block = character == '█';
         if blocks.is_some_and(|current| current != is_block) {
             let style = if blocks == Some(true) {
-                theme.accent()
+                theme.logo()
             } else {
                 theme.rule()
             };
@@ -922,7 +926,7 @@ fn banner_line(line: &str, theme: &PickerTheme) -> Line<'static> {
         spans.push(Span::styled(
             run,
             if blocks == Some(true) {
-                theme.accent()
+                theme.logo()
             } else {
                 theme.rule()
             },

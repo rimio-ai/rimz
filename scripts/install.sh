@@ -22,12 +22,7 @@ fi
 
 esc=$(printf '\033')
 reset=
-row1=
-row2=
-row3=
-row4=
-row5=
-row6=
+c_logo=
 c_ok=
 c_dim=
 c_head=
@@ -45,20 +40,10 @@ if [ "$fancy" = 1 ]; then
     c_warn="${esc}[38;2;224;175;104m"
     case "${COLORTERM:-}" in
         *[Tt][Rr][Uu][Ee][Cc][Oo][Ll][Oo][Rr]*|*24[Bb][Ii][Tt]*)
-            row1="${esc}[38;2;122;162;247m"
-            row2="${esc}[38;2;135;160;247m"
-            row3="${esc}[38;2;148;159;247m"
-            row4="${esc}[38;2;161;157;247m"
-            row5="${esc}[38;2;174;156;247m"
-            row6="${esc}[38;2;187;154;247m"
+            c_logo="${esc}[38;2;255;180;84m"
             ;;
         *)
-            row1="${esc}[34m"
-            row2="${esc}[34m"
-            row3="${esc}[36m"
-            row4="${esc}[36m"
-            row5="${esc}[35m"
-            row6="${esc}[35m"
+            c_logo="${esc}[38;5;215m"
             c_ok="${esc}[32m"
             c_dim="${esc}[2m"
             c_spin="${esc}[34m"
@@ -155,12 +140,12 @@ banner_line6='  ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚═══
 
 banner_row() {
     case "$1" in
-        1) banner_text=$banner_line1; banner_color=$row1 ;;
-        2) banner_text=$banner_line2; banner_color=$row2 ;;
-        3) banner_text=$banner_line3; banner_color=$row3 ;;
-        4) banner_text=$banner_line4; banner_color=$row4 ;;
-        5) banner_text=$banner_line5; banner_color=$row5 ;;
-        6) banner_text=$banner_line6; banner_color=$row6 ;;
+        1) banner_text=$banner_line1 ;;
+        2) banner_text=$banner_line2 ;;
+        3) banner_text=$banner_line3 ;;
+        4) banner_text=$banner_line4 ;;
+        5) banner_text=$banner_line5 ;;
+        6) banner_text=$banner_line6 ;;
     esac
 }
 
@@ -170,7 +155,7 @@ draw_banner_frame() {
     while [ "$frame_row" -le 6 ]; do
         banner_row "$frame_row"
         if [ "$frame_row" -lt "$frame_scan" ]; then
-            printf '\r\033[K%s%s%s\n' "$banner_color" "$banner_text" "$reset" >&2
+            printf '\r\033[K%s%s%s\n' "$c_logo" "$banner_text" "$reset" >&2
         elif [ "$frame_row" -eq "$frame_scan" ]; then
             printf '\r\033[K%s%s%s\n' "$c_head" "$banner_text" "$reset" >&2
         else

@@ -8,6 +8,16 @@ mod columns;
 const TODAY: i64 = 20_749;
 
 #[test]
+fn wordmark_uses_bold_logo_style() {
+    let logo = render::palette::logo().bold();
+    assert_ne!(logo, render::palette::accent().bold());
+    let lines = panel::header_lines(80);
+    for (line, wordmark) in lines.iter().skip(1).zip(WORDMARK.lines()) {
+        assert_eq!(line.trim_start(), render::paint(logo, wordmark));
+    }
+}
+
+#[test]
 fn dashboard_clicks_select_only_the_last_painted_tab_spans() {
     use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     for (cols, rows) in [(119, None), (60, None), (160, Some(100))] {

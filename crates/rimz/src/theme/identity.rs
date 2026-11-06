@@ -1,12 +1,11 @@
-//! External-identity tones — the fixed colors the sidebar pins independent of
-//! any scheme: the Claude brand clay, reused as the live-agent and
-//! working-spinner accent, and the dollar green of money figures. These never
-//! derive from the imported palette; only depth quantization applies
-//! downstream.
+//! Fixed identity tones, independent of any scheme: Claude brand clay, reused
+//! as the live-agent and working-spinner accent, dollar green for money figures,
+//! and Rimio amber for RimZ wordmarks only. These never derive from the imported
+//! palette; only depth quantization applies downstream.
 //!
 //! Per-agent provider brand colors live with each agent's definition
 //! ([`SidebarProviderPanel::color_rgb`](crate::store::snapshot::SidebarProviderPanel)), not
-//! here — identity holds only the tones the sidebar itself owns.
+//! here.
 
 use super::oklab::Rgb;
 
@@ -18,6 +17,8 @@ pub enum Identity {
     Claude,
     /// Dollar green (`#85bb65`) for money figures.
     Money,
+    /// Rimio amber (`#ffb454`) for RimZ wordmarks only.
+    Rimio,
 }
 
 impl Identity {
@@ -25,6 +26,7 @@ impl Identity {
         match self {
             Self::Claude => (0xd9, 0x77, 0x57),
             Self::Money => (0x85, 0xbb, 0x65),
+            Self::Rimio => (0xff, 0xb4, 0x54),
         }
     }
 }
