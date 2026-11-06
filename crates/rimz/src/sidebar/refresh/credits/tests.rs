@@ -954,6 +954,117 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
 }
 
 #[test]
+fn credits_projection_uses_account_plan_with_session_and_credential_fallbacks() {
+    let now_ms = 2 * CREDITS_DISPLAY_MAX_AGE.as_millis() as u64;
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (case, expected_plan) in [
+        ("changed tier", Some(("prolite", None))),
+        ("other adapter", Some(("prolite", None))),
+        ("trimmed tier", Some(("prolite", None))),
+        ("same tier", Some(("max", Some("Bound profile")))),
+        ("no session plan", Some(("prolite", None))),
+        ("stale reading", Some(("pro", Some("Session plan")))),
+        ("failed reading", Some(("pro", Some("Session plan")))),
+        ("blank plan", Some(("pro", Some("Session plan")))),
+        ("missing plan", Some(("pro", Some("Session plan")))),
+        ("other login", Some(("pro", Some("Session plan")))),
+        ("other scope", Some(("pro", Some("Session plan")))),
+        ("missing reading", Some(("pro", Some("Session plan")))),
+        ("login not in use", Some(("pro", Some("Session plan")))),
+        ("unmetered", Some(("pro", Some("Session plan")))),
+        ("delegated credential", Some(("OpenAI OAuth", None))),
+        ("delegated without plan", Some(("pro", None))),
+    ] {
+        let mut panel = panel("codex", true);
+        panel.plan = Some(ProviderPlan {
+            tier: "pro".to_owned(),
+            name: Some("Session plan".to_owned()),
+        });
+        let mut entry = ProviderCreditsEntry {
+            observed_at_ms: now_ms,
+            ok: true,
+            plan: Some("prolite".to_owned()),
+            ..Default::default()
+        };
+        let mut logins = RoomLoginSet::native();
+        match case {
+            "other adapter" => panel.kind = "kimi".to_owned(),
+            "trimmed tier" => entry.plan = Some(" prolite ".to_owned()),
+            "same tier" => {
+                panel.kind = "claude".to_owned();
+                panel.plan = Some(ProviderPlan {
+                    tier: "max".to_owned(),
+                    name: Some("Bound profile".to_owned()),
+                });
+                entry.plan = Some("max".to_owned());
+            }
+            "no session plan" => panel.plan = None,
+            "stale reading" => {
+                entry.observed_at_ms -= CREDITS_DISPLAY_MAX_AGE.as_millis() as u64 + 1;
+            }
+            "failed reading" => entry.ok = false,
+            "blank plan" => entry.plan = Some(" \t".to_owned()),
+            "missing plan" => entry.plan = None,
+            "other scope" => {
+                entry.scope = ProviderAccountScope::sub_provider("openai", "oauth");
+            }
+            "login not in use" => logins = RoomLoginSet::new(None, None, BTreeMap::new()),
+            "unmetered" => panel.metered = false,
+            "delegated credential" | "delegated without plan" => {
+                panel.kind = if case == "delegated credential" {
+                    "pi"
+                } else {
+                    "opencode"
+                }
+                .to_owned();
+                let provider = if case == "delegated credential" {
+                    "openai"
+                } else {
+                    "opencode"
+                };
+                panel.account_scope = ProviderAccountScope::sub_provider(provider, "oauth");
+                panel.plan = (case == "delegated credential").then(|| ProviderPlan {
+                    tier: "OpenAI OAuth".to_owned(),
+                    name: None,
+                });
+                entry.scope = panel.account_scope.clone();
+                entry.plan = Some("pro".to_owned());
+            }
+            _ => {}
+        }
+        let mut key = panel.login_key();
+        if case == "other login" {
+            key.name = "other".parse().unwrap();
+        }
+        let mut cache = CreditsCache::default();
+        if case != "missing reading" {
+            *cache.entry_mut(&AccountUsageKey::new(key, panel.account_scope.clone())) = entry;
+        }
+        let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+            WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            vec![panel],
+        );
+        apply_credits_cache_with(
+            &mut snapshot,
+            &cache,
+            &AccountsConfig::default(),
+            &logins,
+            now_ms,
+        );
+        actual.push((case, snapshot.providers[0].plan.clone()));
+        expected.push((
+            case,
+            expected_plan.map(|(tier, name)| ProviderPlan {
+                tier: tier.to_owned(),
+                name: name.map(ToOwned::to_owned),
+            }),
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn credits_projection_suppresses_stale_plan_windows_and_credits_only_in_use() {
     let key: LoginKey = "claude@default".parse().unwrap();
     let cache = CreditsCache {

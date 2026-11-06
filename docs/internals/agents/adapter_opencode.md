@@ -267,6 +267,8 @@ The account probe and the unnamed usage probe share credential resolution:
 
 The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, except for the Console `opencode` OAuth credential, whose plan comes from the best-effort Console tier read ([Go usage](#go-usage)). The selected credential's raw provider key becomes `sub_provider`. A caller can name an exact usage credential through `AccountCapability::probe_account_usage_for`, keeping the `opencode-go` alias above. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain. Console credentials also hash a non-empty `metadata.orgID` into that key, so an organization switch changes the cache owner without recording the organization id.
 
+Scoped panels retain credential-label plans rather than replacing them with the backing provider's cached tier. The usage cache only fills an empty plan, including a Console tier absent from the probe ([plan precedence](./providers.md#producer-aggregation)).
+
 | OpenCode provider | Quota surface | Account scope |
 | --- | --- | --- |
 | `anthropic` | Claude OAuth usage | `anthropic` OAuth |

@@ -22,8 +22,8 @@ impl SidebarSnapshot {
     /// the producer's cache writes. Reported Pi backing credentials become
     /// alternates inside the same block, with whole-login stats and spend.
     /// A login in the set needs a session on it or a substantive probed account; an account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
-    /// Sums each login's spend, tokens, and edited lines; takes the plan from the
-    /// freshest session, the version as the newest any session or the probe
+    /// Sums each login's spend, tokens, and edited lines; seeds the fallback plan
+    /// from the freshest session, the version as the newest any session or the probe
     /// reports, and rate-limit windows from sessions speaking for one backing
     /// credential and birth account. `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
@@ -85,8 +85,10 @@ impl SidebarSnapshot {
                 continue;
             }
 
-            // The freshest context wins the plan independently of the
-            // birth-account partition used for live rate-limit windows.
+            // The freshest context seeds the fallback plan, independently of
+            // the birth-account partition used for live rate-limit windows.
+            // The credits overlay replaces it on kind-wide metered panels;
+            // delegated scopes keep credential labels rather than usage tiers.
             let freshest = sessions
                 .iter()
                 .filter_map(|agent| agent.context.as_ref())
