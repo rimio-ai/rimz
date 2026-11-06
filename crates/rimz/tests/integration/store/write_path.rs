@@ -74,6 +74,44 @@ fn queued_cancel_message(h: &crate::common::Harness) -> rimz::store::message::Me
     message
 }
 
+#[test]
+fn enqueue_once_preserves_live_progress_and_retained_terminal_history() {
+    use rimz::store::message::{self, MessageStatus};
+
+    let h = crate::common::Harness::new();
+    let mut message = queued_cancel_message(&h);
+    message.message_id = rimz::ids::MessageId::new();
+    h.store.queue_message_once(&message, "rimz-test").unwrap();
+    let fresh = message::read_status(h.store.paths(), &message.message_id).unwrap();
+    let mut sent = message.clone();
+    sent.status = MessageStatus::Sent;
+    sent.text = "already sent".into();
+    h.store.queue_message(&sent, "rimz-test").unwrap();
+    h.store.queue_message_once(&message, "rimz-test").unwrap();
+    let live = h
+        .store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.message_id == message.message_id)
+        .unwrap();
+    h.store.queue_message(&message, "rimz-test").unwrap();
+    h.store
+        .cancel_message(&message.message_id, "rimz-test", "finished")
+        .unwrap();
+    h.store.queue_message_once(&message, "rimz-test").unwrap();
+    let terminal = message::read_status(h.store.paths(), &message.message_id).unwrap();
+    assert_eq!(
+        (fresh, live.status, live.text.as_str(), terminal),
+        (
+            Some(MessageStatus::Queued),
+            MessageStatus::Sent,
+            "already sent",
+            Some(MessageStatus::Canceled)
+        )
+    );
+}
+
 fn assert_cancel_committed(
     h: &crate::common::Harness,
     message: &rimz::store::message::MessageRecord,

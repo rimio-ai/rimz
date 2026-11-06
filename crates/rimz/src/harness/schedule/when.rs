@@ -633,7 +633,7 @@ impl WhenTerm {
         }
     }
 
-    fn comparison_evidence(&self, reading: Option<&str>) -> String {
+    pub(in crate::harness) fn comparison_evidence(&self, reading: Option<&str>) -> String {
         let op = if reading.is_none() || self.matches(reading) {
             self.op.token()
         } else {

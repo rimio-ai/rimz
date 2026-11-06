@@ -100,7 +100,7 @@ pub(super) fn transition(t: &Transition<'_>) {
                 outcome: Some(outcome),
                 target: Some(target),
                 ..
-            } if *action == TurnEndAction::Closed
+            } if matches!(action, TurnEndAction::Closed | TurnEndAction::Pushed)
                 || (*action == TurnEndAction::Kept && target != "@wait") =>
             {
                 assist_log::append(&AssistRecord {

@@ -2251,7 +2251,8 @@ path = "crates/rimz/src/harness"
 # workflow::load_run preserves the run's frozen default for sealed-spec readers (+1).
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
-surface-budget = 1085
+# workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
+surface-budget = 1086
 
 [[verdict]]
 kind = "item"
@@ -4009,7 +4010,8 @@ path = "crates/rimz/src/store"
 # GroupPartition types that shared order (+1).
 # workflow::VERSION shares the current run-record fence with the engine (+1).
 # run::{StoppedTurn, StoppedTurnDisposition} preserve workflow stop evidence without ending a run (+2).
-surface-budget = 557
+# workflow::PushBack and Store::queue_message_once retain idempotent workflow delivery (+2).
+surface-budget = 559
 
 [[verdict]]
 kind = "item"
@@ -11496,6 +11498,16 @@ reason = "Hosted checks publish child identity synchronously after spawn and rea
 kind = "item"
 key = "harness::workflow::AttemptHost"
 reason = "The library decides workflow transitions while the CLI owns agent lifecycle operations."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Pushed"
+reason = "The host confirms that the durable push-back message id has been queued."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::PushBack"
+reason = "Until sessions publish a stable message id before delivery and remember enqueue progress."
 
 [[verdict]]
 kind = "item"

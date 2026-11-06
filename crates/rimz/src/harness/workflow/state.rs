@@ -282,6 +282,12 @@ impl Transition<'_> {
                     .and_then(|verdict| verdict.object["outcome"].as_str().map(str::to_owned)),
                 target: verdict.map(|verdict| verdict.target.clone()),
                 reason,
+                visit: (action == TurnEndAction::Pushed)
+                    .then_some(attempt.visit)
+                    .flatten(),
+                message: (action == TurnEndAction::Pushed)
+                    .then(|| attempt.push.as_ref().map(|push| push.message.clone()))
+                    .flatten(),
             },
         });
     }
@@ -350,7 +356,7 @@ impl Transition<'_> {
         Ok(())
     }
 
-    fn route(
+    pub(super) fn route(
         &mut self,
         target: &str,
         object: Value,
@@ -432,6 +438,28 @@ impl Transition<'_> {
             object["key"] = json!(key);
         }
         object
+    }
+
+    pub(super) fn cap_route(&mut self, bound: &str, visits: u64, max: u64) -> Verdict {
+        let object = self.engine_object(json!({
+            "outcome":"cap", "step":self.record.node, "bound":bound,
+            "visits":visits, "max":max, "routed_by":self.record.visit_bucket().0
+        }));
+        self.push(
+            None,
+            JournalEvent::Route {
+                outcome: "cap".into(),
+                input: object.clone(),
+            },
+        );
+        Verdict {
+            node: self.record.node.clone(),
+            entered_at: self.record.entered_at,
+            at: Some(self.now),
+            target: self.spec.engine_target(&self.record.node, "cap"),
+            object,
+            reason: ParkReason::Cap,
+        }
     }
 
     pub(super) fn engine_route(

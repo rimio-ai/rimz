@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::ids::{AgentKind, AgentSessionId, HoldKind, RunId, WorkflowRunId};
+use crate::ids::{AgentKind, AgentSessionId, HoldKind, MessageId, RunId, WorkflowRunId};
 
 pub const VERSION: u32 = 3;
 
@@ -305,6 +305,14 @@ pub struct LiveAttempt {
     pub asked_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judged: Option<TurnEnd>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<PushBack>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushBack {
+    pub message: MessageId,
+    pub queued: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +345,7 @@ pub struct HeldSession {
 #[serde(rename_all = "snake_case")]
 pub enum TurnEndAction {
     Kept,
+    Pushed,
     Closed,
     Discarded,
     Interrupted,
@@ -631,6 +640,11 @@ pub enum JournalEvent {
         target: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// The visit closed by this push-back, numbered within its admitted outcome/key bucket.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visit: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<MessageId>,
     },
     Evaluation {
         #[serde(default)]

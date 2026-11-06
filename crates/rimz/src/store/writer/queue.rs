@@ -652,6 +652,29 @@ impl Store {
         })
     }
 
+    #[must_use = "durability barrier; check the result"]
+    pub fn queue_message_once(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
+        self.commit_queue(|queue| {
+            if message::retained_status(
+                &self.inner.paths.messages_dir,
+                &self.inner.paths.message_history_dir,
+                &message.message_id,
+            )?
+            .is_some()
+            {
+                return Ok(());
+            }
+            queue.upsert(message.clone());
+            queue.stage_event(EventEnvelope::message_event(
+                message,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            Ok(())
+        })
+    }
+
     /// Carry the queued FIFO across a provider's explicit compaction edge under
     /// the lifecycle writer's existing workspace lock.
     pub(super) fn rebind_queued_messages(

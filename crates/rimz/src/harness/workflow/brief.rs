@@ -82,7 +82,12 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
         };
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
-    let (after, questions) = lifecycle(spec, step, record);
+    let (mut after, questions) = lifecycle(spec, step, record);
+    let check = step.then.as_deref().expect("validated step then");
+    if let Some(note) = check_note(spec, check) {
+        after.push(' ');
+        after.push_str(&note);
+    }
     let more = format!(
         "{CONTEXT} `rimz workflow show $RIMZ_WORKFLOW_RUN` draws the graph with this run's position and trail."
     );
@@ -237,6 +242,94 @@ fn detail(check: &Check, input: &Value) -> Option<String> {
     Some(verbatim(&bounded))
 }
 
+fn check_note(spec: &WorkflowSpec, name: &str) -> Option<String> {
+    let check = spec.checks.get(name)?;
+    if !check.condition_cases().is_empty() {
+        let cases = check
+            .condition_cases()
+            .iter()
+            .map(|case| {
+                let expression = WhenExpr::parse(&case.when).ok()?;
+                Some(format!(
+                    "{}: {} → {}",
+                    span(&case.outcome),
+                    span(&expression.to_string()),
+                    span(&spec.engine_target(name, &case.outcome)),
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .join("; ");
+        return Some(format!(
+            "The check {} tests these cases in order: {cases}.",
+            span(name)
+        ));
+    }
+    let test = check
+        .summary
+        .as_deref()
+        .or(check.run.as_deref())
+        .or(check.shell.as_deref())
+        .or(check.prompt_file.as_deref())
+        .or(check.sleep.as_deref())?;
+    Some(format!("The check {} tests {}.", span(name), span(test)))
+}
+
+pub(super) fn push(spec: &WorkflowSpec, record: &RunRecord) -> Result<String, super::SpecErr> {
+    // A pending push has already applied this check's answer as the step's input.
+    let name = spec.steps[&record.node]
+        .then
+        .as_deref()
+        .expect("validated step then");
+    let check = &spec.checks[name];
+    let input = record.input.as_ref().expect("published push-back answer");
+    let mut text = format!(
+        "The workflow check {} answered {}.",
+        span(name),
+        span(input["outcome"].as_str().unwrap_or_default())
+    );
+    if check.condition_cases().is_empty() {
+        if let Some(reason) = input["reason"].as_str() {
+            text.push_str(&format!("\n\n{reason}"));
+        }
+    } else {
+        let marks = super::case_marks(check, input, None)?;
+        for (case, mark) in check.condition_cases().iter().zip(marks.cases) {
+            if !matches!(mark, super::CaseMark::False | super::CaseMark::Unread) {
+                break;
+            }
+            let expression = WhenExpr::parse(&case.when)?;
+            let mut terms = Vec::new();
+            for (term, negated) in expression.leaves() {
+                let reading = input["readings"][&term.key].as_str();
+                let label = format!("{}{term}", if negated { "!" } else { "" });
+                match reading {
+                    None => terms.push(format!("{label}: unread")),
+                    Some(reading) if term.matches(Some(reading)) == negated => {
+                        terms.push(format!(
+                            "{label}: false ({})",
+                            term.comparison_evidence(Some(reading))
+                        ));
+                    }
+                    Some(_) => {}
+                }
+            }
+            text.push_str(&format!(
+                "\n\nCase {} ({}): {}. {}",
+                span(&case.outcome),
+                span(&expression.to_string()),
+                if mark == super::CaseMark::False {
+                    "false"
+                } else {
+                    "unread"
+                },
+                terms.join("; ")
+            ));
+        }
+    }
+    text.push_str("\n\nContinue working on this step. The run moves on when the check passes.");
+    Ok(text)
+}
+
 fn visits(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> Option<String> {
     let (outcome, key) = record.visit_bucket();
     let mut counts = Vec::new();
@@ -309,7 +402,7 @@ fn visits(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> Option<String
     if !last.is_empty() {
         text.push_str(&format!(": {}", last.join("; ")));
     }
-    Some(format!("{text}."))
+    Some(format!("{text}. Launches and push-backs count as visits."))
 }
 
 fn ordinal(count: u64) -> String {
@@ -351,7 +444,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                 format!(", within the step's {} timeout", verbatim(timeout))
             });
             let after = format!(
-                "This is one turn. When it ends with nothing owed, RimZ closes your pane and runs the check {check}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you."
+                "This is one turn. When it ends cleanly with nothing owed, RimZ closes your pane and runs the check {check}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
             );
             let questions = if step.on.asked.is_some() {
                 // An explicit asked edge always has a resolved target.
@@ -384,7 +477,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                 )
             } else {
                 format!(
-                    "After each of your turns that ends with nothing owed, RimZ runs the check {check}, which either keeps you open for another turn or closes your pane and moves the run on."
+                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
                 )
             };
             (

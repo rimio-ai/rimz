@@ -151,7 +151,7 @@ pub(in crate::store) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageR
         .collect())
 }
 
-pub(super) fn read_status(
+pub(in crate::store) fn read_status(
     messages_dir: &Path,
     history_dir: &Path,
     message_id: &crate::ids::MessageId,

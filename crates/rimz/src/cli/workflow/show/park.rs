@@ -190,7 +190,49 @@ impl View<'_> {
         } else {
             0
         };
+        let mut total_visit = 0;
         for (index, entry) in self.journal.iter().enumerate().skip(since) {
+            if let JournalEvent::TurnEnd {
+                action: records::TurnEndAction::Pushed,
+                check,
+                outcome,
+                visit: Some(visit),
+                message,
+                ..
+            } = &entry.event
+            {
+                if entry.node != self.record.node {
+                    continue;
+                }
+                let key = self.journal[..index]
+                    .iter()
+                    .rev()
+                    .find_map(|answer| match &answer.event {
+                        JournalEvent::Evaluation { object, .. } if &answer.node == check => {
+                            Some(object.get("key").and_then(|key| {
+                                serde_json::from_value::<records::Key>(key.clone()).ok()
+                            }))
+                        }
+                        _ => None,
+                    })
+                    .flatten();
+                if per_outcome && (outcome.as_deref(), key.as_ref()) != bucket {
+                    continue;
+                }
+                total_visit += 1;
+                let visit = if per_outcome { *visit } else { total_visit };
+                writeln!(
+                    out,
+                    "  {} {check} {} · {} {visit} · push-back{}",
+                    self.clock(entry.at),
+                    outcome.as_deref().unwrap_or("—"),
+                    entry.node,
+                    message
+                        .as_ref()
+                        .map_or_else(String::new, |message| format!(" {message}"))
+                )?;
+                continue;
+            }
             let JournalEvent::Attempt {
                 visit,
                 key,
@@ -211,6 +253,8 @@ impl View<'_> {
             {
                 continue;
             }
+            total_visit += 1;
+            let visit = if per_outcome { *visit } else { total_visit };
             let sender = match self.sender(&self.journal[..index]) {
                 Sender::Edge(node, outcome) => format!("{node} {outcome}"),
                 Sender::Resume => "resumed".into(),

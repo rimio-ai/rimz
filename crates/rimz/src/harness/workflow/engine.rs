@@ -336,6 +336,7 @@ enum Decision {
         )>,
     ),
     End(Box<RunRecord>),
+    Push(Box<RunRecord>),
     Evict(Box<RunRecord>),
     Admit(Box<(u64, String, throttle::Run)>),
 }
@@ -392,6 +393,12 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             Decision::Launch(launch) => {
                 let (record, prompt, turn) = *launch;
                 if agent::launch(state, &paths, &spec, &record, prompt, turn, host)? {
+                    continue;
+                }
+                return Ok(());
+            }
+            Decision::Push(record) => {
+                if until::push(state, &paths, &spec, &record, host)? {
                     continue;
                 }
                 return Ok(());
@@ -618,7 +625,9 @@ fn prepare(
     if t.record.recheck_at.is_some_and(|at| at > t.now)
         && !t.record.wait.as_ref().is_some_and(|wait| wait.is_hold())
     {
-        if let Some(wait) = &mut t.record.wait {
+        if t.record.held.is_none()
+            && let Some(wait) = &mut t.record.wait
+        {
             wait.last = t.now;
             wait.count += 1;
         }
@@ -631,15 +640,8 @@ fn prepare(
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
             }
-            t.engine_route(
-                "cap",
-                json!({
-                    "outcome":"cap", "step":t.record.node, "bound":bound,
-                    "visits":visits, "max":max, "routed_by":t.record.visit_bucket().0
-                }),
-                &spec.engine_target(&t.record.node, "cap"),
-                ParkReason::Cap,
-            )?;
+            let route = t.cap_route(bound, visits, max);
+            t.route(&route.target, route.object, route.reason)?;
             admission.capacity = None;
             persist(&mut t, &guard)?;
             return Ok(Decision::Again);
@@ -772,6 +774,9 @@ fn prepare(
     }
     let seq = t.record.next_seq;
     t.record.next_seq += 1;
+    if let Some(held) = &mut t.record.held {
+        held.attempt.woken = false;
+    }
     t.record.attempt = Some(LiveAttempt {
         kind,
         lifecycle: step.map_or(workflow::StepLifecycle::Turn, spec::Step::lifecycle),
@@ -785,6 +790,7 @@ fn prepare(
         held_since: None,
         asked_ms: 0,
         judged: None,
+        push: None,
         child: None,
         run: None,
         head_start,
@@ -1229,6 +1235,9 @@ pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
             t.record.recheck_at = None;
             if let Some(attempt) = &mut t.record.attempt {
                 attempt.woken = true;
+            }
+            if let Some(held) = &mut t.record.held {
+                held.attempt.woken = true;
             }
             if let Some(wait) = &mut t.record.wait {
                 wait.recheck_at = None;

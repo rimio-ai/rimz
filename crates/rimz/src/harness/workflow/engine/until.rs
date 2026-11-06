@@ -1,6 +1,6 @@
 use super::super::{LeaderTurn, Observed};
 use super::*;
-use crate::store::workflow::{HeldSession, StepLifecycle, TurnEndAction, Verdict};
+use crate::store::workflow::{HeldSession, PushBack, StepLifecycle, TurnEndAction, Verdict};
 
 pub(super) fn has_pending_verdict(record: &RunRecord) -> bool {
     record
@@ -112,30 +112,107 @@ pub(super) fn prepare(
         return Ok(Some(Decision::End(Box::new(t.record.clone()))));
     }
     let held = t.record.held.as_ref().expect("observed held session");
-    let Some(verdict) = held.verdict.clone() else {
-        if hold_changed {
-            persist(t, guard)?;
-        }
-        return Ok(None);
-    };
-    if verdict.target == held.attempt.node || verdict.target == "@wait" {
-        if verdict.target == "@wait" {
-            t.merge_wait(&verdict.object, verdict.at.unwrap_or(t.now), false)?;
-        } else {
-            t.close_wait();
-        }
-        return restore(t, guard, seen, TurnEndAction::Kept, &verdict, None).map(Some);
-    }
-    if observed.turn.as_ref().map(|turn| &turn.end) != held.attempt.judged.as_ref() {
+    let verdict = held.verdict.clone();
+    let waiting = verdict
+        .as_ref()
+        .is_none_or(|verdict| verdict.target == "@wait");
+    if observed.turn.as_ref().map(|turn| &turn.end) != held.attempt.judged.as_ref()
+        || (waiting && eligible(&observed).is_none())
+    {
+        t.abandon_check("canceled");
+        t.close_wait();
         return restore(
             t,
             guard,
             seen,
             TurnEndAction::Discarded,
-            &verdict,
+            verdict.as_ref(),
             Some("leader turn moved on".into()),
         )
         .map(Some);
+    }
+    let Some(verdict) = verdict else {
+        if hold_changed {
+            persist(t, guard)?;
+        }
+        return Ok(None);
+    };
+    if verdict.target == "@wait" {
+        t.merge_wait(&verdict.object, verdict.at.unwrap_or(t.now), true)?;
+        let held = t.record.held.as_mut().expect("waiting session");
+        held.verdict = None;
+        let woken = std::mem::take(&mut held.attempt.woken);
+        let attempt = held.attempt.clone();
+        t.turn_end(&attempt, TurnEndAction::Kept, Some(&verdict), None);
+        if woken {
+            t.record.recheck_at = None;
+            // merge_wait has just published this held wait.
+            t.record.wait.as_mut().expect("merged held wait").recheck_at = None;
+            seen.remove(&t.record.node);
+        }
+        persist(t, guard)?;
+        return Ok(Some(if woken {
+            Decision::Again
+        } else {
+            Decision::Stop
+        }));
+    }
+    if verdict.target == t.record.held.as_ref().expect("held verdict").attempt.node {
+        if eligible(&observed).is_none() {
+            if hold_changed {
+                persist(t, guard)?;
+            }
+            return Ok(Some(Decision::Stop));
+        }
+        t.close_wait();
+        t.restore_session();
+        seen.clear();
+        t.record.key = verdict
+            .object
+            .get("key")
+            .and_then(|key| serde_json::from_value(key.clone()).ok());
+        t.record.input = Some(verdict.object.clone());
+        let step = &t.spec.steps[&t.record.node];
+        if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
+            let route = t.cap_route(bound, visits, max);
+            t.stage_agent_end(
+                Ending {
+                    outcome: AttemptOutcome::Ended,
+                    cause: EndCause::Lifecycle,
+                    route: Some(route),
+                    reason: None,
+                },
+                &observed,
+            );
+            t.record.attempt.as_mut().expect("capped session").host = agent::identity();
+            persist(t, guard)?;
+            return Ok(Some(Decision::End(Box::new(t.record.clone()))));
+        }
+        let bucket = t.record.visit_bucket();
+        let bucket = (bucket.0.map(str::to_owned), bucket.1.cloned());
+        t.record
+            .visits
+            .entry(t.record.node.clone())
+            .or_default()
+            .bump(bucket);
+        let visit = t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket());
+        let attempt = t
+            .record
+            .attempt
+            .as_mut()
+            .expect("restored push-back session");
+        let closed_visit = attempt.visit;
+        attempt.visit = Some(visit);
+        attempt.push = Some(PushBack {
+            message: crate::ids::MessageId::new(),
+            queued: false,
+        });
+        let mut attempt = attempt.clone();
+        attempt.visit = closed_visit;
+        t.turn_end(&attempt, TurnEndAction::Pushed, Some(&verdict), None);
+        persist(t, guard)?;
+        write_context(&t.record, t.paths, t.spec)?;
+        return Ok(Some(Decision::Push(Box::new(t.record.clone()))));
     }
     if super::super::close_after(t.spec, &t.record).is_some_and(|(at, _)| t.now < at)
         || eligible(&observed).is_none()
@@ -166,17 +243,66 @@ fn restore(
     guard: &WorkspaceLock,
     seen: &mut BTreeSet<String>,
     action: TurnEndAction,
-    verdict: &Verdict,
+    verdict: Option<&Verdict>,
     reason: Option<String>,
 ) -> Result<Decision> {
     // Restoring a held session always publishes its original agent attempt.
     t.restore_session();
     seen.clear();
     let attempt = t.record.attempt.as_ref().expect("restored session").clone();
-    t.turn_end(&attempt, action, Some(verdict), reason);
+    t.turn_end(&attempt, action, verdict, reason);
     persist(t, guard)?;
     write_context(&t.record, t.paths, t.spec)?;
     Ok(Decision::Again)
+}
+
+pub(super) fn push(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    host: &dyn AttemptHost,
+) -> Result<bool> {
+    // Preparation published this pending push and its owning agent attempt together.
+    let attempt = record.attempt.as_ref().expect("prepared push-back");
+    let push = attempt.push.as_ref().expect("prepared push-back id");
+    let text = super::super::brief::push(spec, record)?;
+    let pushed = host.push(
+        attempt.run.as_ref().expect("push-back session run"),
+        push,
+        &text,
+    )?;
+    if !pushed.queued {
+        return Ok(false);
+    }
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut t = Transition {
+        record: workflow::load(paths)?,
+        spec,
+        paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    if !t.current(attempt.seq) {
+        return Ok(false);
+    }
+    let current = t
+        .record
+        .attempt
+        .as_mut()
+        .expect("current push-back attempt");
+    let Some(current) = current
+        .push
+        .as_mut()
+        .filter(|current| current.message == push.message)
+    else {
+        return Ok(false);
+    };
+    if !current.queued {
+        current.queued = true;
+        persist(&mut t, &guard)?;
+    }
+    Ok(true)
 }
 
 fn outcome_reason(outcome: AttemptOutcome) -> &'static str {

@@ -81,7 +81,7 @@ fn decided(value: &Value) -> bool {
 }
 
 #[test]
-fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
+fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     let room = room();
     let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
@@ -93,7 +93,23 @@ fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
         value["record"]["attempt"]["run"]["run_id"],
         run.run_id.as_str()
     );
-    assert_eq!(events(&value, "turn_end")[0]["action"], "kept");
+    assert_eq!(events(&value, "turn_end")[0]["action"], "pushed");
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["push"]["queued"] == true
+    });
+    let message_id = value["record"]["attempt"]["push"]["message"]
+        .as_str()
+        .unwrap();
+    let (live, history) = room.env.store().list_messages_and_history().unwrap();
+    let message = live
+        .iter()
+        .chain(&history)
+        .find(|message| message.message_id.as_str() == message_id)
+        .unwrap();
+    assert_eq!(message.sender, rimz::store::message::MessageSender::System);
+    assert_eq!(message.gate, rimz::store::message::DeliveryGate::Done);
+    assert!(!message.is_user_input());
+    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     assert!(
         !trace.contains("close-pane"),
@@ -106,13 +122,112 @@ fn a_turn_end_hook_keeps_the_layout_without_an_explicit_advance() {
             .output()
             .unwrap(),
     );
-    assert!(text.contains("turn_end") && text.contains("kept"), "{text}");
+    assert!(
+        text.contains("turn_end pushed") && text.contains("visit 1"),
+        "{text}"
+    );
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
         text.contains("◆ after"),
         "the held session's check was visited:\n{text}"
     );
-    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    room.hook(&id, &run, json!({"hook_event_name":"UserPromptSubmit"}));
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = settled(&room.env, &id, "parked");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
+    assert_eq!(events(&value, "turn_end").len(), 2);
+    let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    let block: Vec<_> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("max-visits:"))
+        .take_while(|line| *line != "you can")
+        .collect();
+    assert_eq!(block.len(), 4, "{text}");
+    assert_eq!(block[0], "max-visits: 2 of 2 visits used");
+    assert!(
+        block[1].ends_with(&format!("after pending · build 1 · push-back {message_id}")),
+        "{text}"
+    );
+    assert!(
+        block[2].contains(&format!(
+            "after pending · build 2 · @{} ended · ",
+            run.agent_name.as_deref().unwrap()
+        )),
+        "{text}"
+    );
+    assert!(
+        block[3].ends_with("build 3 refused: max-visits 2"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
+    let room = room();
+    let definition = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &definition,
+        fs::read_to_string(&definition)
+            .unwrap()
+            .replace("lifecycle='until'\n", ""),
+    )
+    .unwrap();
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    let store = room.env.store();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().lane_path("workflow-tick.json"),
+        &BTreeMap::from([(
+            id.clone(),
+            jiff::Timestamp::now() + Duration::from_secs(3600),
+        )]),
+    )
+    .unwrap();
+    opened_turn(&room, &id, &run);
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["push"]["queued"] == true
+    });
+    let message = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| {
+            message.message_id.as_str() == value["record"]["attempt"]["push"]["message"]
+        })
+        .unwrap();
+    assert_eq!(message.status, rimz::store::message::MessageStatus::Sent);
+    wait_for_advances_to_exit(&room.env, &id);
+    fs::write(paths(&room, &id).work.join("close"), "").unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"UserPromptSubmit", "prompt":"Live workflow probe"}),
+    );
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    wait_for_advances_to_exit(&room.env, &id);
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message.message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Sent),
+    );
+    assert_eq!(events(&show(&room.env, &id), "turn_end").len(), 1);
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"UserPromptSubmit", "prompt":message.text}),
+    );
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message.message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Delivered),
+    );
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
 }
 
 #[test]
@@ -205,11 +320,21 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
         &run,
         json!({"hook_event_name":"UserPromptSubmit", "prompt":"One more question"}),
     );
-    waiting.write_all(&[1]).unwrap();
     let value = until(&room.env, &id, decided);
     assert_eq!(events(&value, "turn_end")[0]["action"], "discarded");
+    assert_eq!(
+        events(&value, "turn_end")[0]["reason"],
+        "leader turn moved on"
+    );
     assert!(events(&value, "attempt").is_empty(), "{value:#}");
     assert_eq!(value["record"]["node"], "build");
+    waiting.write_all(&[1]).unwrap();
+    wait_for_advances_to_exit(&room.env, &id);
+    assert_eq!(
+        events(&show(&room.env, &id), "evaluation"),
+        events(&value, "evaluation"),
+        "the abandoned check's late result must write nothing"
+    );
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     assert!(
         !trace.contains("close-pane"),
@@ -217,8 +342,8 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     );
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
-        text.contains("◆ after") && text.contains("done ·"),
-        "the discarded verdict's check was evaluated:\n{text}"
+        text.contains("◆ after"),
+        "the abandoned check was reached:\n{text}"
     );
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
@@ -229,9 +354,10 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &spec,
-        fs::read_to_string(&spec)
-            .unwrap()
-            .replace("on.pending = 'build'", "on.pending = '@wait'"),
+        fs::read_to_string(&spec).unwrap().replace(
+            "on.pending = 'build'",
+            "on.pending = '@wait'\nwake=['review.ready']",
+        ),
     )
     .unwrap();
     let (id, run) = room.launch();
@@ -268,12 +394,26 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     );
     assert_eq!(text.matches("checking after").count(), 1, "{text}");
     waiting.write_all(&[1]).unwrap();
-    let value = until(&room.env, &id, decided);
+    let value = until(&room.env, &id, |value| {
+        !events(value, "turn_end").is_empty()
+            && value["record"]["held"].is_object()
+            && value["record"]["held"]["verdict"].is_null()
+            && value["record"]["wait"].is_object()
+    });
     assert_eq!(events(&value, "turn_end")[0]["action"], "kept");
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(text.contains("build is with you"), "{text}");
-    assert_eq!(text.matches(" · after: pending").count(), 1, "{text}");
-    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    assert_eq!(text.matches("checking after: pending").count(), 1, "{text}");
+    fs::write(paths(&room, &id).work.join("close"), "").unwrap();
+    let signal = json!({"name":"review.ready","payload":{},"source":"cli"}).to_string();
+    success(
+        room.command(&["workflow", "advance", "--wake-signal", &signal])
+            .output()
+            .unwrap(),
+    );
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
 }
 
 #[test]

@@ -1,10 +1,15 @@
 use super::*;
 
+mod checks;
+
 const INTRO: &str = "You are one step of a RimZ workflow: a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
 const MORE: &str = "`$RIMZ_WORKFLOW_DIR/context.json` holds this run's input and the previous attempt in full. `rimz workflow show $RIMZ_WORKFLOW_RUN` draws the graph with this run's position and trail.";
-const TURN: &str = "This is one turn. When it ends with nothing owed, RimZ closes your pane and runs the check `watch`. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires";
+const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, RimZ closes your pane and runs the check `watch`. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires";
+const STOPS: &str =
+    "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
+const CHECK: &str = "The check `watch` tests `cat answer.json`.";
 const STAY: &str = "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check `watch`.";
-const UNTIL: &str = "After each of your turns that ends with nothing owed, RimZ runs the check `watch`, which either keeps you open for another turn or closes your pane and moves the run on.";
+const UNTIL: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
 const LATER: &str =
     "The user may answer in this pane later; a question goes in your final message.";
 
@@ -131,7 +136,7 @@ fn land_note_matches_the_approved_example_with_reset_aware_visits() {
         );
     }
     let expected = format!(
-        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`, and the second for `red` since the last `queued`: one more `red` before a `queued` parks the run for the user. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you.\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
+        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`, and the second for `red` since the last `queued`: one more `red` before a `queued` parks the run for the user. Launches and push-backs count as visits. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you. {STOPS} {CHECK}\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
     );
     assert_eq!(note(&host), expected);
 }
@@ -144,17 +149,17 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     let cases = [
         (
             "lifecycle='turn'",
-            format!("{TURN}. No signals reach you."),
+            format!("{TURN}. No signals reach you. {STOPS}"),
             question,
         ),
         (
             "lifecycle='turn'\ntimeout='3h'",
-            format!("{TURN}, within the step's 3h timeout. No signals reach you."),
+            format!("{TURN}, within the step's 3h timeout. No signals reach you. {STOPS}"),
             paused,
         ),
         (
             "lifecycle='turn'\non.asked='help'",
-            format!("{TURN}. No signals reach you."),
+            format!("{TURN}. No signals reach you. {STOPS}"),
             routed,
         ),
         ("lifecycle='stay'", STAY.into(), LATER),
@@ -170,6 +175,7 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
         answer(&state, &record, &host, json!({"outcome":"red"}));
         let text = note(&host);
         let paragraphs: Vec<_> = text.split("\n\n").collect();
+        let after = format!("{after} {CHECK}");
         assert_eq!(
             paragraphs.get(4).copied(),
             Some(after.as_str()),
@@ -408,7 +414,7 @@ fn arrival_details_are_bounded_escaped_and_tied_to_the_matched_condition_case() 
         text.contains("answered `red` (ci=unread, pr=open)."),
         "{text}"
     );
-    assert!(!text.contains("pr.review="));
+    assert!(!text.split("\n\n").nth(3).unwrap().contains("pr.review="));
     let (_dir, state, record) = setup(OUTCOME_STEP);
     let host = FakeHost::new();
     answer(

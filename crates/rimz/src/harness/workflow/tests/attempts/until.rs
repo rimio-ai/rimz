@@ -6,6 +6,7 @@ use jiff::Timestamp;
 
 const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[checks.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
 
+mod answers;
 mod checks;
 mod delay;
 
@@ -123,17 +124,65 @@ fn reread_then_type_error_returns_an_error_without_panicking() {
 }
 
 #[test]
-fn same_step_keeps_consume_each_turn_once_without_relaunch_or_input_changes() {
-    keeps("build");
+fn same_step_pushes_once_updates_input_and_counts_the_answer_bucket() {
+    let (dir, state, mut record) = setup(UNTIL);
+    record.key = Some(Key::Integer(7));
+    update(&state, &record);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    check(
+        dir.path(),
+        json!({"outcome":"pending", "key":"lint", "reason":"CI is red"}),
+    );
+    host.observed.borrow_mut().turn = Some(turn());
+    let pushed = advance_ok(&state, &record.id, &host);
+    assert_eq!(pushed.visits["build"].total, 2);
+    assert_eq!(pushed.attempt.as_ref().unwrap().visit, Some(1));
+    assert_eq!(pushed.key, Some(Key::String("lint".into())));
+    assert_eq!(pushed.input.as_ref().unwrap()["reason"], "CI is red");
+    assert_eq!(
+        pushed.attempt.as_ref().unwrap().run,
+        live.attempt.unwrap().run
+    );
+    assert_eq!(host.pushes.borrow().len(), 1);
+    let text = host.pushes.borrow().values().next().unwrap().clone();
+    assert!(
+        text.contains("pr") && text.contains("pending") && text.contains("CI is red"),
+        "{text}"
+    );
+    assert!(text.contains("moves on when the check passes"), "{text}");
+    let rows = decisions(&state, &pushed);
+    assert_eq!(rows[0]["action"], "pushed");
+    assert_eq!(rows[0]["visit"], 1);
+    assert_eq!(advance_ok(&state, &record.id, &host), pushed);
+    assert_eq!(host.push_calls.borrow().len(), 1);
+    let spec = load(&state.workflow(&record.id).home).unwrap();
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    assert_eq!(reached(&hops(&spec, &journal, None), &journal)["build"], 2);
+    check(dir.path(), json!({"outcome":"done"}));
+    host.observed
+        .borrow_mut()
+        .turn
+        .as_mut()
+        .unwrap()
+        .end
+        .ended_at += std::time::Duration::from_secs(1);
+    assert_eq!(advance_ok(&state, &record.id, &host).state, RunState::Done);
+    assert_eq!((host.stops.get(), host.launched.borrow().len()), (1, 1));
 }
 
 #[test]
-fn wait_keeps_consume_each_turn_once_without_relaunch_or_input_changes() {
-    keeps("@wait");
+fn wait_holds_the_session_at_its_check_without_a_visit() {
+    let (_, _, kept, host) = keeps("@wait");
+    assert_eq!(kept.node, "pr");
+    assert!(kept.held.is_some());
+    assert!(kept.held.unwrap().verdict.is_none());
+    assert_eq!(kept.visits["build"].total, 1);
+    assert!(host.pushes.borrow().is_empty());
 }
 
 #[test]
-fn visit_number_stays_with_an_until_session_across_count_resets() {
+fn pushed_visits_use_the_post_reset_bucket_without_resetting_the_total() {
     let text = UNTIL.replace(
         "max-visits=2",
         "max-visits=3\nmax-visits-per-outcome={limit=2,reset-on=['pending','done']}",
@@ -153,7 +202,12 @@ fn visit_number_stays_with_an_until_session_across_count_resets() {
         observed.end.ended_at += std::time::Duration::from_secs(index as u64);
         host.observed.borrow_mut().turn = Some(observed);
         let current = advance_ok(&state, &record.id, &host);
-        assert!(current.visits["build"].outcomes.is_empty());
+        assert_eq!(current.visits["build"].total, (index as u64 + 2).min(3));
+        if outcome == "done" {
+            assert!(current.visits["build"].outcomes.is_empty());
+        } else {
+            assert_eq!(current.visits["build"].outcomes[0].visits, 1);
+        }
         let checking: Value =
             serde_json::from_slice(&fs::read(paths.work.join("check-view.json")).unwrap()).unwrap();
         visits.push(checking["live_attempt"]["visit"].as_u64().unwrap());
@@ -191,22 +245,21 @@ fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     host.observed.borrow_mut().turn = Some(turn());
-    let mut kept = advance_ok(&state, &record.id, &host);
-    assert_eq!(kept.node, "build");
-    assert!(kept.held.is_none());
+    let kept = advance_ok(&state, &record.id, &host);
+    assert_eq!(kept.node, "pr");
+    assert!(kept.held.is_some());
     assert_eq!(kept.input, record.input);
     assert_eq!(kept.key, record.key);
-    assert_eq!(kept.entered_at, live.entered_at);
     assert_eq!(kept.visits, live.visits);
     assert_eq!(
-        kept.attempt.as_ref().unwrap().run,
+        kept.held.as_ref().unwrap().attempt.run,
         live.attempt.as_ref().unwrap().run
     );
     assert_eq!(
-        kept.attempt.as_ref().unwrap().seq,
+        kept.held.as_ref().unwrap().attempt.seq,
         live.attempt.as_ref().unwrap().seq
     );
-    assert_eq!(kept.attempt.as_ref().unwrap().judged, Some(turn().end));
+    assert_eq!(kept.held.as_ref().unwrap().attempt.judged, Some(turn().end));
     assert_eq!((host.stops.get(), host.launched.borrow().len()), (0, 1));
     let paths = state.workflow(&record.id);
     let checking: Value =
@@ -223,19 +276,14 @@ fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
         assert!(checking["live_attempt"].get(field).is_none());
     }
     let restored: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
-    assert_eq!(restored["node"], "build");
+    assert_eq!(restored["node"], "pr");
     assert_eq!(decisions(&state, &kept)[0]["action"], "kept");
     assert_eq!(advance_ok(&state, &record.id, &host), kept);
     if target == "@wait" {
-        assert!(kept.recheck_at.is_none());
-        assert!(kept.wait.as_ref().unwrap().recheck_at.is_none());
-        host.observed
-            .borrow_mut()
-            .turn
-            .as_mut()
-            .unwrap()
-            .end
-            .ended_at += std::time::Duration::from_secs(1);
+        assert!(kept.recheck_at.is_some());
+        let mut due = kept.clone();
+        due.recheck_at = None;
+        update(&state, &due);
         let again = advance_ok(&state, &record.id, &host);
         assert_eq!(again.wait.as_ref().unwrap().count, 2);
         assert_eq!(
@@ -251,7 +299,7 @@ fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
             .collect();
         let wait = again.wait.as_ref().unwrap();
         assert_eq!(vec![wait.first, wait.last], answers);
-        kept = again;
+        return (dir, state, again, host);
     }
     (dir, state, kept, host)
 }

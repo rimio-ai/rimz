@@ -97,7 +97,17 @@ pub trait AttemptHost {
     fn evict(&self, scope: &Path, project_root: &Path) -> Result<Vec<String>, WorkflowErr>;
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr>;
     fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
+    fn push(
+        &self,
+        run: &AttemptRun,
+        push: &crate::store::workflow::PushBack,
+        text: &str,
+    ) -> Result<Pushed, WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
+}
+
+pub struct Pushed {
+    pub queued: bool,
 }
 
 pub enum Observation {
