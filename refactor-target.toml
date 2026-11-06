@@ -590,7 +590,7 @@ reason = "Definition loading, launch routing, and engine re-basing read the mode
 [[verdict]]
 kind = "item"
 key = "agents::tools::render_launch_tool_args"
-reason = "The harness renders carried tools once for the final provider without relaxing definition-load checks."
+reason = "The harness renders tools once for the final provider, warning when a supplied list cannot be applied."
 
 [[verdict]]
 kind = "item"

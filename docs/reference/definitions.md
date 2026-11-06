@@ -126,9 +126,9 @@ Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Pl
 | Codex | Requires `tools`, even if empty. Emits `--strict-config` and the ordered `-c` settings below. Native `Agent(...)` type names do not restrict Codex child types. |
 | Pi | Optional. Emits `--tools` with the mapped names below, or `--no-tools` for an empty or all-dropped list, then `--no-skills` when the list omits `Skill`. An absent list emits no flag. |
 | OMP | Accepts or omits `tools`; ignores the list silently. |
-| Other kinds | Omit `tools`; a supplied list is unsupported. |
+| Other kinds | Accepts or omits `tools`; a supplied list warns at launch and is not applied. |
 
-The Markdown `tools` list follows the original role through every `--agent` switch, including Claude ↔ Codex, and renders for the final provider. An explicit `[]` wins over the replacement's list. A provider that cannot apply a carried list warns and launches without it; OMP stays silent. Generated tool flags are not part of a profile's `args` in `rimz config get`. The injected machine auto-compact window is also omitted from `config get`; `rimz agents explain` shows its effective launch value. A profile's declared auto-compact value stays visible in `config get`.
+The Markdown `tools` list follows the original role through every `--agent` switch, including Claude ↔ Codex, and renders for the final provider. An explicit `[]` wins over the replacement's list. A provider that cannot apply a supplied list warns and launches without it; OMP stays silent. Generated tool flags are not part of a profile's `args` in `rimz config get`. The injected machine auto-compact window is also omitted from `config get`; `rimz agents explain` shows its effective launch value. A profile's declared auto-compact value stays visible in `config get`.
 
 Pi maps these names in first-occurrence order and deduplicates the result:
 
@@ -294,7 +294,7 @@ The loader collects independent errors rather than stopping at the first file, a
 | Prompt support | A kind base, definition craft, or team seat on a kind that takes no system prompt. Delete the base, remove the craft, or choose a kind that takes a system prompt. |
 | Model tiers | Both `tier` and `model` set, a tier name in `model`, an unknown tier (with a suggestion), relative effort, an unbuildable concrete model, or no eligible model at or above the requested tier. Tier exclusions identify each family's reason. Configure ordered lists in machine `config.toml`; project TOML cannot set `[tiers]`, `tier`, or tier-valued models. |
 | Traits | Invalid names, unreadable fragments, or named traits without a substitution token. |
-| Tools | Required list missing, malformed entry, unsupported kind, unknown Claude native child type, or an argument that cannot be rendered. |
+| Tools | Required list missing, malformed entry, unknown Claude native child type, or an argument that cannot be rendered. |
 | Delegation | Empty/unknown child names, delegation on a child, native `Agent` combined with a RimZ child list, or a child reference rejected by final namespace validation. |
 | Skills | Invalid names or missing `Skill` tool; for enforced lists, a listed skill absent from the provider/library/pack chain or in conflict, invalid policy metadata, or a listed user-only skill (including automatically added `reflect`). |
 | Compaction and presets | Invalid native token count or handoff threshold; shared validation/launch rejects unsupported provider capabilities and invalid provider-specific values. |
