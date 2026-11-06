@@ -360,10 +360,10 @@ fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
         serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
     assert_eq!(
         (context["visits"].as_u64(), context["visit"].as_u64()),
-        (Some(3), Some(3))
+        (Some(1), Some(1))
     );
     let text = note(&host);
-    assert!(text.contains("The user resumed the run at this step after it parked. This is visit 3 of 7 to `build`, and the third for `red` since the last `queued`"), "{text}");
+    assert!(text.contains("The user resumed the run at this step after it parked. This is visit 1 of 7 to `build`, and the first for `red` since the last `queued`"), "{text}");
 }
 
 #[test]

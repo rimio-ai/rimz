@@ -28,6 +28,9 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
     if let Ok(journal) = workflow::journal(paths) {
         let sender = routing_hop(spec, &journal, &record.node, record.held.as_ref());
         arrival.push(match sender {
+            Some(hop) if hop.kind == HopKind::Restart => {
+                "The user restarted this step; its visits start over.".into()
+            }
             Some(hop) if hop.kind == HopKind::Resume => {
                 "The user resumed the run at this step after it parked.".into()
             }

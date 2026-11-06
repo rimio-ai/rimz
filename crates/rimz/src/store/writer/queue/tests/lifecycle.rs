@@ -475,3 +475,54 @@ fn give_up_after_cancel_keeps_one_terminal_record_and_event() {
     assert_eq!(history[0].status, MessageStatus::Canceled);
     assert_eq!(q.methods(), ["message.queued", "message.canceled"]);
 }
+
+#[test]
+fn retiring_a_message_cancels_any_pending_status_and_keeps_terminal_history() {
+    for status in [
+        MessageStatus::Queued,
+        MessageStatus::Claimed,
+        MessageStatus::Sent,
+    ] {
+        let q = Queue::new();
+        let queued = q.queue(1);
+        let held = match status {
+            MessageStatus::Claimed | MessageStatus::Sent => q
+                .claim_message_for_delivery(&queued.message_id, Timestamp::now())
+                .unwrap()
+                .unwrap(),
+            _ => queued.clone(),
+        };
+        if status == MessageStatus::Sent {
+            q.record_sent_message(&held, "session").unwrap().unwrap();
+        }
+        assert!(
+            q.retire_message(&queued.message_id, "session", "workflow attempt ended")
+                .unwrap(),
+            "{status:?} must retire"
+        );
+        let history = q.history();
+        let methods = q.methods();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, MessageStatus::Canceled);
+        assert_eq!(q.reason("message.canceled"), "workflow attempt ended");
+        assert!(
+            !q.retire_message(&queued.message_id, "session", "again")
+                .unwrap()
+        );
+        q.queue_message_once(&queued, "session").unwrap();
+        q.record_sent_message(&held, "session").unwrap();
+        assert!(q.live().is_empty());
+        assert_eq!(q.history(), history);
+        assert_eq!(q.methods(), methods);
+    }
+    let q = Queue::new();
+    let sent = q.sent(1);
+    q.settle(&sent.message_id, MessageStatus::Delivered, None)
+        .unwrap();
+    let history = q.history();
+    assert!(
+        !q.retire_message(&sent.message_id, "session", "too late")
+            .unwrap()
+    );
+    assert_eq!(q.history(), history);
+}

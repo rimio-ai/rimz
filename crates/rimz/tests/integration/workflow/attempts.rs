@@ -15,6 +15,7 @@ struct Room {
 
 mod capacity;
 mod keep;
+mod restart;
 mod until;
 
 fn dummy_agent_process() -> std::process::Child {
@@ -1641,10 +1642,22 @@ impl Room {
         id: &str,
         run: &RunRecord,
         owner_pid: u32,
+        payload: Value,
+        variables: &[(&str, &std::path::Path)],
+    ) {
+        self.hook_in_session(id, run, owner_pid, "workflow-session", payload, variables);
+    }
+
+    fn hook_in_session(
+        &self,
+        id: &str,
+        run: &RunRecord,
+        owner_pid: u32,
+        session: &str,
         mut payload: Value,
         variables: &[(&str, &std::path::Path)],
     ) {
-        payload["session_id"] = json!("workflow-session");
+        payload["session_id"] = json!(session);
         payload["cwd"] = json!(self.env.project_root);
         let mut cmd = self.hook_command(run.kind.as_str());
         cmd.envs(variables.iter().copied());

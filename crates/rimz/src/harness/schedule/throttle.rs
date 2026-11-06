@@ -994,7 +994,7 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn check_group_size(config: &ThrottleConfig, run: &Run) -> Result<()> {
+pub(in crate::harness) fn check_group_size(config: &ThrottleConfig, run: &Run) -> Result<()> {
     let agents = run.groups.iter().map(|group| group.agents).sum::<usize>();
     if let Some(start) = &run.limits {
         for (scope, name, limit) in [

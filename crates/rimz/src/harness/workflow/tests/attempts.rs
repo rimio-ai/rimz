@@ -20,6 +20,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
 mod brief;
 mod keep;
 mod reached;
+mod restart;
 mod stops;
 mod until;
 
@@ -148,7 +149,7 @@ fn per_outcome_cap_leaves_other_outcomes_admissible() {
 }
 
 #[test]
-fn resuming_a_cap_keeps_the_refused_bucket_and_grants_one_more_visit() {
+fn resuming_a_cap_resets_the_capped_steps_total_and_every_bucket() {
     let mut actual = Vec::new();
     for at in [None, Some("build")] {
         let (_dir, state, record) = setup(OUTCOME_STEP);
@@ -163,26 +164,29 @@ fn resuming_a_cap_keeps_the_refused_bucket_and_grants_one_more_visit() {
         }
         let paths = state.workflow(&record.id);
         assert_eq!(records::load(&paths).unwrap().state, RunState::Parked);
-        resume(&state, &record.id, at, &["visits=+1".into()]).unwrap();
+        resume(&state, &record.id, at, &[]).unwrap();
         advance_ok(&state, &record.id, &host);
         let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
-        let capped = answer(
+        let next = answer(
             &state,
             &record,
             &host,
             json!({"outcome":"red", "key":"lint"}),
         );
         actual.push((
-            context["visit"].as_u64().unwrap(),
-            capped.state,
-            capped.visits["build"].total,
+            context["visit"].as_u64(),
+            next.state,
+            next.visits["build"].total,
             host.launched.borrow().len(),
         ));
     }
     assert_eq!(
         actual,
-        [(3, RunState::Parked, 3, 3), (3, RunState::Parked, 3, 3)],
-        "both resume forms continue red at visit 3, then refuse its fourth launch"
+        [
+            (Some(1), RunState::Active, 2, 4),
+            (Some(1), RunState::Active, 2, 4)
+        ],
+        "both resume forms reset all counts before counting the first new visit"
     );
 }
 
@@ -294,7 +298,7 @@ fn a_waiting_success_resets_rows_once_and_context_and_previous_attempt_restart()
 }
 
 #[test]
-fn reset_keeps_the_total_cap_and_visit_grants_count_from_the_reset() {
+fn outcome_reset_keeps_total_but_cap_resume_resets_all_counts_and_keeps_grants() {
     let text = OUTCOME_STEP.replace("max-visits=6", "max-visits=3");
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
@@ -307,7 +311,7 @@ fn reset_keeps_the_total_cap_and_visit_grants_count_from_the_reset() {
     assert_eq!(capped.input.as_ref().unwrap()["visits"], 3);
     let extended = resume(&state, &record.id, Some("watch"), &["visits=+2".into()]).unwrap();
     assert_eq!(extended.visit_grant, 2);
-    for count in 3..=4 {
+    for count in 1..=4 {
         let live = answer(&state, &record, &host, json!({"outcome":"red"}));
         let ctx: Value =
             serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
@@ -315,7 +319,10 @@ fn reset_keeps_the_total_cap_and_visit_grants_count_from_the_reset() {
         assert_eq!(live.state, RunState::Active);
     }
     let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
-    assert_eq!(capped.input.as_ref().unwrap()["bound"], "max-visits");
+    assert_eq!(
+        capped.input.as_ref().unwrap()["bound"],
+        "max-visits-per-outcome"
+    );
 }
 
 #[test]

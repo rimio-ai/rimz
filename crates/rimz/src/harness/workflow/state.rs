@@ -201,6 +201,7 @@ impl Transition<'_> {
                         JournalEvent::VisitsReset {
                             step: step.clone(),
                             outcome: outcome.clone(),
+                            all: false,
                         },
                     );
                 }
@@ -243,7 +244,7 @@ impl Transition<'_> {
     }
 
     pub(super) fn restore_session(&mut self) {
-        // Only the held preflight and cancel restore a published held session.
+        // Callers restore only a published held session.
         let held = self.record.held.take().expect("held session to restore");
         self.record.node = held.attempt.node.clone();
         self.record.entered_at = held.entered_at;
@@ -531,11 +532,12 @@ impl Transition<'_> {
     }
 
     fn previous_attempt(&self, outcome: AttemptOutcome) -> PreviousAttempt {
-        // A step's live attempt and visit are published together by prepare.
+        // Both callers retain a live step attempt while recording its end.
         let attempt = self.record.attempt.as_ref().expect("live step attempt");
-        let visits = &self.record.visits[&attempt.node];
         let bucket = self.record.visit_bucket();
-        let visit = attempt.visit.unwrap_or_else(|| visits.for_bucket(bucket));
+        let visit = attempt
+            .visit
+            .unwrap_or_else(|| self.record.visits[&attempt.node].for_bucket(bucket));
         PreviousAttempt {
             step: attempt.node.clone(),
             outcome,
@@ -619,29 +621,37 @@ impl Transition<'_> {
     ) -> Result<(), TimeInputErr> {
         // Both step runners save their evidence before entering this shared routing tail.
         let previous = self.record.prev_attempt.clone().expect("step end evidence");
-        self.push(
-            Some(attempt.seq),
-            JournalEvent::Attempt {
-                outcome: previous.outcome,
-                visit: previous.visit,
-                key: previous.key.clone(),
-                routed_by: previous.routed_by.clone(),
-                digests: attempt.digests.clone(),
-                started_at: previous.started_at,
-                ended_at: self.now,
-                handle: previous.handle,
-                run_id: previous.run_id,
-                head_start: previous.head_start,
-                head_end: previous.head_end,
-                code: previous.code,
-                log: previous.log,
-                cost_usd: previous.cost_usd,
-                children: previous.children,
-                limited: previous.limited,
-                asked: previous.asked.clone(),
-                reason,
-            },
-        );
+        if self
+            .record
+            .restart
+            .as_ref()
+            .and_then(|restart| restart.settled)
+            != Some(attempt.seq)
+        {
+            self.push(
+                Some(attempt.seq),
+                JournalEvent::Attempt {
+                    outcome: previous.outcome,
+                    visit: previous.visit,
+                    key: previous.key.clone(),
+                    routed_by: previous.routed_by.clone(),
+                    digests: attempt.digests.clone(),
+                    started_at: previous.started_at,
+                    ended_at: self.now,
+                    handle: previous.handle,
+                    run_id: previous.run_id,
+                    head_start: previous.head_start,
+                    head_end: previous.head_end,
+                    code: previous.code,
+                    log: previous.log,
+                    cost_usd: previous.cost_usd,
+                    children: previous.children,
+                    limited: previous.limited,
+                    asked: previous.asked.clone(),
+                    reason,
+                },
+            );
+        }
         if let Some(verdict) = ending.route {
             if attempt.judged.is_some() {
                 self.turn_end(&attempt, TurnEndAction::Closed, Some(&verdict), None);
@@ -650,8 +660,13 @@ impl Transition<'_> {
             self.record.entered_at = verdict.entered_at;
             return self.route(&verdict.target, verdict.object, verdict.reason);
         }
+        if let EndCause::Restart { continued } = ending.cause {
+            self.restart_step(&attempt.node, continued);
+            return Ok(());
+        }
         if ending.cause == EndCause::Cancel {
             self.close_wait();
+            self.record.restart = None;
             self.record.state = RunState::Canceled;
             self.record.terminal_at = Some(self.now);
             self.push(
@@ -694,6 +709,36 @@ impl Transition<'_> {
             self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
             ParkReason::User,
         )
+    }
+
+    pub(super) fn reset_visits(&mut self, step: &str, outcome: &str) {
+        self.record.visits.remove(step);
+        self.push(
+            None,
+            JournalEvent::VisitsReset {
+                step: step.into(),
+                outcome: outcome.into(),
+                all: true,
+            },
+        );
+    }
+
+    pub(super) fn restart_step(&mut self, step: &str, continued: bool) {
+        self.close_wait();
+        self.reset_visits(step, "restart");
+        self.record.node = step.into();
+        self.record.entered_at = self.now;
+        self.record.park = None;
+        self.record.state = RunState::Active;
+        self.record.check_retry = 0;
+        self.record.check_retry_context = None;
+        self.push(
+            None,
+            JournalEvent::Restart {
+                step: step.into(),
+                continued,
+            },
+        );
     }
 
     pub(super) fn finish_script(

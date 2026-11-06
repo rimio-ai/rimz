@@ -71,6 +71,8 @@ The combinations are narrow. `agent`, `wait`, and `workflow` conflict, and one o
 
 A supervised `Spawn` task (without `stay`) names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto` or `codex-yolo`. `rimz loop add` rejects teams, multi-cell layouts, and command cells in this mode, because a supervised task owns exactly one pane.
 
+A manual `rimz workflow restart <run>` restarts only that run's current agent step, not the loop task. Its replacement uses manual admission even on an automatically fired run; subsequent step visits again use the run's automatic admission rules.
+
 `TaskShape::compile` compiles each persisted row into an action result and a timing result independently. A row with a valid action and a malformed schedule stays visible and can be fired by hand, while scheduled firing skips it.
 
 ## Where tasks live

@@ -108,6 +108,7 @@ impl Fixture {
 
     fn leader(&self) -> LeaderRun {
         LeaderRun {
+            resume: None,
             lifecycle: crate::store::run::RunLifecycle::Turn,
             keep: false,
             report_to: ReportTo::Launcher,
@@ -130,6 +131,79 @@ impl Fixture {
             },
         }
     }
+}
+
+#[test]
+fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
+    let mut fixture = Fixture::new();
+    fixture.fresh.layout = crate::harness::spec::parse_layout_spec(
+        "claude,claude",
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    fixture.fresh.logins.push("default".parse().unwrap());
+    fixture
+        .fresh
+        .managed_launches
+        .push(crate::agents::ManagedLaunchState::Unsupported);
+    fixture.fresh.reminder_section = Some(crate::harness::launch::ReminderSection::Workflow(
+        "The check pulls this step forward".into(),
+    ));
+    let mut leader = fixture.leader();
+    leader.resume = Some("saved-conversation".into());
+    leader.cleanup = true;
+    leader.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 7,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    leader.completion = RunCompletion::Detached;
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(opened) = open_fresh(
+        fixture.fresh.clone(),
+        Some(leader.clone()),
+        &mut Unattended,
+        &backend,
+    )
+    .unwrap() else {
+        panic!("launch did not open")
+    };
+    let run = opened.run.unwrap();
+    let tabs = backend.tabs.lock().unwrap();
+    let panes: Vec<_> = tabs[0]
+        .panes
+        .columns
+        .iter()
+        .flat_map(|column| &column.panes)
+        .collect();
+    let requests: Vec<_> = panes
+        .iter()
+        .map(|pane| {
+            let payload = std::fs::read_to_string(pane.argv.last().unwrap()).unwrap();
+            crate::harness::launch::decode_exec_request("claude", None, &payload).unwrap()
+        })
+        .collect();
+    assert!(
+        matches!(&requests[0].action,
+        crate::harness::launch::ExecAction::Resume { session_id, .. } if session_id == "saved-conversation"),
+        "{:?}",
+        requests[0].action
+    );
+    assert_eq!(requests[0].run_id, Some(run.record.run_id));
+    assert_eq!(requests[0].identity.params.workflow, leader.workflow);
+    assert_eq!(requests[0].reminder_section, fixture.fresh.reminder_section);
+    assert!(requests[0].close_pane_on_exit && requests[0].exit_on_run_completion);
+    assert!(matches!(
+        requests[1].action,
+        crate::harness::launch::ExecAction::Launch { .. }
+    ));
+    assert!(requests[1].run_id.is_none());
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.identity.params.login.is_none())
+    );
 }
 
 #[test]

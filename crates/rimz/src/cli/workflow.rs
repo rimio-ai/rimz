@@ -21,7 +21,9 @@ mod rail;
 mod receipt;
 mod resolve;
 mod show;
+
 use host::Host;
+pub(super) use receipt::restart;
 
 fn workflow_agent(
     record: &RunRecord,
@@ -180,6 +182,15 @@ enum Command {
         #[arg(long, value_name = "GRANT")]
         extend: Vec<String>,
     },
+    /// Replace the current agent step, resetting its visits.
+    Restart {
+        /// Run address `<workflow>#<lane>`, workflow name, or run id.
+        #[arg(value_name = "RUN")]
+        id: String,
+        /// Resume the current conversation instead of starting fresh; refuses if unavailable.
+        #[arg(long = "continue")]
+        continued: bool,
+    },
     #[command(hide = true)]
     Advance {
         #[arg(required_unless_present = "wake_signal")]
@@ -223,6 +234,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         } => show(&id, node.as_deref(), json, history, globals),
         Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
+        Command::Restart { id, continued } => restart(&id, continued, globals),
         Command::Advance {
             id: Some(id),
             woken_by,

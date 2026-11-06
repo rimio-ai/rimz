@@ -192,7 +192,7 @@ impl StepVisits {
             .map_or(0, |index| self.outcomes[index].visits)
     }
 
-    /// Count one visit in this bucket and in the never-reset total.
+    /// Count one visit in this bucket and in the total since the last full reset.
     pub fn bump(&mut self, bucket: (Option<String>, Option<Key>)) {
         self.total += 1;
         let (outcome, key) = bucket;
@@ -257,6 +257,15 @@ pub enum EndCause {
     Timeout,
     Deadline,
     Cancel,
+    Restart { continued: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Restart {
+    pub resume: Option<crate::ids::AgentSessionId>,
+    /// A previous attempt being stopped again, whose end and cost are already journaled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -529,6 +538,8 @@ pub struct RunRecord {
     pub attempt: Option<LiveAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<HeldSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<Restart>,
     pub prev_attempt: Option<PreviousAttempt>,
     pub terminal_at: Option<Timestamp>,
     #[serde(default)]
@@ -696,6 +707,12 @@ pub enum JournalEvent {
     VisitsReset {
         step: String,
         outcome: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
+    },
+    Restart {
+        step: String,
+        continued: bool,
     },
     Wait {
         outcome: String,

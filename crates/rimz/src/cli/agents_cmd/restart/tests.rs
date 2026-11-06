@@ -227,6 +227,11 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
     agent.role = Some("coder".to_owned());
     // A restart replays the session, not the fire that launched it.
     agent.loop_task = Some("fixer".to_owned());
+    agent.workflow = Some(rimz::agents::WorkflowAttemptRef {
+        run: rimz::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: rimz::agents::WorkflowAttemptRole::Step,
+    });
     let posture = ResumePosture {
         launch: rimz::harness::plan::ResumeLaunchPosture {
             args: vec!["--model".to_owned(), "opus".to_owned()],

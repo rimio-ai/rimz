@@ -281,6 +281,10 @@ pub(super) fn launch(
                     .expect("agent step layout"),
                 lifecycle: attempt.lifecycle,
                 keep: spec.steps[&record.node].keep.unwrap_or(false),
+                resume: record
+                    .restart
+                    .as_ref()
+                    .and_then(|restart| restart.resume.clone()),
                 prompt,
                 workflow_note: super::super::brief::step(paths, spec, record),
                 cwd: record.scope.path.clone(),
@@ -311,6 +315,9 @@ pub(super) fn launch(
             host.stop(&run)?;
         }
         return Ok(false);
+    }
+    if record.restart.is_some() && t.record.restart == record.restart {
+        t.record.restart = None;
     }
     let reason = match launched {
         Ok(run) => {
@@ -345,7 +352,18 @@ pub(super) fn launch(
                     Ending {
                         outcome: failure.outcome,
                         cause: EndCause::Lifecycle,
-                        route: None,
+                        route: record
+                            .restart
+                            .as_ref()
+                            .filter(|restart| restart.resume.is_some())
+                            .map(|_| workflow::Verdict {
+                                node: record.node.clone(),
+                                entered_at: record.entered_at,
+                                at: Some(t.now),
+                                target: "@user".into(),
+                                object: json!({"outcome":"died", "reason":failure.reason}),
+                                reason: workflow::ParkReason::Invalid,
+                            }),
                         reason: None,
                     },
                     &observed,

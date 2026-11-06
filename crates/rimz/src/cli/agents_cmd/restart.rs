@@ -29,6 +29,20 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         &ctx.address_context(),
     )?
     .clone();
+    let ownership = workflow_pin(&ctx.store, &agent)?;
+    if let WorkflowPin::Current {
+        run,
+        step,
+        role: rimz::agents::WorkflowAttemptRole::Step,
+    } = &ownership
+    {
+        writeln!(
+            crate::cli::render::out(),
+            "restarting step {step} of run {run} via rimz workflow restart {run} --continue"
+        )?;
+        return crate::cli::workflow::restart(run.as_str(), true, globals);
+    }
+    let former_workflow = ownership.former()?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let caller = resolve_caller(&snapshot.agents);
     let focus = LaunchFocus::resolve(false, caller.as_ref());
@@ -37,6 +51,9 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             .as_ref()
             .map(|_| rimz::launcher::trust::Unattended::Agent)
     })?;
+    if let Some(pin) = former_workflow {
+        clear_former_workflow_pin(&ctx, &agent, &pin)?;
+    }
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
 }
@@ -330,7 +347,7 @@ pub(in crate::cli) fn relaunch_request(
         role: agent.role.clone(),
         team: agent.team.clone(),
         loop_task: agent.loop_task.clone(),
-        workflow: agent.workflow.clone(),
+        workflow: None,
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),

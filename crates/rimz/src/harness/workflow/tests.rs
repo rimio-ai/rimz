@@ -7,7 +7,7 @@ use std::fs;
 use std::rc::Rc;
 
 pub(super) struct FakeHost {
-    pub(super) occupancy: RefCell<Occupancy>,
+    pub(super) occupancy: Rc<RefCell<Occupancy>>,
     launched: RefCell<Vec<StepLaunch>>,
     observed: Rc<RefCell<Observed>>,
     failure: RefCell<Option<LaunchFailure>>,
@@ -33,7 +33,7 @@ pub(super) struct FakeHost {
 impl FakeHost {
     pub(super) fn new() -> Self {
         Self {
-            occupancy: RefCell::new(Occupancy::Free),
+            occupancy: Rc::new(RefCell::new(Occupancy::Free)),
             launched: RefCell::new(Vec::new()),
             observed: Rc::new(RefCell::new(Observed {
                 status: RunStatus::Running,
