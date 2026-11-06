@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\n[checks.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+            "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\n[checks.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
         ),
         "",
     );
@@ -116,7 +116,9 @@ fn scoped_judge_guard_restores_and_records_replacements() {
         return;
     }
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        &format!(
+            "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+        ),
         "",
     );
     fs::write(
@@ -185,7 +187,9 @@ fn scoped_judge_guard_arm_refusal_names_the_limit_without_spawning() {
         return;
     }
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        &format!(
+            "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+        ),
         "",
     );
     fs::write(
@@ -235,7 +239,9 @@ printf '%s\n' '{"structured_output":{"outcome":"done"}}'
 #[test]
 fn judge_refuses_below_version_floor_before_provider_spawn() {
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        &format!(
+            "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"
+        ),
         "",
     );
     env.write_config(&env.project_root, "[agents]\nisolation = 'host'\n");
@@ -305,7 +311,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
         let _named = NameModeOnPanic(mode);
         let (env, _) = fixture(
             &format!(
-                "{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\ntimeout='1h'\n"
+                "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\ntimeout='1h'\n"
             ),
             "",
         );

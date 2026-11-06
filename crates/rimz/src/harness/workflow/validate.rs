@@ -148,6 +148,12 @@ pub(super) fn validate_spec(
             report.condition_terms(&path, check, project_root);
         }
         if let Some(CheckKind::Agent(agent)) = check.kind() {
+            if check.summary.is_none() {
+                report.error(
+                    &format!("{path}.summary"),
+                    "a judge check requires a one-line summary of what it reviews; add summary = \"...\"",
+                );
+            }
             report.agent_fields(dir, &path, agent, check.prompt_file.as_deref(), definitions);
             if !definitions.failed.contains_key(agent)
                 && let Ok(profile) =

@@ -12,6 +12,40 @@ fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
 }
 
 #[test]
+fn judge_summary_is_required_after_invalid_optional_summaries_are_ignored() {
+    let (_home, dir) = fixture();
+    let base = SIMPLE.replace(
+        "run='true'",
+        "agent='claude'\nprompt-file='prompts/build.md'",
+    );
+    let mut actual = Vec::new();
+    for summary in [
+        "",
+        "summary=''",
+        "summary=\"two\\nlines\"",
+        "summary='Reviews correctness'",
+    ] {
+        fs::write(dir.join("workflow.toml"), format!("{base}{summary}\n")).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        actual.push(report.errors.iter().any(|issue| {
+            issue.path == "checks.pick.summary"
+                && issue
+                    .message
+                    .contains("a judge check requires a one-line summary of what it reviews")
+                && issue.message.contains("add summary = \"...\"")
+        }));
+        if summary.contains("Reviews correctness") {
+            assert!(report.errors.is_empty(), "{report:?}");
+        }
+    }
+    assert_eq!(actual, [true, true, true, false]);
+    let land = "[workflow]\nscope='worktree'\nstart='collect'\n[steps.collect]\nshell='true'\ntimeout='1m'\nthen='notes'\n[checks.notes]\nrun='true'\non={unsure='notes-read',settled='@done'}\n[checks.notes-read]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Decide whether the notes need work'\non.settled='@done'\n";
+    fs::write(dir.join("workflow.toml"), land).unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    assert!(report.errors.is_empty(), "{report:?}");
+}
+
+#[test]
 fn keep_warns_and_is_ignored_except_on_turn_and_until_agent_steps() {
     let mut actual = Vec::new();
     for (kind, lifecycle, keep) in [

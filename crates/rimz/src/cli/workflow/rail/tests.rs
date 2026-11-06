@@ -511,6 +511,7 @@ fn horizontal_canceled_limited_judge_wait_marks_the_stopping_node() {
     canceled_horizontal(
         r#"[checks.work]
 agent='claude'
+summary='Review the work'
 prompt-file='prompt.md'
 timeout='1h'
 on.pass='@done'

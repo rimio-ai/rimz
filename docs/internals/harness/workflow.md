@@ -70,11 +70,11 @@ Definitions live at `~/.rimz/workflows/<name>/workflow.toml`. Unknown fields and
 | --- | --- | --- | --- |
 | run | `run` | `wake`, `timeout`, `on` | Its own outcomes, plus `timeout` and `invalid`. |
 | shell | nonempty `shell` | `wake`, `timeout`, `on` | Requires `on.pass` and `on.fail`. Accepts only those plus `on.timeout` and `on.invalid`. |
-| judge | `agent`, with a required `prompt-file` | `window`, `wake`, `timeout`, `on` | Its own outcomes and `timeout`. An invalid answer retries once, then parks at `@user`, ignoring `on.invalid`. The profile's adapter must have a headless launch. |
+| judge | `agent`, with required `prompt-file` and `summary` | `window`, `wake`, `timeout`, `on` | Its own outcomes and `timeout`. An invalid answer retries once, then parks at `@user`, ignoring `on.invalid`. The profile's adapter must have a headless launch. |
 | condition | nonempty `cases` | required `else`, `provider`, `account`, `timeout`, `on` | Every case outcome and `else` must be routed. Other routes warn and are ignored, except `unknown`, `timeout`, and `invalid`. |
 | sleep | nonzero `sleep` duration | required `then`, optional `when`, `for`, `provider`, `account` | `then` on expiry or a matching condition; `sleeping` and unread `unknown` wait. No timeout edge. |
 
-Every kind accepts an optional `summary`: one nonempty line describing what the node does. Omission never warns. Misplaced optional settings warn and are ignored; conflicting runners still refuse. A `window` holds provider-window terms only. A condition or conditional sleep requires `provider` when its terms read `window.*`; an unknown provider or one without such a term is ignored, as is an `account` without a remaining provider.
+Every kind accepts a `summary`: one nonempty line describing what the node does. It is required for judges and optional elsewhere. Admission validation runs after tolerance, so a judge's dropped blank or multiline summary refuses at `checks.<name>.summary` with `add summary = "..."`. Sealed-run loading does not revalidate admission: an older judge without one keeps running with the fallback description. Misplaced optional settings warn and are ignored; conflicting runners still refuse. A `window` holds provider-window terms only. A condition or conditional sleep requires `provider` when its terms read `window.*`; an unknown provider or one without such a term is ignored, as is an `account` without a remaining provider.
 
 A condition's cases are an ordered array of tables. Write it inline in `[checks.<name>]`, one case per line (`cases = [ { when = [...], outcome = "..." }, ... ]`); the loader reads `[[checks.<name>.cases]]` blocks as the same array. Each case:
 

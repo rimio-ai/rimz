@@ -13,6 +13,7 @@ run = "uv run checks/notes.py"
 on = { none = "@done", needed = "triage", unsure = "judge" }
 
 [checks.judge]
+summary = "Decide whether the PR needs triage"
 agent = "haiku"
 prompt-file = "checks/triage-judge.md"
 window = "5h.left>=42"

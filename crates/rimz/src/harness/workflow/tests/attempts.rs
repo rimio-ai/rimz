@@ -1567,7 +1567,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
 }
 
 fn judge_fixture() -> (WorkflowSpec, crate::disk::paths::WorkflowPaths, RunRecord) {
-    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[checks.judge]\nagent='claude'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
+    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[checks.judge]\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
         std::path::Path::new("/project"),

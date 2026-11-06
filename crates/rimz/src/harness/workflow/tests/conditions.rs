@@ -221,7 +221,7 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
     for runner in [
         "run='true'\non.ok='@done'",
         "shell='true'\non={pass='@done',fail='@user'}",
-        "agent='claude'\nprompt-file='prompts/build.md'\non.ok='@done'",
+        "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
@@ -275,7 +275,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
     for runner in [
         "run='true'\non.ok='@done'",
         "shell='true'\non={pass='@done',fail='@user'}",
-        "agent='claude'\nprompt-file='prompts/build.md'\non.ok='@done'",
+        "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         for (wake, demanded) in [
             ("wake=['ci.failed']", true),

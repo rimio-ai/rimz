@@ -422,7 +422,7 @@ fn validation_warns_for_one_inbound_outcome_unless_reset_or_start() {
             ),
         capped.replace(
             "run = \"python3 checks/pick.py\"",
-            "agent='claude'\nprompt-file='prompts/build.md'",
+            "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'",
         ),
         format!("{capped}[checks.other]\nrun='true'\non.ready='build'\n"),
     ]
@@ -1033,7 +1033,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
         dir.join("workflow.toml"),
         VALID.replace(
             "run = \"python3 checks/pick.py\"",
-            "agent = 'pi'\nprompt-file = 'prompts/build.md'",
+            "agent = 'pi'\nsummary='Review the work'\nprompt-file = 'prompts/build.md'",
         ),
     )
     .unwrap();
@@ -1052,7 +1052,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     let (_home, dir) = fixture();
     let text = VALID.replace(
         "run = \"python3 checks/pick.py\"",
-        "agent = 'claude'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
+        "agent = 'claude'\nsummary='Review the work'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
     );
     fs::write(dir.join("workflow.toml"), &text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
