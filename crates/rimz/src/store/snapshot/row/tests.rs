@@ -399,6 +399,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
                 run_total_tokens: None,
                 context_pct: Some(42),
                 context_window: Some(200_000),
+                context_capacity: None,
                 total_tokens: Some(84_000),
                 cache_read_input_tokens: Some(60_000),
                 cache_write_input_tokens: Some(4_000),

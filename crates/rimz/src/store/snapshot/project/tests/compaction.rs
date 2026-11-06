@@ -488,6 +488,24 @@ fn retired_usage() -> crate::agents::AgentUsageSummary {
 }
 
 #[test]
+fn compaction_preserves_the_published_capacity_beside_its_window() {
+    let mut params = full_reading();
+    params["context_capacity"] = serde_json::json!(400_000);
+    params["agent_id"] = serde_json::json!("sess-1");
+    params["signal"] = signal("registered");
+    let agent = reduce_agent_states(&[
+        raw_lifecycle("opencode", params),
+        lifecycle("opencode", "compaction_started", signal("compacting")),
+        lifecycle("opencode", "compaction_ended", compaction_ended(None)),
+    ])
+    .remove(0);
+    assert_eq!(agent.usage.context_window, Some(200_000));
+    assert_eq!(agent.usage.context_capacity, Some(400_000));
+    assert_eq!(agent.usage.total_tokens, None);
+    assert_eq!(agent.usage.fresh_input_tokens, None);
+}
+
+#[test]
 fn codex_estimate_keeps_the_gap_until_a_model_call_reports_its_split() {
     let before = serde_json::json!({
         "context_window": 372_400, "total_tokens": 16_736,

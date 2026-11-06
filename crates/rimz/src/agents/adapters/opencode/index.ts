@@ -15,6 +15,7 @@ type Gauge = {
   cacheWrite?: number;
   total?: number;
   contextWindow?: number;
+  contextCapacity?: number;
   modelDisplayName?: string;
 };
 type SessionInfo = { title?: string; version?: string; directory?: string };
@@ -93,7 +94,7 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const replies = new Set<Promise<void>>();
   const registrations: Array<{ dispose(): Promise<void> }> = [];
   let disposed = false;
-  let catalog: Promise<Map<string, { contextWindow?: number; modelDisplayName?: string }>> | undefined;
+  let catalog: Promise<Map<string, { contextWindow?: number; contextCapacity?: number; modelDisplayName?: string }>> | undefined;
 
   function base(name: string, sessionID: string, extra: Record<string, unknown> = {}): Envelope {
     const gauge = gauges.get(sessionID);
@@ -104,6 +105,7 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
       session_name: info?.title, agent_version: info?.version,
       model: gauge?.model, provider_id: gauge?.providerID, effort: gauge?.effort,
       model_display_name: gauge?.modelDisplayName, context_window: gauge?.contextWindow,
+      context_capacity: gauge?.contextCapacity,
       input_tokens: gauge?.input, output_tokens: gauge?.output,
       cache_read_input_tokens: gauge?.cacheRead, cache_write_input_tokens: gauge?.cacheWrite,
       total_tokens: gauge?.total, ...extra,
@@ -142,14 +144,17 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     gauges.set(sessionID, {
       ...prior, model: model.id, providerID: model.providerID, effort: model.variant,
       contextWindow: same ? prior.contextWindow : undefined,
+      contextCapacity: same ? prior.contextCapacity : undefined,
       modelDisplayName: same ? prior.modelDisplayName : undefined,
     });
     if (!catalog) {
       catalog = ctx.model.list().then((result) => {
-        const entries = new Map<string, { contextWindow?: number; modelDisplayName?: string }>();
+        const entries = new Map<string, { contextWindow?: number; contextCapacity?: number; modelDisplayName?: string }>();
         for (const item of result.data) {
-          const contextWindow = [item.limit.input, item.limit.context].find((limit) => limit !== undefined && limit > 0);
-          const entry = { contextWindow, modelDisplayName: item.name };
+          const windows = [item.limit.input, item.limit.context].filter((limit): limit is number => limit !== undefined && limit > 0);
+          const contextWindow = windows.length ? Math.min(...windows) : undefined;
+          const contextCapacity = item.limit.context !== undefined && item.limit.context > 0 ? item.limit.context : undefined;
+          const entry = { contextWindow, contextCapacity, modelDisplayName: item.name };
           entries.set(item.providerID + "/" + item.id, entry);
           entries.set(item.id, entry);
         }

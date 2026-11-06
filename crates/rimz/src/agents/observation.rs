@@ -367,15 +367,20 @@ pub struct SpawnedSubagent {
 
 /// Durable provider-neutral token and context-window enrichment.
 ///
-/// Providers may report any subset. Reduction carries each reported value
-/// forward and derives the gauge from the resolved input-side occupancy and
-/// window when no provider supplied an authoritative percentage.
+/// Providers may report any subset. Reduction carries sparse values forward,
+/// keeping published capacity paired with its window, and derives the gauge
+/// from the resolved input-side occupancy and window when no provider supplied
+/// an authoritative percentage.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentUsageSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// The model's published total, read beside `context_window`.
+    /// A display label only, never a threshold denominator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_capacity: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
     /// The child's whole-run total as reported by the provider, never a
@@ -423,14 +428,19 @@ impl AgentUsageSummary {
         })
     }
 
-    /// Carry sparse enrichment forward. An explicit incoming percentage wins;
-    /// otherwise derive from the merged numerator/window before retaining the
-    /// prior percentage.
+    /// Carry sparse enrichment forward, replacing capacity beside an incoming
+    /// window. An explicit incoming percentage wins; otherwise derive from the
+    /// merged numerator/window before retaining the prior percentage.
     pub(crate) fn merge(&self, prior: Option<&Self>, default_window: Option<u64>) -> Self {
         let prior = prior.cloned().unwrap_or_default();
         let mut merged = Self {
             context_pct: None,
             context_window: self.context_window.or(prior.context_window),
+            context_capacity: if self.context_window.is_some() {
+                self.context_capacity
+            } else {
+                prior.context_capacity
+            },
             total_tokens: self.total_tokens.or(prior.total_tokens),
             run_total_tokens: self.run_total_tokens.or(prior.run_total_tokens),
             cache_read_input_tokens: self
@@ -780,6 +790,7 @@ mod tests {
         let prior = AgentUsageSummary {
             context_pct: Some(91),
             context_window: Some(200_000),
+            context_capacity: None,
             total_tokens: Some(80_000),
             run_total_tokens: Some(120_000),
             cache_read_input_tokens: Some(60_000),
@@ -840,5 +851,32 @@ mod tests {
                 .context_pct,
             Some(63)
         );
+    }
+
+    #[test]
+    fn usage_merge_keeps_window_and_published_capacity_paired() {
+        let prior = AgentUsageSummary {
+            context_window: Some(983_010),
+            context_capacity: Some(1_048_576),
+            ..Default::default()
+        };
+        let sparse = AgentUsageSummary::default().merge(Some(&prior), None);
+        assert_eq!(sparse.context_window, prior.context_window);
+        assert_eq!(sparse.context_capacity, prior.context_capacity);
+
+        let switched = AgentUsageSummary {
+            context_window: Some(200_000),
+            ..Default::default()
+        }
+        .merge(Some(&prior), None);
+        assert_eq!(switched.context_window, Some(200_000));
+        assert_eq!(switched.context_capacity, None);
+
+        let published = AgentUsageSummary {
+            context_window: Some(200_000),
+            context_capacity: Some(400_000),
+            ..Default::default()
+        };
+        assert_eq!(published.merge(Some(&prior), None), published);
     }
 }

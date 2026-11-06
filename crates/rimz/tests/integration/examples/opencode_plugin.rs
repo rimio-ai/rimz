@@ -121,6 +121,8 @@ const ctx = {
       {id: "gpt-5-mini", providerID: "openai", name: "GPT-5 Mini", limit: {context: 128000}},
       {id: "negative-input", providerID: "openai", name: "Fallback", limit: {input: -1, context: 100}},
       {id: "negative-context", providerID: "openai", name: "Unknown", limit: {context: -1}},
+      {id: "input-over-context", providerID: "openai", name: "Capped", limit: {input: 400000, context: 200000}},
+      {id: "input-only", providerID: "openai", name: "Input", limit: {input: 100000}},
     ]};
   }},
   event: {subscribe: async function* ({signal}) {
@@ -199,7 +201,7 @@ await emit("session.step.started", {sessionID: "root", assistantMessageID: "m1",
 await emit("session.step.ended", {sessionID: "root", assistantMessageID: "m1", tokens: {input: 100, output: 20, reasoning: 5, cache: {read: 30, write: 40}}});
 await emit("session.execution.succeeded", {sessionID: "root"});
 const idle = await envelope("session_idle");
-for (const [field, expected] of Object.entries({input_tokens:100, output_tokens:25, cache_read_input_tokens:30, cache_write_input_tokens:40, total_tokens:195, context_window:200000, plan_proposed:true})) {
+for (const [field, expected] of Object.entries({input_tokens:100, output_tokens:25, cache_read_input_tokens:30, cache_write_input_tokens:40, total_tokens:195, context_window:200000, context_capacity:400000, plan_proposed:true})) {
   assert.equal(idle[field], expected, field);
 }
 assert.equal(idle.session_name, "Fix OpenCode metadata");
@@ -218,10 +220,19 @@ await hooks.get("execute.after")({sessionID:"root", tool:"probe", status:"comple
 const fallback = await envelope("tool_after");
 check("A2 failed step cleanup", () => assert.equal(fallback.model, "negative-input"));
 check("A3 positive context fallback", () => assert.equal(fallback.context_window, 100));
+check("A3 published context fallback", () => assert.equal(fallback.context_capacity, 100));
 await emit("session.model.selected", {sessionID:"root", model:{id:"negative-context", providerID:"openai"}});
 await hooks.get("execute.after")({sessionID:"root", tool:"probe", status:"completed"});
 const invalidWindow = await envelope("tool_after", "root", 2);
 check("A3 invalid context omitted", () => assert.equal(invalidWindow.context_window, undefined));
+check("A3 invalid capacity omitted", () => assert.equal(invalidWindow.context_capacity, undefined));
+for (const [index, [id, window, capacity]] of [["input-over-context", 200000, 200000], ["input-only", 100000, undefined]].entries()) {
+  await emit("session.model.selected", {sessionID:"root", model:{id, providerID:"openai"}});
+  await hooks.get("execute.after")({sessionID:"root", tool:"probe", status:"completed"});
+  const latest = await envelope("tool_after", "root", index + 3);
+  check(id + " window", () => assert.equal(latest.context_window, window));
+  check(id + " capacity", () => assert.equal(latest.context_capacity, capacity));
+}
 
 metadata = {parentID:"root", title:"existing child", model:{id:"gpt-5-mini", providerID:"openai"}};
 const resumedChildSystem = [];
@@ -244,7 +255,7 @@ await emit("session.execution.failed", {sessionID: "child", error: {type:"ApiErr
 assert.equal((await envelope("SubagentStop", "child")).is_error, true);
 
 await hooks.get("execute.after")({sessionID:"root", tool:"edit", status:"error"});
-assert.equal((await envelope("tool_after", "root", 3)).is_error, true);
+assert.equal((await envelope("tool_after", "root", 5)).is_error, true);
 await emit("form.created", {form: {id:"form", sessionID:"root", title:"Choose", fields:[
   {key:"q0", type:"multiselect", title:"Options", description:"Which options should we use?", options:[{value:"A", label:"A", description:"First option"}], custom:true},
   {key:"q1", type:"string", title:"Proceed", description:"Should we continue?", options:[], custom:true},
