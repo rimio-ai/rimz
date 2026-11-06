@@ -116,6 +116,7 @@ pub fn native_compaction(
     kind: &str,
     configured: Option<u64>,
     window: u64,
+    capacity: Option<u64>,
     limits: Option<&super::context::ModelContextLimits>,
 ) -> Option<NativeCompaction> {
     if window == 0 {
@@ -150,6 +151,17 @@ pub fn native_compaction(
                     .unwrap_or(raw_window),
                 raw_window,
                 lowered: configured.filter(|configured| point < *configured),
+            })
+        }
+        // OpenCode v2.2.5's default ceiling (`calculateCeiling` with no buffer configured).
+        "opencode" => {
+            let buffer = (u128::from(window) * 15 / 100) as u64;
+            let reserve = if window >= 32_000 { 16_000 } else { 0 };
+            Some(NativeCompaction {
+                point: window - buffer.max(reserve),
+                capacity: capacity.unwrap_or(window),
+                raw_window: window,
+                lowered: None,
             })
         }
         _ => None,
