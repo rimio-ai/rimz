@@ -375,6 +375,12 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
             vec![],
             vec![crate::harness::spec::CellNotice::ToolsNotApplied],
         ),
+        (
+            vec!["Read"],
+            "opencode",
+            vec![],
+            vec![crate::harness::spec::CellNotice::ToolsNotApplied],
+        ),
         (vec!["Read"], "omp", vec![], vec![]),
     ] {
         let mut worker = configured_profile("claude", None, None, None, None, None);

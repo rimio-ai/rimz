@@ -51,8 +51,6 @@ pub(crate) enum ToolErr {
     Invalid { entry: String },
     #[error("tools are required for this agent kind")]
     Missing,
-    #[error("agent kind `{kind}` does not support tools")]
-    Unsupported { kind: String },
     #[error("unknown subagent type `{name}`; known types: {known}")]
     UnknownAgent { name: String, known: String },
 }
@@ -221,9 +219,6 @@ pub(crate) fn render_tool_args(
     match (definitions(kind).tools, tools) {
         (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?),
         (DefinitionTools::Optional(render), Some(tools)) => Ok(render(tools).0),
-        (DefinitionTools::Unsupported, Some(_)) => Err(ToolErr::Unsupported {
-            kind: kind.to_owned(),
-        }),
         _ => Ok(Vec::new()),
     }
 }
@@ -512,9 +507,7 @@ mod tests {
                 "{entries:?}"
             );
         }
-        assert!(
-            matches!(render_tool_args("unregistered", Some(&parsed)), Err(ToolErr::Unsupported { kind }) if kind == "unregistered")
-        );
+        assert!(render_tool_args("unregistered", Some(&parsed)).is_ok_and(|args| args.is_empty()));
         assert!(render_tool_args("unregistered", None).unwrap().is_empty());
     }
 

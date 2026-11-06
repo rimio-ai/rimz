@@ -1592,6 +1592,32 @@ fn unsupported_preset_fields_fail_at_the_definition() {
 }
 
 #[test]
+fn unsupported_tool_lists_load_for_launch_notices() {
+    let root = fixture();
+    definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
+    for kind in ["opencode", "cursor"] {
+        definition(
+            root.path(),
+            &format!("agents/{kind}-reader.md"),
+            &format!("agent: {kind}\ntools: [Read]"),
+            "",
+        );
+    }
+    let loaded = load_checked(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for kind in ["opencode", "cursor"] {
+        assert_eq!(
+            loaded.agent_profiles.0[&format!("{kind}-reader")]
+                .tools
+                .as_ref()
+                .unwrap()
+                .bases(),
+            ["Read"]
+        );
+    }
+}
+
+#[test]
 fn unsupported_tuning_fields_load_for_launch_time_normalization() {
     let root = fixture();
     definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
