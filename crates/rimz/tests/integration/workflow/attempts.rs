@@ -14,6 +14,7 @@ struct Room {
 }
 
 mod capacity;
+mod keep;
 mod until;
 
 fn dummy_agent_process() -> std::process::Child {

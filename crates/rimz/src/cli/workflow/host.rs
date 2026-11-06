@@ -208,7 +208,7 @@ impl workflow::AttemptHost for Host<'_> {
                     report_to: ReportTo::Nobody,
                     timeout: None,
                     retry_of: None,
-                    cleanup: true,
+                    cleanup: !step.keep,
                     subagent: false,
                     warn: Vec::new(),
                     grace: None,
@@ -410,18 +410,63 @@ impl workflow::AttemptHost for Host<'_> {
         .map_err(host_error)
     }
 
+    fn detach(&self, attempt: &AttemptRun) -> Result<Children, WorkflowErr> {
+        (|| -> Result<_> {
+            let ctx = self.ctx()?;
+            let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            supervised::cancel_supervised_run(&ctx.store, &run)?;
+            let Some(pin) = &run.workflow else {
+                return Ok(Children::default());
+            };
+            let snapshot = ctx.cached_snapshot()?;
+            let rows = ctx.store.audit_rows()?;
+            let mut result = Children::default();
+            let peers = rimz::address::addressable_agents(&snapshot);
+            for root in rows
+                .iter()
+                .filter(|agent| agent.workflow.as_ref() == Some(pin))
+            {
+                result.live.extend(children(&snapshot, root, &[]).live);
+                if root.ended_at.is_none() && !run.matches_agent(root) {
+                    result.live.push(child_ref(root, &peers));
+                }
+                ctx.store.clear_workflow_pin(
+                    &root.kind,
+                    &root.agent_id,
+                    pin,
+                    &ctx.workspace.session_name,
+                )?;
+            }
+            let mut seen = BTreeSet::new();
+            result
+                .live
+                .retain(|child| seen.insert((child.kind.clone(), child.handle.clone())));
+            Ok(result)
+        })()
+        .map_err(host_error)
+    }
+
     fn stop(&self, attempt: &AttemptRun) -> Result<Children, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
             let snapshot = ctx.cached_snapshot()?;
+            let launch_group = snapshot
+                .agents
+                .iter()
+                .find(|agent| run.matches_agent(agent))
+                .and_then(|agent| agent.launch_group.as_ref());
             let roots = snapshot
                 .agents
                 .iter()
                 .filter(|agent| {
+                    let detached_cohort = agent.workflow.is_none()
+                        && (run.matches_agent(agent)
+                            || (launch_group.is_some()
+                                && agent.launch_group.as_ref() == launch_group));
                     agent.ended_at.is_none()
                         && run.workflow.is_some()
-                        && agent.workflow == run.workflow
+                        && (agent.workflow == run.workflow || detached_cohort)
                 })
                 .collect::<Vec<_>>();
             if roots.is_empty() {

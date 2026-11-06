@@ -566,6 +566,34 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn clear_workflow_pin(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        expected: &crate::agents::WorkflowAttemptRef,
+        session_name: &str,
+    ) -> Result<bool> {
+        self.commit(|txn| {
+            let (_, agents, _) = snapshot::catch_up_rollup(txn.paths)?;
+            if agents
+                .find(kind.as_str(), agent_id)
+                .is_none_or(|agent| agent.workflow.as_ref() != Some(expected))
+            {
+                return Ok(false);
+            }
+            txn.append(&EventEnvelope::new(
+                self.inner.paths.workspace_id.clone(),
+                session_name,
+                kind.as_str(),
+                "agent",
+                "agent.workflow_cleared",
+                serde_json::json!({"agent_id":agent_id, "workflow":expected}),
+            ))?;
+            Ok(true)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn append_signal(
         &self,
         session_name: &str,

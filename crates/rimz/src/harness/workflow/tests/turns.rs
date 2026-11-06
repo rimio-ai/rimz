@@ -68,6 +68,8 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
         "compacting",
         "own ingress",
         "other ingress",
+        "kept agent ingress",
+        "companion ingress",
         "waking ingress",
         "waking and later ingress",
     ] {
@@ -139,7 +141,12 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
         }
         if matches!(
             cause,
-            "own ingress" | "other ingress" | "waking ingress" | "waking and later ingress"
+            "own ingress"
+                | "other ingress"
+                | "kept agent ingress"
+                | "companion ingress"
+                | "waking ingress"
+                | "waking and later ingress"
         ) {
             let frame = HookIngress {
                 boot_id: None,
@@ -151,14 +158,26 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
                 payload: "{}".into(),
                 cwd: dir.path().into(),
                 hook_pid: std::process::id(),
-                env: [(
-                    "RIMZ_WORKFLOW_RUN".into(),
-                    if cause == "other ingress" {
-                        WorkflowRunId::new().to_string()
-                    } else {
-                        run.to_string()
-                    },
-                )]
+                env: [
+                    (
+                        "RIMZ_WORKFLOW_RUN".into(),
+                        if cause == "other ingress" {
+                            WorkflowRunId::new().to_string()
+                        } else {
+                            run.to_string()
+                        },
+                    ),
+                    (
+                        "RIMZ_RUN_ID".into(),
+                        if cause == "kept agent ingress" {
+                            RunId::new().to_string()
+                        } else if cause == "companion ingress" {
+                            String::new()
+                        } else {
+                            session.to_string()
+                        },
+                    ),
+                ]
                 .into(),
             };
             let guard = SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
@@ -193,6 +212,8 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
             ("compacting", Some(false)),
             ("own ingress", Some(false)),
             ("other ingress", Some(true)),
+            ("kept agent ingress", Some(true)),
+            ("companion ingress", Some(true)),
             ("waking ingress", Some(true)),
             ("waking and later ingress", Some(false)),
         ]

@@ -12,6 +12,71 @@ fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
 }
 
 #[test]
+fn keep_warns_and_is_ignored_except_on_turn_and_until_agent_steps() {
+    let mut actual = Vec::new();
+    for (kind, lifecycle, keep) in [
+        (
+            "agent='claude'\nprompt-file='prompts/build.md'",
+            "turn",
+            "true",
+        ),
+        (
+            "agent='claude'\nprompt-file='prompts/build.md'",
+            "until",
+            "false",
+        ),
+        (
+            "agent='claude'\nprompt-file='prompts/build.md'",
+            "stay",
+            "true",
+        ),
+        ("run='true'", "turn", "true"),
+        (
+            "agent='claude'\nprompt-file='prompts/build.md'",
+            "until",
+            "'yes'",
+        ),
+    ] {
+        let text = DELAY
+            .replace("agent='claude'\nprompt-file='prompts/build.md'", kind)
+            .replace(
+                "lifecycle='until'",
+                &format!("lifecycle='{lifecycle}'\nkeep={keep}"),
+            );
+        let spec = loaded(&text).unwrap();
+        actual.push((
+            spec.steps["build"].keep,
+            spec.ignored
+                .iter()
+                .any(|issue| issue.path == "steps.build.keep"),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (Some(true), false),
+            (Some(false), false),
+            (None, true),
+            (None, true),
+            (None, true)
+        ]
+    );
+    for prefix in ["workflow", "checks.pick"] {
+        for keep in ["true", "'yes'"] {
+            let spec = loaded(
+                &SIMPLE.replace(&format!("[{prefix}]"), &format!("[{prefix}]\nkeep={keep}")),
+            )
+            .unwrap();
+            assert!(
+                spec.ignored
+                    .iter()
+                    .any(|issue| issue.path == format!("{prefix}.keep"))
+            );
+        }
+    }
+}
+
+#[test]
 fn delayed_routes_load_and_only_delayed_edges_serialize_a_delay() {
     let result = loaded(DELAY);
     assert!(result.is_ok(), "a delayed route must load: {result:?}");

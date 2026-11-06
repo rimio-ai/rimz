@@ -104,6 +104,7 @@ pub trait AttemptHost {
         text: &str,
     ) -> Result<Pushed, WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
+    fn detach(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
 }
 
 pub struct Pushed {
@@ -126,6 +127,7 @@ pub struct StepLaunch {
     pub automation: crate::agents::Automation,
     pub agent: String,
     pub lifecycle: crate::store::workflow::StepLifecycle,
+    pub keep: bool,
     pub prompt: String,
     pub workflow_note: String,
     pub cwd: PathBuf,
@@ -164,7 +166,8 @@ pub struct LeaderTurn {
 }
 
 /// Read the leader's closed turn and current eligibility while holding the workspace lock.
-/// The advance's waking frame has committed, so only other pending frames can defer rest.
+/// Only pending frames from this leader's supervised run can defer rest; companion hooks
+/// do not decide the leader's rest. The advance's waking frame has already committed.
 pub fn leader_turn(
     store: &Store,
     leader: &AgentState,
@@ -207,6 +210,10 @@ pub fn leader_turn(
                 .env
                 .get("RIMZ_WORKFLOW_RUN")
                 .is_some_and(|id| id == run.as_str())
+            && frame
+                .env
+                .get("RIMZ_RUN_ID")
+                .is_some_and(|id| id == session.as_str())
     });
     Ok(Some(turn))
 }

@@ -18,6 +18,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
     max-visits-per-outcome={limit=2,reset-on='queued'}\n";
 
 mod brief;
+mod keep;
 mod reached;
 mod stops;
 mod until;
