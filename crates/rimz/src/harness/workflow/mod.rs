@@ -26,7 +26,7 @@ pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
     repeats_evaluation, routing_hop, timeout_at,
 };
-pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
+pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse_run;
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, Route, ScopeKind,

@@ -2,6 +2,127 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[checks.gate]\nelse='pending'\non={ready='later',pending='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[checks.later]\nshell='true'\non={pass='@done',fail='build'}\n";
+
+#[test]
+fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_writing() {
+    for (state, node) in [("active", "build"), ("parked", "build"), ("parked", "gate")] {
+        let (env, mut record) = fixture(state, (state == "parked").then_some("user"), vec![]);
+        record.node = node.into();
+        save(&env, &record);
+        sealed_spec(&env, &record, NOW_SPEC);
+        conditions::board(&env, "Done");
+        let paths = env
+            .state_path_for(&record.project_root)
+            .workflow(&record.id);
+        let before = (
+            fs::read(&paths.record).unwrap(),
+            fs::read(&paths.journal).unwrap(),
+        );
+        let expected = json!({"address":record.address().to_string(), "dir":paths.work,
+            "record":record,"journal":[],"warnings":[]});
+        let json_before = success(command(
+            &env,
+            &["workflow", "show", record.id.as_str(), "--json"],
+        ));
+        assert_eq!(
+            json_before,
+            format!("{}\n", serde_json::to_string_pretty(&expected).unwrap())
+        );
+        let text = human(&env, &record, false);
+        let line = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("now "));
+        assert!(line.is_some(), "{state} at {node}: {text}");
+        let line = line.unwrap();
+        contains(line, &["gate", "hold", "team.stage=Done", "2m"]);
+        assert!(
+            !line.contains("read "),
+            "a board condition has no forge probe: {line}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.trim_start().starts_with("now "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            success(command(
+                &env,
+                &["workflow", "show", record.id.as_str(), "--json"]
+            )),
+            json_before
+        );
+        assert_eq!(
+            (
+                fs::read(&paths.record).unwrap(),
+                fs::read(&paths.journal).unwrap()
+            ),
+            before
+        );
+    }
+}
+
+#[test]
+fn show_now_treats_pre_entry_forge_probes_as_unread_and_shows_the_probe_time() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.node = "build".into();
+    save(&env, &record);
+    sealed_spec(
+        &env,
+        &record,
+        &NOW_SPEC.replace("team.stage=Done", "pr=merged"),
+    );
+    conditions::forge(
+        &env,
+        record.entered_at - jiff::SignedDuration::from_secs(1),
+        true,
+    );
+    let text = human(&env, &record, false);
+    let line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("now "))
+        .unwrap_or("");
+    contains(
+        line,
+        &[
+            "gate",
+            "unknown",
+            "pr=unread",
+            "probed before this check was entered",
+            "read ",
+        ],
+    );
+}
+
+#[test]
+fn show_now_skips_child_checks_and_plain_sleeps_but_reads_conditional_sleeps() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.node = "build".into();
+    save(&env, &record);
+    conditions::board(&env, "Done");
+    for runner in [
+        "run='true'",
+        "shell='true'",
+        "agent='claude'\nsummary='Review the work'\nprompt-file='judge.md'",
+        "sleep='1000000d'\nthen='@done'",
+        "sleep='1000000d'\nthen='@done'\nwhen=['team.stage=Done']",
+    ] {
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[checks.gate]\n{runner}\n"
+        );
+        sealed_spec(&env, &record, &text);
+        let output = human(&env, &record, false);
+        assert_eq!(
+            output
+                .lines()
+                .any(|line| line.trim_start().starts_with("now ")),
+            runner.contains("when="),
+            "{output}"
+        );
+    }
+}
+
 fn fixture(state: &str, reason: Option<&str>, rows: Vec<Value>) -> (Env, RunRecord) {
     let env = setup();
     let mut record = seed(&env, &env.project_root, &env.project_root, state);
@@ -670,6 +791,7 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
         text.find(" · read ").unwrap() < text.find("started ").unwrap(),
         "{text}"
     );
+    assert!(!text.contains("now gate"), "{text}");
     assert_eq!(
         text.lines()
             .filter(|line| line.contains("waiting at gate") && line.contains(": pending"))
@@ -1162,12 +1284,23 @@ fn condition_rail_marks_the_winner_and_summarizes_all_readings_once_without_colo
     assert_eq!(readings.matches("ci=pending").count(), 1, "{text}");
     assert_eq!(readings.matches("pr=open").count(), 1, "{text}");
     assert_eq!(readings.matches("pr.queue=none").count(), 1, "{text}");
+    let now = text.lines().find(|line| line.starts_with("now gate"));
+    assert!(now.is_some(), "{text}");
+    let now = now.unwrap();
+    assert!(now.contains("unknown"), "{text}");
+    assert_eq!(now.matches("ci=unread").count(), 1, "{text}");
+    assert_eq!(now.matches("pr=unread").count(), 1, "{text}");
+    assert_eq!(now.matches("pr.queue=unread").count(), 1, "{text}");
     assert!(
         !text.contains("ci: pending") && !text.contains("pr: open") && !text.contains('\u{1b}'),
         "{text}"
     );
     assert!(
-        text.find(" · read ").unwrap() < text.find("3  ci=passed").unwrap(),
+        text.find(" · read ").unwrap() < text.find("now gate").unwrap(),
+        "{text}"
+    );
+    assert!(
+        text.find("now gate").unwrap() < text.find("3  ci=passed").unwrap(),
         "{text}"
     );
 }

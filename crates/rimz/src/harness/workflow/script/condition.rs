@@ -32,6 +32,14 @@ pub(super) fn evaluate(
     check: &Check,
     record: &RunRecord,
 ) -> Result<Value, String> {
+    reading(state, check, record).map(|(object, _)| object)
+}
+
+pub(super) fn reading(
+    state: &StatePaths,
+    check: &Check,
+    record: &RunRecord,
+) -> Result<(Value, Option<Timestamp>), String> {
     let runtime = crate::RuntimePaths::for_state(state).map_err(|error| error.to_string())?;
     let source = CiSource::read(&runtime);
     let now = Timestamp::now();
@@ -75,7 +83,11 @@ pub(super) fn evaluate(
                 .and_then(|local| is_ancestor(&record.scope.path, local, pr_head));
             ci_unread(pr_head, ci_sha, local_head.as_deref(), on_pr)
         });
-    Ok(answer(
+    let reads_forge = expressions
+        .iter()
+        .flat_map(WhenExpr::terms)
+        .any(|term| term.reads_forge());
+    let object = answer(
         check,
         &expressions,
         readings,
@@ -83,7 +95,8 @@ pub(super) fn evaluate(
         (entered_at, stale_reason),
         ci_unread,
         |key| schedule::unread_reason(source.probe_unread_reason(key, &record.scope.path), None),
-    ))
+    );
+    Ok((object, checked_at.filter(|_| reads_forge)))
 }
 
 fn answer(

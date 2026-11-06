@@ -2,7 +2,7 @@ use super::*;
 
 const CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n";
 
-fn board(env: &Env, stage: &str) {
+pub(super) fn board(env: &Env, stage: &str) {
     fs::create_dir_all(env.project_root.join(".rimz/team")).unwrap();
     fs::write(
         env.project_root.join(".rimz/team/blackboard.md"),
@@ -91,7 +91,7 @@ fn condition_holds_merge_survive_wakes_and_restart_after_another_answer() {
     );
 }
 
-fn forge(env: &Env, at: jiff::Timestamp, ok: bool) {
+pub(super) fn forge(env: &Env, at: jiff::Timestamp, ok: bool) {
     let runtime = env.runtime_paths();
     fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
     fs::write(

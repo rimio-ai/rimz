@@ -2253,7 +2253,8 @@ path = "crates/rimz/src/harness"
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
 # workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
 # workflow::restart shares the manual agent-step restart transition with the CLI (+1).
-surface-budget = 1087
+# workflow::condition_now shares live read-only condition answers with CLI inspection (+1).
+surface-budget = 1088
 
 [[verdict]]
 kind = "item"
@@ -11198,6 +11199,11 @@ reason = "Condition rail marks reuse parsed three-valued truth and stored winner
 kind = "item"
 key = "harness::workflow::unread_reasons"
 reason = "Stored condition unread prose is parsed beside its writer, never in a CLI renderer."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::condition_now"
+reason = "Human workflow inspection reuses the check evaluator and its same-snapshot probe time without writes, check children, or probe refreshes."
 
 [[verdict]]
 kind = "item"

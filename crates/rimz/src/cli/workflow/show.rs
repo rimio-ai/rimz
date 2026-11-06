@@ -71,6 +71,7 @@ pub(super) fn render(
     if run.record.state == RunState::Active {
         view.readings(&mut out)?;
     }
+    view.now_line(&run.state, &mut out)?;
     view.origin(&mut out)?;
     if run.record.state == RunState::Active {
         if let Some(asking) = workflow_view::asking(&run.record) {
@@ -373,6 +374,75 @@ impl View<'_> {
         Ok(())
     }
 
+    fn now_line(&self, state: &paths::StatePaths, out: &mut impl Write) -> Result<()> {
+        if !matches!(self.record.state, RunState::Active | RunState::Parked) {
+            return Ok(());
+        }
+        let name = match self.spec.steps.get(&self.record.node) {
+            Some(step) if step.agent.is_some() => step.then.first(),
+            Some(_) => None,
+            None => Some(&self.record.node),
+        };
+        let Some((name, check)) =
+            name.and_then(|name| self.spec.checks.get(name).map(|check| (name, check)))
+        else {
+            return Ok(());
+        };
+        if !matches!(check.kind(), Some(workflow::CheckKind::Condition))
+            && !(check.is_sleep() && check.when.is_some())
+        {
+            return Ok(());
+        }
+        let mut preview = self.record.clone();
+        preview.node = name.clone();
+        preview.wait = preview.wait.filter(|wait| wait.node == *name);
+        let slept_from = if *name == self.record.node {
+            self.record.entered_at
+        } else {
+            self.now
+        };
+        let (object, probed_at) = workflow::condition_now(state, check, &preview, slept_from)
+            .map_err(anyhow::Error::msg)?;
+        let hold = object["case"]
+            .as_u64()
+            .and_then(|case| u32::try_from(case).ok())
+            .map(|case| workflow::hold_until(self.spec, &preview, case, self.now))
+            .transpose()?
+            .flatten();
+        let outcome = object["outcome"].as_str().unwrap_or("unknown");
+        write!(out, "now {name} · ")?;
+        if hold.is_some_and(|at| at > self.now) {
+            write!(out, "hold ")?;
+        }
+        write!(out, "{outcome}")?;
+        if let Some(at) = hold {
+            write!(
+                out,
+                " · {} remaining",
+                render::age_short(self.now, at.max(self.now))
+            )?;
+        }
+        if let Some(readings) = object
+            .get("readings")
+            .and_then(serde_json::Value::as_object)
+            .filter(|readings| !readings.is_empty())
+        {
+            let values = readings
+                .iter()
+                .map(|(key, value)| format!("{key}={}", history::value(value)))
+                .collect::<Vec<_>>();
+            write!(out, " · {}", values.join("  "))?;
+        }
+        if let Some(reason) = object["reason"].as_str() {
+            write!(out, " · {reason}")?;
+        }
+        if let Some(at) = probed_at {
+            write!(out, " · read {}", self.clock(at))?;
+        }
+        writeln!(out)?;
+        Ok(())
+    }
+
     fn evaluation(&self) -> Option<(&JournalEntry, &serde_json::Value)> {
         self.journal
             .iter()
@@ -524,6 +594,99 @@ fn takeover(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_line_uses_the_open_case_hold_instead_of_restarting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Timestamp::now();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":3,"id":WorkflowRunId::new(),"workflow":"review",
+            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "scope":{"kind":"worktree","path":dir.path()},"state":"parked","node":"gate",
+            "created_at":now,"entered_at":now,"visits":{},"visit_grant":0,
+            "deadline_fired":false,"next_seq":1,
+            "wait":{"node":"gate","outcome":"hold","case":0,
+                "first":now-jiff::SignedDuration::from_mins(1),"last":now,"count":1},
+        }))
+        .unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+        std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
+        let paths = state.workflow(&record.id);
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let view = View {
+            record: &record,
+            paths: &paths,
+            spec: &spec,
+            journal: &[],
+            now,
+            commands: resolve::RunCommands::new(&record, &globals),
+        };
+        let mut output = Vec::new();
+        view.now_line(&state, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("now gate")
+                && output.contains("hold")
+                && output.contains("1m remaining")
+                && output.contains("team.stage=Done"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn now_line_reads_a_sleep_a_step_enters_next_instead_of_reporting_it_slept() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Timestamp::now();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":3,"id":WorkflowRunId::new(),"workflow":"review",
+            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"build",
+            "created_at":now,"entered_at":now-jiff::SignedDuration::from_mins(10),"visits":{},
+            "visit_grant":0,"deadline_fired":false,"next_seq":1,
+        }))
+        .unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='p.md'\nlifecycle='turn'\nthen='nap'\n[checks.nap]\nsleep='5m'\nwhen=['team.stage=Done']\nthen='@done'\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            dir.path().join(".rimz/team/blackboard.md"),
+            "Stage: Review\n",
+        )
+        .unwrap();
+        let paths = state.workflow(&record.id);
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let view = View {
+            record: &record,
+            paths: &paths,
+            spec: &spec,
+            journal: &[],
+            now,
+            commands: resolve::RunCommands::new(&record, &globals),
+        };
+        let mut output = Vec::new();
+        view.now_line(&state, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("now nap")
+                && output.contains("team.stage=Review")
+                && !output.contains("slept"),
+            "{output}"
+        );
+    }
 
     fn output(with_you: bool) -> (String, String) {
         let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
