@@ -4,10 +4,13 @@ use serde_json::Value;
 
 use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_hop};
 use crate::disk::paths::WorkflowPaths;
+use crate::disk::summary::FileSummary;
 use crate::harness::schedule::{
     catalog::TaskCatalog, span, trigger_clause, verbatim, when::WhenExpr,
 };
-use crate::store::workflow::{self, AttemptOutcome, Key, RunRecord, StepLifecycle};
+use crate::store::workflow::{
+    self, AttemptOutcome, JournalEvent, Key, RunRecord, StepLifecycle, TurnEndAction,
+};
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
 const CONTEXT: &str =
@@ -294,13 +297,37 @@ fn check_note(spec: &WorkflowSpec, name: &str) -> Option<String> {
     })
 }
 
-pub(super) fn push(spec: &WorkflowSpec, record: &RunRecord) -> Result<String, super::SpecErr> {
+pub(super) fn push(
+    paths: &WorkflowPaths,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+) -> Result<String, super::SpecErr> {
     // A pending push has already applied this check's answer as the step's input.
-    let name = spec.steps[&record.node]
-        .then
-        .first()
-        .map(String::as_str)
-        .expect("validated step then");
+    let pushed = workflow::journal(paths).ok().and_then(|journal| {
+        let message = &record.attempt.as_ref()?.push.as_ref()?.message;
+        let mut entries = journal.iter().rev();
+        let name = entries.by_ref().find_map(|entry| match &entry.event {
+            JournalEvent::TurnEnd {
+                action: TurnEndAction::Pushed,
+                message: Some(id),
+                check,
+                ..
+            } if id == message => Some(check),
+            _ => None,
+        })?;
+        let seq = entries
+            .find(|entry| {
+                entry.node == *name && matches!(entry.event, JournalEvent::Evaluation { .. })
+            })
+            .and_then(|entry| entry.seq);
+        Some((name.clone(), seq))
+    });
+    let name = pushed.as_ref().map(|(name, _)| name).unwrap_or_else(|| {
+        spec.steps[&record.node]
+            .then
+            .first()
+            .expect("validated step then")
+    });
     let check = &spec.checks[name];
     let input = record.input.as_ref().expect("published push-back answer");
     let mut text = format!(
@@ -346,6 +373,29 @@ pub(super) fn push(spec: &WorkflowSpec, record: &RunRecord) -> Result<String, su
                 terms.join("; ")
             ));
         }
+    }
+    if let Some((_, seq)) = &pushed
+        && matches!(
+            check.kind(),
+            Some(CheckKind::Run(_) | CheckKind::Shell(_) | CheckKind::Agent(_))
+        )
+    {
+        let output = seq
+            .map(|seq| {
+                if check.agent.is_some() {
+                    paths.check_output(seq)
+                } else {
+                    paths.check_log(seq)
+                }
+            })
+            .and_then(|path| {
+                let summary = FileSummary::measure(&path)
+                    .ok()
+                    .filter(|summary| !summary.is_empty())?;
+                Some(format!("output: {} ({})", path.display(), summary.label()))
+            })
+            .unwrap_or_else(|| "no output".into());
+        text.push_str(&format!("\n\n{output}"));
     }
     text.push_str("\n\nContinue working on this step. The run moves on when the check passes.");
     Ok(text)

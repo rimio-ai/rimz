@@ -304,7 +304,7 @@ pub(super) fn push(
     // Preparation published this pending push and its owning agent attempt together.
     let attempt = record.attempt.as_ref().expect("prepared push-back");
     let push = attempt.push.as_ref().expect("prepared push-back id");
-    let text = super::super::brief::push(spec, record)?;
+    let text = super::super::brief::push(paths, spec, record)?;
     let pushed = host.push(
         attempt.run.as_ref().expect("push-back session run"),
         push,
