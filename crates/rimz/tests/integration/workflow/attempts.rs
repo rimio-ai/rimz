@@ -154,41 +154,91 @@ fn missing_companion_hooks_name_the_workflow_before_runs_or_panes() {
 }
 
 #[test]
-fn budget_park_leaves_stay_live_but_ends_turn_as_limited() {
-    for stay in [true, false] {
-        let room = Room::new(if stay { "lifecycle='stay'\n" } else { "" });
+fn budget_park_keeps_every_workflow_lifecycle_live() {
+    for lifecycle in ["turn", "stay", "until"] {
+        let room = Room::new(&format!("lifecycle='{lifecycle}'\n"));
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         let state = room.env.state_path_for(&room.env.project_root);
         let (parked, wrote) =
             rimz::harness::run::budget_exceeded(&state, &run.run_id, Some(1.25)).unwrap();
-        if stay {
-            assert!(!wrote, "a budget park must not settle a staying run");
-            assert_eq!(parked.status, RunStatus::Running);
-        } else {
-            assert!(wrote);
-            assert_eq!(parked.status, RunStatus::BudgetExceeded);
-        }
+        assert!(!wrote, "a budget park must not settle a {lifecycle} run");
+        assert_eq!(parked.status, RunStatus::Running);
         success(
             room.command(&["workflow", "advance", &id])
                 .output()
                 .unwrap(),
         );
         let value = show(&room.env, &id);
-        if stay {
-            assert!(value["record"]["attempt"].is_object(), "{value:#}");
-            assert!(value["record"]["prev_attempt"].is_null());
-            let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
-            assert!(
-                !trace.contains("close-pane"),
-                "a parked stay keeps its cells: {trace}"
-            );
-            success(room.command(&["workflow", "cancel", &id]).output().unwrap());
-        } else {
-            let value = settled(&room.env, &id, "done");
-            assert_eq!(value["record"]["prev_attempt"]["outcome"], "limited");
-        }
+        assert!(value["record"]["attempt"].is_object(), "{value:#}");
+        assert!(value["record"]["prev_attempt"].is_null());
+        let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+        assert!(
+            !trace.contains("close-pane"),
+            "a parked {lifecycle} keeps its cells: {trace}"
+        );
+        success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     }
+}
+
+#[test]
+fn budget_park_pauses_the_turn_timeout_at_the_projected_park_stamp() {
+    use rimz::harness::budget::{self, BudgetLedger, BudgetParkStamp};
+
+    let room = Room::new("timeout='1h'\n");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let state = room.env.state_path_for(&room.env.project_root);
+    let bound = rimz::harness::run::load(&state, &run.run_id).unwrap();
+    let store = room.env.store();
+    let now = jiff::Timestamp::now();
+    let since = now - Duration::from_secs(5400);
+    let mut ledger = BudgetLedger::new("$1".parse().unwrap());
+    ledger.parked = Some(BudgetParkStamp {
+        at_cost: 1.25,
+        at: since,
+    });
+    ledger.last_interrupt_at = Some(since);
+    budget::write_ledger(
+        store.runtime_paths(),
+        &run.kind,
+        bound.agent_id.as_ref().unwrap(),
+        &ledger,
+    )
+    .unwrap();
+    {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let paths = state.workflow(&id.parse().unwrap());
+        let mut record = records::load(&paths).unwrap();
+        record.attempt.as_mut().unwrap().started_at = now - Duration::from_secs(7200);
+        records::write(&paths, &record, &guard).unwrap();
+    }
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let held = show(&room.env, &id);
+    assert_eq!(held["record"]["state"], "active", "{held:#}");
+    assert_eq!(held["record"]["attempt"]["held_since"], json!(since));
+    ledger.parked = None;
+    budget::write_ledger(
+        store.runtime_paths(),
+        &run.kind,
+        bound.agent_id.as_ref().unwrap(),
+        &ledger,
+    )
+    .unwrap();
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let resumed = show(&room.env, &id);
+    assert_eq!(resumed["record"]["state"], "active", "{resumed:#}");
+    assert!(resumed["record"]["attempt"]["held_since"].is_null());
+    assert!(resumed["record"]["attempt"]["asked_ms"].as_u64().unwrap() >= 5_400_000);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
 #[test]
@@ -1945,7 +1995,7 @@ fn cancel_pending_attempt_is_durable_and_idempotent() {
 }
 
 #[test]
-fn timeout_and_failed_run_settle_before_following_then() {
+fn timeout_still_settles_but_a_failed_turn_waits_for_a_clean_end() {
     for timeout in [true, false] {
         let room = Room::new(if timeout { "timeout='1h'" } else { "" });
         let (id, run) = room.launch();
@@ -1977,10 +2027,26 @@ fn timeout_and_failed_run_settle_before_following_then() {
             );
         }
         success(advance.output().unwrap());
+        if !timeout {
+            let value = show(&room.env, &id);
+            assert_eq!(value["record"]["state"], "active", "{value:#}");
+            assert!(value["record"]["attempt"].is_object());
+            let open = rimz::harness::run::load(&state, &run.run_id).unwrap();
+            assert_eq!(open.status, RunStatus::Running);
+            assert!(open.stopped_turn.is_some());
+            let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+            assert!(!trace.contains("close-pane"), "{trace}");
+            room.hook(
+                &id,
+                &run,
+                json!({"hook_event_name":"UserPromptSubmit", "prompt":"Continue"}),
+            );
+            room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+        }
         let value = settled(&room.env, &id, "done");
         assert_eq!(
             value["record"]["prev_attempt"]["outcome"],
-            if timeout { "timeout" } else { "died" }
+            if timeout { "timeout" } else { "ended" }
         );
         let ended = rimz::harness::run::load(&state, &run.run_id).unwrap();
         assert_eq!(
@@ -1988,7 +2054,7 @@ fn timeout_and_failed_run_settle_before_following_then() {
             if timeout {
                 RunStatus::Canceled
             } else {
-                RunStatus::Failed
+                RunStatus::Completed
             }
         );
         if timeout {

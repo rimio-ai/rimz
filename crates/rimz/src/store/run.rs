@@ -213,6 +213,19 @@ pub struct RunSession {
     pub transcript_path: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoppedTurnDisposition {
+    Failed,
+    Canceled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoppedTurn {
+    pub at: Timestamp,
+    pub disposition: StoppedTurnDisposition,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
@@ -329,6 +342,8 @@ pub struct RunRecord {
     /// terminal write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_turn: Option<StoppedTurn>,
     /// The answer text through the most recent park, sealed when an in-turn
     /// signal proves work resumed; each later turn's final message joins after
     /// it in `last_message`. Kept by the terminal write, cleared by a reopen.
@@ -497,6 +512,7 @@ impl RunRecord {
             updated_at: now,
             completed_at: None,
             parked_at: None,
+            stopped_turn: None,
             parked_answer: None,
             park_noticed_activity: None,
             stall_noticed_at: None,

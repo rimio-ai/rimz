@@ -488,6 +488,7 @@ impl Transition<'_> {
             .as_mut()
             .expect("agent ending has an attempt");
         attempt.asking = None;
+        attempt.held_since = None;
         attempt.ending = Some(ending);
         let mut previous = self.previous_attempt(outcome);
         previous.children = Some(observed.children.clone());

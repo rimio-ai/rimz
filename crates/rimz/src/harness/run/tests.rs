@@ -29,6 +29,120 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
+    use crate::store::run::StoppedTurnDisposition;
+
+    for (signal, disposition) in [
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            StoppedTurnDisposition::Failed,
+        ),
+        (
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            StoppedTurnDisposition::Canceled,
+        ),
+    ] {
+        for resume in [
+            turn_started(),
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: None,
+                native_key: None,
+                turn_id: None,
+            },
+            LifecycleSignal::AwaitingInput {
+                kind: crate::agents::AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            turn_end("leader").signal,
+        ] {
+            let (_dir, _paths, mut record) = setup();
+            record.workflow = Some(crate::agents::WorkflowAttemptRef {
+                run: crate::ids::WorkflowRunId::new(),
+                seq: 1,
+                role: crate::agents::WorkflowAttemptRole::Step,
+            });
+            record.agent_id = Some("leader".into());
+            record.parked_at = Some(record.started_at);
+            let now = record.started_at + Duration::from_secs(1);
+            let mut observation =
+                AgentLifecycleObservation::new(Some("leader".into()), signal.clone());
+            assert_eq!(
+                fold_lifecycle(&mut record, "claude", &observation, None, now, None),
+                LifecycleFold::Updated,
+            );
+            assert_eq!(record.status, RunStatus::Running);
+            assert_eq!(record.completed_at, None);
+            assert_eq!(record.parked_at, None);
+            let stopped = record.stopped_turn.as_ref().unwrap();
+            assert_eq!((stopped.at, stopped.disposition), (now, disposition));
+            observation.signal = resume;
+            fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+            assert!(record.stopped_turn.is_none());
+            observation.signal = turn_end("leader").signal;
+            fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+            assert_eq!(record.status, RunStatus::Completed);
+        }
+    }
+}
+
+#[test]
+fn workflow_session_stops_are_evidence_until_work_resumes() {
+    for signal in [
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+    ] {
+        let (_dir, _paths, mut record) = setup();
+        record.lifecycle = RunLifecycle::Session;
+        record.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        });
+        let now = record.started_at;
+        let mut observation = AgentLifecycleObservation::new(Some("leader".into()), signal);
+        fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+        assert_eq!(record.status, RunStatus::Running);
+        assert!(record.stopped_turn.is_some());
+        observation.signal = turn_started();
+        assert_eq!(
+            fold_lifecycle(&mut record, "claude", &observation, None, now, None),
+            LifecycleFold::Updated,
+        );
+        assert!(record.stopped_turn.is_none());
+    }
+}
+
+#[test]
+fn workflow_budget_parks_never_settle_runs() {
+    for lifecycle in [RunLifecycle::Turn, RunLifecycle::Session] {
+        let (_dir, paths, mut record) = setup();
+        record.lifecycle = lifecycle;
+        record.status = RunStatus::Running;
+        record.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        });
+        create(&paths, &record).unwrap();
+        let (parked, wrote) = budget_exceeded(&paths, &record.run_id, Some(1.25)).unwrap();
+        assert!(!wrote, "workflow budget parks keep {lifecycle:?} runs open");
+        assert_eq!(parked, record);
+    }
+}
+
+#[test]
 fn session_lifecycle_keeps_hooks_open_and_follows_conversation_rows() {
     use crate::store::run::RunLifecycle;
 

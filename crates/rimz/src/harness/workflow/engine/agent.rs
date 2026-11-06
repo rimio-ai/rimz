@@ -56,6 +56,7 @@ pub(super) fn empty_observation() -> Observed {
         status: RunStatus::Pending,
         ask: None,
         limited: None,
+        stopped: None,
         children: Children::default(),
         cost_usd: None,
         turn: None,
@@ -75,11 +76,6 @@ pub(super) fn observed_outcome(
         RunStatus::Canceled => Some(AttemptOutcome::Canceled),
         RunStatus::BudgetExceeded => Some(AttemptOutcome::Limited),
         RunStatus::Pending | RunStatus::Running
-            if lifecycle.is_turn() && observed.limited.is_some() =>
-        {
-            Some(AttemptOutcome::Limited)
-        }
-        RunStatus::Pending | RunStatus::Running
             if lifecycle.is_turn() && on_asked && observed.ask.is_some() =>
         {
             Some(AttemptOutcome::Asked)
@@ -96,14 +92,17 @@ pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
     }
 }
 
-/// Folds one observation's blocking ask into the attempt's hold and reports whether it changed.
-/// A new hold opens at the ask's visibility time, clamped to the attempt; a kept hold keeps its
-/// start; the first observation without an ask closes it into `asked_ms`.
+/// Fold blocking evidence into one hold, crediting overlapping pauses only once.
+/// Legacy open asks supply their start until the shared hold has been published.
 pub(super) fn hold(
     attempt: &mut workflow::LiveAttempt,
     ask: Option<&workflow::Asking>,
+    stopped: Option<&super::super::Stopped>,
     now: Timestamp,
 ) -> bool {
+    let previous = attempt
+        .held_since
+        .or_else(|| attempt.asking.as_ref().map(|asking| asking.since));
     let asking = ask.map(|seen| workflow::Asking {
         since: match &attempt.asking {
             Some(open) => open.since,
@@ -111,14 +110,31 @@ pub(super) fn hold(
         },
         ask: seen.ask.clone(),
     });
-    let changed = attempt.asking != asking;
-    if asking.is_none()
-        && let Some(closed) = attempt.asking.take()
+    let since = asking
+        .as_ref()
+        .map(|asking| asking.since)
+        .into_iter()
+        .chain(
+            stopped
+                .filter(|stopped| stopped.kind != super::super::StopKind::Interrupt)
+                .map(|stopped| stopped.since),
+        )
+        .min();
+    let held_since = since.map(|since| {
+        previous
+            .map_or(since, |previous| previous.min(since))
+            .max(attempt.started_at)
+            .min(now)
+    });
+    let changed = attempt.asking != asking || attempt.held_since != held_since;
+    if held_since.is_none()
+        && let Some(closed) = previous
     {
-        let paused = u64::try_from(now.duration_since(closed.since).as_millis()).unwrap_or(0);
+        let paused = u64::try_from(now.duration_since(closed).as_millis()).unwrap_or(0);
         attempt.asked_ms = attempt.asked_ms.saturating_add(paused);
     }
     attempt.asking = asking;
+    attempt.held_since = held_since;
     changed
 }
 
@@ -175,6 +191,7 @@ pub(super) fn prepare_end(
     let hold_changed = hold(
         t.record.attempt.as_mut().expect("observed agent attempt"),
         observed.ask.as_ref(),
+        observed.stopped.as_ref(),
         t.now,
     );
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
@@ -287,7 +304,7 @@ pub(super) fn launch(
     let reason = match launched {
         Ok(run) => {
             t.record.attempt.as_mut().expect("current launch").run = Some(run);
-            persist(&t, &guard)?;
+            persist(&mut t, &guard)?;
             accounting::step(&t.record);
             if t.record
                 .attempt
@@ -327,7 +344,7 @@ pub(super) fn launch(
         }
     };
     t.record.attempt.as_mut().expect("launch ending").host = identity();
-    persist(&t, &guard)?;
+    persist(&mut t, &guard)?;
     let record = t.record;
     drop(guard);
     finish(state, paths, spec, &record, host, reason)
@@ -393,7 +410,7 @@ pub(super) fn finish(
     t.record.attempt.as_mut().expect("current agent ending").run = run;
     // A concurrent cancel may have replaced the ending while the stop ran.
     t.settle_agent(children, cost, head_end, reason)?;
-    persist(&t, &guard)?;
+    persist(&mut t, &guard)?;
     Ok(t.record.state == RunState::Active && t.record.wait.is_none())
 }
 
@@ -417,18 +434,8 @@ mod tests {
         let signals = [
             (false, false, None, None),
             (true, false, None, Some(AttemptOutcome::Asked)),
-            (
-                false,
-                true,
-                Some(AttemptOutcome::Limited),
-                Some(AttemptOutcome::Limited),
-            ),
-            (
-                true,
-                true,
-                Some(AttemptOutcome::Limited),
-                Some(AttemptOutcome::Limited),
-            ),
+            (false, true, None, None),
+            (true, true, None, Some(AttemptOutcome::Asked)),
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();
@@ -451,6 +458,7 @@ mod tests {
                                 },
                             }),
                             limited: limit.then_some(Limited { reset_at: None }),
+                            stopped: None,
                             children: Children::default(),
                             cost_usd: None,
                             turn: None,

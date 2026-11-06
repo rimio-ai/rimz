@@ -299,6 +299,8 @@ pub struct LiveAttempt {
     pub woken: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asking: Option<Asking>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_since: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

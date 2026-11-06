@@ -10,6 +10,37 @@ mod checks;
 mod delay;
 
 #[test]
+fn stopped_turns_wait_for_a_clean_rest_before_the_check_judges() {
+    use crate::harness::workflow::{StopKind, Stopped};
+
+    for kind in [
+        StopKind::Limit,
+        StopKind::Error,
+        StopKind::Interrupt,
+        StopKind::Budget,
+    ] {
+        let (dir, state, record) = setup(UNTIL);
+        check(dir.path(), json!({"outcome":"done"}));
+        let host = FakeHost::new();
+        advance_ok(&state, &record.id, &host);
+        host.observed.borrow_mut().turn = Some(turn());
+        host.observed.borrow_mut().stopped = Some(Stopped {
+            since: Timestamp::now(),
+            kind,
+        });
+        let held = advance_ok(&state, &record.id, &host);
+        assert_eq!(held.state, RunState::Active, "{kind:?}");
+        assert_eq!(held.node, "build");
+        assert!(held.held.is_none());
+        assert!(decisions(&state, &record).is_empty());
+        host.observed.borrow_mut().stopped = None;
+        let ended = advance_ok(&state, &record.id, &host);
+        assert_eq!(ended.state, RunState::Done);
+        assert_eq!(host.stops.get(), 1);
+    }
+}
+
+#[test]
 fn omitted_lifecycle_launches_an_until_session() {
     let (_dir, state, record) = setup(&UNTIL.replace("lifecycle='until'\n", ""));
     let host = FakeHost::new();

@@ -19,6 +19,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
 
 mod brief;
 mod reached;
+mod stops;
 mod until;
 
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
@@ -1142,7 +1143,7 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
         (RunStatus::Canceled, Some(AttemptOutcome::Canceled)),
         (RunStatus::BudgetExceeded, Some(AttemptOutcome::Limited)),
         (RunStatus::Running, None),
-        (RunStatus::Pending, Some(AttemptOutcome::Limited)),
+        (RunStatus::Pending, None),
     ] {
         let (_dir, state, record) = setup(STEP);
         let host = FakeHost::new();

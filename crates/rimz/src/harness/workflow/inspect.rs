@@ -379,7 +379,7 @@ pub(super) fn first_bound(
         .min_by_key(|(at, _)| *at))
 }
 
-/// The check's entry-based timeout or a turn step's timeout, paused while asking.
+/// The check's entry-based timeout or a turn step's timeout, excluding held time.
 pub fn timeout_at(
     spec: &WorkflowSpec,
     record: &RunRecord,
@@ -390,7 +390,8 @@ pub fn timeout_at(
         let Some(attempt) = record.attempt.as_ref() else {
             return Ok(None);
         };
-        if !attempt.lifecycle.is_turn() || attempt.asking.is_some() {
+        if !attempt.lifecycle.is_turn() || attempt.held_since.is_some() || attempt.asking.is_some()
+        {
             return Ok(None);
         }
         let Ok(start) = attempt
