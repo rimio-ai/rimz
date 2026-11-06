@@ -38,6 +38,8 @@ Before creating a run, the command validates the definition and refuses on any e
 
 When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
+The step leader's Workflow launch note describes its listed checks in order. Scripts and shells show their command and optional summary, explain their execution/path rules, and say the agent may run them itself. A judge shows only its summary, never its prompt filename; a sealed judge without one gets a fixed agent-judge description.
+
 `[workflow] start` must name a check or a step, not a special target such as `@done` or `@user`. A step at the start runs through the same admission as any later visit. Its first `context.json` has `input`, `key`, and `prev_attempt` set to null, with `visit` and `visits` both 1; that visit counts against `max-visits-per-outcome` under the null outcome and null key.
 
 Workflow agents, judges, script and shell checks, and command steps receive `RIMZ_WORKFLOW_RUN` (run id), `RIMZ_WORKFLOW_DIR` (work directory), and `RIMZ_WORKFLOW_DEFINITION` (absolute definition folder). Every workflow agent gets an Environment `- workflow:` line even with `env_reminder` off. Non-workflow agent launches unset all three variables. If the agent launch cannot read the run record, it warns and omits the definition variable and line.
