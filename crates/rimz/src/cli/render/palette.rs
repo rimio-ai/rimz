@@ -117,6 +117,11 @@ pub(crate) fn money() -> anstyle::Style {
     THEME.style(THEME.palette.identity(rimz::theme::Identity::Money))
 }
 
+/// Fixed Rimio amber for RimZ wordmarks only.
+pub(crate) fn logo() -> anstyle::Style {
+    THEME.style(THEME.palette.identity(rimz::theme::Identity::Rimio))
+}
+
 /// The sidebar budget bar's tone for a window with `remaining_pct` left.
 pub(crate) fn budget(remaining_pct: u8) -> anstyle::Style {
     THEME.budget(remaining_pct)
@@ -202,6 +207,46 @@ mod tests {
         assert_eq!(
             overridden.style(overridden.palette.good()).get_fg_color(),
             Some(anstyle::Color::Rgb(anstyle::RgbColor(1, 2, 3)))
+        );
+    }
+
+    #[test]
+    fn logo_tone_ignores_scheme_and_accent_overrides() {
+        for config in [
+            ThemeConfig::default(),
+            ThemeConfig {
+                scheme: Some("Afterglow".to_owned()),
+                ..Default::default()
+            },
+            ThemeConfig {
+                accent: Some(ThemeColor::Rgb(1, 2, 3)),
+                ..Default::default()
+            },
+        ] {
+            let theme = CliTheme::resolve(&config, true);
+            assert_eq!(
+                theme
+                    .style(theme.palette.identity(rimz::theme::Identity::Rimio))
+                    .get_fg_color(),
+                Some(anstyle::Color::Rgb(anstyle::RgbColor(255, 180, 84)))
+            );
+        }
+    }
+
+    #[test]
+    fn logo_tone_quantizes_to_index_215() {
+        let theme = CliTheme::resolve(
+            &ThemeConfig {
+                mode: ThemeMode::Indexed,
+                ..Default::default()
+            },
+            true,
+        );
+        assert_eq!(
+            theme
+                .style(theme.palette.identity(rimz::theme::Identity::Rimio))
+                .get_fg_color(),
+            Some(anstyle::Color::Ansi256(anstyle::Ansi256Color(215)))
         );
     }
 

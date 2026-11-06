@@ -682,7 +682,7 @@ pub(super) fn header_lines(panel_width: usize) -> Vec<String> {
     for line in WORDMARK.lines() {
         lines.push(format!(
             "{wm_indent}{}",
-            render::paint(render::palette::accent().bold(), line)
+            render::paint(render::palette::logo().bold(), line)
         ));
     }
     lines.push(center(

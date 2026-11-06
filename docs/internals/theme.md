@@ -46,7 +46,7 @@ Each kind of change lands in one layer. A scheme switch replaces Layer 1, and a 
 | [`oklab.rs`](../../crates/rimz/src/theme/oklab.rs) | Perceptual color math: `blend`, `lift_lightness`, `warm_toward`, and the gamut fit, plus WCAG contrast from linearized sRGB. |
 | [`glyphs.rs`](../../crates/rimz/src/theme/glyphs.rs) | The glyph catalog (one row per `GlyphRole`), `GlyphSet::resolve`, and the first-run Nerd Font probes. |
 | [`provider.rs`](../../crates/rimz/src/theme/provider.rs) | Provider display identity: name, emblem, emblem tints, and brand color. |
-| [`identity.rs`](../../crates/rimz/src/theme/identity.rs) | `Identity`, the two scheme-independent tones: Claude clay (`#d97757`) and dollar green (`#85bb65`). |
+| [`identity.rs`](../../crates/rimz/src/theme/identity.rs) | `Identity`, the three scheme-independent tones: Claude clay (`#d97757`), dollar green (`#85bb65`), and Rimio amber (`#ffb454`) for RimZ wordmarks only. |
 | [`fmt.rs`](../../crates/rimz/src/theme/fmt.rs) | Renderer-independent value formats (see [Shared value formats](#shared-value-formats)). |
 
 The serialized config shape lives in [`config/`](../../crates/rimz/src/config/), so the theme core resolves types it does not define:
@@ -191,7 +191,7 @@ Four meanings cover every human-facing use of color, and a new surface picks fro
 
 | meaning | rule | home |
 | --- | --- | --- |
-| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Model spend markers use readable scheme hues nearest that brand; statuses, plans, and headings use their own roles. | `theme/provider.rs`, `theme/palette.rs` |
+| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Model spend markers use readable scheme hues nearest that brand; statuses, plans, and headings use their own roles. RimZ's own wordmarks (stats, the sessions picker and `rimz web`, the installer) wear fixed Rimio amber (`Identity::Rimio`), for logos only. | `theme/provider.rs`, `theme/identity.rs`, `theme/palette.rs` |
 | State | typed lifecycle values map to a state role, and a glyph or status word carries the same meaning without color | `cli/render/status.rs` |
 | Hierarchy | `body` for primary content, `muted` for labels and metadata, `faint` for separators and placeholders, bold for emphasis. Headings are muted bold except the held stats dashboard's body-bold section titles; `accent` marks categories. | every renderer |
 | Quantity | dollar green (`Identity::Money`) for currency, the token-category tones, and the heat ramp plus shape-readable bars for percentages and budgets | `theme/identity.rs`, `theme/palette.rs` |
