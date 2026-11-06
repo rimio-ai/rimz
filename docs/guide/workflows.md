@@ -375,6 +375,7 @@ Some decisions need judgment that a script cannot give: whether review comments 
 
 ```toml
 [checks.review]
+summary = "Review the diff for correctness"
 agent = "claude"
 prompt-file = "checks/review.md"
 window = "5h.left>=40"
@@ -472,7 +473,7 @@ Some work is project-wide: a monthly dependency sweep, or a loop that takes the 
 
 ## Rules for writing nodes
 
-An optional `summary` can describe the whole graph in `[workflow]`, or one check or step in its own table. It must be one nonempty line, not instructions to the runner. Blank or multiline summaries warn and are ignored; leaving one out produces no validation warning.
+A `summary` describes the whole graph in `[workflow]`, or one check or step in its own table. It is required for a judge check and optional elsewhere. It must be one nonempty line, not instructions to the runner. Blank or multiline summaries warn and are ignored; a judge then refuses as missing at `checks.<name>.summary`, with the fix `add summary = "..."`. Admission checks this for both manual and loop-started runs. Older sealed judges keep running with a fixed agent-judge description.
 
 The engine stays simple because nodes follow four rules.
 

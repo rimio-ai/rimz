@@ -203,7 +203,7 @@ fn held_judges_keep_the_session_during_limit_backoff() {
 fn judge(limited: bool) {
     let text = UNTIL.replace(
         "run='sh check.sh'",
-        "agent='claude'\nprompt-file='prompt.md'",
+        "agent='claude'\nsummary='Review the work'\nprompt-file='prompt.md'",
     );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
