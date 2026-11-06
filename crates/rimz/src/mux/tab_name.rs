@@ -29,7 +29,7 @@ pub struct TabOwnerRecord {
 /// whatever the tab is called.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TabNameIntent {
-    Claim { pane_name: String },
+    Claim { pane_name: crate::pane::PaneTitle },
     Status { observed: String },
     Rest { observed: String },
     Rebuild { observed: String, base: String },
@@ -100,7 +100,7 @@ mod tests {
         }
         assert_eq!(
             TabNameIntent::Claim {
-                pane_name: "opus".to_owned()
+                pane_name: "opus".into()
             }
             .observed(),
             None

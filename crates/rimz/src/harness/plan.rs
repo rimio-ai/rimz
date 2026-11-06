@@ -297,6 +297,7 @@ pub(super) struct ResumeLaunchIdentity {
     pub profile_scope: Option<crate::config::effective::ProfileScope>,
     pub role: Option<String>,
     pub team: Option<String>,
+    pub automation: Option<crate::agents::Automation>,
     pub launch_group: Option<String>,
     pub launch_ordinal: Option<u32>,
     pub channel: Option<String>,
@@ -323,6 +324,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             profile_scope: agent.profile_scope,
             role: agent.role.clone(),
             team: agent.team.clone(),
+            automation: agent.automation.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
             channel: agent.channel.clone(),
@@ -2142,7 +2144,7 @@ pub fn compile_layout_panes(
                             } else {
                                 argv
                             };
-                            (argv, cell.pane_name())
+                            (argv, cell.pane_name().into())
                         }
                         Cell::Agent(cell) => {
                             let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);

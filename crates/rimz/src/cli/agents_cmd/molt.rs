@@ -327,7 +327,7 @@ fn molt_tab_names(
     agent: &AgentState,
     posture: &ResumePosture,
     launch: &AgentLaunchIdentity,
-) -> (String, String) {
+) -> (String, rimz::pane::PaneTitle) {
     let title = agent.channel.as_deref().map_or_else(
         || {
             rimz::harness::spec::default_tab_title(
@@ -535,7 +535,8 @@ mod tests {
                 run_id: None,
                 prompt: None,
             };
-            molt_tab_names(&agent, &posture, &launch)
+            let (title, pane) = molt_tab_names(&agent, &posture, &launch);
+            (title, pane.to_string())
         };
         let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
         assert_eq!(

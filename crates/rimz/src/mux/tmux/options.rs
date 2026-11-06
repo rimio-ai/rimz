@@ -12,6 +12,9 @@ use crate::theme::{Palette, Tone, resolve_provider_brand};
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
+pub(super) const RIMZ_ORIGIN_OPTION: &str = "@rimz_origin";
+pub(super) const RIMZ_TITLE_LEAD_OPTION: &str = "@rimz_title_lead";
+pub(super) const RIMZ_TITLE_REST_OPTION: &str = "@rimz_title_rest";
 pub(super) const RIMZ_TAB_BASE_OPTION: &str = "@rimz_tab_base";
 pub(super) const RIMZ_TAB_FOUNDERS_OPTION: &str = "@rimz_tab_founders";
 
@@ -314,12 +317,30 @@ fn pane_border_format(theme: &ThemeConfig) -> String {
         let brand = border_tone(resolve_provider_brand(&kind, &theme.providers).tone(&palette));
         title_style = format!("#{{?#{{==:#{{@rimz_kind}},{kind}}},{brand},{title_style}}}");
     }
+    let origin_style = [
+        "#{?#{==:#{@rimz_origin},team},",
+        &border_tone(palette.meta),
+        ",#{?#{==:#{@rimz_origin},automation},",
+        &border_tone(palette.accent),
+        ",",
+        &border_tone(palette.body),
+        "}}",
+    ]
+    .concat();
+    let title = [
+        "#{?#{@rimz_origin},",
+        &origin_style,
+        " #{@rimz_title_lead},}",
+        &title_style,
+        "#{?#{@rimz_origin},#{@rimz_title_rest}, #{@rimz_title}} ",
+    ]
+    .concat();
     [
         "#{?#{==:#{pane_title},",
         SIDEBAR_CHROME_TITLE,
         "},,#{?#{@rimz_title},",
-        &title_style,
-        " #{@rimz_title} ,",
+        &title,
+        ",",
         &muted,
         " #{pane_current_command} }}",
     ]
@@ -459,7 +480,35 @@ mod tests {
         );
         assert!(format.contains("#[fg=#445566]"), "{format}");
         assert!(
-            format.contains(" #{@rimz_title} ,#[fg=#112233] #{pane_current_command} "),
+            format.contains(" #{@rimz_title}} ,#[fg=#112233] #{pane_current_command} "),
+            "{format}"
+        );
+    }
+
+    #[test]
+    fn border_format_colors_origin_leads_separately_from_the_provider() {
+        let theme = toml::from_str("meta = '#aabbcc'\naccent = '#778899'").unwrap();
+        let format = pane_border_format(&theme);
+        assert_eq!(
+            format.matches("#{==:#{@rimz_kind},claude}").count(),
+            1,
+            "{format}"
+        );
+        assert!(
+            format.contains("#{==:#{@rimz_origin},team},#[fg=#aabbcc]"),
+            "{format}"
+        );
+        assert!(
+            format.contains("#{==:#{@rimz_origin},automation},#[fg=#778899]"),
+            "{format}"
+        );
+        assert!(format.contains(" #{@rimz_title_lead}"), "{format}");
+        assert!(
+            format.contains("#{?#{@rimz_origin},#{@rimz_title_rest}, #{@rimz_title}} "),
+            "{format}"
+        );
+        assert!(
+            format.contains("#{==:#{@rimz_kind},claude},#[fg=#d97757]"),
             "{format}"
         );
     }
@@ -476,6 +525,12 @@ mod tests {
             "{format}"
         );
         assert!(!format.contains("#[fg=#"), "{format}");
+        for origin in ["team", "automation"] {
+            assert!(
+                format.contains(&format!("#{{==:#{{@rimz_origin}},{origin}}},#[fg=colour")),
+                "{format}"
+            );
+        }
     }
 
     #[test]

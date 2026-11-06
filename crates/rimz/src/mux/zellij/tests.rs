@@ -1163,7 +1163,7 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
 
     for intent in [
         TabNameIntent::Claim {
-            pane_name: "-opus-4.5 (@brave-fox) › explorer subagent (@gold-tower)".to_owned(),
+            pane_name: "-opus-4.5 (@brave-fox) › explorer subagent (@gold-tower)".into(),
         },
         TabNameIntent::Status {
             observed: "#feat".to_owned(),
@@ -1606,7 +1606,7 @@ exit 0
             .split_pane(SplitPaneOptions {
                 placement: SplitPlacement::Directional(direction),
                 focus: true,
-                title: Some("rimz managed pane".to_owned()),
+                title: Some("rimz managed pane".into()),
                 ..Default::default()
             })
             .expect("directional split");
@@ -1946,7 +1946,7 @@ esac
                 session_name: "rimz-test".to_owned(),
                 pane_id: PaneId::from_parts(crate::MuxName::Zellij, format!("terminal_{anchor}")),
             },
-            title: Some("child".to_owned()),
+            title: Some("child".into()),
             cwd: Some("/tmp".to_owned()),
             command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
             env: [("KEY".to_owned(), "value".to_owned())].into(),

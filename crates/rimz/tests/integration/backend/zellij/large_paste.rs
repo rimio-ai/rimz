@@ -32,7 +32,7 @@ fn large_zellij_paste_delivers_exact_pty_bytes() {
                     received.display(),
                 ),
             ]),
-            title: Some("paste-reader".to_owned()),
+            title: Some("paste-reader".into()),
             close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::default(),

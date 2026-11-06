@@ -82,7 +82,7 @@ fn request(placement: Placement) -> PlacementRequest {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {
                     argv: vec!["rimz".to_owned(), "agents".to_owned()],
-                    name: Some("codex".to_owned()),
+                    name: Some("codex".into()),
                 }],
                 stacked: false,
             }],
@@ -1241,7 +1241,7 @@ mod zone_backend {
             sidebar,
             &m::PaneCmd {
                 argv: vec!["child".to_owned()],
-                name: Some(CHILD_TITLE.to_owned()),
+                name: Some(CHILD_TITLE.into()),
             },
             Some("ch"),
             Some(PaneId::parse("tmux:%99").unwrap()),

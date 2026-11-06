@@ -1199,12 +1199,15 @@ impl MuxBackend for ZellijBackend {
         if opts.close_on_exit {
             spec = spec.arg("--close-on-exit");
         }
-        let title = opts.title.or_else(|| {
-            opts.command.as_ref().map_or_else(
-                || Some(crate::proc::shell_pane_name()),
-                |command| super::pane_short_name(command),
-            )
-        });
+        let title = opts
+            .title
+            .map(|title| title.as_str().to_owned())
+            .or_else(|| {
+                opts.command.as_ref().map_or_else(
+                    || Some(crate::proc::shell_pane_name()),
+                    |command| super::pane_short_name(command),
+                )
+            });
         if let Some(title) = title {
             spec = spec.args(["--name".to_owned(), title]);
         }
@@ -1942,7 +1945,13 @@ impl MuxBackend for ZellijBackend {
             if let TabNameIntent::Claim { pane_name } = &intent
                 && let Err(err) = self
                     .zellij_action(session)
-                    .args(["rename-pane", "--pane-id", anchor.raw(), "--", pane_name])
+                    .args([
+                        "rename-pane",
+                        "--pane-id",
+                        anchor.raw(),
+                        "--",
+                        pane_name.as_str(),
+                    ])
                     .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
             {
                 tracing::warn!(

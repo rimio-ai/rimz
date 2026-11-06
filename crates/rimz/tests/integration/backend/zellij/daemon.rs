@@ -358,7 +358,7 @@ fn daemon_shape_case(repairable: bool) {
                 },
                 cwd: Some(pane.cwd.to_string_lossy().into_owned()),
                 command: Some(pane.argv.clone()),
-                title: Some(pane.argv.join(" ")),
+                title: Some(pane.argv.join(" ").into()),
                 close_on_exit: true,
                 placement: SplitPlacement::Directional(direction),
                 focus: false,

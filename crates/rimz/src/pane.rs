@@ -43,6 +43,71 @@ impl PartialOrd for ClientPaneView {
 /// publish this command for downstream chrome classifiers.
 pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
 
+/// The origin that leads an agent pane's display title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaneTitleOrigin {
+    Team,
+    Automation,
+}
+
+/// Verbatim pane text with an optional origin lead, never renderer markup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneTitle {
+    text: String,
+    lead: Option<(PaneTitleOrigin, usize)>,
+}
+
+impl PaneTitle {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The recorded origin, lead, and rest, including the ` · ` separator.
+    pub(crate) fn lead(&self) -> Option<(PaneTitleOrigin, &str, &str)> {
+        self.lead.map(|(origin, end)| {
+            let (lead, rest) = self.text.split_at(end);
+            (origin, lead, rest)
+        })
+    }
+
+    pub(crate) fn with_origin(origin: PaneTitleOrigin, lead: &str, label: &str) -> Self {
+        Self {
+            text: format!("{lead} · {label}"),
+            lead: Some((origin, lead.len())),
+        }
+    }
+
+    pub(crate) fn push_str(&mut self, suffix: &str) {
+        self.text.push_str(suffix);
+    }
+}
+
+impl From<String> for PaneTitle {
+    fn from(text: String) -> Self {
+        Self { text, lead: None }
+    }
+}
+
+impl From<&str> for PaneTitle {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl std::ops::Deref for PaneTitle {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for PaneTitle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// View name for the managed daemon tab. Shared by the launcher and pane
 /// classifiers so every backend speaks the same name.
 pub const VIEW_NAME: &str = "rimzd";

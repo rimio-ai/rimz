@@ -241,7 +241,7 @@ fn split_pane_close_on_exit_removes_a_failed_command() {
                 "rimz-close-on-exit".to_owned(),
                 marker.to_string_lossy().into_owned(),
             ]),
-            title: Some("rimz-close-on-exit".to_owned()),
+            title: Some("rimz-close-on-exit".into()),
             close_on_exit: true,
             focus: false,
             ..Default::default()

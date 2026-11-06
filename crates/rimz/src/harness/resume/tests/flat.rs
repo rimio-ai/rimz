@@ -69,6 +69,57 @@ fn flat_resume_names_a_profiled_pane_by_profile() {
 }
 
 #[test]
+fn flat_resume_keeps_a_loop_origin_in_the_pane_title() {
+    let saved = AgentState {
+        name: Some("brave-fox".into()),
+        profile: Some("coder".into()),
+        automation: Some(crate::agents::Automation::Loop),
+        ..agent("claude", "saved", "/code/project", 0)
+    };
+    let plan = plan_profiled(saved, &profiles("coder", profile("claude")));
+    let title = plan.tabs[0].layout.columns[0].panes[0]
+        .name
+        .as_ref()
+        .unwrap();
+    assert_eq!(title.as_str(), "loop · coder (@brave-fox)");
+    assert_eq!(
+        title.lead(),
+        Some((
+            crate::pane::PaneTitleOrigin::Automation,
+            "loop",
+            " · coder (@brave-fox)"
+        ))
+    );
+}
+
+#[test]
+fn flat_resume_keeps_a_workflow_origin_in_the_pane_title() {
+    let saved = AgentState {
+        name: Some("brave-fox".into()),
+        profile: Some("coder".into()),
+        automation: Some(crate::agents::Automation::Workflow {
+            workflow: "nightly".into(),
+            step: "build".into(),
+        }),
+        ..agent("claude", "saved", "/code/project", 0)
+    };
+    let plan = plan_profiled(saved, &profiles("coder", profile("claude")));
+    let title = plan.tabs[0].layout.columns[0].panes[0]
+        .name
+        .as_ref()
+        .unwrap();
+    assert_eq!(title.as_str(), "nightly · build (@brave-fox)");
+    assert_eq!(
+        title.lead(),
+        Some((
+            crate::pane::PaneTitleOrigin::Automation,
+            "nightly",
+            " · build (@brave-fox)"
+        ))
+    );
+}
+
+#[test]
 fn flat_resume_keeps_the_profile_pane_name_when_posture_degrades() {
     let saved = AgentState {
         name: Some("brave-fox".into()),

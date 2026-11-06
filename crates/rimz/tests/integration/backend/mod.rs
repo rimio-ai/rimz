@@ -41,7 +41,7 @@ fn identity_marker_tab(
                             "marker".to_owned(),
                             format!("marker-{marker}"),
                         ],
-                        name: Some(format!("marker-{marker}")),
+                        name: Some(format!("marker-{marker}").into()),
                     }
                 })
                 .collect(),

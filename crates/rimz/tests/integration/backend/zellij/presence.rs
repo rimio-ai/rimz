@@ -297,11 +297,11 @@ fn live_work_boundary_resize_is_audited() {
                 columns: vec![
                     tiled_column(vec![PaneCmd {
                         argv: vec!["sleep".to_owned(), "600".to_owned()],
-                        name: Some("architect".to_owned()),
+                        name: Some("architect".into()),
                     }]),
                     tiled_column(vec![PaneCmd {
                         argv: vec!["sleep".to_owned(), "600".to_owned()],
-                        name: Some("work".to_owned()),
+                        name: Some("work".into()),
                     }]),
                 ],
                 focused_pane: 0,
