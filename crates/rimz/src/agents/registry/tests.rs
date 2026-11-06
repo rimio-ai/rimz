@@ -20,7 +20,7 @@ fn native_compaction_applies_provider_caps() {
     let actual: Vec<_> = cases
         .iter()
         .map(|&(kind, configured, window, _)| {
-            native_compaction(kind, Some(configured), window, None).map(|limits| limits.point)
+            native_compaction(kind, Some(configured), window, None, None).map(|limits| limits.point)
         })
         .collect();
     assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
@@ -99,7 +99,7 @@ fn native_compaction_separates_the_trigger_from_model_capacity() {
     let actual: Vec<_> = cases
         .iter()
         .map(|(count, window, limits, _)| {
-            native_compaction("codex", *count, *window, limits.as_ref())
+            native_compaction("codex", *count, *window, Some(1_048_576), limits.as_ref())
         })
         .collect();
     assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
@@ -108,7 +108,7 @@ fn native_compaction_separates_the_trigger_from_model_capacity() {
 #[test]
 fn native_compaction_preserves_claude_and_unsupported_kinds() {
     assert_eq!(
-        native_compaction("claude", Some(372_000), 1_000_000, None),
+        native_compaction("claude", Some(372_000), 1_000_000, Some(400_000), None),
         Some(NativeCompaction {
             point: 372_000,
             capacity: 1_000_000,
@@ -123,7 +123,31 @@ fn native_compaction_preserves_claude_and_unsupported_kinds() {
         ("amp", Some(100_000)),
         ("process-plugin", Some(100_000)),
     ] {
-        assert_eq!(native_compaction(kind, count, 200_000, None), None);
+        assert_eq!(native_compaction(kind, count, 200_000, None, None), None);
+    }
+}
+
+#[test]
+fn opencode_compaction_predicts_the_default_ceiling_and_published_capacity() {
+    for configured in [None, Some(1), Some(2_000_000)] {
+        let cases = [
+            (983_010, Some(1_048_576), 835_559),
+            (200_000, Some(400_000), 170_000),
+            (20_000, None, 17_000),
+            (32_000, None, 16_000),
+        ];
+        let actual = cases.map(|(window, capacity, _)| {
+            native_compaction("opencode", configured, window, capacity, None)
+        });
+        let expected = cases.map(|(window, capacity, point)| {
+            Some(NativeCompaction {
+                point,
+                capacity: capacity.unwrap_or(window),
+                raw_window: window,
+                lowered: None,
+            })
+        });
+        assert_eq!(actual, expected);
     }
 }
 

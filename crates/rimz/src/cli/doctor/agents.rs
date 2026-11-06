@@ -500,6 +500,7 @@ fn agent_compaction_lowered(agent: &rimz::agents::AgentState) -> Option<Compacti
         agent.kind.as_str(),
         agent.record.as_ref().and_then(|record| record.auto_compact),
         agent.resolved_context_window()?,
+        agent.usage.context_capacity,
         limits,
     )?;
     let configured = compaction.lowered?;

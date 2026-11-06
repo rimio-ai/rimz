@@ -262,6 +262,7 @@ impl SidebarRow {
                     &self.name,
                     agent.auto_compact,
                     window,
+                    agent.usage.context_capacity,
                     limits,
                 )
             }),
