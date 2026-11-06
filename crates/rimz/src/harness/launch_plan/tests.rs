@@ -671,15 +671,38 @@ fn workflow_env_pins_survive_both_isolations() {
         seq: 3,
         role: crate::agents::WorkflowAttemptRole::Step,
     };
-    for (sandboxed, role) in [
-        (false, crate::agents::WorkflowAttemptRole::Step),
-        (true, crate::agents::WorkflowAttemptRole::Step),
-        (false, crate::agents::WorkflowAttemptRole::Judge),
-        (true, crate::agents::WorkflowAttemptRole::Judge),
+    let definition = metadata.path().join("workflow <definition>");
+    let workflow_paths = state.workflow(&workflow.run);
+    std::fs::create_dir_all(&workflow_paths.home).unwrap();
+    std::fs::write(
+        &workflow_paths.record,
+        serde_json::to_vec(&serde_json::json!({
+            "version":3,"id":workflow.run,"workflow":"test","spec_dir":definition,
+            "spec_digest":"test","project_root":project.path(),
+            "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
+            "created_at":"2026-01-01T00:00:00Z","entered_at":"2026-01-01T00:00:00Z",
+            "deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for (sandboxed, role, readable) in [
+        (false, crate::agents::WorkflowAttemptRole::Step, true),
+        (true, crate::agents::WorkflowAttemptRole::Step, true),
+        (false, crate::agents::WorkflowAttemptRole::Judge, true),
+        (true, crate::agents::WorkflowAttemptRole::Judge, true),
+        (false, crate::agents::WorkflowAttemptRole::Step, false),
     ] {
+        if !readable {
+            std::fs::remove_file(&workflow_paths.record).unwrap();
+        }
         let mut request = request("claude", action_with_args("launch", vec![]));
         request.identity.params.workflow = Some(workflow.clone());
         request.identity.params.workflow.as_mut().unwrap().role = role;
+        let mut effective =
+            crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+                .unwrap();
+        effective.env_reminder = sandboxed;
         let plan = compile(LaunchPlanInputs {
             request: &request,
             cwd: project.path(),
@@ -687,7 +710,7 @@ fn workflow_env_pins_survive_both_isolations() {
             rimz_bin: Path::new("/bin/rimz"),
             runtime: &runtime,
             state: &state,
-            effective: None,
+            effective: Some(&effective),
             machine: &machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
@@ -719,6 +742,24 @@ fn workflow_env_pins_survive_both_isolations() {
         assert_eq!(
             plan.process().env.get("RIMZ_WORKFLOW_DIR"),
             Some(&state.workflow(&workflow.run).work.display().to_string())
+        );
+        assert_eq!(
+            plan.process().env.get("RIMZ_WORKFLOW_DEFINITION"),
+            readable.then_some(&definition.display().to_string())
+        );
+        let reminder = &plan.process().reminder;
+        assert_eq!(
+            reminder.contains("- workflow:")
+                && reminder.contains("$RIMZ_WORKFLOW_DEFINITION")
+                && reminder.contains("workflow &lt;definition&gt;"),
+            readable,
+            "{reminder}"
+        );
+        assert_eq!(
+            plan.warnings.iter().any(|warning| matches!(warning,
+                LaunchPlanWarning::LaunchEnv(text) if text.contains("workflow definition folder unavailable")
+            )),
+            !readable,
         );
         if let Some(sandbox) = &plan.sandbox {
             let checkout_ro = |mount: &crate::sandbox::Mount| {
@@ -3369,6 +3410,7 @@ fn a_provider_temp_root_follows_tmpdir() {
         })
         .unwrap();
         let env = &plan.process().env;
+        assert!(!plan.process().reminder.contains("- workflow:"));
         let expected = (kind == "claude").then(|| env["TMPDIR"].clone());
         assert_eq!(env.get("CLAUDE_CODE_TMPDIR").cloned(), expected, "{kind}");
         assert_eq!(
@@ -3388,6 +3430,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                         *key,
                         "RIMZ_WORKFLOW_RUN"
                             | "RIMZ_WORKFLOW_DIR"
+                            | "RIMZ_WORKFLOW_DEFINITION"
                             | "RIMZ_LAUNCH_FAST"
                             | "RIMZ_LAUNCH_AUTO_APPROVE"
                             | "RIMZ_LONG_CACHE_ENV"

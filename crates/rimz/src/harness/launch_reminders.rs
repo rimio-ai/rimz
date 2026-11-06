@@ -36,6 +36,7 @@ pub(super) struct LaunchReminders {
     pub team_notes_run: Option<PathBuf>,
     /// The launch's temp unit and the room's shared dir; every compiled launch has them.
     pub files: Option<TempFiles>,
+    pub workflow_definition: Option<PathBuf>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     /// The launch runs inside the RimZ scoped view.
@@ -69,6 +70,7 @@ impl Default for LaunchReminders {
             permission_roots: None,
             team_notes_run: None,
             files: None,
+            workflow_definition: None,
             model: true,
             sandbox: false,
             lsp_configured: false,
@@ -149,6 +151,7 @@ pub(super) fn render(
         || !lsp_servers.is_empty()
         || team_context.is_some()
         || reminders.files.is_some()
+        || reminders.workflow_definition.is_some()
         || !params.add_dirs.is_empty()
     {
         paragraphs.push(env_paragraph(
@@ -270,6 +273,12 @@ fn env_paragraph(
         lines.push(format!(
             "- shared: {} (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.",
             escape_reminder_text(&files.shared.to_string_lossy())
+        ));
+    }
+    if let Some(definition) = &reminders.workflow_definition {
+        lines.push(format!(
+            "- workflow: {} (`$RIMZ_WORKFLOW_DEFINITION`): this workflow's definition folder.",
+            escape_reminder_text(&definition.to_string_lossy())
         ));
     }
     if !reminders.runtime_env

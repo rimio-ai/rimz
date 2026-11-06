@@ -4941,6 +4941,8 @@ allowed-dependencies = [
     "lsp::registry",
     "mux::domain",
     "sandbox",
+    # Compile reads the pinned run's definition folder for workflow environment pins.
+    "store::workflow",
     "workspace",
     "worktree",
 ]

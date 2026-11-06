@@ -119,6 +119,7 @@ pub(super) fn evaluate(
         .current_dir(&record.scope.path)
         .stdin(Stdio::null())
         .env("RIMZ_WORKFLOW_DIR", &paths.work)
+        .env("RIMZ_WORKFLOW_DEFINITION", &record.spec_dir)
         .env("RIMZ_WORKFLOW_RUN", record.id.as_str())
         .envs(crate::workspace::pin_env(
             &state.workspace_id,
@@ -206,6 +207,10 @@ fn evaluate_shell(
         let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
         let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
         env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
+        env.insert(
+            "RIMZ_WORKFLOW_DEFINITION".into(),
+            record.spec_dir.display().to_string(),
+        );
         env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
         let output = with_child(
             state,
@@ -277,6 +282,10 @@ pub(super) fn execute_step(
         .map_err(|error| ChildError::Failed(format!("{}: {error}", log.display())))?;
     let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
     env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
+    env.insert(
+        "RIMZ_WORKFLOW_DEFINITION".into(),
+        record.spec_dir.display().to_string(),
+    );
     env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
     with_child(
         state,

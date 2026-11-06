@@ -2,6 +2,48 @@ use super::*;
 use crate::store::workflow::{self as records, AttemptOutcome, RunState};
 
 #[test]
+fn workflow_definition_reaches_command_run_and_shell_children() {
+    let text = r#"
+[workflow]
+scope='worktree'
+start='command'
+[steps.command]
+shell='printf "%s" "$RIMZ_WORKFLOW_DEFINITION"'
+timeout='1m'
+then='run'
+[checks.run]
+run='sh checks/env.sh'
+on.ok='shell'
+[checks.shell]
+shell='printf "%s" "$RIMZ_WORKFLOW_DEFINITION" > "$RIMZ_WORKFLOW_DIR/shell-definition"'
+on={pass='@done',fail='@failed'}
+"#;
+    let (dir, state, mut record) = super::attempts::setup(text);
+    record.spec_dir = dir.path().join("workflow definitions");
+    fs::create_dir_all(record.spec_dir.join("checks")).unwrap();
+    fs::write(
+        record.spec_dir.join("checks/env.sh"),
+        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\"}' \"$RIMZ_WORKFLOW_DEFINITION\"\n",
+    )
+    .unwrap();
+    let paths = state.workflow(&record.id);
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::write(&paths, &record, &guard).unwrap();
+    drop(guard);
+    advance(&state, &record.id, &FakeHost::new()).unwrap();
+    let definition = record.spec_dir.display().to_string();
+    assert_eq!(fs::read_to_string(paths.step_log(1)).unwrap(), definition);
+    assert_eq!(
+        fs::read_to_string(paths.work.join("shell-definition")).unwrap(),
+        definition
+    );
+    let journal = records::journal(&paths).unwrap();
+    assert!(journal.iter().any(|row| matches!(&row.event,
+        records::JournalEvent::Evaluation { object, .. }
+        if row.node == "run" && object["definition"] == definition)));
+}
+
+#[test]
 fn command_steps_bypass_every_agent_host_operation_and_prompt() {
     let mut results = Vec::new();
     for runner in ["run", "shell"] {

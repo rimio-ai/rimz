@@ -38,6 +38,8 @@ timeout = "1h"
 
 `prompts/fix.md` is what the agent receives each time the step launches. RimZ sets `RIMZ_WORKFLOW_DIR` in the agent's environment, and the agent reads it there. RimZ does not expand variables in the prompt text.
 
+`RIMZ_WORKFLOW_DEFINITION` names the workflow's absolute definition folder, distinct from its work directory and the checkout. Steps, judges, script and shell checks, and command steps all receive it. Every workflow agent's Environment section includes a `- workflow:` line naming that folder, even with `env_reminder` off.
+
 ```markdown
 The test suite in this checkout fails. Read context.json in the directory
 $RIMZ_WORKFLOW_DIR names: its "input" object is the check's answer, and
@@ -187,7 +189,7 @@ An attempt can end as `died` when an agent fails to start or crashes, or when a 
 
 RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the `input`, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
 
-A script or shell check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads a script's stdout as its answer; a shell command's output is only a log at `work/<seq>.check.log`. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process. A check's optional `timeout` spans evaluations and waits; shell checks do not inherit the loop's default timeout. Timeout, deadline, and cancellation stop the shell's whole process group.
+A script or shell check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR`, `RIMZ_WORKFLOW_RUN`, and `RIMZ_WORKFLOW_DEFINITION` set. RimZ reads a script's stdout as its answer; a shell command's output is only a log at `work/<seq>.check.log`. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process. A check's optional `timeout` spans evaluations and waits; shell checks do not inherit the loop's default timeout. Timeout, deadline, and cancellation stop the shell's whole process group.
 
 An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind, profile, virtual cell such as `claude-auto`, or a layout such as `claude,nvim` or `yagni,reflect-notes`. It needs an unambiguous prompt leader and cannot name a team. Judges still take one profile. The layout opens in an unfocused new tab titled `run <leader kind>`. Every agent cell gets the same workflow environment variables; only the leader gets the composed prompt and owns the supervised run. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to every agent. Attempt cost counts the leader only; companion spend still appears on their cards and in stats.
 
@@ -258,7 +260,7 @@ max-visits = 3
 
 Route the green outcome to `merge`, and let the `pr` check decide whether the PR merged or still needs to wait. Select exactly one of `agent`, `run`, or `shell` on a step. `run` passes words literally, without a shell; a quoted word with spaces stays one argument, and files named by slash-containing words must stay inside the workflow directory. Use `shell` instead for `sh -c` syntax and arbitrary paths. Both command kinds require an explicit `timeout`, so a hung command cannot hold the run.
 
-The child runs in the checkout, in its own process group, with no stdin, the room's workspace environment, `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN`. Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no agent to leave the checkout, and takes no prompt. `prompt-file`, `lifecycle`, `window`, `takeover`, and `on.asked` belong only to agent steps; command steps read `context.json` instead. Signs and the run's `--prompt` compose only agent prompts.
+The child runs in the checkout, in its own process group, with no stdin, the room's workspace environment, `RIMZ_WORKFLOW_DIR`, `RIMZ_WORKFLOW_RUN`, and `RIMZ_WORKFLOW_DEFINITION`. Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no agent to leave the checkout, and takes no prompt. `prompt-file`, `lifecycle`, `window`, `takeover`, and `on.asked` belong only to agent steps; command steps read `context.json` instead. Signs and the run's `--prompt` compose only agent prompts.
 
 Exit 0 records `ended`; another exit or a signal records `died`. A spawn or log-open failure also records `died`, with a reason. The step timeout stops the group and records `timeout`. These outcomes follow `then`, with the original routed input unchanged and the outcome in `prev_attempt`. A run deadline stops the group, records `canceled`, and follows `on.deadline`; `workflow cancel` stops the group and ends the run. If the host dies, the next advance stops any survivor, records `canceled`, and follows `then`, without repeating the action. A child that already exited keeps its exit outcome even if a bound became due before settlement.
 
