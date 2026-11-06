@@ -306,6 +306,7 @@ Claude and Codex additionally receive routine-command permissions by default, in
 - `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
 - `rimz asks`, `rimz answer`, `rimz wait`
 - `rimz pane list`, `rimz pane capture`, `rimz loop show`, `rimz loop logs`
+- `rimz workflow show`
 - `rimz packs list`, `rimz packs show`, `rimz packs diff`
 - `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp show`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
 

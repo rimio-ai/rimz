@@ -321,6 +321,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "pane capture",
             "loop show",
             "loop logs",
+            "workflow show",
             "packs list",
             "packs show",
             "packs diff",
