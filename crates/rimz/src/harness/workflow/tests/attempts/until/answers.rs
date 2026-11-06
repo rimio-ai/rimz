@@ -1,6 +1,103 @@
 use super::*;
 
 #[test]
+fn run_pushbacks_point_at_complete_stderr_or_say_no_output() {
+    for stderr in [String::new(), "private stderr evidence\n".repeat(500)] {
+        let (dir, state, record) = setup(UNTIL);
+        let host = FakeHost::new();
+        advance_ok(&state, &record.id, &host);
+        fs::write(dir.path().join("check.sh"), format!(
+            "printf '%s' {} >&2\nprintf '%s' '{{\"outcome\":\"pending\",\"reason\":\"repair tests\"}}'\n",
+            shlex::try_quote(&stderr).unwrap(),
+        )).unwrap();
+        host.observed.borrow_mut().turn = Some(turn());
+        advance_ok(&state, &record.id, &host);
+        let paths = state.workflow(&record.id);
+        let journal = records::journal(&paths).unwrap();
+        let seq = journal
+            .iter()
+            .find(|row| matches!(row.event, JournalEvent::Evaluation { .. }))
+            .unwrap()
+            .seq
+            .unwrap();
+        let log = paths.check_log(seq);
+        assert!(
+            log.is_file(),
+            "run checks must save stderr even when empty: {}",
+            log.display()
+        );
+        assert_eq!(fs::read_to_string(&log).unwrap(), stderr);
+        let text = host.pushes.borrow().values().next().unwrap().clone();
+        assert!(text.contains("repair tests"), "{text}");
+        assert!(!text.contains("private stderr evidence"), "{text}");
+        if stderr.is_empty() {
+            assert!(text.contains("\n\nno output\n\n"), "{text}");
+        } else {
+            let summary = crate::disk::summary::FileSummary::measure(&log).unwrap();
+            assert!(
+                text.contains(&format!("output: {} ({})", log.display(), summary.label())),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
+    let text = UNTIL
+        .replace("then='pr'", "then=['pr','review']")
+        .replace("on.done='@done'", "on.done='review'")
+        + "[checks.review]\nshell='echo private-shell-evidence; exit 1'\non={pass='@done',fail='build'}\n";
+    let (dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    check(dir.path(), json!({"outcome":"done"}));
+    host.observed.borrow_mut().turn = Some(turn());
+    let pushed = advance_ok(&state, &record.id, &host);
+    let paths = state.workflow(&record.id);
+    let journal = records::journal(&paths).unwrap();
+    let seq = journal
+        .iter()
+        .find(|row| row.node == "review" && matches!(row.event, JournalEvent::Evaluation { .. }))
+        .unwrap()
+        .seq
+        .unwrap();
+    let text = host.pushes.borrow().values().next().unwrap().clone();
+    assert!(text.contains("check `review` answered `fail`"), "{text}");
+    assert!(
+        text.contains(&format!("output: {} (", paths.check_log(seq).display())),
+        "{text}"
+    );
+    assert!(!text.contains("private-shell-evidence"), "{text}");
+    let mut spec = load(&paths.home).unwrap();
+    let check = spec.checks.get_mut("review").unwrap();
+    check.shell = None;
+    check.agent = Some("claude".into());
+    check.prompt_file = Some("prompt.md".into());
+    fs::write(
+        paths.check_output(seq),
+        r#"{"outcome":"fail","reason":"exited 1"}"#,
+    )
+    .unwrap();
+    let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
+    assert!(text.find("exited 1") < text.find("output:"), "{text}");
+    assert!(
+        text.contains(&format!("output: {} (", paths.check_output(seq).display())),
+        "{text}"
+    );
+    fs::remove_file(paths.check_output(seq)).unwrap();
+    let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
+    assert!(text.contains("\n\nno output\n\n"), "{text}");
+    fs::remove_file(&paths.journal).unwrap();
+    let text = crate::harness::workflow::brief::push(&paths, &spec, &pushed).unwrap();
+    assert!(text.contains("check `pr` answered `fail`"), "{text}");
+    assert!(
+        !text.contains("\n\noutput:") && !text.contains("\n\nno output"),
+        "{text}"
+    );
+}
+
+#[test]
 fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
     let definition = UNTIL.split("[checks.pr]").next().unwrap().to_owned()
         + "[checks.pr]\nelse='pending'\non={done='@done',pending='build'}\n[[checks.pr.cases]]\nwhen=['team.stage=Done || team.stage=Review']\noutcome='done'\n[[checks.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -107,6 +108,15 @@ pub(super) fn evaluate(
         None => return Evaluation::failed("invalid", "check needs exactly one runner"),
     };
     let mut result = Evaluation::failed("invalid", "evaluation interrupted");
+    // Evaluation follows a recorded live attempt.
+    let attempt = record.attempt.as_ref().expect("prepared hosted evaluation");
+    let log = paths.check_log(attempt.seq);
+    let mut stderr = match std::fs::File::create(&log) {
+        Ok(file) => file,
+        Err(error) => {
+            return Evaluation::failed("invalid", &format!("{}: {error}", log.display()));
+        }
+    };
     let mut digests = BTreeMap::new();
     let argv = match command_words(record, run, &mut digests) {
         Ok(argv) => argv,
@@ -149,7 +159,9 @@ pub(super) fn evaluate(
                 String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(4096)..])
                     .into_owned(),
             );
-            result.object = if output.timed_out {
+            result.object = if let Err(error) = stderr.write_all(&output.stderr) {
+                Err(format!("{}: {error}", log.display()))
+            } else if output.timed_out {
                 Err("evaluation timed out".into())
             } else if !output.status.success() {
                 // command_words resolved this exact, nonempty argv successfully.

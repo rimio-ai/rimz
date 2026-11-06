@@ -171,6 +171,8 @@ work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
   notes/           node-owned cross-node scratch, created with the run
   signs/           live step guidance, created with the run
+  <seq>.check.log  run-check stderr or shell-check combined output
+  <seq>.check.json judge's whole saved answer
   <seq>.step.log   command-step stdout and stderr
 ```
 
@@ -219,6 +221,8 @@ Command steps bypass `AttemptHost`, prompt composition, provider windows, and oc
 Three windows stay open. Only the hosting process writes the step log, so when another advance enforces a bound on a stalled host, the next check can read the log before the host drains what the killed child wrote. A host killed after the spawn and before it publishes the child leaves `child` unset, so the dead-host reclaim kills nothing and the command can outlive its settled attempt. Checks share that second window. A live host that stalls (SIGSTOP, a frozen cgroup) after its command's group leader exits holds the step: `Transition::bound` leaves it to that host, so no other advance enforces the step timeout or the run deadline, and a group member still running keeps running. The host's own bound kills the group once it resumes, and the dead-host reclaim kills it once the host dies. Waiting for the group to empty would close this window only by reopening another: `kill(-pgid, 0)` succeeds while the exited leader is still unreaped, so another advance would again overwrite the exit the host is about to record.
 
 ### Check answers
+
+Run checks save complete stderr to `work/<seq>.check.log` after the bounded runner returns, creating the file even for an empty stream. Stdout remains the answer, and invalid evaluations retain the journal's 4096-byte stderr tail. The push-back brief looks backward for the `TurnEnd {pushed}` matching `attempt.push.message`, then that check's preceding evaluation sequence. It names that check and measures `.check.log` for run/shell or `.check.json` for a judge with `FileSummary`; reason precedes the output path/label, and empty or missing files say `no output`. No file content is copied. Without a matching row it falls back to the step's first check and omits the output line. The durable push-back and journal formats do not change.
 
 A run check or a judge answers exactly one JSON object: a required string `outcome`, an optional string `reason`, an RFC 3339 `recheck_at`, and a string or integer `key`. Other fields stay in the object as payload. The full normalized object (`crates/rimz/src/harness/workflow/state.rs::normalize_object`) becomes the next node's input, and a missing key inherits the run's current key. A sleep journals its own answers but forwards its incoming input and key unchanged on every route, including invalid and deadline parks; the next step's visit bucket therefore still uses the incoming outcome.
 
