@@ -1020,6 +1020,10 @@ The cache shape and reopen mechanism are exercised by `crates/rimz/tests/integra
 
 Tear down the room with the isolated wrapper's `rimz --tmux reset --yes --no-start <clone>`, then kill the named driver with `tmux -S "$LIVE_ROOT/driver.sock" kill-session -t workflow-m4-driver`. Check child PIDs and any remaining processes belonging to this exact isolated home; stop only those PIDs. Save scripts and non-secret output, then remove `$LIVE_ROOT`. Do not copy provider account files into the evidence.
 
+### Drive a workflow step with the stub
+
+A check of workflow routing that needs no real provider can run in a held sandbox room instead. The sandbox's `claude` stub never acts, so drive a workflow step agent by feeding its hooks with `cargo xtask sandbox in <root> --as @claude#probe`: the room handle, not the pet name `workflow show` prints. After an `until` push-back, the next `UserPromptSubmit` must carry the pushed message's exact text as `prompt` (read it with `rimz message show <msg>`). Delivery is confirmed by matching that text, and until then the pending message defers the step's judgment.
+
 ## Probe a loop judge against a real provider
 
 A [judge](../reference/cli/loop.md#waits-and-checks) asks a real Claude or Codex model, so it needs a provider login too, and a firing verdict then starts a real agent. Two choices keep the run to the judge alone:
