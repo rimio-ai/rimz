@@ -948,7 +948,7 @@ fn render_picker_block(
     };
     let title = if help_inside {
         Line::from(vec![
-            Span::styled(" RimZ ", theme.accent().add_modifier(Modifier::BOLD)),
+            Span::styled(" RimZ ", theme.logo().add_modifier(Modifier::BOLD)),
             Span::styled(format!("── {view_title} "), theme.muted()),
         ])
     } else {

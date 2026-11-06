@@ -305,6 +305,31 @@ fn banner_blocks_use_brand_amber_and_preserve_shading_and_no_color() {
 }
 
 #[test]
+fn compact_title_wears_bold_logo_style() {
+    let mut picker = Picker::new(None);
+    let theme = PickerTheme::resolve(&ThemeConfig::default(), true, false);
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut picker, &theme))
+        .expect("draw picker");
+    let buffer = terminal.backend().buffer();
+    let top = buffer_text(buffer)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let start = top.find(" RimZ ").expect("compact title");
+    let first = u16::try_from(top[..start].chars().count()).expect("narrow row");
+    for x in first..first + 6 {
+        let cell = &buffer[(x, 0)];
+        assert_eq!(Some(cell.fg), theme.logo().fg);
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+    let view = &buffer[(first + 6, 0)];
+    assert_eq!(Some(view.fg), theme.muted().fg);
+}
+
+#[test]
 fn filter_matches_displayed_repo_name_and_path_then_attaches() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows(), now());
