@@ -587,6 +587,41 @@ fn model_tiers_refuse_the_old_key_relative_effort_and_unrenderable_tools() {
 }
 
 #[test]
+fn model_tiers_keep_model_clients_and_team_seats_on_their_engine() {
+    let mut actual = Vec::new();
+    for kind in ["pi", "opencode"] {
+        let root = fixture();
+        definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!("agent: {kind}\ntier: senior\ntools: [Bash]"),
+            "Craft.",
+        );
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    tier: junior"),
+            "Pipeline.",
+        );
+        let loaded = clean(root.path());
+        for name in ["worker", "probe.lead", "probe.judge"] {
+            let profile = &loaded.agent_profiles.0[name];
+            actual.push((profile.agent.clone(), profile.model.clone()));
+        }
+    }
+    assert_eq!(
+        actual,
+        ["pi", "opencode"]
+            .into_iter()
+            .flat_map(|kind| {
+                ["opus", "opus", "sol"].map(|model| (kind.into(), Some(model.into())))
+            })
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn model_tiers_seats_use_the_role_tier_over_the_root_family() {
     for family in ["claude", "codex"] {
         let root = team_fixture();

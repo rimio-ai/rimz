@@ -179,6 +179,119 @@ fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_e
 }
 
 #[test]
+fn agent_override_errors_reach_the_launch_failure_ladder() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(root.path().join("agents/broken.md"), "---\n[broken\n---\n").unwrap();
+    let mut machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let broken = machine.definition_failure_for("broken").unwrap();
+    machine.agents.profiles.0.insert(
+        "main-only".into(),
+        toml::from_str("agent = 'claude'").unwrap(),
+    );
+    let errors = [
+        (ProfileScope::Agents, "bogus"),
+        (ProfileScope::Agents, "broken"),
+        (ProfileScope::Subagents, "main-only"),
+    ]
+    .map(|(scope, name)| {
+        let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+        launch
+            .route(
+                &machine.tiers,
+                scope,
+                Some("claude"),
+                None,
+                None,
+                Some(name),
+                |_, _| None,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|consumed| {
+                crate::harness::plan::resolve_launch(
+                    &launch,
+                    scope,
+                    &machine.agents.commands,
+                    Some("claude"),
+                    (!consumed).then_some(name),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .err()
+            .unwrap_or_default()
+    });
+    assert_eq!(
+        [
+            errors[0].starts_with(
+                "unknown agent profile or kind `bogus` for --agent; valid profiles and kinds: ",
+            ),
+            errors[1] == broken,
+            errors[2].contains("is defined under [agents.profiles]")
+                && errors[2].contains("`rimz subagents` resolves [subagents.profiles]"),
+        ],
+        [true; 3],
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn profile_agent_overrides_are_not_consumed_by_model_or_tier_routing() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, body) in [
+        ("claude", ""),
+        ("worker", "agent: claude\ntier: junior\ntools: [Bash]\n"),
+        ("quick", "agent: claude\nmodel: haiku\ntools: [Bash]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Worker\n{body}---\nCraft."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.agents.profiles.0.insert(
+        "fast".into(),
+        toml::from_str("agent = 'claude'\nmodel = 'haiku'").unwrap(),
+    );
+    let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let mut actual = Vec::new();
+    for base in ["fast", "quick"] {
+        for (tier, model) in [
+            (None, None),
+            (Some(crate::config::tiers::ModelTier::Junior), None),
+            (None, Some("sonnet")),
+        ] {
+            let consumed = launch
+                .clone()
+                .route(
+                    &machine.tiers,
+                    ProfileScope::Agents,
+                    Some("worker"),
+                    tier,
+                    model,
+                    Some(base),
+                    |_, _| None,
+                )
+                .unwrap();
+            actual.push(consumed);
+        }
+    }
+    assert_eq!(actual, [false; 6]);
+}
+
+#[test]
 fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -487,6 +600,73 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         assert_eq!(project.launch.model.as_deref(), Some("opus"));
         assert!(project.launch.tier.is_none());
     }
+}
+
+#[test]
+fn tier_launches_keep_the_requested_model_client_engine() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex", "pi", "opencode"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base.\n---\nBase.",
+        )
+        .unwrap();
+    }
+    for (name, kind) in [("worker", "opencode"), ("native", "claude")] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!(
+                "---\ndescription: Worker.\nagent: {kind}\ntier: junior\ntools: [Bash]\n---\nCraft."
+            ),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    machine.agents.profiles = loaded.agent_profiles;
+    machine.agents.profiles.0.insert(
+        "alternate".into(),
+        toml::from_str("agent = 'opencode'").unwrap(),
+    );
+    let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let actual: Vec<_> = [
+        ("worker", None),
+        ("worker", Some("opencode")),
+        ("worker", Some("alternate")),
+        ("native", Some("opencode")),
+    ]
+    .map(|(target, family)| {
+        let mut launch = launch.clone();
+        let consumed = launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(target),
+                Some(crate::config::tiers::ModelTier::Junior),
+                None,
+                family,
+                |kind, _| (kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut),
+            )
+            .unwrap();
+        let base = family.filter(|_| !consumed);
+        let resolved =
+            crate::harness::spec::resolve_profile_rebased(target, base, &launch.profiles).unwrap();
+        (resolved.kind.to_string(), resolved.launch.model)
+    })
+    .into();
+    assert_eq!(
+        actual,
+        [(); 4].map(|_| ("opencode".into(), Some("sol".into())))
+    );
 }
 
 #[test]

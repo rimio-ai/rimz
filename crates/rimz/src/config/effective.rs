@@ -131,7 +131,8 @@ pub struct LaunchAgents {
 
 impl LaunchAgents {
     /// Overlay a fresh launch without changing the memoized machine profiles.
-    /// Explicit tiers walk the table; concrete models select their family's render unless
+    /// Explicit tiers walk the table on the preferred model-client engine, or across native
+    /// families. Concrete models select their family's render unless
     /// the requested engine runs other providers' models, or no engine is requested and the
     /// target's own kind runs them.
     /// Returns whether rendered definitions consumed the family request. Finalization applies
@@ -152,6 +153,8 @@ impl LaunchAgents {
     ) -> std::result::Result<bool, super::tiers::TierError> {
         let model = model.map(str::trim).filter(|value| !value.is_empty());
         let family = family.map(str::trim).filter(|value| !value.is_empty());
+        let base = family
+            .and_then(|family| agents_spec::resolve_profile(family, self.profiles_for(scope)).ok());
         if tier.is_some() && model.is_some() {
             return Err(super::tiers::TierError(
                 "choose one of --tier and --model".to_owned(),
@@ -161,9 +164,9 @@ impl LaunchAgents {
             return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
         }
         let mut model_kind = model.and_then(crate::agents::definition_model_kind);
-        if let (Some(implied), Some(model), Some(family)) = (model_kind, model, family) {
-            let base = agents_spec::resolve_profile(family, self.profiles_for(scope))
-                .map_err(|error| super::tiers::TierError(error.to_string()))?;
+        if let (Some(implied), Some(model), Some(family), Some(base)) =
+            (model_kind, model, family, &base)
+        {
             if crate::agents::runs_other_providers_models(&base.kind) {
                 model_kind = None;
             } else if base.kind.as_str() != implied {
@@ -262,8 +265,9 @@ impl LaunchAgents {
                         selected.effort = renders.effort.clone();
                         selected.model_tier = None;
                         selected.tier_stamp = None;
-                        consumed |=
-                            family.is_none_or(|family| renders.renders.contains_key(family));
+                        consumed |= base
+                            .as_ref()
+                            .is_none_or(|base| renders.renders.contains_key(base.kind.as_str()));
                         selected.definition_renders = Some(renders);
                         *profile = selected;
                         continue;
@@ -282,8 +286,9 @@ impl LaunchAgents {
                 let preference = if targeted && (tier.is_some() || family.is_some()) {
                     super::tiers::TierPreference {
                         model: None,
-                        family: family
-                            .map(str::to_owned)
+                        family: base
+                            .as_ref()
+                            .map(|base| base.kind.to_string())
                             .or_else(|| renders.preference.family.clone()),
                     }
                 } else {
@@ -295,7 +300,7 @@ impl LaunchAgents {
                     |kind| renders.exclusions.get(kind).map(String::as_str),
                     &mut unavailable,
                 )?;
-                // Load renders or excludes every table family, and the walk passes the excluded ones.
+                // Load covers native families and model-client engines; the walk skips exclusions.
                 let mut selected = renders.renders[&pick.kind].clone();
                 selected.effort = renders.effort.clone();
                 selected.model = Some(pick.model.clone());
@@ -310,8 +315,10 @@ impl LaunchAgents {
                         .map(|(model, reason)| crate::agents::TierSkip { model, reason })
                         .collect(),
                 }));
-                consumed |=
-                    targeted && family.is_none_or(|family| renders.renders.contains_key(family));
+                consumed |= targeted
+                    && base
+                        .as_ref()
+                        .is_none_or(|base| renders.renders.contains_key(base.kind.as_str()));
                 renders.preference = preference;
                 selected.model_tier = Some(super::tiers::TierProvenance {
                     tier: requested,
@@ -321,7 +328,10 @@ impl LaunchAgents {
                 *profile = selected;
             }
         }
-        Ok(consumed)
+        Ok(
+            consumed
+                && family.is_none_or(|family| crate::agents::find_definition(family).is_some()),
+        )
     }
 }
 

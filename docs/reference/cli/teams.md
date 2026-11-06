@@ -51,7 +51,7 @@ The catalogue merges home and installed-pack [Markdown definitions](../definitio
 
 Tiered role listings and `show` rosters display the tier beside the concrete model and mark a fallback. JSON adds `tier` and `tier_fallback` only for tiered roles; `model` remains the resolved provider model.
 
-On a fresh launch, `--model M` runs that exact model for every Markdown role, normally on M's family's render, without tier routing or a stamp. Pi and OpenCode roles keep their engine and do not require M's native-family render; `--agent pi` or `--agent opencode` also runs the model on that engine. For other engines, if that family cannot build a role, the launch refuses with the role, model, family and build error. A conflicting `--agent` family refuses too. Use `--tier` to allow routing, including across families on a Pi or OpenCode role or when a role declares a concrete `model:`.
+On a fresh launch, `--model M` runs that exact model for every Markdown role, normally on M's family's render, without tier routing or a stamp. Pi and OpenCode roles keep their engine and do not require M's native-family render; `--agent pi` or `--agent opencode` also runs the model on that engine. For other engines, if that family cannot build a role, the launch refuses with the role, model, family and build error. A conflicting `--agent` family refuses too. Use `--tier` to allow model routing, including when a role declares a concrete `model:`. Pi and OpenCode roles keep their engine and take models in list order; other roles may move across native families.
 
 ```sh
 rimz teams profiles

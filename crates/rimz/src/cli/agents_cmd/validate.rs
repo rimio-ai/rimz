@@ -147,9 +147,19 @@ fn warnings(
             continue;
         };
         if let (Some(tier), Some(renders)) = (&profile.model_tier, &profile.definition_renders) {
+            let engine = renders
+                .preference
+                .family
+                .as_deref()
+                .filter(|kind| rimz::agents::runs_other_providers_models(kind));
             for (family, reason) in &renders.exclusions {
+                if engine.is_some_and(|engine| engine != family) {
+                    continue;
+                }
                 if let Some((listed_tier, _, model)) =
-                    tiers.entries(tier.tier).find(|(_, kind, _)| kind == family)
+                    tiers.entries(tier.tier).find(|(_, kind, _)| {
+                        engine == Some(family.as_str()) || *kind == Some(family.as_str())
+                    })
                 {
                     warnings.push(Warning {
                         path: row.source.clone(),

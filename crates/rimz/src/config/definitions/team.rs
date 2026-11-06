@@ -318,7 +318,7 @@ impl SeatLoader<'_> {
             .and_then(agents::definition_model_kind)
             .filter(|_| !agents::runs_other_providers_models(&original.agent))
             .unwrap_or(&original.agent);
-        fm.agent = if role.tier.is_some() {
+        fm.agent = if role.tier.is_some() && !agents::runs_other_providers_models(kind) {
             None
         } else if role.model.is_some() {
             Some(kind.to_owned())

@@ -97,7 +97,11 @@ impl LaunchAvailability {
         let families: BTreeSet<_> = config
             .tiers
             .entries(crate::config::tiers::ModelTier::Intern)
-            .map(|(_, kind, _)| kind)
+            .filter_map(|(_, kind, _)| kind)
+            .chain(
+                crate::agents::known_kinds()
+                    .filter(|kind| crate::agents::runs_other_providers_models(kind)),
+            )
             .collect();
         for kind in families {
             let Some(login) = logins.get(kind) else {

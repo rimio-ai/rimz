@@ -138,12 +138,9 @@ impl<'de> Deserialize<'de> for TierConfig {
             }
             let models: Vec<String> = value.try_into().map_err(serde::de::Error::custom)?;
             for model in &models {
-                if !matches!(
-                    agents::definition_model_kind(model),
-                    Some("claude" | "codex")
-                ) {
+                if model.trim().is_empty() {
                     return Err(serde::de::Error::custom(format!(
-                        "tiers.{tier} entry {model:?}; use a claude or codex alias or full model ID"
+                        "tiers.{tier} has an empty model name; remove it or name a model"
                     )));
                 }
             }
@@ -205,16 +202,13 @@ impl TierConfig {
         })
     }
 
-    pub fn entries(&self, tier: ModelTier) -> impl Iterator<Item = (ModelTier, &str, &str)> {
+    pub fn entries(
+        &self,
+        tier: ModelTier,
+    ) -> impl Iterator<Item = (ModelTier, Option<&'static str>, &str)> {
         self.rows.range(tier..).flat_map(|(tier, row)| {
-            row.iter().map(move |model| {
-                // Deserialization admits only models with a known family.
-                (
-                    *tier,
-                    agents::definition_model_kind(model).expect("validated tier model"),
-                    model.as_str(),
-                )
-            })
+            row.iter()
+                .map(move |model| (*tier, agents::definition_model_kind(model), model.as_str()))
         })
     }
 
@@ -228,16 +222,20 @@ impl TierConfig {
         let mut first = None;
         let mut skipped = Vec::new();
         let mut build_passes = Vec::new();
+        let engine = preference
+            .family
+            .as_deref()
+            .filter(|kind| agents::runs_other_providers_models(kind));
         for (candidate_tier, row) in self.rows.range(tier..) {
             let mut entries: Vec<_> = row.iter().collect();
             entries.sort_by_key(|model| {
-                // Deserialization admits only models with a known family.
-                let kind = agents::definition_model_kind(model).expect("validated tier model");
+                let kind = agents::definition_model_kind(model);
                 let exact = *candidate_tier == tier && preference.model.as_ref() == Some(*model);
                 if exact {
                     0
-                } else if (*candidate_tier != tier || preference.model.is_none())
-                    && preference.family.as_deref() == Some(kind)
+                } else if engine.is_none()
+                    && (*candidate_tier != tier || preference.model.is_none())
+                    && preference.family.as_deref() == kind
                 {
                     1
                 } else {
@@ -245,7 +243,9 @@ impl TierConfig {
                 }
             });
             for model in entries {
-                let kind = agents::definition_model_kind(model).expect("validated tier model");
+                let Some(kind) = engine.or_else(|| agents::definition_model_kind(model)) else {
+                    continue;
+                };
                 if let Some(error) = unbuildable(kind) {
                     build_passes.push(agents::TierUnbuildable {
                         model: model.clone(),
@@ -296,6 +296,113 @@ impl TierConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tier_lists_accept_models_without_a_native_owner() {
+        let parsed =
+            toml::from_str::<TierConfig>("junior = ['deepseek-v4.1-flash', 'sol', 'sonnet']");
+        assert!(parsed.is_ok(), "unowned models must load: {parsed:?}");
+        let table = parsed.unwrap();
+        let actual = ["opencode", "pi", "claude", "codex"].map(|family| {
+            let pick = table
+                .walk(
+                    ModelTier::Junior,
+                    &TierPreference {
+                        family: Some(family.into()),
+                        model: None,
+                    },
+                    |_| None,
+                    |_, _| None::<()>,
+                )
+                .unwrap();
+            (pick.kind, pick.model)
+        });
+        assert_eq!(
+            actual,
+            [
+                ("opencode".into(), "deepseek-v4.1-flash".into()),
+                ("pi".into(), "deepseek-v4.1-flash".into()),
+                ("claude".into(), "sonnet".into()),
+                ("codex".into(), "sol".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn engine_pick_ignores_the_model_owners_exhaustion() {
+        let table = TierConfig::default();
+        let pick = table
+            .walk(
+                ModelTier::Senior,
+                &TierPreference {
+                    family: Some("opencode".into()),
+                    model: None,
+                },
+                |_| None,
+                |kind, _| (kind == "claude").then_some("exhausted"),
+            )
+            .unwrap();
+        assert_eq!(
+            (pick.kind.as_str(), pick.model.as_str()),
+            ("opencode", "opus")
+        );
+    }
+
+    #[test]
+    fn model_clients_keep_the_engine_and_judge_its_availability() {
+        let table = TierConfig {
+            routing: Routing::Fallback,
+            rows: BTreeMap::from([(
+                ModelTier::Junior,
+                ["sol", "sonnet"].map(str::to_owned).to_vec(),
+            )]),
+        };
+        let actual: Vec<_> = [
+            (Some("opencode"), None),
+            (Some("pi"), None),
+            (Some("claude"), None),
+            (Some("codex"), None),
+            (None, None),
+            (Some("opencode"), Some("sonnet")),
+        ]
+        .map(|(family, model)| {
+            let mut checked = Vec::new();
+            let pick = table.walk(
+                ModelTier::Junior,
+                &TierPreference {
+                    family: family.map(str::to_owned),
+                    model: model.map(str::to_owned),
+                },
+                |_| None,
+                |kind, model| {
+                    checked.push((kind.to_owned(), model.to_owned()));
+                    (kind == "claude").then_some("Claude is exhausted")
+                },
+            );
+            pick.map(|pick| (pick.kind, pick.model, checked))
+                .map_err(|error| error.to_string())
+        })
+        .into();
+        let expected = [
+            ("opencode", "sol", vec![("opencode", "sol")]),
+            ("pi", "sol", vec![("pi", "sol")]),
+            ("codex", "sol", vec![("claude", "sonnet"), ("codex", "sol")]),
+            ("codex", "sol", vec![("codex", "sol")]),
+            ("codex", "sol", vec![("codex", "sol")]),
+            ("opencode", "sonnet", vec![("opencode", "sonnet")]),
+        ]
+        .map(|(kind, model, checked)| {
+            Ok((
+                kind.to_owned(),
+                model.to_owned(),
+                checked
+                    .into_iter()
+                    .map(|(kind, model)| (kind.to_owned(), model.to_owned()))
+                    .collect(),
+            ))
+        });
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn walk_records_only_unbuildable_entries_ahead_of_the_pick() {
@@ -456,12 +563,7 @@ mod tests {
                 ],
             ),
             ("routing = 'smart'", vec!["fallback", "off"]),
-            ("senior = ['senior']", vec!["senior", "alias", "model ID"]),
-            ("senior = ['']", vec!["senior", "alias", "model ID"]),
-            (
-                "senior = ['unknown-model']",
-                vec!["senior", "unknown-model", "alias", "model ID"],
-            ),
+            ("senior = ['']", vec!["senior", "empty", "model"]),
             ("junior = ['opus']", vec!["junior", "senior"]),
         ] {
             let result = toml::from_str::<TierConfig>(source);
