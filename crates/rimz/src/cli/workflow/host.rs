@@ -38,6 +38,22 @@ impl<'a> Host<'a> {
     fn ctx(&self) -> Result<Ctx> {
         Ctx::for_workspace(self.state.workspace_id.clone(), self.globals.mux)
     }
+
+    fn owns_push(&self, run: &RunRecord, push: &rimz::store::workflow::PushBack) -> Result<bool> {
+        let pin = run
+            .workflow
+            .as_ref()
+            .context("workflow leader has no pin")?;
+        let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
+        Ok(record.session_attempt().is_some_and(|current| {
+            current.seq == pin.seq
+                && current.ending.is_none()
+                && current
+                    .push
+                    .as_ref()
+                    .is_some_and(|current| current.message == push.message)
+        }))
+    }
 }
 
 fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
@@ -159,6 +175,8 @@ impl workflow::AttemptHost for Host<'_> {
         &self,
         step: workflow::StepLaunch,
     ) -> Result<Result<AttemptRun, workflow::LaunchFailure>, WorkflowErr> {
+        let resume = step.resume.clone();
+        let workflow_id = step.workflow.run.clone();
         let result = (|| -> Result<_> {
             let ctx = self.ctx()?;
             let mux = crate::cli::render::room::present_mux_pick(
@@ -196,6 +214,7 @@ impl workflow::AttemptHost for Host<'_> {
                 workflow: Some(step.workflow.clone()),
                 automation: Some(step.automation),
                 leader_run: Some(launcher::LeaderRun {
+                    resume: step.resume,
                     reminder_section: Some(rimz::harness::launch::ReminderSection::Workflow(
                         step.workflow_note,
                     )),
@@ -232,10 +251,16 @@ impl workflow::AttemptHost for Host<'_> {
                     .run
                     .context("workflow launch did not publish its leader run")
                     .map_err(host_error)?;
-                let name = run
-                    .record
-                    .agent_name
-                    .as_deref()
+                let name = if let Some(session) = &resume {
+                    let ctx = self.ctx().map_err(host_error)?;
+                    let rows = ctx.store.audit_rows().map_err(host_error)?;
+                    rows.iter()
+                        .find(|agent| agent.kind == run.record.kind && &agent.agent_id == session)
+                        .and_then(|agent| agent.name.clone())
+                } else {
+                    run.record.agent_name
+                };
+                let name = name
                     .context("workflow run has no leader name")
                     .map_err(host_error)?;
                 return Ok(Ok(AttemptRun {
@@ -247,7 +272,16 @@ impl workflow::AttemptHost for Host<'_> {
             Ok(LaunchOutcome::Declined | LaunchOutcome::Existing) => {
                 (AttemptOutcome::Died, "workflow launch aborted".into())
             }
-            Err(error) => (AttemptOutcome::Died, format!("{error:#}")),
+            Err(error) => (
+                AttemptOutcome::Died,
+                if resume.is_some() {
+                    format!(
+                        "{error:#}; use rimz workflow restart {workflow_id} for a fresh agent step"
+                    )
+                } else {
+                    format!("{error:#}")
+                },
+            ),
         };
         Ok(Err(workflow::LaunchFailure { outcome, reason }))
     }
@@ -383,6 +417,9 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            if !self.owns_push(&run, push)? {
+                return Ok(workflow::Pushed { queued: false });
+            }
             let snapshot = ctx.cached_snapshot()?;
             let root =
                 agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
@@ -397,6 +434,14 @@ impl workflow::AttemptHost for Host<'_> {
             message.message_id = push.message.clone();
             ctx.store
                 .queue_message_once(&message, &ctx.workspace.session_name)?;
+            if !self.owns_push(&run, push)? {
+                ctx.store.retire_message(
+                    &push.message,
+                    &ctx.workspace.session_name,
+                    "workflow attempt ended",
+                )?;
+                return Ok(workflow::Pushed { queued: true });
+            }
             rimz::message::synthetic::attempt_now(
                 &ctx.workspace,
                 &ctx.store,
@@ -450,6 +495,20 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            if let Some(pin) = &run.workflow {
+                let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
+                if let Some(push) = record
+                    .session_attempt()
+                    .filter(|current| current.seq == pin.seq)
+                    .and_then(|current| current.push.as_ref())
+                {
+                    ctx.store.retire_message(
+                        &push.message,
+                        &ctx.workspace.session_name,
+                        "workflow attempt ended",
+                    )?;
+                }
+            }
             let snapshot = ctx.cached_snapshot()?;
             let launch_group = snapshot
                 .agents

@@ -62,44 +62,6 @@ enum ResumeSource<'a> {
     Provider(&'a LocalSessionObservation, Option<&'a str>),
 }
 
-fn workflow_resume_pin(
-    store: &rimz::Store,
-    agent: &rimz::agents::AgentState,
-) -> Result<Option<rimz::agents::WorkflowAttemptRef>> {
-    use rimz::agents::WorkflowAttemptRole;
-    use rimz::store::workflow::{self, AttemptKind};
-
-    let Some(pin) = &agent.workflow else {
-        return Ok(None);
-    };
-    let record = match workflow::load(&store.paths().workflow(&pin.run)) {
-        Ok(record) => record,
-        Err(error) => {
-            writeln!(
-                crate::cli::render::err(),
-                "warning: cannot read run `{}`: {error}; keeping its workflow pin",
-                pin.run
-            )?;
-            return Ok(None);
-        }
-    };
-    let attempt = match pin.role {
-        WorkflowAttemptRole::Step => record.session_attempt(),
-        WorkflowAttemptRole::Judge => record
-            .attempt
-            .as_ref()
-            .filter(|attempt| attempt.kind == AttemptKind::Judge),
-    };
-    if !record.state.is_terminal() && attempt.is_some_and(|attempt| attempt.seq == pin.seq) {
-        bail!(
-            "agent is still owned by run `{}`; use `rimz workflow restart {} --continue`",
-            pin.run,
-            pin.run
-        );
-    }
-    Ok(Some(pin.clone()))
-}
-
 pub(super) fn resume_provider(
     args: &super::AgentLaunchArgs,
     layout: &super::LayoutSpec,
@@ -137,7 +99,7 @@ pub(super) fn resume_provider(
         .iter()
         .find(|agent| agent.agent_id.as_str() == session_id)
     {
-        let former_workflow = workflow_resume_pin(&ctx.store, agent)?;
+        let former_workflow = super::workflow_pin(&ctx.store, agent)?.former()?;
         validate_recorded_resume(agent, &cell.kind, profile)?;
         return resume_selected(
             ResumeSource::Recorded(agent),
@@ -225,7 +187,7 @@ pub(super) fn resume_agent(
         }
         Err(error) => return Err(error),
     };
-    let former_workflow = workflow_resume_pin(store, &agent)?;
+    let former_workflow = super::workflow_pin(store, &agent)?.former()?;
     validate_recorded_resume(&agent, &agent.kind, None)?;
     let args = super::AgentLaunchArgs {
         overrides: overrides.into_launch_overrides(),
@@ -445,14 +407,9 @@ fn resume_selected(
     let receipt = format!("resumed {kind}:{name} ({session_id})");
     if let ResumeSource::Recorded(agent) = source
         && former_workflow.is_some()
-        && let Some(pin) = workflow_resume_pin(store, agent)?
-        && store.clear_workflow_pin(&agent.kind, &agent.agent_id, &pin, &workspace.session_name)?
+        && let Some(pin) = super::workflow_pin(store, agent)?.former()?
     {
-        writeln!(
-            crate::cli::render::out(),
-            "@{name} is now outside run `{}`",
-            pin.run
-        )?;
+        super::clear_former_workflow_pin(ctx, agent, &pin)?;
     }
     if placement == Placement::NewTab {
         room.open_resume_tab(tab, focus.takes_focus())?;

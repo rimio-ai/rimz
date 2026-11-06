@@ -45,7 +45,7 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
 }
 
 pub(super) fn interrupt(t: &mut Transition<'_>, reason: &str) {
-    // Held preflight and cancel call only with a published held session.
+    // Callers interrupt only a published held session.
     let verdict = t
         .record
         .held

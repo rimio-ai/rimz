@@ -250,6 +250,8 @@ Agent-initiated launches, forks, resumes, and restarts leave your focus alone, s
 
 **Bounce an agent in place.** `rimz agents restart @coder` from your shell focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current Markdown definitions, so an edit takes effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the replacement handle rather than hiding a rename.
 
+A current workflow step agent instead uses [workflow restart with `--continue`](./workflows.md#stop-a-run-and-clean-up), resetting the step's visits and refusing rather than starting fresh when its conversation cannot resume.
+
 **Fork an agent to try another approach.** `rimz agents fork @coder` from your shell takes over the launching pane with the full conversation under a new provider-assigned session id, in the source worktree, leaving the original session untouched and keeping its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. The fork gets a fresh pet name; `rimz agents fork @coder --name twin` pins `@twin` when you want both approaches to have memorable handles.
 
 **Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI [accepts one](../reference/cli/agents.md#compact):

@@ -2,10 +2,11 @@ use rimz::store::workflow::ParkReason;
 
 use super::*;
 
-/// What last sent the run to its node: a routed outcome, a resume, or neither.
+/// What last sent the run to its node: a routed outcome, manual re-entry, or neither.
 enum Sender {
     Edge(String, String),
     Resume,
+    Restart,
     Direct,
 }
 
@@ -128,7 +129,16 @@ impl View<'_> {
             ParkReason::Timeout => {
                 self.option(out, None, &[], "run the node again with a fresh timeout")?
             }
-            ParkReason::Invalid => self.option(out, None, &[], "retry after fixing the check")?,
+            ParkReason::Invalid => self.option(
+                out,
+                None,
+                &[],
+                if self.spec.steps.contains_key(&self.record.node) {
+                    "retry after fixing the launch"
+                } else {
+                    "retry after fixing the check"
+                },
+            )?,
             ParkReason::Check => {
                 self.option(out, None, &[], "run the check again; retry cleared")?
             }
@@ -179,17 +189,16 @@ impl View<'_> {
             String::new()
         };
         writeln!(out, "{bound}{bucket_label}: {used} of {max} visits used")?;
-        let since = if per_outcome {
-            self.journal
-                .iter()
-                .rposition(|entry| match &entry.event {
-                    JournalEvent::VisitsReset { step, .. } => step == &self.record.node,
-                    _ => false,
-                })
-                .map_or(0, |index| index + 1)
-        } else {
-            0
-        };
+        let since = self
+            .journal
+            .iter()
+            .rposition(|entry| match &entry.event {
+                JournalEvent::VisitsReset { step, all, .. } => {
+                    step == &self.record.node && (per_outcome || *all)
+                }
+                _ => false,
+            })
+            .map_or(0, |index| index + 1);
         let mut total_visit = 0;
         for (index, entry) in self.journal.iter().enumerate().skip(since) {
             if let JournalEvent::TurnEnd {
@@ -258,6 +267,7 @@ impl View<'_> {
             let sender = match self.sender(&self.journal[..index]) {
                 Sender::Edge(node, outcome) => format!("{node} {outcome}"),
                 Sender::Resume => "resumed".into(),
+                Sender::Restart => "restarted".into(),
                 Sender::Direct => "direct entry".into(),
             };
             let runner = handle.clone().unwrap_or_else(|| {
@@ -303,6 +313,7 @@ impl View<'_> {
             self.record.held.as_ref(),
         ) {
             Some(hop) if hop.kind == HopKind::Resume => Sender::Resume,
+            Some(hop) if hop.kind == HopKind::Restart => Sender::Restart,
             Some(hop) => Sender::Edge(hop.node, hop.outcome.unwrap_or_default()),
             None => Sender::Direct,
         }

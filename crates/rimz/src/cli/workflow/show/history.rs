@@ -303,8 +303,16 @@ impl View<'_> {
                         value(&input)
                     )?;
                 }
-                JournalEvent::VisitsReset { step, outcome } => {
-                    writeln!(out, "{step} visits reset on {outcome}")?;
+                JournalEvent::VisitsReset { step, outcome, all } => {
+                    let scope = if *all { "all visits" } else { "visits" };
+                    if step != &entry.node {
+                        write!(out, "{step} ")?;
+                    }
+                    writeln!(out, "{scope} reset on {outcome}")?;
+                }
+                JournalEvent::Restart { continued, .. } => {
+                    let mode = if *continued { "continued" } else { "fresh" };
+                    writeln!(out, "restart · {mode} · visits restarted at 1")?;
                 }
                 JournalEvent::Wait {
                     outcome,

@@ -1,0 +1,644 @@
+use super::*;
+
+pub(super) fn wait_for_pane_close(room: &Room, child: &mut std::process::Child) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if fs::read_to_string(room.env.project_root.join("spawn.log"))
+            .unwrap()
+            .contains("close-pane")
+        {
+            return;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "restart exited before closing"
+        );
+        assert!(Instant::now() < deadline, "restart never closed the pane");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn agents_restart_clears_a_former_steps_pin_and_stays_outside_the_run() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    let mut record = records::load(&paths).unwrap();
+    record.state = records::RunState::Done;
+    {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        records::write(&paths, &record, &guard).unwrap();
+    }
+    let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    let receipt = success(
+        room.command(&["agents", "restart", &reference])
+            .output()
+            .unwrap(),
+    );
+    let snapshot = room.env.store().snapshot().unwrap();
+    assert!(
+        snapshot.agents.iter().all(|agent| agent.workflow.is_none()),
+        "{snapshot:#?}"
+    );
+    assert!(
+        receipt.contains(&format!("{reference} is now outside run `{id}`"))
+            && !receipt.contains("via rimz workflow restart"),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let store = room.env.store();
+    let snapshot = store.snapshot().unwrap();
+    let card = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name == run.agent_name)
+        .unwrap();
+    let mut pin = card.workflow.clone().unwrap();
+    pin.role = rimz::agents::WorkflowAttemptRole::Judge;
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(card.agent_id.clone()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.launch.workflow = Some(pin.clone());
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            run.kind.as_str(),
+            "test",
+            &observation,
+        ))
+        .unwrap();
+    let state = store.paths();
+    let paths = state.workflow(&id.parse().unwrap());
+    let record = {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let mut record = records::load(&paths).unwrap();
+        let attempt = record.attempt.as_mut().unwrap();
+        attempt.kind = records::AttemptKind::Judge;
+        // A judge's evaluator stays alive, unlike the finished step-launch host.
+        attempt.host = records::Host {
+            pid: std::process::id(),
+            start: rimz::proc::process_start_token(std::process::id()),
+        };
+        records::write(&paths, &record, &guard).unwrap();
+        record
+    };
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    let output = room
+        .command(&["agents", "restart", &reference])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && error.contains(&format!(
+                "agent is still owned by run `{id}`, judging check {}; wait for its answer or \
+                 cancel the run with `rimz workflow cancel {id}`",
+                record.attempt.as_ref().unwrap().node
+            ))
+            && !error.contains("workflow restart"),
+        "{output:?}"
+    );
+    let current = store.snapshot().unwrap();
+    assert_eq!(
+        current
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == card.agent_id)
+            .unwrap()
+            .workflow,
+        Some(pin)
+    );
+    assert_eq!(records::load(&paths).unwrap(), record);
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+}
+
+#[test]
+fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
+    let mut actual = Vec::new();
+    let mut outputs = Vec::new();
+    for missing in [false, true] {
+        let room = Room::new("");
+        let (id, run) = room.launch();
+        let transcript = room.env.project_root.join("session.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+        room.hook(
+            &id,
+            &run,
+            json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+        );
+        fs::write(
+            room.env.project_root.join("panes.json"),
+            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        )
+        .unwrap();
+        let store = room.env.store();
+        let snapshot = store.snapshot().unwrap();
+        let card = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name)
+            .unwrap();
+        let paths = store.paths().workflow(&id.parse().unwrap());
+        if missing {
+            fs::remove_file(&paths.record).unwrap();
+        } else {
+            fs::write(&paths.record, "invalid JSON").unwrap();
+        }
+        let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+        let output = room
+            .command(&["agents", "restart", &reference])
+            .output()
+            .unwrap();
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        let warning = String::from_utf8_lossy(&output.stderr);
+        let current = store.snapshot().unwrap();
+        let unchanged = current
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == card.agent_id)
+            .is_some_and(|agent| agent.workflow == card.workflow);
+        actual.push((
+            output.status.success(),
+            warning.contains(&format!("warning: cannot read run `{id}`"))
+                && warning.contains("keeping its workflow pin"),
+            receipt.contains("restarted") && !receipt.contains("outside run"),
+            unchanged,
+        ));
+        outputs.push(output);
+    }
+    assert_eq!(actual, vec![(true, true, true, true); 2], "{outputs:#?}");
+}
+
+#[test]
+fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
+    let room = Room::new("");
+    let (id, old) = room.launch();
+    let receipt = success(
+        room.command(&["workflow", "restart", &id])
+            .output()
+            .unwrap(),
+    );
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["run"]["run_id"]
+            .as_str()
+            .is_some_and(|run| run != old.run_id.as_str())
+    });
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["attempt"]["visit"], 1);
+    let handle = value["record"]["attempt"]["run"]["handle"]
+        .as_str()
+        .unwrap();
+    assert!(
+        receipt.contains(handle)
+            && receipt.contains("fresh")
+            && receipt.contains("visits restarted at 1"),
+        "{receipt}"
+    );
+    assert_eq!(events(&value, "restart").len(), 1, "{value:#}");
+    let shown = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    assert!(
+        shown.contains("◇ after"),
+        "the then check has not been reached: {shown}"
+    );
+    assert!(!shown.contains("build → after"), "{shown}");
+    let history = success(
+        room.command(&["workflow", "show", &id, "--history"])
+            .output()
+            .unwrap(),
+    );
+    let rows: Vec<_> = history
+        .lines()
+        .filter_map(|line| line.split_once("#— ").map(|(_, row)| row))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "build all visits reset on restart",
+            "build restart · fresh · visits restarted at 1",
+        ],
+        "{history}"
+    );
+    let replacement = room.attempt(&id);
+    room.hook(&id, &replacement, json!({"hook_event_name":"SessionStart"}));
+    let snapshot = room.env.store().snapshot().unwrap();
+    let card = rimz::store::snapshot::find_agent(
+        &snapshot.agents,
+        &replacement.kind,
+        &"workflow-session".into(),
+    )
+    .unwrap();
+    assert_eq!(card.name.as_deref(), Some(handle.trim_start_matches('@')));
+}
+
+#[test]
+fn continue_without_a_conversation_refuses_before_stopping() {
+    let room = Room::new("");
+    let (id, old) = room.launch();
+    let output = room
+        .command(&["workflow", "restart", &id, "--continue"])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && error.contains("no resumable session")
+            && error.contains(&format!("rimz workflow restart {id}")),
+        "{error}"
+    );
+    let value = show(&room.env, &id);
+    assert_eq!(
+        value["record"]["attempt"]["run"]["run_id"],
+        old.run_id.as_str()
+    );
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+}
+
+#[test]
+fn agents_restart_routes_the_current_step_through_workflow_continue() {
+    continued_restart(true);
+}
+
+#[test]
+fn continued_restart_receipts_the_addressable_handle() {
+    continued_restart(false);
+}
+
+#[test]
+fn fresh_restart_from_a_cap_park_leaves_the_kept_previous_card_live_and_detached() {
+    let room = Room::new("keep=true\n");
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("max-visits = 2", "max-visits = 1")
+            .replace("on.done = '@done'", "on.done = 'build'"),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    // Another checkout keeps ordinary occupancy from gating the fresh launch.
+    let kept_checkout = room
+        .env
+        .project_root
+        .parent()
+        .unwrap()
+        .join("kept-checkout");
+    fs::create_dir_all(&kept_checkout).unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"SessionStart", "worktree_path":kept_checkout}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"Stop", "worktree_path":kept_checkout}),
+    );
+    let parked = settled(&room.env, &id, "parked");
+    assert_eq!(parked["record"]["park"]["reason"], "cap");
+    assert_eq!(
+        parked["record"]["prev_attempt"]["run_id"],
+        run.run_id.as_str()
+    );
+    let snapshot = room.env.store().snapshot().unwrap();
+    let kept = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name == run.agent_name)
+        .unwrap();
+    assert!(kept.pane.is_some(), "{kept:#?}");
+    assert_eq!(kept.lane_path(), kept_checkout.to_str());
+    assert!(
+        kept.ended_at.is_none() && kept.workflow.is_none(),
+        "{kept:#?}"
+    );
+
+    success(
+        room.command(&["workflow", "restart", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_ne!(room.attempt(&id).run_id, run.run_id);
+    let current = room.env.store().snapshot().unwrap();
+    let previous = current
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == kept.agent_id);
+    assert!(
+        previous.is_some_and(|agent| agent.ended_at.is_none() && agent.workflow.is_none()),
+        "a fresh restart must leave the kept previous card live and detached: {previous:#?}"
+    );
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+}
+
+#[test]
+fn continued_restart_resumes_cap_and_asked_parks_and_stops_a_kept_previous_card() {
+    for asked in [false, true] {
+        let room = Room::new(if asked {
+            "on.asked='@user'\n"
+        } else {
+            "keep=true\n"
+        });
+        if !asked {
+            let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+            fs::write(
+                &path,
+                fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("max-visits = 2", "max-visits = 1")
+                    .replace("on.done = '@done'", "on.done = 'build'"),
+            )
+            .unwrap();
+        }
+        let (id, run) = room.launch();
+        let transcript = room.env.project_root.join("session.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+        let mut owner = dummy_agent_process();
+        room.hook_with_owner(
+            &id,
+            &run,
+            owner.id(),
+            json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+        );
+        fs::write(
+            room.env.project_root.join("panes.json"),
+            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        )
+        .unwrap();
+        if asked {
+            room.hook_with_owner(
+                &id,
+                &run,
+                owner.id(),
+                serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
+            );
+            // Let hook-launched advances finish before making this ask visible.
+            super::until::wait_for_advances_to_exit(&room.env, &id);
+            room.expire_permission_review(&run);
+            let mut advance = room.command(&["workflow", "advance", &id]).spawn().unwrap();
+            wait_for_pane_close(&room, &mut advance);
+            owner.kill().unwrap();
+            owner.wait().unwrap();
+            assert!(advance.wait().unwrap().success());
+        } else {
+            room.hook_with_owner(&id, &run, owner.id(), json!({"hook_event_name":"Stop"}));
+        }
+        let parked = settled(&room.env, &id, "parked");
+        assert_eq!(
+            parked["record"]["park"]["reason"],
+            if asked { "asked" } else { "cap" }
+        );
+        let state = room.env.state_path_for(&room.env.project_root);
+        let paths = state.workflow(&id.parse().unwrap());
+        let previous = records::load(&paths).unwrap();
+        {
+            let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            let mut moved = previous.clone();
+            moved.prev_attempt.as_mut().unwrap().step = "other".into();
+            records::write(&paths, &moved, &guard).unwrap();
+        }
+        let refused = room
+            .command(&["workflow", "restart", &id, "--continue"])
+            .output()
+            .unwrap();
+        assert!(
+            !refused.status.success()
+                && String::from_utf8_lossy(&refused.stderr).contains("no resumable session"),
+            "{refused:?}"
+        );
+        {
+            let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            records::write(&paths, &previous, &guard).unwrap();
+        }
+        let mut restart = room
+            .command(&["workflow", "restart", &id, "--continue"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        if !asked {
+            wait_for_pane_close(&room, &mut restart);
+            let stopping = show(&room.env, &id);
+            assert!(
+                stopping["record"]["attempt"]["ending"].is_object(),
+                "{stopping:#}"
+            );
+            owner.kill().unwrap();
+        }
+        owner.wait().unwrap();
+        let receipt = success(restart.wait_with_output().unwrap());
+        assert!(
+            receipt.contains("resumed (workflow-session)")
+                && receipt.contains("visits restarted at 1"),
+            "{receipt}"
+        );
+        let replacement = room.attempt(&id);
+        room.hook(&id, &replacement, json!({"hook_event_name":"SessionStart"}));
+        assert_eq!(show(&room.env, &id)["record"]["attempt"]["visit"], 1);
+    }
+}
+
+fn continued_restart(routed: bool) {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    let mut owner = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    let args = if routed {
+        vec!["agents", "restart", &reference]
+    } else {
+        vec!["workflow", "restart", &id, "--continue"]
+    };
+    let mut child = room
+        .command(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_pane_close(&room, &mut child);
+    // The trace shim closes the pane but cannot terminate its owner.
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let receipt = success(child.wait_with_output().unwrap());
+    assert!(
+        (!routed || receipt.contains(&format!("via rimz workflow restart {id} --continue")))
+            && receipt.contains("resumed")
+            && receipt.contains("visits restarted at 1"),
+        "{receipt}"
+    );
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["seq"]
+            .as_u64()
+            .is_some_and(|seq| seq > 2)
+            && value["record"]["attempt"]["run"].is_object()
+    });
+    assert_eq!(events(&value, "restart")[0]["continued"], true);
+    let replacement = room.attempt(&id);
+    room.hook(&id, &replacement, json!({"hook_event_name":"SessionStart"}));
+    let snapshot = room.env.store().snapshot().unwrap();
+    let card = rimz::store::snapshot::find_agent(
+        &snapshot.agents,
+        &replacement.kind,
+        &"workflow-session".into(),
+    )
+    .unwrap();
+    let expected = format!("@{}", card.name.as_deref().unwrap());
+    assert_eq!(value["record"]["attempt"]["run"]["handle"], expected);
+    assert!(
+        receipt.contains(&format!("as {expected} · resumed")),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn continue_rechecks_the_history_pool_after_stopping() {
+    let room = Room::new("");
+    success(
+        room.command(&[
+            "accounts",
+            "add",
+            "codex",
+            "other",
+            "--history",
+            "standalone",
+        ])
+        .output()
+        .unwrap(),
+    );
+    rimz::agents::trust_hook_config_for_test(
+        &room
+            .env
+            .rimz_home()
+            .join("accounts/codex/other/config.toml"),
+        &[],
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    let mut owner = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let mut child = room
+        .command(&["workflow", "restart", &id, "--continue"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_pane_close(&room, &mut child);
+    room.env
+        .store()
+        .switch_room_login(
+            &room.env.resolve_workspace(&room.env.project_root),
+            &run.kind,
+            &"other".parse().unwrap(),
+        )
+        .unwrap();
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    success(child.wait_with_output().unwrap());
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["run"]["run_id"]
+            .as_str()
+            .is_some_and(|current| current != run.run_id.as_str())
+            || value["record"]["state"] != "active"
+    });
+    assert!(
+        events(&value, "attempt").iter().any(|event| {
+            event["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("rimz accounts use codex default"))
+        }),
+        "a pool change during stop must refuse the resume: {value:#}"
+    );
+    let fix = format!("rimz workflow restart {id}");
+    assert_eq!(value["record"]["state"], "parked", "{value:#}");
+    assert!(
+        events(&value, "attempt").iter().any(|event| {
+            event["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains(&fix))
+        }),
+        "an after-stop refusal must name the fresh restart command: {value:#}"
+    );
+    // The receipt can precede settlement; read the remedy after the persisted park.
+    let shown = success(room.command(&["workflow", "show", &id]).output().unwrap());
+    assert!(shown.contains(&fix), "{shown}");
+    assert!(
+        shown.contains("retry after fixing the launch") && shown.contains("◇ after"),
+        "{shown}"
+    );
+    success(
+        room.command(&["workflow", "restart", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_ne!(room.attempt(&id).run_id, run.run_id);
+}

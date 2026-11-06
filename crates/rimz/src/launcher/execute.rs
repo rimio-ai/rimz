@@ -27,6 +27,7 @@ pub enum RunCompletion {
 
 #[derive(Clone)]
 pub struct LeaderRun {
+    pub resume: Option<crate::ids::AgentSessionId>,
     pub lifecycle: crate::store::run::RunLifecycle,
     pub keep: bool,
     pub report_to: ReportTo,
@@ -244,13 +245,20 @@ fn open_fresh(
             let adapter = crate::agents::find_definition(&cell.kind)
                 .context("run-bearing launch has no agent definition")?;
             let prompt = fresh.prompt.as_deref().unwrap_or_default();
-            crate::harness::launch::compile_provider_argv(
-                adapter,
-                cell.kind.as_str(),
-                &crate::harness::launch::ExecAction::Launch {
+            let action = match &leader.resume {
+                Some(session) => crate::harness::launch::ExecAction::Resume {
+                    session_id: session.to_string(),
+                    extra_args: cell.args.clone(),
+                },
+                None => crate::harness::launch::ExecAction::Launch {
                     prompt: Some(prompt.to_owned()),
                     extra_args: cell.args.clone(),
                 },
+            };
+            crate::harness::launch::compile_provider_argv(
+                adapter,
+                cell.kind.as_str(),
+                &action,
                 cwd,
             )?;
             let mut record = RunRecord::new(
@@ -383,6 +391,7 @@ fn open_fresh(
                 .zip(record.as_ref())
                 .map(|(leader, record)| crate::harness::plan::LayoutRunParams {
                     run_id: &record.run_id,
+                    resume: leader.resume.as_ref(),
                     leader_index,
                     managed_launch: fresh.managed_launches.get(leader_index),
                     cleanup: leader.cleanup,

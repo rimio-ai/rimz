@@ -300,7 +300,12 @@ fn prepare(
         Some(&workspace.project_root),
         &machine_config,
     )?;
-    let requested_login = if run_layout.is_some() {
+    let resume = run_layout
+        .as_ref()
+        .and_then(|(_, leader)| leader.resume.as_ref());
+    let requested_login = if resume.is_some() {
+        crate::store::writer::LaunchLogin::RoomDefault
+    } else if run_layout.is_some() {
         agent_cell.launch.login.clone().map_or(
             crate::store::writer::LaunchLogin::RoomDefault,
             crate::store::writer::LaunchLogin::Pinned,
@@ -310,6 +315,24 @@ fn prepare(
     };
     let login = requested_login.resolve(&agent_cell.kind, &logins, &machine_config.accounts)?;
     login.preflight(&crate::agents::ambient_env())?;
+    if let Some(session) = resume {
+        let previous =
+            crate::store::snapshot::find_agent(&projection.agents, &agent_cell.kind, session)
+                .with_context(|| {
+                    format!(
+                        "no recorded {} session {session}; restart fresh instead",
+                        agent_cell.kind
+                    )
+                })?;
+        crate::harness::resume::relaunch_login(
+            previous,
+            &logins,
+            &crate::agents::LoginCatalog::from_config(&machine_config.accounts)?,
+        )?;
+        if !crate::harness::resume::resume_session_present(previous) {
+            bail!("session {session} is no longer available; restart fresh instead");
+        }
+    }
     let mut companion_logins = Vec::new();
     if let Some((args, _)) = &run_layout {
         let mut prospective = cwd
@@ -614,6 +637,7 @@ fn prepare(
     let leader = run_layout
         .map(|(_, leader)| leader)
         .unwrap_or_else(|| LeaderRun {
+            resume: None,
             lifecycle: crate::store::run::RunLifecycle::Turn,
             keep: request.keep,
             report_to: request.report_to,

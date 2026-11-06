@@ -2051,6 +2051,7 @@ pub(super) fn resume_command(
 #[derive(Clone, Copy)]
 pub struct LayoutRunParams<'a> {
     pub run_id: &'a crate::ids::RunId,
+    pub resume: Option<&'a crate::ids::AgentSessionId>,
     pub leader_index: usize,
     pub managed_launch: Option<&'a crate::agents::ManagedLaunchState>,
     pub cleanup: bool,
@@ -2250,6 +2251,13 @@ fn fresh_agent_argv(
         .filter(|run| run.leader_index == agent_index)
     {
         request.run_id = Some(run.run_id.clone());
+        if let Some(session) = run.resume {
+            request.action = crate::harness::launch::ExecAction::Resume {
+                session_id: session.to_string(),
+                extra_args: std::mem::take(request.action.extra_args_mut()),
+            };
+            request.reminder_section = params.reminder_section.cloned();
+        }
         request.subagent = run.subagent;
         (request.close_pane_on_exit, request.exit_on_run_completion) = run_exit_policy(run.cleanup);
         request.provider_account = run.managed_launch.and_then(|state| state.binding()).map_or(

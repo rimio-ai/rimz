@@ -34,7 +34,7 @@ fn paths(room: &Room, id: &str) -> rimz::disk::paths::WorkflowPaths {
         .workflow(&id.parse().unwrap())
 }
 
-fn wait_for_advances_to_exit(env: &Env, id: &str) {
+pub(super) fn wait_for_advances_to_exit(env: &Env, id: &str) {
     let spec = rimz::testkit::sandbox::SandboxSpec {
         home_root: env.home_root.clone(),
         runtime_root: env.runtime_root.clone(),
@@ -231,6 +231,103 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
 }
 
 #[test]
+fn continued_restart_retires_a_pending_push_before_judging_the_next_stop() {
+    restart_after_pending_push(true);
+}
+
+#[test]
+fn fresh_restart_retires_a_pending_push_before_judging_the_next_stop() {
+    restart_after_pending_push(false);
+}
+
+fn restart_after_pending_push(continued: bool) {
+    let room = room();
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    let store = room.env.store();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().lane_path("workflow-tick.json"),
+        &BTreeMap::from([(
+            id.clone(),
+            jiff::Timestamp::now() + Duration::from_secs(3600),
+        )]),
+    )
+    .unwrap();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    let mut owner = dummy_agent_process();
+    for payload in [
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+        json!({"hook_event_name":"UserPromptSubmit", "prompt":"Review the PR"}),
+        json!({"hook_event_name":"Stop"}),
+    ] {
+        room.hook_with_owner(&id, &run, owner.id(), payload);
+    }
+    let pushed = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["push"]["queued"] == true
+    });
+    let message_id = pushed["record"]["attempt"]["push"]["message"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Sent),
+    );
+    wait_for_advances_to_exit(&room.env, &id);
+    let mut args = vec!["workflow", "restart", &id];
+    if continued {
+        args.push("--continue");
+    }
+    let mut child = room
+        .command(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    super::restart::wait_for_pane_close(&room, &mut child);
+    // The trace shim closes the pane but cannot terminate its owner.
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    success(child.wait_with_output().unwrap());
+    let replacement = room.attempt(&id);
+    assert_ne!(replacement.run_id, run.run_id);
+    fs::write(paths(&room, &id).work.join("close"), "").unwrap();
+    let session = if continued {
+        "workflow-session"
+    } else {
+        "fresh-workflow-session"
+    };
+    for payload in [
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+        json!({"hook_event_name":"UserPromptSubmit", "prompt":"Review the resumed work"}),
+        json!({"hook_event_name":"Stop"}),
+    ] {
+        room.hook_in_session(
+            &id,
+            &replacement,
+            room.env.agent_owner_pid(),
+            session,
+            payload,
+            &[],
+        );
+    }
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(events(&value, "turn_end").len(), 2, "{value:#}");
+    assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Canceled),
+    );
+}
+
+#[test]
 fn a_closing_turn_end_hook_stops_the_layout_and_uses_one_verdict() {
     let room = room();
     let (id, run) = room.launch();
@@ -254,6 +351,60 @@ fn a_closing_turn_end_hook_stops_the_layout_and_uses_one_verdict() {
     );
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     assert!(trace.contains("close-pane"), "{trace}");
+}
+
+#[test]
+fn restart_abandons_an_inflight_until_answer_before_relaunching() {
+    let room = room();
+    let (id, run) = room.launch();
+    let mut owner = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart"}),
+    );
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"UserPromptSubmit"}),
+    );
+    wait_for_advances_to_exit(&room.env, &id);
+    let socket = room.env.runtime_root.join("restart-result.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    room.hook_with_environment(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"Stop"}),
+        &[("RIMZ_TEST_WORKFLOW_RESULT_GATE", &socket)],
+    );
+    let mut waiting = gate(&listener);
+    // The trace shim closes the pane but cannot terminate its owner.
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let output = room
+        .command(&["workflow", "restart", &id])
+        .output()
+        .unwrap();
+    waiting.write_all(&[1]).unwrap();
+    let receipt = success(output);
+    assert!(receipt.contains("visits restarted at 1"), "{receipt}");
+    let value = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["run"]["run_id"]
+            .as_str()
+            .is_some_and(|current| current != run.run_id.as_str())
+    });
+    assert!(value["record"]["held"].is_null(), "{value:#}");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert!(
+        !events(&value, "turn_end")
+            .iter()
+            .any(|event| event["action"] == "pushed"),
+        "{value:#}"
+    );
 }
 
 #[test]

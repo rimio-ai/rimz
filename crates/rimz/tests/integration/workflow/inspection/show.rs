@@ -262,8 +262,8 @@ fn cap_explains_each_visit_and_the_refused_visit_with_copyable_options() {
         &[
             "max-visits",
             "2 of 2",
-            "gate ok · build 1",
-            "resumed · build 2",
+            "resumed · build 1",
+            "gate ok · build 2",
             "build 3 refused",
             "exit 0",
             "ended",
@@ -329,7 +329,7 @@ fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
     );
     success(command(&env, &["workflow", "advance", id]));
     let value = settled(&env, id, "parked");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 4);
+    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
     assert_eq!(value["record"]["input"]["routed_by"], "red");
     let text = success(command(&env, &["workflow", "show", id]));
     contains(

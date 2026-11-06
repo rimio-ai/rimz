@@ -381,7 +381,7 @@ Resolution checks live agents first, then retained agents under the same channel
 
 Peers launched by another agent are eligible: a child has a recorded parent, not merely a positive launch depth. Resume preserves the peer's recorded `launch_depth` and `launched_by`, so it does not reset the launch-chain budget. It does not reconnect the peer's `report_to` to its original launcher.
 
-A session still owned by a workflow attempt refuses with `rimz workflow restart <run> --continue`. A former step agent resumes outside its old run: once admission succeeds, RimZ clears its workflow pin and prints `@<name> is now outside run <run>` before the resume receipt. An unreadable workflow record is not proof that the agent detached; RimZ warns and retains that pin.
+A session still owned by a workflow step refuses with `rimz workflow restart <run> --continue`; a judge still answering its check refuses with `rimz workflow cancel <run>` as the way out. A former step agent resumes outside its old run: once admission succeeds, RimZ clears its workflow pin and prints `@<name> is now outside run <run>` before the resume receipt. An unreadable workflow record is not proof that the agent detached; RimZ warns and retains that pin.
 
 The session keeps its provider, working directory, channel, and saved launch posture, with its profile rendered from current definitions. Account selection is the same as lane resume: the room's selected account must share the session's history pool. Missing worktrees, unsupported resume CLIs, absent saved conversations, resume caps, unsupported prompt replacement, and unavailable or mismatched accounts refuse rather than launching fresh. A missing worktree also records the session ended. Success prints `resumed <kind>:<name> (<session-id>)` on stdout.
 
@@ -996,6 +996,8 @@ A launched child's profile resolves from `[subagents.profiles]`, or from `[agent
 When the provider has no resume command or no recorded conversation, restart launches fresh and prints `restarted fresh as @<name> — <reason>`. The fresh agent may get a new name, because the old card still holds its handle while the replacement starts.
 
 Closing the old pane ends the replaced session, so its session-pinned loop rows retire with it. A restart that resumes keeps the same session id and is a continuation, so its declared [team bindings](../../internals/harness/loops.md#team-bindings) carry straight over to the replacement; a restart that launches fresh leaves the old identity behind and retires its rows whole, and the replacement's registration re-arms the role's bindings under the new session. Either way, waits the agent armed for itself are gone, and the result line ends with `; <n> armed wait(s) dropped` when any were, also when the retirement then reports an error on stderr. A restart that fails before the old pane closes leaves every row intact.
+
+Restarting a current workflow step agent uses `rimz workflow restart <run> --continue`, with a routing line before its receipt. This resets the step's visits and replaces its whole layout; it refuses rather than silently starting fresh when the conversation cannot resume. Restarting a former step agent is an ordinary agent restart, clears its old workflow pin, and prints that the agent is now outside that run. A workflow judge still answering its check refuses, as resume does. Team restarts are unchanged.
 
 #### `compact`
 

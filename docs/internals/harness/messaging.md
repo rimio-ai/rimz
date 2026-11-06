@@ -170,7 +170,7 @@ The seven terminal states are final. A terminal transition removes the record fr
 | The address resolved to no agent, after the durable fallback | `Errored` |
 | A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer to an agent waiting on input (a self wait's wake stays `Queued` instead) | `Errored` |
 | A queued compaction command would follow an unprompted compaction ([the repeat guards](#the-repeat-guards)) | `Errored` |
-| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), the [run-link guard](#the-run-linked-notice-guard), a cleared soft-compaction cycle, or the [idle-compaction turn guard](#the-idle-compaction-turn-guard) | `Canceled` |
+| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), the [run-link guard](#the-run-linked-notice-guard), a cleared soft-compaction cycle, the [idle-compaction turn guard](#the-idle-compaction-turn-guard), or an ended workflow attempt's unconsumed push-back (including `Sent`) | `Canceled` |
 | A retryable failure with `attempts` at its cap | `Abandoned` |
 | The receiver session ended, a watched `when` session ended, or the channel was torn down | `Archived` |
 

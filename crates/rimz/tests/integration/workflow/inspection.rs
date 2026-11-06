@@ -730,15 +730,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     success(output);
-    assert!(
-        stderr
-            .contains("build has used 2 of 2 visits (max-visits); the run will park again at once"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("rimz workflow resume 'review#project' --extend 'visits=+1'"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("has used"), "{stderr}");
     save(&env, &record);
     let paths = env.state_path_for(&env.project_root).workflow(&record.id);
     fs::write(paths.spec, format!("{SPEC}on.cap='gate'\n")).unwrap();
@@ -750,7 +742,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     success(output);
-    assert!(stderr.contains("goes to gate at once"), "{stderr}");
+    assert!(!stderr.contains("goes to gate at once"), "{stderr}");
     assert!(!stderr.contains("park again"), "{stderr}");
 
     record.state = RunState::Active;

@@ -20,7 +20,7 @@ mod state;
 mod validate;
 
 pub(crate) use engine::reassign_task;
-pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
+pub use engine::{WorkflowErr, advance, cancel, create, restart, resume, wake, wake_run};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
@@ -128,6 +128,7 @@ pub struct StepLaunch {
     pub agent: String,
     pub lifecycle: crate::store::workflow::StepLifecycle,
     pub keep: bool,
+    pub resume: Option<crate::ids::AgentSessionId>,
     pub prompt: String,
     pub workflow_note: String,
     pub cwd: PathBuf,

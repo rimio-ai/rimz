@@ -101,20 +101,6 @@ pub(super) fn resume(
         "→ {}",
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
-    if resumed
-        && let Some((bound, used, max)) = step.and_then(|step| step.tripped_visit_bound(&record))
-    {
-        let target = spec
-            .target(&record.node, "cap")
-            .unwrap_or_else(|| "@user".into());
-        writeln!(
-            render::err(),
-            "warning: {} has used {used} of {max} visits ({bound}); {} — {}",
-            record.node,
-            immediate(&target),
-            resolve::run_command(&record, "resume", globals, None, &["visits=+1".into()], &[])
-        )?;
-    }
     if !record.deadline_fired
         && let Some(deadline) = record.deadline.filter(|deadline| *deadline <= now)
     {
@@ -137,6 +123,163 @@ pub(super) fn resume(
         )?;
     }
     Ok(())
+}
+
+pub(in crate::cli) fn restart(
+    target: &str,
+    continued: bool,
+    globals: &super::super::GlobalFlags,
+) -> Result<()> {
+    let run = select(target, "restart", globals, None, &[])?;
+    let resume = if continued {
+        Some(continue_session(&run, globals)?)
+    } else {
+        None
+    };
+    let session = resume.as_ref().map(|(_, session)| session.clone());
+    let host = Host::new(&run.state, globals, None);
+    let restarted = workflow::restart(&run.state, &run.record.id, resume, &host)?;
+    let receipt_deadline =
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs(30));
+    let record = loop {
+        let record = records::load(&run.paths)?;
+        if record.restart.is_none()
+            || record.wait.is_some()
+            || record.state.is_terminal()
+            || receipt_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            break record;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let step = restarted
+        .session_attempt()
+        .map_or(&restarted.node, |attempt| &attempt.node);
+    let mode = session.map_or_else(|| "fresh".into(), |session| format!("resumed ({session})"));
+    let mut out = render::out();
+    if let Some(agent) = record
+        .session_attempt()
+        .and_then(|attempt| attempt.run.as_ref())
+        .filter(|_| record.restart.is_none())
+    {
+        writeln!(
+            out,
+            "restarted {} step {step} as {} · {mode} · visits restarted at 1",
+            record.address(),
+            agent.handle
+        )?;
+    } else if record.state == RunState::Parked {
+        writeln!(
+            out,
+            "restart {} step {step} · {mode} · no live replacement: {}",
+            record.address(),
+            record
+                .park
+                .as_ref()
+                .map_or_else(String::new, |park| park.label())
+        )?;
+    } else if record.state.is_terminal() {
+        writeln!(
+            out,
+            "restart {} step {step} · {mode} · run is {}; no live replacement",
+            record.address(),
+            record.state.as_str()
+        )?;
+    } else {
+        writeln!(
+            out,
+            "restarting {} step {step} · {mode} · awaiting launch; visits reset",
+            record.address()
+        )?;
+    }
+    writeln!(
+        out,
+        "→ {}",
+        resolve::run_command(&record, "show", globals, None, &[], &[])
+    )?;
+    Ok(())
+}
+
+fn continue_session(
+    run: &resolve::Located,
+    globals: &super::super::GlobalFlags,
+) -> Result<(u64, rimz::ids::AgentSessionId)> {
+    if run.record.state.is_terminal() {
+        bail!(
+            "workflow run {} is {}; cannot restart",
+            run.record.id,
+            run.record.state.as_str()
+        );
+    }
+    let fix = format!("rimz workflow restart {}", run.record.id);
+    let candidate = run
+        .record
+        .session_attempt()
+        .and_then(|attempt| {
+            attempt
+                .run
+                .as_ref()
+                .map(|supervised| (attempt.seq, attempt.node.as_str(), &supervised.run_id))
+        })
+        .or_else(|| {
+            run.record
+                .prev_attempt
+                .as_ref()
+                .filter(|previous| {
+                    run.record.state == RunState::Parked && previous.step == run.record.node
+                })
+                .and_then(|previous| {
+                    previous
+                        .run_id
+                        .as_ref()
+                        .map(|id| (previous.seq, previous.step.as_str(), id))
+                })
+        });
+    let (seq, step, run_id) = candidate.with_context(|| {
+        let spec = workflow::load_run(&run.paths.home, &run.record).ok();
+        let kind = if spec
+            .as_ref()
+            .is_some_and(|spec| spec.checks.contains_key(&run.record.node))
+        {
+            "check"
+        } else {
+            "step"
+        };
+        format!(
+            "{kind} {} has no resumable session; use {fix} for a fresh agent step",
+            run.record.node
+        )
+    })?;
+    let supervised = rimz::harness::run::load(&run.state, run_id)?;
+    let ctx = super::super::ctx::Ctx::for_workspace(run.state.workspace_id.clone(), globals.mux)?;
+    let agents = ctx.store.audit_rows()?;
+    let agent = supervised
+        .agent_id
+        .as_ref()
+        .and_then(|id| rimz::address::launch_row(agents.iter(), &supervised.kind, id))
+        .with_context(|| format!("no resumable session for step {step}; use {fix}"))?;
+    let logins = rimz::agents::room_accounts(
+        &run.state.workspace_record,
+        Some(&run.record.project_root),
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
+    rimz::harness::resume::relaunch_login(agent, &logins, &rimz::agents::machine_login_catalog())?;
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
+        .with_context(|| format!("unknown agent kind {}; use {fix}", agent.kind))?;
+    if agent.agent_id.is_provisional() || !rimz::harness::resume::resume_session_present(agent) {
+        bail!("no resumable session for step {step}; use {fix}");
+    }
+    rimz::harness::launch::compile_provider_argv(
+        adapter,
+        agent.kind.as_str(),
+        &rimz::harness::launch::ExecAction::Resume {
+            session_id: agent.agent_id.to_string(),
+            extra_args: Vec::new(),
+        },
+        &run.record.scope.path,
+    )
+    .with_context(|| format!("{} has no resume support; use {fix}", agent.kind))?;
+    Ok((seq, agent.agent_id.clone()))
 }
 
 fn immediate(target: &str) -> String {

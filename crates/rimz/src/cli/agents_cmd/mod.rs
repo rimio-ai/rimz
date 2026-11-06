@@ -170,6 +170,95 @@ fn resolve_live_or_audit(
     }
 }
 
+enum WorkflowPin {
+    None,
+    Current {
+        run: rimz::ids::WorkflowRunId,
+        step: String,
+        role: rimz::agents::WorkflowAttemptRole,
+    },
+    Former(rimz::agents::WorkflowAttemptRef),
+    Unreadable,
+}
+
+impl WorkflowPin {
+    fn former(self) -> Result<Option<rimz::agents::WorkflowAttemptRef>> {
+        match self {
+            Self::Current {
+                run,
+                step,
+                role: rimz::agents::WorkflowAttemptRole::Judge,
+            } => bail!(
+                "agent is still owned by run `{run}`, judging check {step}; wait for its \
+                 answer or cancel the run with `rimz workflow cancel {run}`"
+            ),
+            Self::Current { run, .. } => bail!(
+                "agent is still owned by run `{run}`; use `rimz workflow restart {run} --continue`"
+            ),
+            Self::Former(pin) => Ok(Some(pin)),
+            Self::None | Self::Unreadable => Ok(None),
+        }
+    }
+}
+
+fn workflow_pin(store: &rimz::Store, agent: &AgentState) -> Result<WorkflowPin> {
+    use rimz::agents::WorkflowAttemptRole;
+    use rimz::store::workflow::{self, AttemptKind};
+
+    let Some(pin) = &agent.workflow else {
+        return Ok(WorkflowPin::None);
+    };
+    let record = match workflow::load(&store.paths().workflow(&pin.run)) {
+        Ok(record) => record,
+        Err(error) => {
+            writeln!(
+                crate::cli::render::err(),
+                "warning: cannot read run `{}`: {error}; keeping its workflow pin",
+                pin.run
+            )?;
+            return Ok(WorkflowPin::Unreadable);
+        }
+    };
+    let attempt = match pin.role {
+        WorkflowAttemptRole::Step => record.session_attempt(),
+        WorkflowAttemptRole::Judge => record
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.kind == AttemptKind::Judge),
+    };
+    if !record.state.is_terminal()
+        && let Some(attempt) = attempt.filter(|attempt| attempt.seq == pin.seq)
+    {
+        return Ok(WorkflowPin::Current {
+            run: pin.run.clone(),
+            step: attempt.node.clone(),
+            role: pin.role,
+        });
+    }
+    Ok(WorkflowPin::Former(pin.clone()))
+}
+
+fn clear_former_workflow_pin(
+    ctx: &Ctx,
+    agent: &AgentState,
+    pin: &rimz::agents::WorkflowAttemptRef,
+) -> Result<()> {
+    if ctx.store.clear_workflow_pin(
+        &agent.kind,
+        &agent.agent_id,
+        pin,
+        &ctx.workspace.session_name,
+    )? {
+        let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+        writeln!(
+            crate::cli::render::out(),
+            "@{name} is now outside run `{}`",
+            pin.run
+        )?;
+    }
+    Ok(())
+}
+
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
 const RUN_MONITOR_POLL: Duration = Duration::from_millis(250);

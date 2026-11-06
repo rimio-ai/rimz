@@ -146,6 +146,7 @@ pub fn create(
         next_seq: 1,
         attempt: None,
         held: None,
+        restart: None,
         prev_attempt: None,
         terminal_at: None,
         check_retry: 0,
@@ -207,6 +208,9 @@ fn spawn(record: &RunRecord) -> Result<()> {
 
 fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     t.record.version = workflow::VERSION;
+    if t.record.state != RunState::Active {
+        t.record.restart = None;
+    }
     for entry in &t.entries {
         workflow::append(t.paths, entry, guard)?;
     }
@@ -376,7 +380,12 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             Decision::Admit(request) => {
                 let (seq, node, run) = *request;
                 let config = crate::config::MachineConfig::load_lenient();
-                admission.capacity = Some((seq, node, throttle::try_admit(&config.throttle, &run)));
+                admission.capacity = Some((
+                    seq,
+                    node,
+                    throttle::check_group_size(&config.throttle, &run)
+                        .and_then(|()| throttle::try_admit(&config.throttle, &run)),
+                ));
                 #[cfg(feature = "testkit")]
                 crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_ADMISSION_GATE");
                 continue;
@@ -649,6 +658,7 @@ fn prepare(
         if let Some(spec::StepKind::Agent(agent)) = step.kind() {
             let admits = spec.workflow.limit.is_some()
                 || step.limit.is_some()
+                || t.record.restart.is_some()
                 || (t.record.task.is_some() && !t.record.manual);
             if admits && let Some((_, _, Err(reason))) = &admission.capacity {
                 launch_error = Some(reason.to_string());
@@ -664,7 +674,8 @@ fn prepare(
             } else {
                 Vec::new()
             };
-            if launch_error.is_none()
+            if t.record.restart.is_none()
+                && launch_error.is_none()
                 && let Some(raw) = &step.window
                 && let Some(detail) = window_wait_for_groups(&t.record, &groups, raw, windows)?
             {
@@ -840,24 +851,24 @@ fn prepare_capacity(
     admission: &mut Admission,
     guard: &WorkspaceLock,
 ) -> Result<Option<Decision>> {
-    let may_wait = t.record.task.is_some() && !t.record.manual;
+    let may_wait = t.record.task.is_some() && !t.record.manual && t.record.restart.is_none();
     let machine_gated = may_wait && step.throttle != Some(crate::config::ThrottleSwitch::Off);
-    let limits = (t.spec.workflow.limit.is_some() || step.limit.is_some()).then(|| {
-        throttle::WorkflowStart {
-            workflow: t.record.workflow.clone(),
-            step: t.record.node.clone(),
-            run: t.record.id.clone(),
-            arrival: t
-                .record
-                .wait
-                .as_ref()
-                .filter(|wait| wait.outcome == "capacity")
-                .map_or(t.now, |wait| wait.first),
-            workflow_limit: t.spec.workflow.limit.clone(),
-            step_limit: step.limit.clone(),
-            may_wait,
-        }
-    });
+    let limits =
+        (t.spec.workflow.limit.is_some() || step.limit.is_some() || t.record.restart.is_some())
+            .then(|| throttle::WorkflowStart {
+                workflow: t.record.workflow.clone(),
+                step: t.record.node.clone(),
+                run: t.record.id.clone(),
+                arrival: t
+                    .record
+                    .wait
+                    .as_ref()
+                    .filter(|wait| wait.outcome == "capacity")
+                    .map_or(t.now, |wait| wait.first),
+                workflow_limit: t.spec.workflow.limit.clone(),
+                step_limit: step.limit.clone(),
+                may_wait,
+            });
     if !may_wait && limits.is_none() {
         admission.capacity = None;
         return Ok(None);
@@ -1050,6 +1061,7 @@ pub fn cancel(
         }
         return Ok(true);
     }
+    t.record.restart = None;
     if t.finish_script(
         Ending {
             outcome: AttemptOutcome::Canceled,
@@ -1080,6 +1092,173 @@ pub fn cancel(
     );
     persist(&mut t, &guard)?;
     Ok(true)
+}
+
+pub fn restart(
+    state: &StatePaths,
+    id: &WorkflowRunId,
+    resume: Option<(u64, crate::ids::AgentSessionId)>,
+    host: &dyn AttemptHost,
+) -> Result<RunRecord> {
+    let paths = state.workflow(id);
+    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut t = Transition {
+        record: workflow::load(&paths)?,
+        spec: &spec,
+        paths: &paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    if t.record.state.is_terminal() {
+        return Err(WorkflowErr::Refused(format!(
+            "workflow run {id} is {}; cannot restart",
+            t.record.state.as_str()
+        )));
+    }
+    if t.record
+        .session_attempt()
+        .and_then(|attempt| attempt.ending.as_ref())
+        .is_some_and(|ending| ending.cause == EndCause::Cancel)
+    {
+        return Err(WorkflowErr::Refused(format!(
+            "workflow run {id} is canceling; cannot restart"
+        )));
+    }
+    let step = t
+        .record
+        .session_attempt()
+        .map_or(&t.record.node, |attempt| &attempt.node)
+        .clone();
+    if !spec
+        .steps
+        .get(&step)
+        .is_some_and(|step| matches!(step.kind(), Some(spec::StepKind::Agent(_))))
+    {
+        let kind = if spec.checks.contains_key(&step) {
+            "a check"
+        } else {
+            "a command step"
+        };
+        let reason = t
+            .record
+            .park
+            .as_ref()
+            .map(|park| format!("; @user: {}", park.label()))
+            .or_else(|| {
+                t.record
+                    .wait
+                    .as_ref()
+                    .map(|wait| format!("; waiting on {}", wait.outcome))
+            })
+            .unwrap_or_default();
+        return Err(WorkflowErr::Refused(format!(
+            "node {step} is {kind}{reason}; restart requires an agent step"
+        )));
+    }
+    if let Some((seq, _)) = &resume
+        && t.record
+            .session_attempt()
+            .map(|attempt| attempt.seq)
+            .or_else(|| {
+                t.record
+                    .prev_attempt
+                    .as_ref()
+                    .filter(|previous| {
+                        t.record.state == RunState::Parked && previous.step == t.record.node
+                    })
+                    .map(|previous| previous.seq)
+            })
+            != Some(*seq)
+    {
+        return Err(WorkflowErr::Refused(
+            "the step attempt changed during --continue preflight; retry the restart".into(),
+        ));
+    }
+    if t.record.restart.is_some() {
+        return Err(WorkflowErr::Refused(
+            "this step is already restarting".into(),
+        ));
+    }
+    let continued = resume.is_some();
+    if t.record.held.is_some() {
+        until::interrupt(&mut t, "restart");
+    }
+    t.record.restart = Some(workflow::Restart {
+        resume: resume.map(|(_, session)| session),
+        settled: None,
+    });
+    if continued
+        && t.record.attempt.is_none()
+        && t.record.state == RunState::Parked
+        && let Some(previous) = t.record.prev_attempt.as_ref()
+        && previous.step == step
+        && let Some(run_id) = &previous.run_id
+        && let Some(handle) = &previous.handle
+    {
+        t.record.restart.as_mut().expect("staged restart").settled = Some(previous.seq);
+        t.record.attempt = Some(LiveAttempt {
+            kind: AttemptKind::Agent,
+            lifecycle: spec.steps[&step].lifecycle(),
+            seq: previous.seq,
+            node: step.clone(),
+            visit: Some(previous.visit),
+            started_at: previous.started_at,
+            host: agent::identity(),
+            run: Some(workflow::AttemptRun {
+                run_id: run_id.clone(),
+                handle: handle.clone(),
+            }),
+            head_start: previous.head_start.clone(),
+            child: None,
+            digests: BTreeMap::new(),
+            ending: None,
+            retry: None,
+            woken: false,
+            asking: None,
+            held_since: None,
+            asked_ms: 0,
+            judged: None,
+            push: None,
+        });
+        t.record.state = RunState::Active;
+        t.record.park = None;
+    }
+    let busy = if let Some(attempt) = &t.record.attempt {
+        let busy = (attempt.ending.is_some() || attempt.run.is_none())
+            && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref());
+        let observed = match &attempt.run {
+            Some(run) => host.observe(run, Observation::Attempt)?,
+            None => agent::empty_observation(),
+        };
+        t.stage_agent_end(
+            Ending {
+                outcome: AttemptOutcome::Canceled,
+                cause: EndCause::Restart { continued },
+                route: None,
+                reason: None,
+            },
+            &observed,
+        );
+        if !busy {
+            t.record.attempt.as_mut().expect("staged restart").host = agent::identity();
+        }
+        busy
+    } else {
+        t.restart_step(&step, continued);
+        false
+    };
+    persist(&mut t, &guard)?;
+    let record = t.record;
+    drop(guard);
+    if !busy && record.attempt.is_some() {
+        agent::finish(state, &paths, &spec, &record, host, None)?;
+    }
+    let record = workflow::load(&paths)?;
+    if record.state == RunState::Active {
+        spawn(&record)?;
+    }
+    Ok(record)
 }
 
 pub fn resume(
@@ -1141,6 +1320,14 @@ pub fn resume(
             }
         }
         if t.record.state == RunState::Parked {
+            if t.record
+                .park
+                .as_ref()
+                .is_some_and(|park| park.reason == ParkReason::Cap)
+            {
+                let step = t.record.node.clone();
+                t.reset_visits(&step, "cap");
+            }
             t.close_wait();
             if let Some(node) = at {
                 t.record.node = node.into();

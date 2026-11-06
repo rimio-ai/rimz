@@ -92,6 +92,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             reminder_section: None,
             leader_run: Some(crate::harness::plan::LayoutRunParams {
                 run_id: &run_id,
+                resume: None,
                 leader_index: 0,
                 managed_launch: Some(&managed),
                 cleanup: true,

@@ -1621,6 +1621,30 @@ impl Store {
         })
     }
 
+    /// Cancel an obsolete message even after its pane write, without changing terminal history.
+    #[must_use = "durability barrier; check the result"]
+    pub fn retire_message(
+        &self,
+        message_id: &MessageId,
+        session_name: &str,
+        reason: &str,
+    ) -> Result<bool> {
+        self.commit_queue(|queue| {
+            let message = match queue.get(message_id) {
+                Some(message) if !message.status.is_terminal() => message,
+                Some(_) | None => return Ok(false),
+            };
+            queue.terminalize(
+                message,
+                MessageStatus::Canceled,
+                session_name,
+                Some(reason),
+                Timestamp::now(),
+            );
+            Ok(true)
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn clear_messages_for(
         &self,

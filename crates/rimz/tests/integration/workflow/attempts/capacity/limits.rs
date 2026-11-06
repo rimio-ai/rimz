@@ -92,6 +92,52 @@ fn oversized_step_groups_fail_without_taking_the_capacity_route() {
 }
 
 #[test]
+fn restart_is_manual_for_window_and_capacity_but_still_refuses_oversized_layouts() {
+    let mut actual = Vec::new();
+    for oversized in [false, true] {
+        let room = Room::new("window='5h.left>=99'\n[steps.build.limit]\nmax-parallel=1\n");
+        let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+        if oversized {
+            fs::write(
+                &spec,
+                fs::read_to_string(&spec)
+                    .unwrap()
+                    .replace("agent = 'codex'", "agent = 'codex:lead,codex'"),
+            )
+            .unwrap();
+        }
+        let record = pending(&room, Some("nightly"));
+        fill_limit(&room, &record);
+        success(
+            room.command(&["workflow", "restart", record.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+        let value = until(&room.env, record.id.as_str(), |value| {
+            value["record"]["attempt"]["run"].is_object()
+                || value["record"]["state"] == "failed"
+                || value["record"]["state"] == "done"
+        });
+        actual.push((
+            value["record"]["state"].as_str().unwrap().to_owned(),
+            value["record"]["wait"].is_null(),
+            events(&value, "attempt").iter().any(|event| {
+                event["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("more than max-parallel = 1"))
+            }),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            ("active".into(), true, false),
+            ("failed".into(), true, true)
+        ]
+    );
+}
+
+#[test]
 fn off_steps_still_hold_at_the_machine_automation_cap() {
     let room = Room::new("throttle='off'\ncapacity-wait='1h'\n");
     let core = room.env.rimz_home().join("config.toml");

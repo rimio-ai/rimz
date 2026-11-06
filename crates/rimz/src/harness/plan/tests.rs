@@ -4018,6 +4018,7 @@ fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
                 reminder_section: None,
                 leader_run: bound.then_some(LayoutRunParams {
                     run_id: &run_id,
+                    resume: None,
                     leader_index: 0,
                     managed_launch: None,
                     cleanup: false,

@@ -26,6 +26,7 @@ pub struct Hop {
 pub enum HopKind {
     Route,
     Resume,
+    Restart,
     VisitsReset,
     Park { reason: ParkReason },
     Terminal { state: RunState },
@@ -63,7 +64,9 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry], held: Option<&HeldSes
             at: entry.at,
             node: match &entry.event {
                 JournalEvent::TurnEnd { check, .. } => check.clone(),
-                JournalEvent::VisitsReset { step, .. } => step.clone(),
+                JournalEvent::VisitsReset { step, .. } | JournalEvent::Restart { step, .. } => {
+                    step.clone()
+                }
                 _ => entry.node.clone(),
             },
             outcome,
@@ -96,6 +99,7 @@ pub fn routing_hop(
     let mut resumed = None;
     for hop in hops(spec, journal, held).into_iter().rev() {
         match hop.kind {
+            HopKind::Restart if hop.node == node => return Some(hop),
             HopKind::Resume if hop.node == node && resumed.is_none() => resumed = Some(hop),
             HopKind::Park { .. } if resumed.is_some() => return resumed,
             HopKind::Route if hop.target.as_deref() == Some(node) => return Some(hop),
@@ -114,7 +118,7 @@ pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a
             continue;
         }
         let node = hop.node.as_str();
-        if position != Some(node) || hop.kind == HopKind::Resume {
+        if position != Some(node) || matches!(hop.kind, HopKind::Resume | HopKind::Restart) {
             *counts.entry(node).or_default() += 1;
         }
         position = Some(node);
@@ -221,6 +225,7 @@ fn hop_kind(
         } => {
             return Some((HopKind::Route, Some(outcome.clone()), Some(target.clone())));
         }
+        JournalEvent::Restart { .. } => return Some((HopKind::Restart, None, None)),
         JournalEvent::Resume { .. } => return Some((HopKind::Resume, None, None)),
         JournalEvent::VisitsReset { outcome, .. } => {
             return Some((HopKind::VisitsReset, Some(outcome.clone()), None));
@@ -335,10 +340,19 @@ fn attempt_superseded(
             JournalEvent::TurnEnd {
                 action: TurnEndAction::Closed,
                 ..
+            }
+            | JournalEvent::Park {
+                reason: ParkReason::Invalid,
+                ..
             },
             _,
         ) => true,
-        (JournalEvent::Cancel { .. }, AttemptOutcome::Canceled) => true,
+        (
+            JournalEvent::Cancel { .. }
+            | JournalEvent::VisitsReset { all: true, .. }
+            | JournalEvent::Restart { .. },
+            AttemptOutcome::Canceled,
+        ) => true,
         _ => false,
     }
 }

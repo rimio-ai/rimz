@@ -2252,7 +2252,8 @@ path = "crates/rimz/src/harness"
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
 # workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
-surface-budget = 1086
+# workflow::restart shares the manual agent-step restart transition with the CLI (+1).
+surface-budget = 1087
 
 [[verdict]]
 kind = "item"
@@ -4011,7 +4012,9 @@ path = "crates/rimz/src/store"
 # workflow::VERSION shares the current run-record fence with the engine (+1).
 # run::{StoppedTurn, StoppedTurnDisposition} preserve workflow stop evidence without ending a run (+2).
 # workflow::PushBack and Store::queue_message_once retain idempotent workflow delivery (+2).
-surface-budget = 559
+# workflow::Restart carries one manual launch's optional continued session (+1).
+# Store::retire_message cancels obsolete workflow prompts, including unconfirmed sends (+1).
+surface-budget = 561
 
 [[verdict]]
 kind = "item"
@@ -11408,6 +11411,16 @@ reason = "Workflow attempts share durable process, run, stop, ask, limit, and li
 kind = "item"
 key = "store::workflow::EndCause"
 reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Restart"
+reason = "A step restart preserves its fresh or continued manual launch across stop recovery and occupancy waits."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::restart"
+reason = "The workflow and agent CLI doorways share a locked manual step restart and stop settlement."
 
 [[verdict]]
 kind = "item"
