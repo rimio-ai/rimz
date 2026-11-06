@@ -322,10 +322,13 @@ impl View<'_> {
                     outcome,
                     target,
                     reason,
+                    visit,
+                    message,
                     ..
                 } => {
                     let action_name = match action {
                         TurnEndAction::Kept => "kept",
+                        TurnEndAction::Pushed => "pushed",
                         TurnEndAction::Closed => "closed",
                         TurnEndAction::Discarded => "discarded",
                         TurnEndAction::Interrupted => "interrupted",
@@ -338,10 +341,16 @@ impl View<'_> {
                             .as_ref()
                             .filter(|_| matches!(
                                 action,
-                                TurnEndAction::Kept | TurnEndAction::Closed
+                                TurnEndAction::Kept | TurnEndAction::Pushed | TurnEndAction::Closed
                             ))
                             .map_or_else(String::new, |target| format!(" → {target}"))
                     )?;
+                    if let Some(visit) = visit {
+                        writeln!(out, "    visit {visit}")?;
+                    }
+                    if let Some(message) = message {
+                        writeln!(out, "    message: {message}")?;
+                    }
                     if let Some(reason) = reason {
                         prose(out, reason, "    ")?;
                     }
@@ -880,6 +889,8 @@ mod tests {
                 outcome: Some("pending".into()),
                 target: Some("@wait".into()),
                 reason: None,
+                visit: None,
+                message: None,
             },
         }
     }

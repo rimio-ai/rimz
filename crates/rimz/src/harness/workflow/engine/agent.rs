@@ -219,6 +219,16 @@ pub(super) fn prepare_end(
             })
     };
     let Some(ending) = ending else {
+        if t.record
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.push.as_ref().is_some_and(|push| !push.queued))
+        {
+            if hold_changed {
+                persist(t, guard)?;
+            }
+            return Ok(Decision::Push(Box::new(t.record.clone())));
+        }
         if until::begin(t, &observed)? {
             persist(t, guard)?;
             return Ok(Decision::Again);

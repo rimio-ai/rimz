@@ -6,12 +6,19 @@ fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
     let (_dir, state, record) = setup(UNTIL);
     let host = FakeHost::new();
     let mut live = advance_ok(&state, &record.id, &host);
+    host.observed.borrow_mut().turn = Some(turn());
+    let saved_verdict = held(&live, true).held.unwrap().verdict;
     let first = Timestamp::UNIX_EPOCH;
     for (index, at) in [first, first + std::time::Duration::from_secs(10)]
         .into_iter()
         .enumerate()
     {
-        let mut pending = held(&live, true);
+        let mut pending = if live.held.is_some() {
+            live.clone()
+        } else {
+            held(&live, true)
+        };
+        pending.held.as_mut().unwrap().verdict = saved_verdict.clone();
         let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
         verdict.at = Some(at);
         verdict.target = "@wait".into();
@@ -31,6 +38,7 @@ fn a_legacy_held_verdict_without_an_answer_instant_uses_the_merge_instant() {
     let (_dir, state, record) = setup(UNTIL);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
+    host.observed.borrow_mut().turn = Some(turn());
     let mut pending = held(&live, true);
     let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
     verdict.at = Some(Timestamp::UNIX_EPOCH);
@@ -135,7 +143,7 @@ fn forge_check(
 }
 
 #[test]
-fn condition_hold_matures_from_the_first_kept_wait_across_turns() {
+fn condition_hold_matures_while_the_leader_rests_on_the_judged_turn() {
     let text = UNTIL.split("[checks.pr]").next().unwrap().to_owned()
         + "[checks.pr]\nelse='pending'\ntimeout='1h'\non={done='@done',pending='build',unknown='build'}\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='done'\nfor='1h'\n";
     let (dir, state, record) = setup(&text);
@@ -152,13 +160,6 @@ fn condition_hold_matures_from_the_first_kept_wait_across_turns() {
     assert_eq!(host.stops.get(), 0);
     kept.wait.as_mut().unwrap().first -= std::time::Duration::from_secs(7200);
     update(&state, &kept);
-    host.observed
-        .borrow_mut()
-        .turn
-        .as_mut()
-        .unwrap()
-        .end
-        .ended_at += std::time::Duration::from_secs(1);
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(ended.state, RunState::Done);
     assert_eq!(host.stops.get(), 1);
@@ -207,6 +208,7 @@ fn judge(limited: bool) {
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
+    host.observed.borrow_mut().turn = Some(turn());
     let mut pending = held(&live, false);
     let mut check = live.attempt.unwrap();
     check.node = "pr".into();

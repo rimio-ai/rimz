@@ -136,6 +136,36 @@ pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a
             counts.entry(entry.node.as_str()).or_insert(1);
         }
     }
+    let mut sessions = BTreeMap::new();
+    let mut pushed = std::collections::BTreeSet::new();
+    for entry in journal {
+        if !matches!(
+            entry.event,
+            JournalEvent::Attempt { .. } | JournalEvent::TurnEnd { .. }
+        ) {
+            continue;
+        }
+        let visits = sessions
+            .entry((entry.node.as_str(), entry.seq))
+            .or_insert(1);
+        if let JournalEvent::TurnEnd {
+            action: TurnEndAction::Pushed,
+            message: Some(message),
+            ..
+        } = &entry.event
+            && pushed.insert(message)
+        {
+            *visits += 1;
+        }
+    }
+    let mut visits = BTreeMap::new();
+    for ((node, _), count) in sessions {
+        *visits.entry(node).or_insert(0) += count;
+    }
+    for (node, visits) in visits {
+        let count = counts.entry(node).or_default();
+        *count = (*count).max(visits);
+    }
     counts
 }
 
@@ -184,7 +214,7 @@ fn hop_kind(
             outcome.as_str()
         }
         JournalEvent::TurnEnd {
-            action: TurnEndAction::Kept | TurnEndAction::Closed,
+            action: TurnEndAction::Kept | TurnEndAction::Pushed | TurnEndAction::Closed,
             outcome: Some(outcome),
             target: Some(target),
             ..

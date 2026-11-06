@@ -286,14 +286,14 @@ pub(super) fn check_layout(
                     decisions,
                     if closing {
                         vec![
-                            workflow::TurnEndAction::Kept,
+                            workflow::TurnEndAction::Pushed,
                             workflow::TurnEndAction::Closed,
                         ]
                     } else {
-                        vec![workflow::TurnEndAction::Kept]
+                        vec![workflow::TurnEndAction::Pushed]
                     }
                 );
-                assert_eq!(record.visits["work"].total, 1);
+                assert_eq!(record.visits["work"].total, 2);
                 if closing {
                     assert_eq!(record.state, RunState::Done);
                 } else {
@@ -312,7 +312,29 @@ pub(super) fn check_layout(
                         cells
                             .iter()
                             .all(|cell| panes().panes.iter().any(|pane| &pane.pane_id == cell)),
-                        "a keep must leave every cell open"
+                        "a push-back must leave every cell open"
+                    );
+                    // The sleeping provider cannot acknowledge the queued push-back.
+                    let messages: Vec<_> = store
+                        .list_messages()
+                        .unwrap()
+                        .into_iter()
+                        .filter(|message| message.same_agent_card(&leader))
+                        .collect();
+                    assert_eq!(messages.len(), 1);
+                    store.record_sent_batch(&messages, session).unwrap();
+                    assert_eq!(
+                        store
+                            .confirm_delivered_for_card(
+                                &leader.kind,
+                                &leader.agent_id,
+                                leader.name.as_deref(),
+                                rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                                session,
+                            )
+                            .unwrap()
+                            .len(),
+                        1
                     );
                 }
             }

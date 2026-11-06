@@ -22,6 +22,10 @@ pub(super) struct FakeHost {
     on_launch: RefCell<Option<Box<dyn Fn()>>>,
     on_observe: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
+    pushes: RefCell<std::collections::BTreeMap<crate::ids::MessageId, String>>,
+    push_calls: RefCell<Vec<crate::ids::MessageId>>,
+    push_error: Cell<bool>,
+    on_push: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl FakeHost {
@@ -50,6 +54,10 @@ impl FakeHost {
             on_launch: RefCell::new(None),
             on_observe: RefCell::new(None),
             on_occupancy: RefCell::new(None),
+            pushes: RefCell::new(std::collections::BTreeMap::new()),
+            push_calls: RefCell::new(Vec::new()),
+            push_error: Cell::new(false),
+            on_push: RefCell::new(None),
         }
     }
 }
@@ -111,6 +119,27 @@ impl AttemptHost for FakeHost {
             Observation::LeaderTurn => self.turn_observations.set(self.turn_observations.get() + 1),
         }
         Ok(observed)
+    }
+
+    fn push(
+        &self,
+        _: &AttemptRun,
+        push: &crate::store::workflow::PushBack,
+        text: &str,
+    ) -> Result<Pushed, WorkflowErr> {
+        self.push_calls.borrow_mut().push(push.message.clone());
+        let callback = self.on_push.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        if self.push_error.replace(false) {
+            return Err(WorkflowErr::Refused("push interrupted".into()));
+        }
+        self.pushes
+            .borrow_mut()
+            .entry(push.message.clone())
+            .or_insert_with(|| text.into());
+        Ok(Pushed { queued: true })
     }
 
     fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {

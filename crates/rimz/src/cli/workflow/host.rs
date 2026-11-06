@@ -374,6 +374,42 @@ impl workflow::AttemptHost for Host<'_> {
         .map_err(host_error)
     }
 
+    fn push(
+        &self,
+        attempt: &AttemptRun,
+        push: &rimz::store::workflow::PushBack,
+        text: &str,
+    ) -> Result<workflow::Pushed, WorkflowErr> {
+        (|| -> Result<_> {
+            let ctx = self.ctx()?;
+            let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            let snapshot = ctx.cached_snapshot()?;
+            let root =
+                agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
+            let mut message = rimz::message::synthetic::SyntheticMessage {
+                agent: root,
+                text: text.into(),
+                sender: rimz::store::message::MessageSender::System,
+                gate: rimz::store::message::DeliveryGate::Done,
+                pane_id: None,
+            }
+            .record(&ctx.workspace);
+            message.message_id = push.message.clone();
+            ctx.store
+                .queue_message_once(&message, &ctx.workspace.session_name)?;
+            rimz::message::synthetic::attempt_now(
+                &ctx.workspace,
+                &ctx.store,
+                &push.message,
+                None,
+                rimz::store::writer::DeliveryFailureDisposition::Retry,
+                "workflow push-back delivery deferred",
+            )?;
+            Ok(workflow::Pushed { queued: true })
+        })()
+        .map_err(host_error)
+    }
+
     fn stop(&self, attempt: &AttemptRun) -> Result<Children, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
