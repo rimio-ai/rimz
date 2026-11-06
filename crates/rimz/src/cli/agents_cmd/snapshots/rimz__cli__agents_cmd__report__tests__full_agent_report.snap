@@ -37,6 +37,7 @@ expression: entry
     "fill_pct": 20,
     "used_tokens": 53700,
     "window": 272000,
+    "capacity": 286315,
     "severity": "yellow",
     "compactions": 2,
     "compacting": false

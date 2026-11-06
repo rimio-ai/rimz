@@ -515,7 +515,7 @@ fn render_context_section(
     writeln!(
         w,
         "  {fill} of {} · {} in window · {} spent ({} cache read) · {} · {active} active",
-        opt_compact_count(agent.context.window),
+        opt_compact_count(agent.context.capacity),
         opt_compact_count(agent.context.used_tokens),
         opt_compact_count(agent.stats.total_tokens),
         opt_compact_count(agent.stats.cache_read_tokens),

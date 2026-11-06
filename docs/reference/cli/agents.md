@@ -689,7 +689,7 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order, followed by any OpenCode model-pick notice; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
-| `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). `severity` follows the configured context-meter scale; `fill_pct` and `window` remain window-based. |
+| `context` | `fill_pct`, `used_tokens`, `window`, `capacity`, `severity`, `compactions` (completed), and `compacting` (in progress). `capacity` is the label's published size, falling back to the usable `window`, and is present whenever `window` is. `severity` follows the configured context-meter scale; `fill_pct`, `used_tokens`, and `window` remain usable-window-based. |
 | `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | UTC timestamps: `registered_at`, `turn_started_at`, `last_activity` (real activity), `last_seen` (liveness), and `idle_since` (the displayed `AGE` origin, always present). |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
@@ -715,7 +715,7 @@ Run
   prompt: wire up the refresh-token path
 
 Context
-  33% of 258k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
+  33% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
   compactions: 0
   tools:       12 · Bash 9, Read 3
   budget:      -
@@ -733,7 +733,7 @@ Identity
 
 The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch. When requested and running effort are both known and differ, an `effort` row reads, for example, `running max, requested xhigh`. This text-only notice leaves the launch request and JSON unchanged.
 
-Context labels window occupancy separately from lifetime tokens spent, cache reads, cost, and active time. Lifetime figures cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
+Context labels window occupancy separately from lifetime tokens spent, cache reads, cost, and active time. The `of` size is the published capacity, not necessarily the usable window that fill measures: the example uses a 258,400-token usable window and Codex's inferred 272,000-token raw capacity. Lifetime figures cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 
 The Messages section lists your messages and agents' attributed messages. When it hides system messages, a faint line gives their count and the command that lists them, `rimz message list --all --system @<agent>`.
 

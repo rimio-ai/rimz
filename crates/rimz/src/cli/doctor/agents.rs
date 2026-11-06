@@ -496,13 +496,7 @@ fn agent_compaction_lowered(agent: &rimz::agents::AgentState) -> Option<Compacti
         .model_context_limits
         .as_ref()
         .filter(|limits| limits.model == *model);
-    let compaction = rimz::agents::registry::native_compaction(
-        agent.kind.as_str(),
-        agent.record.as_ref().and_then(|record| record.auto_compact),
-        agent.resolved_context_window()?,
-        agent.usage.context_capacity,
-        limits,
-    )?;
+    let compaction = agent.native_compaction()?;
     let configured = compaction.lowered?;
     let max_window = limits.and_then(|limits| limits.max_window);
     let fix = if max_window.is_some_and(|max| compaction.raw_window >= max) {
@@ -1001,6 +995,14 @@ mod tests {
             ..Default::default()
         });
         agent
+    }
+
+    #[test]
+    fn opencode_never_warns_about_an_unsupported_compaction_count() {
+        let mut agent = compaction_agent(983_010, 2_000_000, None);
+        agent.kind = rimz::ids::AgentKind::new_unchecked("opencode");
+        agent.usage.context_capacity = Some(1_048_576);
+        assert!(agent_compaction_lowered(&agent).is_none());
     }
 
     #[test]

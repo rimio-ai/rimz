@@ -33,6 +33,7 @@ expression: entry
     "fill_pct": null,
     "used_tokens": null,
     "window": null,
+    "capacity": null,
     "severity": null,
     "compactions": 0,
     "compacting": false
