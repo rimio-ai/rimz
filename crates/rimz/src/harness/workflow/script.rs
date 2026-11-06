@@ -98,7 +98,9 @@ pub(super) fn evaluate(
         }
         Some(spec::CheckKind::Sleep) => {
             let mut result = Evaluation::failed("invalid", "sleep evaluation interrupted");
-            result.object = evaluate_sleep(state, &spec.checks[&record.node], record);
+            result.object =
+                condition_now(state, &spec.checks[&record.node], record, record.entered_at)
+                    .map(|(object, _)| object);
             return result;
         }
         Some(spec::CheckKind::Run(run)) => run,
@@ -169,24 +171,30 @@ pub(super) fn evaluate(
     result
 }
 
-fn evaluate_sleep(
+/// Read a condition check or sleep without spawning a check, writing, or refreshing probes.
+/// A sleep runs from `slept_from`. Returns the answer and the forge probe time, omitted when no
+/// forge key is read.
+pub fn condition_now(
     state: &StatePaths,
     check: &super::Check,
     record: &RunRecord,
-) -> Result<Value, String> {
-    // CheckKind::Sleep requires sleep to be present.
-    let sleep = check.sleep.as_deref().expect("sleep runner");
-    let end = record
-        .entered_at
-        .checked_add(spec::duration(sleep).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    if Timestamp::now() >= end {
-        return Ok(json!({"outcome":"then", "reason":format!("slept {sleep}")}));
+    slept_from: Timestamp,
+) -> Result<(Value, Option<Timestamp>), String> {
+    if let Some(sleep) = &check.sleep {
+        let end = slept_from
+            .checked_add(spec::duration(sleep).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        if Timestamp::now() >= end {
+            return Ok((
+                json!({"outcome":"then", "reason":format!("slept {sleep}")}),
+                None,
+            ));
+        }
+        if check.when.is_none() {
+            return Ok((json!({"outcome":"sleeping", "recheck_at":end}), None));
+        }
     }
-    if check.when.is_some() {
-        return condition::evaluate(state, check, record);
-    }
-    Ok(json!({"outcome":"sleeping", "recheck_at":end}))
+    condition::reading(state, check, record)
 }
 
 fn evaluate_shell(
