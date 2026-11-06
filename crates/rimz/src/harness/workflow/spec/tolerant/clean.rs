@@ -227,6 +227,16 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
     }
     for (node, step) in &mut spec.steps {
         let path = format!("steps.{node}");
+        if !matches!(step.kind(), Some(StepKind::Agent(_)))
+            || step.lifecycle() == crate::store::workflow::StepLifecycle::Stay
+        {
+            ignore(
+                &mut step.keep,
+                &format!("{path}.keep"),
+                ignored,
+                "keep is only for turn and until agent steps",
+            );
+        }
         summary(&mut step.summary, &format!("{path}.summary"), ignored);
         sanitize(
             &mut step.timeout,

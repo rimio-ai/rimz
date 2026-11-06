@@ -4,7 +4,7 @@ use crate::harness::workflow::LeaderTurn;
 use crate::store::workflow::{HeldSession, StepLifecycle, TurnEnd, Verdict};
 use jiff::Timestamp;
 
-const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[checks.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
+pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[checks.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
 
 mod answers;
 mod checks;
@@ -56,7 +56,7 @@ fn omitted_lifecycle_launches_an_until_session() {
     );
 }
 
-fn turn() -> LeaderTurn {
+pub(super) fn turn() -> LeaderTurn {
     LeaderTurn {
         end: TurnEnd {
             agent_id: "leader".into(),
@@ -67,7 +67,7 @@ fn turn() -> LeaderTurn {
     }
 }
 
-fn check(dir: &std::path::Path, object: Value) {
+pub(super) fn check(dir: &std::path::Path, object: Value) {
     fs::write(dir.join("check.sh"), format!(
         "cp \"$RIMZ_WORKFLOW_DIR/context.json\" \"$RIMZ_WORKFLOW_DIR/check-view.json\"\nprintf '%s' {}\n",
         shlex::try_quote(&object.to_string()).unwrap(),

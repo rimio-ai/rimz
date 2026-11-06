@@ -280,6 +280,7 @@ pub(super) fn launch(
                     .clone()
                     .expect("agent step layout"),
                 lifecycle: attempt.lifecycle,
+                keep: spec.steps[&record.node].keep.unwrap_or(false),
                 prompt,
                 workflow_note: super::super::brief::step(paths, spec, record),
                 cwd: record.scope.path.clone(),
@@ -360,6 +361,15 @@ pub(super) fn launch(
     finish(state, paths, spec, &record, host, reason)
 }
 
+fn detaches(spec: &WorkflowSpec, attempt: &LiveAttempt) -> bool {
+    let ending = attempt.ending.as_ref().expect("published agent ending");
+    spec.steps[&attempt.node].keep.unwrap_or(false)
+        && ending.cause == EndCause::Lifecycle
+        && ending.route.as_ref().is_none_or(|route| {
+            route.reason != workflow::ParkReason::Cap || route.target != "@user"
+        })
+}
+
 pub(super) fn finish(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -370,6 +380,7 @@ pub(super) fn finish(
 ) -> Result<bool> {
     // Only a published ending reaches the off-lock stop cascade.
     let attempt = record.attempt.as_ref().expect("published agent ending");
+    let detached = detaches(spec, attempt);
     let mut run = attempt.run.clone();
     if run.is_none() {
         let identity = WorkflowAttemptRef {
@@ -395,7 +406,11 @@ pub(super) fn finish(
     }
     let (children, cost) = match &run {
         Some(run) => (
-            host.stop(run)?,
+            if detached {
+                host.detach(run)?
+            } else {
+                host.stop(run)?
+            },
             host.observe(run, Observation::Attempt)?.cost_usd,
         ),
         None => (Children::default(), None),
@@ -416,6 +431,16 @@ pub(super) fn finish(
             .is_none_or(|a| a.host != attempt.host)
     {
         return Ok(false);
+    }
+    if detached
+        && !detaches(
+            spec,
+            t.record.attempt.as_ref().expect("current agent ending"),
+        )
+    {
+        let record = t.record;
+        drop(guard);
+        return finish(state, paths, spec, &record, host, reason);
     }
     t.record.attempt.as_mut().expect("current agent ending").run = run;
     // A concurrent cancel may have replaced the ending while the stop ran.

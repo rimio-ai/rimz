@@ -14,11 +14,13 @@ pub(super) struct FakeHost {
     evict_error: Cell<bool>,
     stale_after_evict: Cell<bool>,
     stops: Cell<usize>,
+    detaches: Cell<usize>,
     evictions: Cell<usize>,
     occupancies: Cell<usize>,
     observations: Cell<usize>,
     turn_observations: Cell<usize>,
     on_stop: RefCell<Option<Box<dyn Fn()>>>,
+    on_detach: RefCell<Option<Box<dyn Fn()>>>,
     on_launch: RefCell<Option<Box<dyn Fn()>>>,
     on_observe: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
@@ -46,11 +48,13 @@ impl FakeHost {
             evict_error: Cell::new(false),
             stale_after_evict: Cell::new(false),
             stops: Cell::new(0),
+            detaches: Cell::new(0),
             evictions: Cell::new(0),
             occupancies: Cell::new(0),
             observations: Cell::new(0),
             turn_observations: Cell::new(0),
             on_stop: RefCell::new(None),
+            on_detach: RefCell::new(None),
             on_launch: RefCell::new(None),
             on_observe: RefCell::new(None),
             on_occupancy: RefCell::new(None),
@@ -140,6 +144,14 @@ impl AttemptHost for FakeHost {
             .entry(push.message.clone())
             .or_insert_with(|| text.into());
         Ok(Pushed { queued: true })
+    }
+
+    fn detach(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
+        if let Some(callback) = self.on_detach.borrow_mut().take() {
+            callback();
+        }
+        self.detaches.set(self.detaches.get() + 1);
+        Ok(self.observed.borrow().children.clone())
     }
 
     fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {

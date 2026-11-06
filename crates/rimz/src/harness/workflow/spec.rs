@@ -378,6 +378,7 @@ pub struct Step {
     pub run: Option<String>,
     pub shell: Option<String>,
     pub lifecycle: Option<crate::store::workflow::StepLifecycle>,
+    pub keep: Option<bool>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
     pub takeover: Option<bool>,

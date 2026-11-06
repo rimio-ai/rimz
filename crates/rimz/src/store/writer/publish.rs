@@ -143,6 +143,7 @@ impl Store {
             EventKind::AgentLifecycle(payload) => Some(payload.observation.signal.tag().to_owned()),
             EventKind::AgentAttach(_)
             | EventKind::AgentLaunchWarnings(_)
+            | EventKind::AgentWorkflowCleared(_)
             | EventKind::Signal(_)
             | EventKind::AgentLaunch(_)
             | EventKind::Message { .. }

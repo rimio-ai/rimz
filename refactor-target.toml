@@ -11511,6 +11511,11 @@ reason = "Until sessions publish a stable message id before delivery and remembe
 
 [[verdict]]
 kind = "item"
+key = "store::event::AgentWorkflowClearedPayload"
+reason = "Workflow detach and ordinary resume persist compare-and-clear ownership without changing the card schema."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::StepLaunch"
 reason = "The host receives the complete admitted supervised-attempt request."
 

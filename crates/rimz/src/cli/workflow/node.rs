@@ -241,6 +241,7 @@ fn step_facts(facts: &mut render::KeyVals, step: &Step) {
         }),
     );
     field(facts, "takeover", step.takeover);
+    field(facts, "keep", step.keep);
     field(facts, "window", step.window.as_ref());
     field(facts, "timeout", step.timeout.as_ref());
     field(

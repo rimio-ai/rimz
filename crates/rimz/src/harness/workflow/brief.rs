@@ -440,11 +440,16 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
     let check = span(step.then.as_deref().expect("validated step then"));
     match step.lifecycle() {
         StepLifecycle::Turn => {
+            let cleanup = if step.keep.unwrap_or(false) {
+                "leaves your pane open outside this run"
+            } else {
+                "closes your pane"
+            };
             let timeout = step.timeout.as_ref().map_or_else(String::new, |timeout| {
                 format!(", within the step's {} timeout", verbatim(timeout))
             });
             let after = format!(
-                "This is one turn. When it ends cleanly with nothing owed, RimZ closes your pane and runs the check {check}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
+                "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and runs the check {check}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
             );
             let questions = if step.on.asked.is_some() {
                 // An explicit asked edge always has a resolved target.
@@ -476,8 +481,13 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                     "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check {check}."
                 )
             } else {
+                let close = if step.keep.unwrap_or(false) {
+                    "Other routes move the run on; RimZ leaves your pane open outside this run."
+                } else {
+                    "Other routes close your pane and move the run on."
+                };
                 format!(
-                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
+                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
                 )
             };
             (

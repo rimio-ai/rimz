@@ -698,6 +698,105 @@ mod agent_ref {
     }
 
     #[test]
+    fn workflow_resume_refuses_current_pins_and_clears_former_pins_only_after_admission() {
+        use rimz::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
+        use rimz::disk::lock::WorkspaceLock;
+        use rimz::store::workflow::{self as records, RunRecord};
+
+        let mut actual = Vec::new();
+        let mut diagnostics = Vec::new();
+        for case in [
+            "current",
+            "held",
+            "terminal",
+            "newer",
+            "role",
+            "unreadable",
+            "refused",
+        ] {
+            let pin = WorkflowAttemptRef {
+                run: rimz::ids::WorkflowRunId::new(),
+                seq: 7,
+                role: WorkflowAttemptRole::Step,
+            };
+            let fixture = Fixture::new(
+                LaunchParams {
+                    workflow: Some(pin.clone()),
+                    ..Default::default()
+                },
+                false,
+                None,
+            );
+            let store = fixture.env.store();
+            let paths = store.paths().workflow(&pin.run);
+            let state = if matches!(case, "terminal" | "refused") {
+                "done"
+            } else {
+                "active"
+            };
+            let seq = if case == "newer" { 8 } else { 7 };
+            let mut record: RunRecord = serde_json::from_value(serde_json::json!({
+                "version":3, "id":pin.run, "workflow":"review", "spec_dir":fixture.cwd,
+                "spec_digest":"test", "project_root":fixture.env.project_root,
+                "scope":{"kind":"worktree","path":fixture.cwd},
+                "created_at":"2026-01-01T00:00:00Z", "state":state,
+                "node":"build", "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
+                "next_seq":8, "visits":{}, "visit_grant":0,
+                "attempt":{"kind":"agent", "seq":seq,
+                    "node":"build", "started_at":"2026-01-01T00:00:00Z", "host":{"pid":1,"start":null}}
+            })).unwrap();
+            if case == "role" {
+                record.attempt.as_mut().unwrap().kind = records::AttemptKind::Judge;
+            }
+            if case == "held" {
+                record.held = Some(records::HeldSession {
+                    attempt: record.attempt.take().unwrap(),
+                    entered_at: record.entered_at,
+                    verdict: None,
+                });
+                record.node = "check".into();
+            }
+            let guard = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+            records::initialize(store.paths(), &record, b"", &guard).unwrap();
+            drop(guard);
+            if case == "unreadable" {
+                std::fs::write(&paths.record, "not json").unwrap();
+            }
+            if case == "refused" {
+                std::fs::remove_dir_all(&fixture.cwd).unwrap();
+            }
+            let output = fixture.output("@bright-otter");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let rows = store.audit_rows().unwrap();
+            let card = rows.find("claude", &SESSION.into()).unwrap();
+            actual.push((
+                case,
+                output.status.success(),
+                card.workflow.is_some(),
+                stdout.contains(&format!("outside run `{}`", pin.run)),
+                stderr.contains(&format!("rimz workflow restart {} --continue", pin.run)),
+                stderr.contains("keeping its workflow pin"),
+                !fixture.trace().contains("layout-json\t"),
+            ));
+            diagnostics.push((case, stdout.into_owned(), stderr.into_owned()));
+        }
+        assert_eq!(
+            actual,
+            [
+                ("current", false, true, false, true, false, true),
+                ("held", false, true, false, true, false, true),
+                ("terminal", true, false, true, false, false, false),
+                ("newer", true, false, true, false, false, false),
+                ("role", true, false, true, false, false, false),
+                ("unreadable", true, true, false, false, true, false),
+                ("refused", false, true, false, false, false, true),
+            ],
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn single_session_omission_replays_saved_settings_and_refreshes_auto_compact() {
         let fixture = Fixture::new(LaunchParams::default(), false, None);
         let params = LaunchParams {

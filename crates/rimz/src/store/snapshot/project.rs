@@ -237,6 +237,7 @@ pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, Agent
         EventKind::AgentLaunch(payload) => payload.agent_id.clone(),
         EventKind::AgentAttach(payload) => payload.agent_id.clone(),
         EventKind::AgentLaunchWarnings(payload) => payload.agent_id.clone(),
+        EventKind::AgentWorkflowCleared(payload) => payload.agent_id.clone(),
         _ => return None,
     };
     Some((
@@ -300,6 +301,17 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             }
             EventKind::AgentLifecycle(payload) => {
                 state.reduce_lifecycle_event(envelope, payload);
+            }
+            EventKind::AgentWorkflowCleared(payload) => {
+                let key = (
+                    AgentKind::new_unchecked(envelope.source.clone()),
+                    payload.agent_id.clone(),
+                );
+                if let Some(agent) = state.map.get_mut(&key)
+                    && agent.workflow.as_ref() == Some(&payload.workflow)
+                {
+                    agent_mut(agent).workflow = None;
+                }
             }
             EventKind::Message { payload, .. } => {
                 stamp_message(&mut state.map, payload, envelope.timestamp);
@@ -1173,6 +1185,11 @@ fn assemble_launch_state(
         state.set_launch_id(launch_id.clone());
     }
     fold_launch_params(&mut state, &payload.launch);
+    if payload.state == AgentLaunchState::Bound
+        && let Some(prior) = prior
+    {
+        state.workflow.clone_from(&prior.workflow);
+    }
     state.mode = payload.launch.mode;
     if let Some(pane_id) = &payload.pane_id {
         state.pane = Some(PaneRef::from_id(pane_id.clone()));

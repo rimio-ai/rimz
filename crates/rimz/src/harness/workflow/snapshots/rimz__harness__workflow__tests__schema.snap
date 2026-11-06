@@ -312,6 +312,12 @@ expression: value
             "null"
           ]
         },
+        "keep": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "lifecycle": {
           "anyOf": [
             {

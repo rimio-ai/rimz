@@ -423,6 +423,42 @@ fn same_pane_successor_keeps_the_full_workflow_attempt_pin() {
 }
 
 #[test]
+fn workflow_pin_clear_matches_the_complete_expected_attempt() {
+    let pin = crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 7,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    };
+    let mut launch = launch_payload("primary", "coder-card");
+    launch.launch.workflow = Some(pin.clone());
+    let launched = launch_event("claude", launch);
+    let mut actual = Vec::new();
+    for changed in ["none", "run", "seq", "role"] {
+        let mut expected = pin.clone();
+        match changed {
+            "run" => expected.run = crate::ids::WorkflowRunId::new(),
+            "seq" => expected.seq += 1,
+            "role" => expected.role = crate::agents::WorkflowAttemptRole::Judge,
+            _ => {}
+        }
+        let clear = EventEnvelope::new(
+            workspace(),
+            "session",
+            "claude",
+            "agent",
+            "agent.workflow_cleared",
+            json!({"agent_id":"primary", "workflow":expected}),
+        );
+        let agents = reduce_agent_states(&[launched.clone(), clear]);
+        actual.push(agents[0].workflow.clone());
+    }
+    assert_eq!(
+        actual,
+        [None, Some(pin.clone()), Some(pin.clone()), Some(pin)]
+    );
+}
+
+#[test]
 fn live_successor_keeps_its_launch_after_predecessor_picker_revive() {
     let mut events = resumed_fork_events("tmux:%1");
     events.push(launch_event(
