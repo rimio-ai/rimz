@@ -786,7 +786,7 @@ fn block_failed_kind_bases(
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
     if let Some(name) = spec.map(str::trim).filter(|name| {
-        crate::agents::find_definition(name).is_some() || profiles.0.contains_key(*name)
+        crate::agents::find_runtime(name).is_some() || profiles.0.contains_key(*name)
     }) {
         launch.block_failed_profile(name, profiles)?;
     }

@@ -92,7 +92,7 @@ pub use credits::{
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
     HookCoverage, IntegrationConcern, LocalSessionDiscovery, PermissionMode, PlanCapacities,
-    PlanCapacity, PlanLabel, SamePaneSessionPolicy, UserCapability,
+    PlanCapacity, PlanLabel, SamePaneSessionPolicy, UserCapability, Variant,
 };
 use definition::{
     CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,
@@ -143,8 +143,9 @@ pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
 };
 pub use registry::{
-    SoftCompactSkip, all_definitions, compact_command, definition_by_kind, find_definition,
-    known_kinds, soft_compact_prompt, soft_compact_skip, spec_by_kind,
+    Runtime, SoftCompactSkip, all_definitions, compact_command, definition_by_kind,
+    find_definition, find_runtime, known_kinds, runtime_names, soft_compact_prompt,
+    soft_compact_skip, spec_by_kind,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};
 pub use state::{

@@ -47,8 +47,20 @@ pub(crate) fn available_profiles(
     let mut reports = profiles
         .0
         .iter()
+        .map(|(name, profile)| (name.as_str(), profile))
+        .chain(rimz::agents::runtime_names().filter_map(|name| {
+            let runtime = rimz::agents::find_runtime(name)?;
+            runtime.variant?;
+            if profiles.0.contains_key(name) {
+                return None;
+            }
+            profiles
+                .0
+                .get(runtime.kind())
+                .map(|profile| (name, profile))
+        }))
         .map(|(name, profile)| AgentProfileReport {
-            name: name.clone(),
+            name: name.to_owned(),
             source: "profile",
             origin: sources
                 .profile_origin(scope, name)
@@ -173,15 +185,13 @@ fn provider_brand_kind<'a>(
     let mut seen = HashSet::new();
     while seen.insert(current) {
         let Some(profile) = profiles.0.get(current) else {
-            return if rimz::agents::find_definition(current).is_some() {
-                current
-            } else {
-                raw_agent
-            };
+            return rimz::agents::find_runtime(current).map_or(raw_agent, |runtime| runtime.kind());
         };
         let next = profile.agent.as_str();
-        if next == current && rimz::agents::find_definition(next).is_some() {
-            return next;
+        if next == current
+            && let Some(runtime) = rimz::agents::find_runtime(next)
+        {
+            return runtime.kind();
         }
         current = next;
     }
@@ -353,6 +363,21 @@ pub(crate) fn model_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mini_profiles_follow_the_canonical_base_and_provider_brand() {
+        let profiles = toml::from_str("[opencode]\nagent = 'opencode'").unwrap();
+        let reports = available_profiles(
+            &profiles,
+            &Default::default(),
+            &Default::default(),
+            ProfileScope::Agents,
+        );
+        assert!(reports.iter().any(|report| report.name == "opencode-mini"
+            && report.agent.as_deref() == Some("opencode")
+            && report.brand_kind.as_deref() == Some("opencode")));
+        assert_eq!(provider_brand_kind("opencode-mini", &profiles), "opencode");
+    }
 
     #[test]
     fn tier_profiles_show_concrete_models_and_fallback_in_cards_and_json() {
@@ -694,6 +719,7 @@ mod tests {
         rimz::config::Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,

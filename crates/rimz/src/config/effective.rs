@@ -265,9 +265,11 @@ impl LaunchAgents {
                         selected.effort = renders.effort.clone();
                         selected.model_tier = None;
                         selected.tier_stamp = None;
-                        consumed |= base
-                            .as_ref()
-                            .is_none_or(|base| renders.renders.contains_key(base.kind.as_str()));
+                        consumed |= base.as_ref().is_none_or(|base| {
+                            renders.renders.contains_key(base.kind.as_str())
+                                && (selected.agent != base.kind.as_str()
+                                    || selected.variant == base.variant)
+                        });
                         selected.definition_renders = Some(renders);
                         *profile = selected;
                         continue;
@@ -315,10 +317,13 @@ impl LaunchAgents {
                         .map(|(model, reason)| crate::agents::TierSkip { model, reason })
                         .collect(),
                 }));
+                // A native fallback consumes its preference; a variant change still needs a rebase.
                 consumed |= targeted
-                    && base
-                        .as_ref()
-                        .is_none_or(|base| renders.renders.contains_key(base.kind.as_str()));
+                    && base.as_ref().is_none_or(|base| {
+                        renders.renders.contains_key(base.kind.as_str())
+                            && (selected.agent != base.kind.as_str()
+                                || selected.variant == base.variant)
+                    });
                 renders.preference = preference;
                 selected.model_tier = Some(super::tiers::TierProvenance {
                     tier: requested,
@@ -328,10 +333,7 @@ impl LaunchAgents {
                 *profile = selected;
             }
         }
-        Ok(
-            consumed
-                && family.is_none_or(|family| crate::agents::find_definition(family).is_some()),
-        )
+        Ok(consumed && family.is_none_or(|family| crate::agents::find_runtime(family).is_some()))
     }
 }
 
@@ -699,7 +701,10 @@ impl LaunchAgents {
     pub(crate) fn block_failed_profile(&self, name: &str, profiles: &ProfilesConfig) -> Result<()> {
         let name = name.trim();
         if !profiles.0.contains_key(name) {
-            return self.block_failed_reference(Some(name), None);
+            let kind = crate::agents::find_runtime(name)
+                .map(crate::agents::Runtime::kind)
+                .filter(|kind| !profiles.0.contains_key(*kind));
+            return self.block_failed_reference(Some(name), kind);
         }
         if let Ok(profile) = agents_spec::resolve_profile(name, profiles)
             && !profiles.0.contains_key(profile.kind.as_str())

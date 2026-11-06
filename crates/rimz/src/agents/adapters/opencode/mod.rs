@@ -108,6 +108,10 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         definitions: crate::agents::definition::DefinitionSpec {
+            variants: &[crate::agents::Variant {
+                name: "opencode-mini",
+                args: &[MINI_SUBCOMMAND],
+            }],
             runs_other_providers_models: true,
             ..crate::agents::definition::DefinitionSpec::EMPTY
         },

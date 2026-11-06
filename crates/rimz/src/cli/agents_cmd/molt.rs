@@ -395,6 +395,34 @@ mod tests {
     }
 
     #[test]
+    fn mini_molt_rebases_the_variant_without_losing_the_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles = toml::from_str("[worker]\nagent = 'opencode-mini'").unwrap();
+        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
+        let mut agent = rimz::testkit::agent_state("opencode", "mini", jiff::Timestamp::UNIX_EPOCH);
+        agent.profile = Some("worker".into());
+        let actual = ["opencode-mini", "opencode"].map(|base| {
+            replacement_posture(&agent, &machine, &effective, base, None)
+                .map(|(kind, posture)| {
+                    (
+                        kind.to_string(),
+                        posture.launch.args.first().map(String::as_str) == Some("mini"),
+                        posture.launch.record.unwrap().agent,
+                    )
+                })
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(
+            actual,
+            [
+                Ok(("opencode".into(), true, Some("opencode-mini".into()))),
+                Ok(("opencode".into(), false, Some("opencode".into()))),
+            ]
+        );
+    }
+
+    #[test]
     fn replacement_rebases_the_same_role_without_replaying_the_old_record() {
         let dir = tempfile::tempdir().unwrap();
         let role_prompt = dir.path().join("role.md");

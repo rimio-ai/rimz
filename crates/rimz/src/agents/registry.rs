@@ -96,6 +96,60 @@ pub fn find_definition(kind: &str) -> Option<&'static AgentDefinition> {
     })
 }
 
+/// An executable runtime, retaining its canonical kind and optional launch form.
+#[derive(Clone, Copy)]
+pub struct Runtime {
+    pub definition: &'static AgentDefinition,
+    pub variant: Option<&'static super::Variant>,
+}
+
+impl Runtime {
+    pub fn kind(self) -> &'static str {
+        self.definition.spec().kind
+    }
+
+    pub fn name(self) -> &'static str {
+        self.variant
+            .map_or_else(|| self.kind(), |variant| variant.name)
+    }
+}
+
+/// Resolve a kind, alias, or named launch variant without widening kind lookups.
+pub fn find_runtime(name: &str) -> Option<Runtime> {
+    all_definitions().find_map(|definition| {
+        let spec = definition.spec();
+        if spec.kind == name || spec.aliases.contains(&name) {
+            return Some(Runtime {
+                definition,
+                variant: None,
+            });
+        }
+        spec.launch
+            .definitions
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .map(|variant| Runtime {
+                definition,
+                variant: Some(variant),
+            })
+    })
+}
+
+/// Canonical kinds and their named launch variants, in display order.
+pub fn runtime_names() -> impl Iterator<Item = &'static str> {
+    all_definitions().flat_map(|definition| {
+        let spec = definition.spec();
+        std::iter::once(spec.kind).chain(
+            spec.launch
+                .definitions
+                .variants
+                .iter()
+                .map(|variant| variant.name),
+        )
+    })
+}
+
 /// The static definition for `kind`, for sites that need only const data
 /// (branding, capabilities, tool tables) without the behavioral trait.
 pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {

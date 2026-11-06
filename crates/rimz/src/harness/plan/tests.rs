@@ -1546,6 +1546,7 @@ fn configured_profile(
 ) -> Profile {
     Profile {
         empty_dir: None,
+        variant: None,
         definition_renders: None,
         kind_defaults: false,
         tools: None,
@@ -1859,6 +1860,37 @@ fn failed_definitions_refuse_only_the_requested_launch() {
             .to_string(),
         machine.definition_failure_for("crew").unwrap()
     );
+}
+
+#[test]
+fn failed_kind_base_refuses_bare_mini_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/opencode.md"),
+        "---\ndescription: Base\n---\n",
+    )
+    .unwrap();
+    let machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let launch = effective_launch(&machine, root.path());
+    let actual = [
+        crate::config::effective::ProfileScope::Agents,
+        crate::config::effective::ProfileScope::Subagents,
+    ]
+    .map(|scope| {
+        super::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            Some("opencode-mini"),
+            None,
+        )
+        .err()
+        .map(|error| error.to_string())
+    });
+    let detail = machine.definition_failure_for("opencode").unwrap();
+    assert_eq!(actual, [(); 2].map(|_| Some(detail.clone())));
 }
 
 #[test]
@@ -4701,6 +4733,140 @@ fn planned_cell(launch: &SupervisedLaunch) -> &AgentCell {
         );
     };
     cell
+}
+
+#[test]
+fn profile_agent_override_replaces_the_tier_model_and_is_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, body) in [
+        ("claude", ""),
+        ("worker", "agent: claude\ntier: junior\ntools: [Bash]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Worker\n{body}---\nCraft."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.agents.profiles.0.insert(
+        "fast".into(),
+        toml::from_str(
+            "agent = 'claude'\nmodel = 'haiku'\neffort = 'low'\nmode = 'yolo'\nargs = '--profile-flag'",
+        )
+        .unwrap(),
+    );
+    let actual = [false, true].map(|tier| {
+        let mut request = supervised_request("worker", "Read the brief.");
+        request.agent = Some("fast".into());
+        request.tier = tier.then_some(crate::config::tiers::ModelTier::Junior);
+        let launch = plan_one(&request, &machine, root.path());
+        let cell = planned_cell(&launch);
+        (
+            cell.launch.model.clone(),
+            cell.launch.effort.clone(),
+            cell.launch.mode,
+            cell.args.iter().any(|arg| arg == "--profile-flag"),
+            cell.launch.record.as_ref().unwrap().agent.clone(),
+            cell.launch.tier.is_some(),
+        )
+    });
+    assert_eq!(
+        actual,
+        [(); 2].map(|_| (
+            Some("haiku".into()),
+            Some("low".into()),
+            Some(PermissionMode::Yolo),
+            true,
+            Some("fast".into()),
+            false,
+        ))
+    );
+}
+
+#[test]
+fn mini_overrides_keep_the_tier_model_and_record_the_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/opencode.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: opencode\nmodel: deepseek-v4.1-flash\n---\nCraft.",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let actual = [false, true].map(|tier| {
+        let mut request = supervised_request("worker", "Read the brief.");
+        request.agent = Some("opencode-mini".into());
+        request.tier = tier.then_some(crate::config::tiers::ModelTier::Junior);
+        let (launch, _) = SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(root.path());
+        launch
+            .map(|launch| {
+                let cell = planned_cell(&launch);
+                (
+                    cell.kind.to_string(),
+                    cell.args.first().map(String::as_str) == Some("mini"),
+                    cell.launch.model.clone(),
+                    cell.launch
+                        .record
+                        .as_ref()
+                        .and_then(|record| record.agent.clone()),
+                    cell.launch.tier.is_some(),
+                )
+            })
+            .map_err(|error| error.to_string())
+    });
+    assert_eq!(
+        actual,
+        [
+            Ok((
+                "opencode".into(),
+                true,
+                Some("deepseek-v4.1-flash".into()),
+                Some("opencode-mini".into()),
+                false
+            )),
+            Ok((
+                "opencode".into(),
+                true,
+                Some("sol".into()),
+                Some("opencode-mini".into()),
+                true
+            )),
+        ]
+    );
 }
 
 #[test]

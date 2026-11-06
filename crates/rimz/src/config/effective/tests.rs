@@ -603,6 +603,116 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
 }
 
 #[test]
+fn mini_tier_and_model_overrides_keep_the_selected_interface() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/opencode.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Mini\nagent: opencode-mini\ntier: junior\n---\nCraft.",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(
+        loaded.errors.is_empty(),
+        "mini must load: {:?}",
+        loaded.errors
+    );
+    machine.agents.profiles = loaded.agent_profiles;
+    let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let actual = [
+        (Some(crate::config::tiers::ModelTier::Senior), None),
+        (None, Some("deepseek-v4.1-flash")),
+    ]
+    .map(|(tier, model)| {
+        let mut launch = launch.clone();
+        launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("worker"),
+                tier,
+                model,
+                None,
+                |_, _| None,
+            )
+            .unwrap();
+        let mut resolved = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some("worker"),
+            None,
+        )
+        .unwrap();
+        crate::harness::plan::finalize_launch_layout(
+            &mut resolved.layout,
+            crate::harness::plan::LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset {
+                    model: model.map(str::to_owned),
+                    ..Default::default()
+                },
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        (
+            cell.kind.to_string(),
+            cell.args.first().cloned(),
+            cell.launch.model.clone(),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            ("opencode".into(), Some("mini".into()), Some("opus".into())),
+            (
+                "opencode".into(),
+                Some("mini".into()),
+                Some("deepseek-v4.1-flash".into())
+            ),
+        ]
+    );
+    let mut launch = launch;
+    let refusal = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("opencode-mini"),
+            Some(crate::config::tiers::ModelTier::Junior),
+            None,
+            None,
+            |_, _| None,
+        )
+        .unwrap_err();
+    assert!(
+        refusal
+            .to_string()
+            .contains("--tier needs Markdown definitions"),
+        "{refusal}"
+    );
+}
+
+#[test]
 fn tier_launches_keep_the_requested_model_client_engine() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -1299,6 +1409,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
         empty_dir: None,
         allowed_tools: None,
+        variant: None,
         definition_renders: None,
         kind_defaults: false,
         tools: None,

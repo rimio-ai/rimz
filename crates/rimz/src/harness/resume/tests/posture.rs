@@ -4,6 +4,56 @@
 use super::*;
 
 #[test]
+fn mini_relaunch_replays_each_name_source_and_current_definition() {
+    let mut profiles: ProfilesConfig =
+        toml::from_str("[worker]\nagent = 'opencode-mini'\n[plain]\nagent = 'opencode'").unwrap();
+    let actual = [
+        (Some("worker"), None, true),
+        (Some("opencode-mini"), None, true),
+        (Some("plain"), Some("opencode-mini"), true),
+        (Some("worker"), Some("opencode"), false),
+    ]
+    .map(|(name, base, mini)| {
+        let record = crate::agents::LaunchRecord {
+            agent: base.map(str::to_owned),
+            ..Default::default()
+        };
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: name,
+                kind: &AgentKind::new_unchecked("opencode"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        (
+            posture.degraded.is_none(),
+            posture.launch.args.first().map(String::as_str) == Some("mini"),
+            mini,
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (true, true, true),
+            (true, true, true),
+            (true, true, true),
+            (true, false, false)
+        ]
+    );
+    profiles.0.get_mut("worker").unwrap().agent = "opencode".into();
+    let posture = posture_for("opencode", Some("worker"), None, &profiles);
+    assert!(posture.degraded.is_none());
+    assert!(!posture.launch.args.iter().any(|arg| arg == "mini"));
+    profiles.0.get_mut("worker").unwrap().agent = "missing".into();
+    let posture = posture_for("opencode", Some("worker"), None, &profiles);
+    assert!(posture.degraded.is_some());
+    assert!(!posture.launch.args.iter().any(|arg| arg == "mini"));
+}
+
+#[test]
 fn null_mode_resumes_default_with_or_without_records_profiles_and_degradation() {
     for (kind, expected) in [
         ("claude", PermissionMode::Auto),

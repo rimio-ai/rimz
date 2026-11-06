@@ -24,6 +24,7 @@ struct Resolved {
 pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
+        variant: None,
         definition_renders: None,
         kind_defaults: false,
         tools: None,
@@ -191,8 +192,8 @@ impl Resolver<'_> {
         let own_kind = fm
             .agent
             .as_deref()
-            .and_then(agents::find_definition)
-            .map(|definition| definition.spec().kind);
+            .and_then(agents::find_runtime)
+            .map(agents::Runtime::kind);
         let model_kind = fm
             .model
             .as_deref()
@@ -239,8 +240,10 @@ impl Resolver<'_> {
             })?;
         let mut profile = if parent_name.is_empty() {
             empty_profile("")
-        } else if let Some(kind) = agents::find_definition(&parent_name) {
-            empty_profile(kind.spec().kind)
+        } else if let Some(runtime) = agents::find_runtime(&parent_name) {
+            let mut profile = empty_profile(runtime.kind());
+            profile.variant = runtime.variant;
+            profile
         } else if self.tree.lookup(&parent_name, path)?.is_some()
             || self.tree.failed.contains(&parent_name)
         {
@@ -261,6 +264,7 @@ impl Resolver<'_> {
                 preference = parent.preference;
             }
             let mut profile = empty_profile(&parent.profile.agent);
+            profile.variant = parent.profile.variant;
             profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
             profile
         } else {
@@ -298,6 +302,9 @@ impl Resolver<'_> {
             runtime_kind = Some(profile.agent.clone());
             preference.family = Some(profile.agent.clone());
         } else if let Some(kind) = fm.model.as_deref().and_then(agents::definition_model_kind) {
+            if profile.agent != kind {
+                profile.variant = None;
+            }
             profile.agent = kind.to_owned();
         } else if fm.model.is_some() {
             profile.agent = runtime_kind.clone().ok_or_else(|| {
@@ -331,6 +338,7 @@ impl Resolver<'_> {
             }
             let mut candidate = profile.clone();
             candidate.agent = kind.to_owned();
+            candidate.variant = profile.variant.filter(|_| kind == profile.agent);
             let mut candidate_fm = fm.clone();
             candidate_fm.model = model.map(str::to_owned);
             match self.finish(name, candidate_fm, candidate) {

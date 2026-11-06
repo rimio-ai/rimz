@@ -331,6 +331,11 @@ impl SeatLoader<'_> {
         } else {
             Some(kind.to_owned())
         };
+        if fm.agent.as_deref() == Some(original.agent.as_str())
+            && let Some(variant) = original.variant
+        {
+            fm.agent = Some(variant.name.to_owned());
+        }
         fm.description = definition.frontmatter.description.clone();
         let mut traits = Vec::new();
         for name in definition

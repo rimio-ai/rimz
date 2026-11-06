@@ -245,9 +245,9 @@ pub struct LaunchParams {
     /// the launcher's fleet report. Boxed to keep launch events compact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launched_by: Option<Box<LaunchedBy>>,
-    /// The profile selected from `[agents.profiles]` or
-    /// `[subagents.profiles]`, passed through `RIMZ_AGENT_PROFILE`. Used as the
-    /// card handle when no role is present.
+    /// The selected profile or fileless runtime variant, passed through
+    /// `RIMZ_AGENT_PROFILE` and retained for posture replay. Used as the card
+    /// handle when no role is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// Profile lookup doorway when the launch's lineage does not identify it.

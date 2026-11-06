@@ -33,6 +33,8 @@ The invariant matches module paths and type names, not kind strings, so it does 
 | `find_definition(kind)` / `definition_by_kind(kind)` | the definition for a `--source <agent>` tag, matching the spec's `kind` or one of its `aliases`. The second returns an error for an unknown kind |
 | `spec_by_kind(kind)` | the same lookup for callers that need only const data (branding, tool tables) |
 | `known_kinds()` | kinds in display order, for doctor, wiring probes, and coverage |
+| `find_runtime(name)` | a definition and optional `Variant` for launch names: kinds, aliases, or registered variants such as `opencode-mini`; the runtime exposes its canonical kind and launch name |
+| `runtime_names()` | canonical kinds plus variant names, for launch listings and completion; kind-only lookup remains unchanged |
 | `command_agent_kind(command)` | which agent a pane's command line is running, after shell and launcher normalization |
 | `resumed_session_id_from_cmdline(cmdline)` | the session a `<agent> --resume <id>` process reopened. Abstains when two adapters match |
 | `room_env(runtime)` | the merged adapter environment a new room exports to the multiplexer as one opaque map |

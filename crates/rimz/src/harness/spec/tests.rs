@@ -4,6 +4,165 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[test]
+fn team_roles_accept_bare_mini_runtime() {
+    let profiles = ProfilesConfig::default();
+    let teams =
+        toml::from_str("[forge]\nroles = [{role = 'coder', profile = 'opencode-mini'}]").unwrap();
+    let actual = resolve_spec_with_agent_override(
+        Some("forge"),
+        &profiles,
+        &profiles,
+        &CommandsConfig::default(),
+        &teams,
+        None,
+    )
+    .map(|layout| {
+        let cell = layout.agent_cells().next().unwrap();
+        (
+            cell.kind.to_string(),
+            cell.args.first().map(String::as_str) == Some("mini"),
+            cell.launch.role.clone(),
+        )
+    })
+    .map_err(|error| error.to_string());
+    assert_eq!(actual, Ok(("opencode".into(), true, Some("coder".into()))));
+}
+
+#[test]
+fn mini_runtime_is_explicit_and_rebases_with_the_engine() {
+    let mut profiles: ProfilesConfig = toml::from_str(
+        "[mini]\nagent = 'opencode-mini'\nmode = 'yolo'\nargs = '--keep'\n\
+         [child]\nagent = 'mini'\n[plain]\nagent = 'opencode'\n\
+         [writer]\nagent = 'claude'",
+    )
+    .unwrap();
+    profiles.0.get_mut("writer").unwrap().system_prompt_file =
+        Some(crate::config::PromptSource::Text {
+            origin: "writer.md".into(),
+            text: "Keep the job.".into(),
+        });
+    let actual: Vec<_> = [
+        ("mini", None),
+        ("child", None),
+        ("mini", Some("claude")),
+        ("mini", Some("opencode")),
+        ("writer", Some("opencode-mini")),
+        ("writer", Some("opencode")),
+        ("plain", Some("opencode-mini")),
+        ("opencode-mini", None),
+        ("opencode", None),
+    ]
+    .map(|(name, base)| {
+        resolve_spec_with_agent_override(
+            Some(name),
+            &profiles,
+            &profiles,
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+            base,
+        )
+        .map(|layout| {
+            let cell = layout.agent_cells().next().unwrap();
+            (
+                cell.kind.to_string(),
+                cell.args.first().is_some_and(|arg| arg == "mini"),
+                cell.args.iter().filter(|arg| *arg == "mini").count(),
+                cell.launch.profile.clone(),
+                cell.notices.is_empty(),
+                name != "writer"
+                    || cell.system_prompt_file == profiles.0["writer"].system_prompt_file,
+            )
+        })
+        .map_err(|error| error.to_string())
+    })
+    .into();
+    let expected = [
+        ("opencode", true, Some("mini")),
+        ("opencode", true, Some("child")),
+        ("claude", false, Some("mini")),
+        ("opencode", false, Some("mini")),
+        ("opencode", true, Some("writer")),
+        ("opencode", false, Some("writer")),
+        ("opencode", true, Some("plain")),
+        ("opencode", true, Some("opencode-mini")),
+        ("opencode", false, None),
+    ]
+    .map(|(kind, mini, profile)| {
+        Ok((
+            kind.into(),
+            mini,
+            usize::from(mini),
+            profile.map(str::to_owned),
+            true,
+            true,
+        ))
+    });
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn mini_runtime_is_listed_without_permission_or_fast_suffixes() {
+    let profiles = ProfilesConfig::default();
+    let commands = CommandsConfig::default();
+    let actual = ["opencode-mini-yolo", "opencode-mini-fast"].map(|name| {
+        let result = parse_cell(name, &profiles, &commands, None);
+        let Err(LayoutErr::UnknownCell(error)) = result else {
+            return false;
+        };
+        error
+            .candidates
+            .iter()
+            .any(|candidate| candidate.name == "opencode-mini")
+            && !error
+                .candidates
+                .iter()
+                .any(|candidate| candidate.name == name)
+    });
+    assert_eq!(actual, [true, true]);
+    assert!(
+        valid_agent_overrides(&profiles)
+            .split(", ")
+            .any(|name| name == "opencode-mini")
+    );
+}
+
+#[test]
+fn mini_uses_the_canonical_base_and_toml_can_shadow_its_name() {
+    let profiles: ProfilesConfig = toml::from_str(
+        "[opencode]\nagent = 'opencode'\nsystem-prompt-file = 'base.md'\n\
+         [mini]\nagent = 'opencode-mini'",
+    )
+    .unwrap();
+    for name in ["mini", "opencode-mini"] {
+        let actual = resolve_profile(name, &profiles)
+            .map(|resolved| (resolved.kind.to_string(), resolved.system_prompt_file))
+            .map_err(|error| error.to_string());
+        assert_eq!(
+            actual,
+            Ok(("opencode".into(), Some(PathBuf::from("base.md").into())))
+        );
+    }
+    let profiles: ProfilesConfig = toml::from_str("[opencode-mini]\nagent = 'claude'").unwrap();
+    let cell = parse_cell("opencode-mini", &profiles, &CommandsConfig::default(), None).unwrap();
+    assert!(matches!(cell, Cell::Agent(cell)
+            if cell.kind == "claude" && !cell.args.iter().any(|arg| arg == "mini")));
+}
+
+#[test]
+fn mini_allowlist_is_a_literal_runtime_not_its_whole_kind() {
+    let profiles: ProfilesConfig =
+        toml::from_str("[caller]\nagent = 'claude'\nsubagents = ['opencode-mini']").unwrap();
+    assert!(
+        validate_subagent_allowlists(
+            &profiles,
+            &ProfilesConfig::default(),
+            &CommandsConfig::default()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
     let profiles = profiles([
         ("perf", profile("claude")),
@@ -204,6 +363,7 @@ fn profile(agent: &str) -> Profile {
     Profile {
         empty_dir: None,
         allowed_tools: None,
+        variant: None,
         definition_renders: None,
         kind_defaults: false,
         tools: None,
@@ -1273,6 +1433,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
         Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,

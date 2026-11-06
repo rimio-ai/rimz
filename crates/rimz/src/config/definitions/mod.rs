@@ -550,10 +550,10 @@ fn load_resolved(
                         format!("has unsafe definition name {name:?}"),
                     ));
                 }
-                if crate::agents::find_definition(name).is_some() {
+                if crate::agents::find_runtime(name).is_some() {
                     return Err(DefinitionErr::new(
                         path,
-                        "takes the name of an agent kind; rename it",
+                        "takes the name of an agent runtime; rename it",
                     ));
                 }
                 if item.pack.is_some() {
@@ -724,7 +724,7 @@ fn load_resolved(
         &mut loaded,
     );
     loaded.failed.retain(|name, paths| {
-        if crate::agents::find_definition(name).is_some()
+        if crate::agents::find_runtime(name).is_some()
             && paths.iter().all(|path| {
                 sources.items.iter().any(|item| {
                     item.pack.is_some() && item.path == *path && item.namespace() != "bases"

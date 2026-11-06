@@ -683,6 +683,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -714,6 +715,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -745,6 +747,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,

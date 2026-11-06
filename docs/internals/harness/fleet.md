@@ -136,6 +136,8 @@ Two decision trees behave like state machines without an enum: the [deliberate-e
 
 ## Launching a fleet
 
+Named runtime variants remain separate from kinds. `opencode-mini` resolves to the OpenCode definition and its typed `Variant`; accounts, spending, and kind-base lookup still use `opencode`. Profiles retain the variant until argument rendering, which places its args first in the cell. Re-basing takes the replacement's variant even on the same kind, so `--agent opencode` clears mini. Relaunch re-resolves the current definition name, a bare variant's stamped profile name, or the saved `LaunchRecord.agent`, without a stored variant field.
+
 ### The layout IR
 
 `rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline spec, and both compile to the same backend-neutral panes. In the inline grammar, commas split columns, plus signs tile rows within a column, and slashes stack rows within a column.
@@ -148,7 +150,7 @@ claude-auto,codex-yolo     → agent cells with adapter-owned permission posture
 claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` handles
 ```
 
-Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<kind>-<mode>` variant, a `<base>-fast` cell, a configured profile, a configured command, or an executable found on PATH ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). Configured cells and built-ins resolve before PATH. A `<base>-fast` cell whose kind has no fast mode warns and launches without it, never falling through to PATH (`crates/rimz/src/harness/spec.rs::fast_suffix_cell`). An agent cell may carry an ad-hoc role as `<cell>:<role>`. Inline roles follow team-role naming and addressing rules, must be unique within the spec, and apply only to agent cells.
+Each cell is one of: the built-in `term`, a registered runtime (kind or named variant), a virtual `<kind>-<mode>` permission cell, a `<base>-fast` cell, a configured profile, a configured command, or an executable found on PATH ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). Configured cells and built-ins resolve before PATH. A `<base>-fast` cell whose kind has no fast mode warns and launches without it, never falling through to PATH (`crates/rimz/src/harness/spec.rs::fast_suffix_cell`). An agent cell may carry an ad-hoc role as `<cell>:<role>`. Inline roles follow team-role naming and addressing rules, must be unique within the spec, and apply only to agent cells.
 
 A named team is an ordered role list. It opens as one column per role unless it declares its own `layout`, which uses the same row and column grammar. A team layout places each declared role exactly once and resolves declared role names before other cells; any other cell (a roleless agent, `term`, a command, a PATH executable) parses as it would inline (`crates/rimz/src/harness/spec.rs::compile_team_layout`). A role cell in a team layout takes no `:role` suffix. `<team>.<role>` launches one declared role with its team identity, placed like any single-agent launch.
 

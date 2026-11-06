@@ -370,6 +370,7 @@ fn tier_stamp(model: &str) -> Box<crate::agents::TierStamp> {
 
 fn routed_profile(effort: Option<&str>) -> Profile {
     Profile {
+        variant: None,
         definition_renders: Some(crate::config::tiers::DefinitionRenders {
             preference: Default::default(),
             renders: BTreeMap::from([(
