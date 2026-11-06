@@ -3,6 +3,32 @@ use crate::agents::{AgentStatus, ConcernCoverage, IntegrationConcern};
 use crate::ids::AgentKind;
 
 #[test]
+fn mini_runtime_keeps_kind_lookup_separate() {
+    let actual = ["opencode-mini", "opencode", "mcode", "absent"].map(|name| {
+        find_runtime(name).map(|runtime| {
+            (
+                runtime.kind(),
+                runtime.name(),
+                runtime.variant.map(|variant| variant.args),
+                std::ptr::eq(runtime.definition, find_definition(runtime.kind()).unwrap()),
+            )
+        })
+    });
+    assert_eq!(
+        actual,
+        [
+            Some(("opencode", "opencode-mini", Some(["mini"].as_slice()), true)),
+            Some(("opencode", "opencode", None, true)),
+            Some(("minimax", "minimax", None, true)),
+            None,
+        ]
+    );
+    assert!(find_definition("opencode-mini").is_none());
+    assert!(runtime_names().any(|name| name == "opencode-mini"));
+    assert!(!known_kinds().any(|name| name == "opencode-mini"));
+}
+
+#[test]
 fn native_compaction_applies_provider_caps() {
     let cases = [
         ("claude", 372_000, 1_000_000, Some(372_000)),

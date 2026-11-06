@@ -1236,6 +1236,44 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
 }
 
 #[test]
+fn mini_cohort_restore_replays_and_can_drop_the_variant() {
+    let profiles: ProfilesConfig = toml::from_str("[worker]\nagent = 'opencode-mini'").unwrap();
+    let mut saved = team_agent("opencode", "mini", "coder", "/repo", 1);
+    saved.profile = Some("worker".into());
+    saved.record = Some(Box::default());
+    let seeds = [CohortSeed::Resume(Box::new(saved))];
+    let actual = [None, Some("opencode")].map(|base| {
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::agent(
+            AgentKind::new_unchecked("opencode"),
+        ));
+        restore_routed_cells(
+            &mut layout,
+            &seeds,
+            &profiles,
+            &ResumeOverrides {
+                agent: base,
+                ..Default::default()
+            },
+        )
+        .map(|_| {
+            let cell = layout.agent_cells().next().unwrap();
+            (
+                cell.kind.to_string(),
+                cell.args.first().map(String::as_str) == Some("mini"),
+            )
+        })
+        .map_err(|error| error.to_string())
+    });
+    assert_eq!(
+        actual,
+        [
+            Ok(("opencode".into(), true)),
+            Ok(("opencode".into(), false))
+        ]
+    );
+}
+
+#[test]
 fn resume_agent_override_requires_same_kind_and_records_base() {
     let mut profiles = profiles("planner", profile("claude"));
     let mut reviewer = profile("claude");

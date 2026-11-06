@@ -5,7 +5,7 @@
 //! PATH executable, or a built-in cell. Agent cells optionally carry a `:role`
 //! suffix for an ad-hoc role handle. Named teams compile to one column per role
 //! unless they declare an explicit role-first layout shape. Built-ins provide
-//! `term`, every registered agent kind, and `<kind>-<mode>` virtual variants;
+//! `term`, registered runtimes, and `<kind>-<mode>` permission cells;
 //! per-machine `[agents.profiles]` entries can specialize agent cells and
 //! `[agents.commands]` entries provide raw command panes.
 
@@ -184,6 +184,7 @@ pub struct ResolvedProfile {
     pub empty_dir: Option<bool>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
+    pub(crate) variant: Option<&'static crate::agents::Variant>,
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
@@ -213,6 +214,7 @@ impl ResolvedProfile {
             kind_defaults: false,
             filled_effort: false,
             kind: AgentKind::new_unchecked(kind),
+            variant: None,
             empty_dir: None,
             layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
@@ -230,6 +232,7 @@ impl ResolvedProfile {
     }
 
     fn fill_missing(&mut self, layer: &Profile) {
+        self.variant = self.variant.or(layer.variant);
         self.kind_defaults |= layer.kind_defaults;
         self.empty_dir = self.empty_dir.or(layer.empty_dir);
         self.isolation_default = self.isolation_default.or(layer.isolation);
@@ -1267,20 +1270,22 @@ pub fn resolve_role(binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<
     Ok(resolved)
 }
 
-/// Resolve `name` through profile inheritance to a concrete built-in kind.
+/// Resolve `name` through profile inheritance to a canonical kind and launch variant.
 pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
     let mut cur = name.to_owned();
     let mut seen = Vec::<String>::new();
     let mut layers = Vec::<&Profile>::new();
-    let terminal_kind = loop {
+    let terminal = loop {
         if layers.len() >= MAX_PROFILE_DEPTH {
             return Err(LayoutErr::ProfileChainTooDeep {
                 profile: name.to_owned(),
             });
         }
         let Some(profile) = profiles.0.get(&cur) else {
-            if layers.is_empty() && crate::agents::find_definition(&cur).is_some() {
-                break cur;
+            if layers.is_empty()
+                && let Some(runtime) = crate::agents::find_runtime(&cur)
+            {
+                break runtime;
             }
             return Err(LayoutErr::UnknownProfileBase {
                 profile: name.to_owned(),
@@ -1290,8 +1295,10 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         seen.push(cur.clone());
         layers.push(profile);
         let next = profile.agent.as_str();
-        if next == cur && crate::agents::find_definition(next).is_some() {
-            break next.to_owned();
+        if next == cur
+            && let Some(runtime) = crate::agents::find_runtime(next)
+        {
+            break runtime;
         }
         if profiles.0.contains_key(next) {
             if seen.iter().any(|visited| visited == next) {
@@ -1304,8 +1311,8 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             cur = next.to_owned();
             continue;
         }
-        if crate::agents::find_definition(next).is_some() {
-            break next.to_owned();
+        if let Some(runtime) = crate::agents::find_runtime(next) {
+            break runtime;
         }
         return Err(LayoutErr::UnknownProfileBase {
             profile: cur,
@@ -1313,11 +1320,22 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         });
     };
 
-    let mut resolved = ResolvedProfile::bare(&terminal_kind);
+    let mut resolved = ResolvedProfile::bare(terminal.kind());
     resolved.layers = seen;
     for layer in layers {
         resolved.fill_missing(layer);
     }
+    if terminal.variant.is_some()
+        && !resolved.layers.iter().any(|layer| layer == terminal.kind())
+        && let Some(base) = profiles
+            .0
+            .get(terminal.kind())
+            .filter(|base| base.agent == terminal.kind())
+    {
+        resolved.layers.push(terminal.kind().to_owned());
+        resolved.fill_missing(base);
+    }
+    resolved.variant = resolved.variant.or(terminal.variant);
     resolved.fill_kind_defaults();
     normalize_auto_compact(&mut resolved.auto_compact, name)?;
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
@@ -1353,7 +1371,7 @@ pub(super) fn resolve_agent_override(
     else {
         return Ok(None);
     };
-    if !profiles.0.contains_key(value) && crate::agents::find_definition(value).is_none() {
+    if !profiles.0.contains_key(value) && crate::agents::find_runtime(value).is_none() {
         return Err(LayoutErr::UnknownAgentOverride {
             value: value.to_owned(),
             valid: valid_agent_overrides(profiles),
@@ -1558,7 +1576,7 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
     commands.0.contains_key(raw)
         || profiles.0.contains_key(raw)
         || raw == "term"
-        || crate::agents::find_definition(raw).is_some()
+        || crate::agents::find_runtime(raw).is_some()
         || virtual_agent_shape(raw)
         || fast_suffix_base(raw).is_some_and(|base| {
             profiles.0.contains_key(base)
@@ -1620,13 +1638,13 @@ fn parse_cell(
     if raw == "term" {
         return Ok(Cell::shell());
     }
-    if crate::agents::find_definition(raw).is_some() {
-        let original = ResolvedProfile::bare(raw);
+    if let Some(runtime) = crate::agents::find_runtime(raw) {
+        let original = resolve_profile(raw, profiles)?;
         let resolved = rebase_onto(original, base_override);
         return Ok(Cell::Agent(agent_cell_from(
             &resolved,
             render_profile_args(raw, &resolved)?,
-            None,
+            runtime.variant.map(|_| runtime.name().to_owned()),
             None,
             resolved.launch.mode,
         )));
@@ -1737,6 +1755,9 @@ fn render_profile_args(
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
+    if let Some(variant) = resolved.variant {
+        argv.splice(0..0, variant.args.iter().map(|arg| (*arg).to_owned()));
+    }
     if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.spec().launch.permission_args(mode));
     }
@@ -2280,7 +2301,7 @@ fn prepare_team<'a>(
             });
         }
         if !profiles.0.contains_key(&binding.profile)
-            && crate::agents::find_definition(&binding.profile).is_none()
+            && crate::agents::find_runtime(&binding.profile).is_none()
         {
             return Err(LayoutErr::UnknownRoleProfile {
                 team: name.to_owned(),
@@ -2403,10 +2424,13 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     original.clear_kind_defaults();
     original.kind_defaults |= base.kind_defaults;
     let same_kind = original.kind == base.kind;
-    original.launch.tier = None;
+    if !same_kind || base.layers.iter().any(|layer| layer != base.kind.as_str()) {
+        original.launch.tier = None;
+    }
 
     // The base supplies the engine; the original keeps the role.
     original.kind.clone_from(&base.kind);
+    original.variant = base.variant;
     original.layers.retain(|layer| !base.layers.contains(layer));
     original.layers.extend_from_slice(&base.layers);
     if !base.filled_effort && base.launch.effort.is_some() {
@@ -2448,7 +2472,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
 
     let carry_model = same_kind || crate::agents::runs_other_providers_models(&base.kind);
-    if base.launch.model.is_some() {
+    if base.launch.model.is_some() && original.launch.tier.is_none() {
         original.launch.model.clone_from(&base.launch.model);
     } else if !carry_model && let Some(model) = original.launch.model.take() {
         original.notices.push(CellNotice::DroppedModel { model });
@@ -2509,8 +2533,8 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
 fn cell_names(profiles: &ProfilesConfig, commands: &CommandsConfig) -> BTreeSet<String> {
     let mut values = BTreeSet::new();
     values.insert("term".to_owned());
+    values.extend(crate::agents::runtime_names().map(str::to_owned));
     for kind in crate::agents::known_kinds() {
-        values.insert(kind.to_owned());
         for mode in PERMISSION_MODE_NAMES {
             let parsed = PermissionMode::from_str(mode).expect("permission mode constant is valid");
             if supported_virtual_agent_args(kind, parsed).is_some() {
@@ -2524,7 +2548,7 @@ fn cell_names(profiles: &ProfilesConfig, commands: &CommandsConfig) -> BTreeSet<
 }
 
 fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
-    let mut values = crate::agents::known_kinds()
+    let mut values = crate::agents::runtime_names()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     values.extend(profiles.0.keys().cloned());
@@ -2537,7 +2561,7 @@ fn cell_candidates(profiles: &ProfilesConfig, commands: &CommandsConfig) -> Vec<
         candidates.insert(name.clone(), SpecKind::Command);
     }
     for (name, profile) in &profiles.0 {
-        if crate::agents::find_definition(name).is_none() {
+        if crate::agents::find_runtime(name).is_none() {
             candidates
                 .entry(name.clone())
                 .or_insert_with(|| SpecKind::Profile(Box::new(profile.clone())));
@@ -2555,7 +2579,7 @@ fn cell_candidates(profiles: &ProfilesConfig, commands: &CommandsConfig) -> Vec<
         }
     }
     for name in cells {
-        let kind = if name == "term" || crate::agents::find_definition(&name).is_some() {
+        let kind = if name == "term" || crate::agents::find_runtime(&name).is_some() {
             SpecKind::Kind
         } else {
             SpecKind::Cell

@@ -194,8 +194,10 @@ fn launch_specs_from(
 ) -> Vec<CompletionCandidate> {
     let mut candidates = Vec::new();
     let mut suffix_bases = Vec::new();
+    for name in rimz::agents::runtime_names() {
+        candidates.push(candidate(name, "agent runtime"));
+    }
     for kind in rimz::agents::known_kinds() {
-        candidates.push(candidate(kind, "agent kind"));
         suffix_bases.push(kind.to_owned());
     }
     for (name, profile) in &profiles.0 {
@@ -541,6 +543,17 @@ mod tests {
             candidates[1].get_help().map(ToString::to_string).as_deref(),
             Some("topic/owned")
         );
+    }
+
+    #[test]
+    fn mini_completion_does_not_synthesize_suffixes() {
+        let config = MachineConfig::default();
+        let names: Vec<_> = agent_specs_from(&config)
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|name| name == "opencode-mini"));
+        assert!(!names.iter().any(|name| name.starts_with("opencode-mini-")));
     }
 
     #[test]

@@ -470,6 +470,8 @@ impl std::str::FromStr for Isolation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
+    #[serde(skip)]
+    pub variant: Option<&'static crate::agents::Variant>,
     /// Complete family renders exist only for Markdown definitions.
     #[serde(skip)]
     pub definition_renders: Option<super::tiers::DefinitionRenders>,

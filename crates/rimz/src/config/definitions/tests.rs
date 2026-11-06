@@ -2,6 +2,104 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn mini_definitions_and_seats_keep_the_variant_and_canonical_base() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/opencode.md",
+        "",
+        "OpenCode foundation.",
+    );
+    for (path, fields) in [
+        (
+            "agents/worker.md",
+            "agent: opencode-mini\nmodel: deepseek-v4.1-flash",
+        ),
+        ("agents/child.md", "agent: worker"),
+        ("agents/plain.md", "agent: opencode"),
+        (
+            "subagents/reader.md",
+            "agent: opencode-mini\nmodel: deepseek-v4.1-flash",
+        ),
+    ] {
+        definition(root.path(), path, fields, "Craft.");
+    }
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    tier: junior"),
+        "Pipeline.",
+    );
+    let loaded = load_checked(root.path());
+    assert!(
+        loaded.errors.is_empty(),
+        "mini must load: {:?}",
+        loaded.errors
+    );
+    for profile in [
+        &loaded.agent_profiles.0["worker"],
+        &loaded.agent_profiles.0["child"],
+        &loaded.agent_profiles.0["probe.lead"],
+        &loaded.agent_profiles.0["probe.judge"],
+        &loaded.subagent_profiles.0["reader"],
+    ] {
+        assert_eq!(profile.agent, "opencode");
+        assert_eq!(
+            profile.variant.map(|variant| variant.name),
+            Some("opencode-mini")
+        );
+        assert!(
+            !serde_json::to_value(profile)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("variant")
+        );
+        let renders = profile.definition_renders.as_ref().unwrap();
+        assert!(
+            renders
+                .renders
+                .iter()
+                .all(|(kind, render)| { render.variant.is_none() || kind == "opencode" })
+        );
+    }
+    let profile = &loaded.agent_profiles.0["child"];
+    assert_eq!(
+        profile.variant.map(|variant| variant.args),
+        Some(["mini"].as_slice())
+    );
+    assert_eq!(
+        crate::harness::spec::resolve_profile("child", &loaded.agent_profiles)
+            .unwrap()
+            .system_prompt_file
+            .as_ref()
+            .map(PromptSource::origin),
+        Some(root.path().join("agents/opencode.md").as_path())
+    );
+    assert!(loaded.agent_profiles.0["plain"].variant.is_none());
+}
+
+#[test]
+fn mini_runtime_name_is_reserved_for_markdown_definitions() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/opencode-mini.md",
+        "agent: pi",
+        "Craft.",
+    );
+    let loaded = load_checked(root.path());
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .any(|error| { error.message.contains("takes the name of an agent runtime") }),
+        "{:?}",
+        loaded.errors
+    );
+}
+
+#[test]
 fn example_bundles_load_without_external_definitions() {
     let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/teams");
     for entry in std::fs::read_dir(bundles).unwrap() {

@@ -334,6 +334,7 @@ fn planner_profiles() -> ProfilesConfig {
         "planner".to_owned(),
         Profile {
             empty_dir: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -553,6 +554,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         "planner".to_owned(),
         Profile {
             empty_dir: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -584,6 +586,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         "child-only".to_owned(),
         Profile {
             empty_dir: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -1935,6 +1938,7 @@ mod launch_options {
             "warn".to_owned(),
             rimz::config::Profile {
                 empty_dir: None,
+                variant: None,
                 definition_renders: None,
                 kind_defaults: false,
                 tools: None,

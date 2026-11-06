@@ -2142,11 +2142,15 @@ fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
 #[test]
 fn process_compiler_places_mini_before_options_and_translates_auto_approve() {
     let project = tempfile::tempdir().unwrap();
+    let profiles = toml::from_str("[mini]\nagent = 'opencode-mini'\nmode = 'yolo'").unwrap();
+    let cell = crate::harness::spec::profile_cell("mini", &profiles);
+    assert!(cell.is_ok(), "mini variant must resolve: {cell:?}");
+    let mini_args = cell.unwrap().args;
     let cases = [
         (
             ExecAction::Launch {
                 prompt: Some("--auto".into()),
-                extra_args: ["--auto", "mini"].map(str::to_owned).to_vec(),
+                extra_args: mini_args.clone(),
             },
             vec!["opencode", "mini", "--standalone", "--prompt", "--auto"],
             true,
@@ -2154,7 +2158,7 @@ fn process_compiler_places_mini_before_options_and_translates_auto_approve() {
         (
             ExecAction::Resume {
                 session_id: "ses_saved".into(),
-                extra_args: ["mini", "--auto"].map(str::to_owned).to_vec(),
+                extra_args: mini_args,
             },
             vec!["opencode", "mini", "--session", "ses_saved", "--standalone"],
             true,

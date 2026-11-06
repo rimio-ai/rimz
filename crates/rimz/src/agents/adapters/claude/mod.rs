@@ -472,6 +472,7 @@ pub(in crate::agents) struct ClaudeAdapter;
 
 const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
+        variants: &[],
         runs_other_providers_models: false,
         effort: Some("xhigh"),
         models: &[

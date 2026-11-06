@@ -374,21 +374,41 @@ fn pack_team_conflicts_named_like_kinds_do_not_block_kind_launches() {
 
 #[test]
 fn kind_named_pack_profiles_report_the_kind_name_error() {
-    for namespace in ["agents", "subagents"] {
+    for (namespace, name) in [
+        ("agents", "claude"),
+        ("subagents", "claude"),
+        ("agents", "opencode-mini"),
+        ("subagents", "opencode-mini"),
+    ] {
         let env = Env::new();
         let source = installed_with_home_profile(&env);
+        if name == "opencode-mini" {
+            write(
+                env.agents_home().join("agents/opencode.md"),
+                "---\ndescription: OpenCode base\n---\nBase.",
+            );
+        }
         write(
             source.join("crew").join(namespace).join("invalid.md"),
-            "---\nname: claude\ndescription: Invalid\nagent: pi\n---\nInvalid.",
+            &format!("---\nname: {name}\ndescription: Invalid\nagent: pi\n---\nInvalid."),
         );
         let crew = json(&env, &["packs", "show", "crew", "--json"]);
         assert_eq!(
-            item(&crew, namespace, "claude")["fate"]["message"],
+            item(&crew, namespace, name)["fate"]["message"],
             format!(
-                "takes the name of an agent kind; rename it; run `rimz packs exclude crew:claude --type {namespace}`"
+                "takes the name of an agent runtime; rename it; run \
+                 `rimz packs exclude crew:{name} --type {namespace}`"
             ),
             "{crew}"
         );
+        env.rimz()
+            .args(["agents", "explain", name])
+            .assert()
+            .success();
+        env.rimz()
+            .args(["agents", "explain", "claude", "--agent", name])
+            .assert()
+            .success();
     }
 }
 
@@ -415,7 +435,7 @@ fn pack_kind_base_conflicts_and_home_kind_names_keep_the_launch_failure() {
             .assert()
             .code(1)
             .stderr(contains(if home {
-                "takes the name of an agent kind; rename it"
+                "takes the name of an agent runtime; rename it"
             } else {
                 "rimz packs exclude crew:claude --type agents"
             }));

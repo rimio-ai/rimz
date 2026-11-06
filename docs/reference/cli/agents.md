@@ -97,15 +97,16 @@ rimz agents forge.planner                            # re-add one role of team f
 rimz agents claude --worktree "Take one approach."   # each run gets its own fresh worktree
 ```
 
-A spec is one of three things:
+A spec takes one of these forms:
 
 | Spec | Launches |
 | --- | --- |
 | A team name | The [team](../../guide/configuration.md#agent-profiles-commands-and-teams)'s layout. [`rimz teams`](./teams.md#launch-a-team) is the doorway for configured cohorts. The built-in `peer` team is the roleless `claude,codex`. |
 | `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. |
 | An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group with one expanded member). |
+| `opencode-mini` | OpenCode's mini interface, sharing kind `opencode` and its kind base. Restart and resume keep mini; `--agent opencode` switches to the full interface. |
 
-Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a [fast cell](#fast-cells) such as `claude-fast`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
+Each inline cell is `term` (a plain shell), an agent kind or registered runtime variant (`opencode-mini`), a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a [fast cell](#fast-cells) such as `claude-fast`, a configured profile, a configured command, or any executable on your `PATH`. Mini has no `-yolo` or `-fast` shorthand; use `rimz agents opencode-mini --yolo` or `--fast`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 
 An unresolved bare word (`rimz agents <word>`) exits 2. The refusal suggests up to three names at the closest distance within two edits (an adjacent transposition counts as one), with verbs before launch names. Without a close match it lists teams, standalone profiles and commands, and agent kinds, followed by discovery commands and the resolved definition paths. Empty groups are omitted. Explicit `rimz agents launch <word>` prints the same refusal with exit 1 and excludes verbs from suggestions. A misspelled role in `<team>.<role>` suggests a nearby declared role. An unresolved inline-layout cell exits 1 with ``unknown layout cell `<cell>` ``, followed by up to three nearby cell names within two edits, or grouped profiles, commands, and agent kinds when none is close; teams are not cell suggestions.
 
@@ -204,7 +205,7 @@ These flags select a resume path or override the launch's agent cells. Each adap
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
 | `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited profile and role fragment list with these files, in command-line order; the team layer stays intact. |
 | `--ask`, `--yolo` | Replace the permission posture, including a profile's declared mode, and record it for restart and resume; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
-| `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
+| `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile, kind, or runtime variant such as `opencode-mini` (below). |
 | `--isolation host\|scoped\|sandbox` | Isolation for this launch instead of its profile default or the machine's `agents.isolation` (below). |
 | `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it, after any role or unique profile, the agent renders as `@<kind>` when unambiguous, else its pet name. |
 | `--description <TEXT>` | Seeds the card's second line until the agent names its own session. It never reaches the agent's argv or environment. |

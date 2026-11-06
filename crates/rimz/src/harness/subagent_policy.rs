@@ -27,8 +27,8 @@ pub enum SubagentCatalog {
     Available(Vec<SubagentProfile>),
 }
 
-/// `subagent_profiles` includes every kind base, which serves both namespaces, so a home with
-/// any kind base yields `Available` unless the caller's `subagents` list filters it out.
+/// Kind bases serve both namespaces. Their variants are listed beside them, or when explicitly
+/// allowed; a home with neither profiles nor commands otherwise keeps delegation disabled.
 pub fn catalog(
     caller_profile: Option<&str>,
     profiles: &ProfilesConfig,
@@ -60,6 +60,25 @@ pub fn catalog(
         effort: None,
         description: None,
     }));
+    for runtime in crate::agents::runtime_names().filter_map(crate::agents::find_runtime) {
+        if runtime.variant.is_none() || specs.iter().any(|spec| spec.name == runtime.name()) {
+            continue;
+        }
+        let base = subagent_profiles.0.get(runtime.kind());
+        if base.is_none()
+            && !allowed.is_some_and(|allowed| allowed.iter().any(|name| name == runtime.name()))
+        {
+            continue;
+        }
+        specs.push(SubagentProfile {
+            name: runtime.name().to_owned(),
+            source: SubagentProfileSource::Profile,
+            agent: Some(runtime.kind().to_owned()),
+            model: base.and_then(|base| base.model.clone()),
+            effort: base.and_then(crate::config::Profile::effective_effort),
+            description: base.and_then(|base| base.description.clone()),
+        });
+    }
     if let Some(allowed) = allowed {
         specs.retain(|spec| allowed.contains(&spec.name));
     }
@@ -154,6 +173,7 @@ mod tests {
             Profile {
                 empty_dir: None,
                 allowed_tools: None,
+                variant: None,
                 definition_renders: None,
                 kind_defaults: false,
                 tools: None,
@@ -209,6 +229,26 @@ mod tests {
     }
 
     #[test]
+    fn mini_catalog_and_allowlist_keep_literal_runtime_names() {
+        let (mut agent, profiles) = caller(Some(vec!["opencode-mini"]));
+        let children: ProfilesConfig = toml::from_str("[opencode]\nagent = 'opencode'").unwrap();
+        let listed = catalog(
+            Some("planner"),
+            &profiles,
+            &children,
+            &CommandsConfig::default(),
+        );
+        assert!(matches!(listed, SubagentCatalog::Available(specs)
+                if specs.len() == 1 && specs[0].name == "opencode-mini"
+                    && specs[0].agent.as_deref() == Some("opencode")));
+        agent.profile = Some("planner".into());
+        assert!(check_allowed(&agent, &profiles, "opencode-mini", None).is_ok());
+        assert!(check_allowed(&agent, &profiles, "opencode", None).is_err());
+        let (agent, profiles) = caller(Some(vec!["opencode"]));
+        assert!(check_allowed(&agent, &profiles, "opencode-mini", None).is_err());
+    }
+
+    #[test]
     fn catalog_combines_profiles_and_commands() {
         let (_, profiles) = caller(None);
         let subagent_profiles = ProfilesConfig(BTreeMap::from([(
@@ -216,6 +256,7 @@ mod tests {
             Profile {
                 empty_dir: None,
                 allowed_tools: None,
+                variant: None,
                 definition_renders: None,
                 kind_defaults: false,
                 tools: None,

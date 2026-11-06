@@ -723,16 +723,18 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 
-For OpenCode 2.2.5's mini frontend, use a TOML profile in a trusted project's `.rimz/config.toml` (Markdown definitions accept no raw `args`):
+For OpenCode 2.2.5's mini interface, select the `opencode-mini` runtime. A machine-wide `agents/deepseek-flash-mini.md` can use the same `agents/opencode.md` base as the full interface:
 
-```toml
-[profiles.mini]
-agent = "opencode"
-args = "mini"
-mode = "yolo"
+```yaml
+---
+description: DeepSeek with OpenCode mini.
+agent: opencode-mini
+model: deepseek-v4.1-flash
+mode: yolo
+---
 ```
 
-Launch it with `rimz agents mini`. RimZ selects `mini` as the frontend when it is the first argument after skipping permission flags, placing it immediately after `opencode` on launch, resume, restart, and restore. Yolo works through RimZ's OpenCode integration instead of mini's unsupported `--auto`; refresh the integration with `rimz hooks install opencode` when upgrading. Keep `--session`, `--continue`, `--fork`, `--prompt`, `--model`, and `--auto` out of profile args: RimZ owns the conversation and prompt, and the profile's `model` and `mode` cover model and permission choices. Other occurrences of `mini`, such as `--agent mini`, pass through unchanged.
+Launch it with `rimz agents deepseek-flash-mini`. `rimz agents opencode-mini` also works without a mini profile, and `--agent opencode-mini` moves another profile onto mini while retaining its job. TOML profiles can select it with `agent = "opencode-mini"` too. Restart, resume, and team seats keep the interface; `--agent opencode` explicitly switches back to the full interface. A tier changes the model, not the OpenCode engine or interface. There is no `opencode-mini.md` kind base and no `opencode-mini-yolo` or `opencode-mini-fast` shorthand; use launch flags instead. Yolo works through RimZ's OpenCode integration instead of mini's unsupported `--auto`; refresh the integration with `rimz hooks install opencode` when upgrading.
 
 #### Customizing a pack item
 
@@ -806,7 +808,7 @@ An inline spec such as `rimz agents "claude,codex+term"` names the cells to laun
 1. `[agents.commands]`,
 2. direct profiles from `agents/`, including a trusted project's overrides,
 3. the built-in `term`,
-4. a registered agent kind,
+4. a registered agent runtime (a kind or `opencode-mini`),
 5. an adapter-supported `<kind>-<mode>` cell (`claude-auto`, `codex-ask`, `codex-yolo`, and so on; the [agents reference](../reference/cli/agents.md#permission-mode-cells) lists which kinds have which),
 6. a `<base>-fast` cell over a profile, kind, or `<kind>-<mode>` cell, launched in the provider's fast mode ([fast cells](../reference/cli/agents.md#fast-cells)); a base whose kind has no fast switch warns and launches without it, never reaching step 7,
 7. an executable of that name on `PATH`.

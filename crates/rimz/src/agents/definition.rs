@@ -533,6 +533,7 @@ pub(super) enum DefinitionTools {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DefinitionSpec {
+    pub variants: &'static [Variant],
     pub effort: Option<&'static str>,
     pub models: &'static [DefinitionModel],
     pub runs_other_providers_models: bool,
@@ -542,12 +543,20 @@ pub(super) struct DefinitionSpec {
 
 impl DefinitionSpec {
     pub const EMPTY: Self = Self {
+        variants: &[],
         effort: None,
         models: &[],
         runs_other_providers_models: false,
         prefixes: &[],
         tools: DefinitionTools::Unsupported,
     };
+}
+
+/// A named launch form of an existing agent kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Variant {
+    pub name: &'static str,
+    pub args: &'static [&'static str],
 }
 
 #[derive(Clone, Copy, Debug)]

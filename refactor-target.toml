@@ -356,7 +356,8 @@ upward-dependencies = ["address"]
 # is_untracked_frontend shares the per-kind display fallback with the pane fold (+1).
 # NotTracked, NotTrackedReason, not_tracked_hooks and untracked_mode_fix share reporting gaps (+4).
 # AgentState::native_compaction shares model-matched display limits with CLI reports and doctor (+1).
-surface-budget = 1257
+# Variant and its name/args, Runtime and its definition/variant/kind/name, find_runtime and runtime_names share named launch forms (+10).
+surface-budget = 1267
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -461,6 +462,26 @@ reason = "Definition checks and scoped views retain conflicts separately from ab
 kind = "item"
 key = "agents::registry::ResumeProbe"
 reason = "Pane repair distinguishes resumed, settled and retryable process-chain answers."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::Variant"
+reason = "Definition loading and launch resolution retain a named launch form beside its canonical kind."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::Runtime"
+reason = "Launch-name consumers share the definition and optional variant without widening kind-only lookups."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::find_runtime"
+reason = "Definitions, launch overrides and runtime catalogs resolve names through one kind-and-variant lookup."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::runtime_names"
+reason = "Launch listings and completion enumerate canonical kinds and their registered variants together."
 
 [[verdict]]
 kind = "item"

@@ -1929,6 +1929,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             name.to_owned(),
             crate::config::Profile {
                 empty_dir: None,
+                variant: None,
                 definition_renders: None,
                 kind_defaults: false,
                 tools: None,
@@ -1962,6 +1963,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             name.to_owned(),
             crate::config::Profile {
                 empty_dir: None,
+                variant: None,
                 definition_renders: None,
                 kind_defaults: false,
                 tools: None,
@@ -3990,6 +3992,34 @@ fn fresh_exec_of_a_child_fork_judges_the_subagent_profile_definition() {
     assert_eq!(
         definition_failure(&request, &machine, Some(&effective)),
         None
+    );
+}
+
+#[test]
+fn mini_restart_gate_refuses_a_failed_kind_base() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/opencode.md"),
+        "---\ndescription: Base\n---\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let mut request = request(
+        "opencode",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    request.identity.params.profile = Some("opencode-mini".into());
+    assert_eq!(
+        definition_failure(&request, &machine, Some(&effective)),
+        Some(machine.definition_failure_for("opencode").unwrap())
     );
 }
 

@@ -2793,6 +2793,7 @@ fn team_machine() -> MachineConfig {
         Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
@@ -2824,6 +2825,7 @@ fn team_machine() -> MachineConfig {
         Profile {
             empty_dir: None,
             allowed_tools: None,
+            variant: None,
             definition_renders: None,
             kind_defaults: false,
             tools: None,
