@@ -674,14 +674,24 @@ fn apply_credits_cache_with(
             let ceiling = accounts.usage_limit(&panel.kind);
             if panel.metered {
                 let displayable_entry = entry.filter(|entry| entry_is_displayable(entry, now_ms));
-                if panel.plan.is_none() {
-                    panel.plan = displayable_entry
-                        .and_then(|entry| entry.plan.as_deref())
-                        .filter(|plan| !plan.trim().is_empty())
-                        .map(|tier| ProviderPlan {
-                            tier: tier.to_owned(),
-                            name: None,
-                        });
+                let cached_tier = displayable_entry
+                    .and_then(|entry| entry.plan.as_deref())
+                    .map(str::trim)
+                    .filter(|tier| !tier.is_empty());
+                // The account reading's plan wins on kind-wide panels; a
+                // session/probe plan is a fallback. Delegated scopes hold
+                // credential labels, so their cache only fills an empty plan.
+                // An unchanged tier keeps its display name.
+                if let Some(tier) = cached_tier
+                    && panel
+                        .plan
+                        .as_ref()
+                        .is_none_or(|plan| panel.account_scope.is_kind_wide() && plan.tier != tier)
+                {
+                    panel.plan = Some(ProviderPlan {
+                        tier: tier.to_owned(),
+                        name: None,
+                    });
                 }
                 panel.extra_credits = displayable_entry
                     .and_then(|entry| entry.extra_credits.clone())
