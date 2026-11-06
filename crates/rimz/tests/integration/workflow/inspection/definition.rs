@@ -22,6 +22,7 @@ on.red = 'fix'
 timeout = '3d'
 [steps.fix]
 agent = 'claude'
+lifecycle = 'turn'
 prompt-file = 'prompt.md'
 then = 'watch'
 timeout = '2h'
@@ -63,7 +64,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "capacity-wait 6h",
         "only when a loop task starts the run",
         "asked ↑ watch",
-        "A step goes on to its next check however its turn ends.",
+        "A turn step goes on to its next check when its turn ends cleanly or its provider exits.",
         "A check that cannot run parks at @user.",
         "No deadline is set; a deadline granted to a run parks it at @user.",
         "one node in full: rimz workflow show review begin",

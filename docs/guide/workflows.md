@@ -28,6 +28,7 @@ on = { pass = "@done", fail = "fix" }
 [steps.fix]
 agent = "claude"
 prompt-file = "prompts/fix.md"
+lifecycle = "turn"
 then = "tests"
 max-visits = 3
 timeout = "1h"
@@ -71,7 +72,7 @@ $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
 fix-tests  tests  check  cargo test  —           fail → fix (explicit), pass → @done (explicit), timeout → @user (default, never: no timeout), invalid → @user (default), deadline → @user (default, only with a deadline)
 fix-tests  fix    step   claude      yes         then → tests (explicit), cap → @user (default), capacity → @failed (default, never: capacity-wait is forever), deadline → @user (default, only with a deadline)
-warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
+warning: fix-tests: steps.fix: auto-continue is off; a step paused on a provider limit waits for you
 ```
 
 A default edge to `@user` parks the run only when it can fire. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks, but its timeout cannot fire because this check has no timeout. A deadline needs a grant on the run. The `fix` row says the cap (`cap`) parks too; a question stays live in the agent's pane. Its capacity wait never gives up by default. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
@@ -192,11 +193,11 @@ An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind
 
 Only the leader also gets a `### Workflow` launch note: what a workflow is, a compact graph rail marking this step, who started the run, why it arrived here, applicable visit caps, the previous attempt, and what follows its turn. It points to `context.json` and `rimz workflow show` for the full record. Automatic runs name the loop task and its current trigger when available. The note is separate from the prompt and is not saved: agent restart, resume, and rebirth do not carry it, including a restarted `until` session.
 
-For an agent step, `lifecycle = "turn"` is the default. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
+Set `lifecycle = "turn"` for a one-turn agent step. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
 
 Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you in @<handle>` in `workflow list` and `<step> is with you` in `show`, or `asking you: …` and `<step> is asking you` while a blocking question is open. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step warns and ignores `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
 
-Use `lifecycle = "until"` to work across turns until the check says you are done. At each leader turn end, once the leader is at rest with no pending work, blocking question, or provider limit, RimZ runs `then` once. A route back to this step or to `@wait` keeps the layout open without another visit; every other route closes it and follows that route without repeating the check. A kept `@wait` waits for your next turn end, not a timer or signal. While the check runs, `list` reads `with you · checking <check>`, with any waiting detail appended; a blocking question still takes precedence. If RimZ observes a newer turn when it rechecks a closing verdict, it discards that verdict without stopping your session. Provider exit, deadline, and cancel still end the session as for `stay`. Both `stay` and `until` are staying steps.
+Agent steps default to `lifecycle = "until"`: work across turns until the check says you are done. At each leader turn end, once the leader is at rest with no pending work, blocking question, or provider limit, RimZ runs `then` once. A route back to this step or to `@wait` keeps the layout open without another visit; every other route closes it and follows that route without repeating the check. A kept `@wait` waits for your next turn end, not a timer or signal. While the check runs, `list` reads `with you · checking <check>`, with any waiting detail appended; a blocking question still takes precedence. If RimZ observes a newer turn when it rechecks a closing verdict, it discards that verdict without stopping your session. Provider exit, deadline, and cancel still end the session as for `stay`. Both `stay` and `until` are staying steps; omitting `lifecycle` therefore also warns and ignores `timeout` and `on.asked`. Set `lifecycle = "turn"` to use those fields. An `until` step cannot use a sleep as its `then` check; use `turn` for that too.
 
 To leave time for another turn before an `until` session closes, give the closing route a delay:
 
@@ -284,6 +285,7 @@ cases = [
 summary = "Repair CI and re-arm the PR"
 agent = "claude"
 prompt-file = "prompts/sweep.md"
+lifecycle = "turn"
 takeover = true
 then = "pr"
 max-visits = 5

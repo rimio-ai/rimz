@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
-use crate::store::workflow::{Key, RunRecord, StepVisits};
+use crate::store::workflow::{Key, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -496,6 +496,13 @@ pub enum StepKind<'a> {
 }
 
 impl Step {
+    pub fn lifecycle(&self) -> StepLifecycle {
+        self.lifecycle.unwrap_or(match self.kind() {
+            Some(StepKind::Agent(_)) => StepLifecycle::Until,
+            _ => StepLifecycle::Turn,
+        })
+    }
+
     /// Configured bounds as (name, used, limit including grant), total before per-outcome.
     pub fn visit_bounds(
         &self,
@@ -573,12 +580,26 @@ pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
     parse(&text)
 }
 
-pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+pub fn load_run(dir: &Path, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
+    let path = crate::disk::paths::workflow_spec_file(dir);
+    let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
+    parse_run(&text, record)
+}
+
+pub(crate) fn parse_run(text: &str, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
+    parse_with_lifecycle(text, record.default_lifecycle)
+}
+
+pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+    parse_with_lifecycle(text, StepLifecycle::Until)
+}
+
+fn parse_with_lifecycle(text: &str, default: StepLifecycle) -> Result<WorkflowSpec, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,
     })?;
-    tolerant::parse(value)
+    tolerant::parse(value, default)
 }
 
 pub fn schema() -> schemars::Schema {

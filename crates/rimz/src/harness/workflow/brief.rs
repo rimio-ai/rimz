@@ -345,7 +345,7 @@ fn ordinal(count: u64) -> String {
 fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, String) {
     // Validation requires every agent step's `then` to name a check.
     let check = span(step.then.as_deref().expect("validated step then"));
-    match step.lifecycle.unwrap_or_default() {
+    match step.lifecycle() {
         StepLifecycle::Turn => {
             let timeout = step.timeout.as_ref().map_or_else(String::new, |timeout| {
                 format!(", within the step's {} timeout", verbatim(timeout))

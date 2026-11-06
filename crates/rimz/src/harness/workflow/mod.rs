@@ -27,10 +27,10 @@ pub use inspect::{
     repeats_evaluation, routing_hop, timeout_at,
 };
 pub use script::{CaseMark, CaseMarks, case_marks, unread_reasons};
-pub(crate) use spec::parse;
+pub(crate) use spec::parse_run;
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, Route, ScopeKind,
-    SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, schema,
+    SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
 };
 pub use validate::{NodeRow, Validation, validate};
 

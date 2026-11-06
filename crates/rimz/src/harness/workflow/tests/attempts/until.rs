@@ -9,6 +9,21 @@ const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\
 mod checks;
 mod delay;
 
+#[test]
+fn omitted_lifecycle_launches_an_until_session() {
+    let (_dir, state, record) = setup(&UNTIL.replace("lifecycle='until'\n", ""));
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (
+            live.attempt.as_ref().unwrap().lifecycle,
+            host.launched.borrow()[0].lifecycle,
+            host.turn_observations.get(),
+        ),
+        (StepLifecycle::Until, StepLifecycle::Until, 1),
+    );
+}
+
 fn turn() -> LeaderTurn {
     LeaderTurn {
         end: TurnEnd {
@@ -266,7 +281,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     let mut actual = Vec::new();
     for target in ["@done", "@user", "next", "other"] {
         let text = format!(
-            "{}\n[steps.next]\nagent='claude'\nprompt-file='prompt.md'\nthen='other'\n[checks.other]\nshell='true'\non.pass='@done'\n",
+            "{}\n[steps.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[checks.other]\nshell='true'\non.pass='@done'\n",
             UNTIL.replace("on.done='@done'", &format!("on.done='{target}'"))
         );
         let (dir, state, record) = setup(&text);

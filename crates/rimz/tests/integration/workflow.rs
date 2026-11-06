@@ -31,6 +31,32 @@ const HEADER: &str = "[workflow]\nscope = 'worktree'\nstart = 'pr'\n";
 const WAIT: &str = "[checks.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
+#[test]
+fn new_runs_seal_definitions_at_version_three() {
+    let actual: Vec<_> = [
+        String::new(),
+        "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\n".into(),
+        "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='turn'\n"
+            .into(),
+    ]
+    .into_iter()
+    .map(|step| {
+        let spec = format!("{HEADER}{WAIT}{step}");
+        let (env, _) = fixture(&spec, PENDING);
+        let id = start(&env);
+        let value = until(&env, &id, |value| value["record"]["wait"].is_object());
+        let paths = env
+            .state_path_for(&env.project_root)
+            .workflow(&id.parse().unwrap());
+        (
+            value["record"]["version"].as_u64().unwrap(),
+            fs::read_to_string(paths.spec).unwrap() == spec,
+        )
+    })
+    .collect();
+    assert_eq!(actual, [(3, true); 3]);
+}
+
 fn command(env: &Env, args: &[&str]) -> std::process::Output {
     env.rimz().args(args).output().unwrap()
 }
@@ -321,7 +347,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
     let state =
         rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
     let mut future = value["record"].clone();
-    future["version"] = json!(3);
+    future["version"] = json!(4);
     let mut ids = Vec::new();
     for contents in [
         None,
@@ -736,7 +762,7 @@ fn invalid_script_signal_names_the_signal() {
 
 fn steps_spec(cap: &str) -> String {
     format!(
-        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ work = 'build', done = '@done' }}\n[steps.build]\nagent = 'claude'\nprompt-file = 'prompt.md'\nthen = 'pr'\nmax-visits = 1\n{cap}\n"
+        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ work = 'build', done = '@done' }}\n[steps.build]\nagent = 'claude'\nlifecycle = 'turn'\nprompt-file = 'prompt.md'\nthen = 'pr'\nmax-visits = 1\n{cap}\n"
     )
 }
 

@@ -2243,11 +2243,13 @@ path = "crates/rimz/src/harness"
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
-# workflow::parse shares the sealed-spec parser with cached sidebar projection (+1).
+# workflow::parse_run shares the run-aware sealed-spec parser with cached sidebar projection.
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
 # workflow::Route and workflow::close_after share delayed routes and their close instant (+2).
-surface-budget = 1080
+# Step::lifecycle shares the agent definition's until default with CLI readers (+1).
+# workflow::load_run preserves the run's frozen default for sealed-spec readers (+1).
+surface-budget = 1082
 
 [[verdict]]
 kind = "item"
@@ -4003,7 +4005,8 @@ path = "crates/rimz/src/store"
 # SidebarStallResource, SidebarStallPhase and SidebarStallItem carry classified host PSI (+3).
 # group_partition shares active/external/inactive ordering with frozen layouts (+1).
 # GroupPartition types that shared order (+1).
-surface-budget = 554
+# workflow::VERSION shares the current run-record fence with the engine (+1).
+surface-budget = 555
 
 [[verdict]]
 kind = "item"
@@ -4057,8 +4060,8 @@ reason = "Workflow strips distinguish main-rail step and check glyphs without im
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::spec::parse"
-reason = "The stat-gated sidebar cache parses sealed workflow bytes through the same tolerant parser as load."
+key = "harness::workflow::spec::parse_run"
+reason = "The stat-gated sidebar cache parses sealed workflow bytes with the run's frozen lifecycle default."
 
 [[verdict]]
 kind = "item"
@@ -10839,7 +10842,12 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 [[verdict]]
 kind = "item"
 key = "store::workflow::StepLifecycle"
-reason = "Step definitions and durable attempts share default-compatible turn/stay lifecycle without store importing harness policy."
+reason = "Step definitions and durable attempts share turn/stay/until vocabulary; the definition's until default is separate from legacy attempts decoding as turn."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::VERSION"
+reason = "The engine creates workflow records at the store's supported current version."
 
 [[verdict]]
 kind = "item"
@@ -11110,6 +11118,11 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 kind = "item"
 key = "harness::workflow::load"
 reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::load_run"
+reason = "Sealed workflow readers preserve the run's lifecycle default before tolerant cleanup."
 
 [[verdict]]
 kind = "item"

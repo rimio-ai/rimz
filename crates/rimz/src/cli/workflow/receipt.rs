@@ -53,7 +53,7 @@ pub(super) fn resume(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let run = select(target, "resume", globals, at, extend)?;
-    let spec = workflow::load(&run.paths.home)?;
+    let spec = workflow::load_run(&run.paths.home, &run.record)?;
     let resumed = run.record.state == RunState::Parked;
     let record = workflow::resume(&run.state, &run.record.id, at, extend)?;
     let address = record.address().to_string();

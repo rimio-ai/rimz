@@ -46,7 +46,8 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
         ("shell='true'", false),
         ("agent='claude'\nlifecycle='stay'", false),
         ("agent='claude'\nlifecycle='until'", false),
-        ("agent='claude'", true),
+        ("agent='claude'\nlifecycle='turn'", true),
+        ("agent='claude'", false),
     ] {
         let spec: WorkflowSpec = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
@@ -55,7 +56,7 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
         ))
         .unwrap();
         assert_eq!(
-            defaults(&spec).contains(&"A step goes on to its next check however its turn ends."),
+            defaults(&spec).contains(&"A turn step goes on to its next check when its turn ends cleanly or its provider exits."),
             turn_end,
             "{runner}"
         );
@@ -709,6 +710,7 @@ fn horizontal_canceled_agent_turn_leaves_its_then_check_unreached() {
         r#"[steps.work]
 agent='claude'
 prompt-file='prompt.md'
+lifecycle='turn'
 then='after'
 "#,
         "work",
@@ -1194,7 +1196,7 @@ mod horizontal_sweep {
             (
                 "until",
                 "[workflow]\nscope='worktree'\nstart='plan'\n\
-                 [steps.plan]\nagent='claude'\nthen='planned'\n\
+                 [steps.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
                  [checks.planned]\nshell='true'\non.pass='work'\n\
                  [steps.work]\nagent='claude'\nlifecycle='until'\nthen='gate'\n\
                  max-visits=3\non.cap='escalate_to_release_manager'\n\
@@ -1309,7 +1311,7 @@ mod horizontal_sweep {
             runs.push((state.as_str(), record, hops));
         }
         if let Some(step) = spec.steps.get(node)
-            && step.lifecycle == Some(StepLifecycle::Until)
+            && step.lifecycle() == StepLifecycle::Until
         {
             base.node = step.then.clone().unwrap();
             base.held = Some(

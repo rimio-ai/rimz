@@ -26,11 +26,13 @@ run='cat answer.json'
 on={rule='triage',none='@done'}
 [steps.sweep]
 agent='claude'
+lifecycle='turn'
 throttle='off'
 prompt-file='prompt.md'
 then='watch'
 [steps.fix]
 agent='claude'
+lifecycle='turn'
 throttle='off'
 prompt-file='prompt.md'
 then='watch'
@@ -39,10 +41,12 @@ max-visits=6
 max-visits-per-outcome={limit=2,reset-on='queued'}
 [steps.clean]
 agent='claude'
+lifecycle='turn'
 prompt-file='prompt.md'
 then='notes'
 [steps.triage]
 agent='claude'
+lifecycle='turn'
 prompt-file='prompt.md'
 then='ruled'
 max-visits=2
@@ -138,14 +142,18 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     let paused = "A question waits in your pane until the user answers it, and the timeout pauses meanwhile.";
     let routed = "A blocking question ends this attempt, and the run goes to `help`.";
     let cases = [
-        ("", format!("{TURN}. No signals reach you."), question),
         (
-            "timeout='3h'",
+            "lifecycle='turn'",
+            format!("{TURN}. No signals reach you."),
+            question,
+        ),
+        (
+            "lifecycle='turn'\ntimeout='3h'",
             format!("{TURN}, within the step's 3h timeout. No signals reach you."),
             paused,
         ),
         (
-            "on.asked='help'",
+            "lifecycle='turn'\non.asked='help'",
             format!("{TURN}. No signals reach you."),
             routed,
         ),
@@ -154,7 +162,8 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     ];
     for (settings, after, questions) in cases {
         let text = format!(
-            "{OUTCOME_STEP}{settings}\n[checks.help]\nshell='true'\non.pass='@done'\non.fail='@user'\n"
+            "{}{settings}\n[checks.help]\nshell='true'\non.pass='@done'\non.fail='@user'\n",
+            OUTCOME_STEP.replace("lifecycle='turn'\n", ""),
         );
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();

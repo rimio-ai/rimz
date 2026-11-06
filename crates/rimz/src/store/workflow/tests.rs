@@ -17,6 +17,37 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn record_version_fence_accepts_one_through_three() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let mut record = record();
+    let paths = state.workflow(&record.id);
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    let actual: Vec<_> = (0..=4)
+        .map(|version| {
+            record.version = version;
+            write(&paths, &record, &guard).unwrap();
+            match load(&paths) {
+                Ok(loaded) => (version, Some(loaded.version), false),
+                Err(WorkflowStoreErr::Version { version, .. }) => (version, None, true),
+                Err(error) => panic!("version {version}: {error}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (0, None, true),
+            (1, Some(1), false),
+            (2, Some(2), false),
+            (3, Some(3), false),
+            (4, None, true),
+        ]
+    );
+}
+
+#[test]
 fn session_agent_join_uses_the_held_attempt_and_prefers_its_root_leader() {
     use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
     let mut record = record();
@@ -491,7 +522,7 @@ fn listing_skips_unreadable_records_but_named_loads_fail() {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
     let mut future = record.clone();
-    future.version = 3;
+    future.version = 4;
     for contents in [
         None,
         Some(b"corrupt".to_vec()),

@@ -234,7 +234,7 @@ fn step_facts(facts: &mut render::KeyVals, step: &Step) {
     field(
         facts,
         "lifecycle",
-        step.lifecycle.map(|life| match life {
+        matches!(step.kind(), Some(StepKind::Agent(_))).then(|| match step.lifecycle() {
             StepLifecycle::Turn => "turn",
             StepLifecycle::Stay => "stay",
             StepLifecycle::Until => "until",

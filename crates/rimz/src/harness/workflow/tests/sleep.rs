@@ -34,7 +34,7 @@ fn evaluations(state: &StatePaths, record: &RunRecord) -> Vec<Value> {
 
 #[test]
 fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_visit_bucket() {
-    let text = SLEEP.replace("then='@done'", "then='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3\nmax-visits-per-outcome=2");
+    let text = SLEEP.replace("then='@done'", "then='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3\nmax-visits-per-outcome=2");
     let (_dir, state, mut record) = attempts::setup(&text);
     record.input = Some(json!({"outcome":"repair", "key":"original", "context":42}));
     record.key = Some(Key::String("original".into()));

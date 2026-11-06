@@ -15,7 +15,7 @@ pub(super) fn sealed_specs(
         .iter()
         .filter(|record| !record.state.is_terminal())
         .filter_map(|record| {
-            rimz::harness::workflow::load(&state.workflow(&record.id).home)
+            rimz::harness::workflow::load_run(&state.workflow(&record.id).home, record)
                 .ok()
                 .map(|spec| (record.id.clone(), spec))
         })

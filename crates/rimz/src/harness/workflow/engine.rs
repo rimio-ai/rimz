@@ -113,15 +113,8 @@ pub fn create(
     }
     let now = Timestamp::now();
     let record = RunRecord {
-        version: if spec
-            .steps
-            .values()
-            .any(|step| step.lifecycle == Some(workflow::StepLifecycle::Until))
-        {
-            2
-        } else {
-            1
-        },
+        version: workflow::VERSION,
+        default_lifecycle: workflow::StepLifecycle::Until,
         id: WorkflowRunId::new(),
         workflow: name,
         task,
@@ -360,7 +353,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let paths = state.workflow(id);
-    let spec = spec::load(&paths.home)?;
+    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
     let mut seen = BTreeSet::new();
     let mut admission = Admission::default();
     loop {
@@ -780,7 +773,7 @@ fn prepare(
     t.record.next_seq += 1;
     t.record.attempt = Some(LiveAttempt {
         kind,
-        lifecycle: step.and_then(|step| step.lifecycle).unwrap_or_default(),
+        lifecycle: step.map_or(workflow::StepLifecycle::Turn, spec::Step::lifecycle),
         seq,
         node: t.record.node.clone(),
         visit: step.map(|_| t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket())),
@@ -986,7 +979,7 @@ pub fn cancel(
     if record.state.is_terminal() {
         return Ok(false);
     }
-    let spec = spec::load(&paths.home)?;
+    let spec = spec::load_run(&paths.home, &record)?;
     let mut t = Transition {
         record,
         spec: &spec,
@@ -1088,7 +1081,7 @@ pub fn resume(
     extend: &[String],
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
-    let spec = spec::load(&paths.home)?;
+    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
     let record = {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let record = workflow::load(&paths)?;
@@ -1194,7 +1187,7 @@ pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
             if current.state != RunState::Active {
                 return Ok(());
             }
-            let spec = spec::load(&paths.home)?;
+            let spec = spec::load_run(&paths.home, &current)?;
             let Some(check) = spec.checks.get(&current.node) else {
                 return Ok(());
             };

@@ -23,6 +23,7 @@ expression: value
   "created_at": "2026-01-01T00:00:00Z",
   "deadline": null,
   "deadline_fired": false,
+  "default_lifecycle": "turn",
   "entered_at": "2026-01-01T00:00:00Z",
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
