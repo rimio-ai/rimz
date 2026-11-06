@@ -78,6 +78,29 @@ fn price_lookup_handles_exact_fuzzy_embedded_and_unknown_boundaries() {
 }
 
 #[test]
+fn scoped_rows_do_not_price_bare_other_provider_or_shorter_ids() {
+    for key in ["opencode_go/hy4", "opencode_go/hy4-preview"] {
+        let json = serde_json::json!({key: {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6
+        }})
+        .to_string();
+        for book in books(&json) {
+            assert_eq!(
+                ["hy4", "opencode/hy4", "opencode_go/hy4", key]
+                    .map(|model| book.price(model).map(|price| price.input)),
+                [
+                    None,
+                    None,
+                    (key == "opencode_go/hy4").then_some(1e-6),
+                    Some(1e-6)
+                ]
+            );
+        }
+    }
+}
+
+#[test]
 fn fuzzy_memo_is_transparent_and_survives_a_clone() {
     for book in books(BOOK_JSON) {
         // Repeated fuzzy lookups (hit then cached) stay identical, and a cached

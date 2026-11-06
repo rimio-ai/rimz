@@ -36,8 +36,8 @@ pub fn run(args: PricingRefreshArgs) -> Result<()> {
         )?,
         None => writeln!(
             out,
-            "pricing coverage ok: {} models (LiteLLM {}, {providers})",
-            report.model_count, report.litellm_model_count
+            "pricing coverage ok: {} models (LiteLLM {}, scoped {}, {providers})",
+            report.model_count, report.litellm_model_count, report.scoped_model_count
         )?,
     }
     Ok(())

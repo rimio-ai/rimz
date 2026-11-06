@@ -2,7 +2,8 @@
 //!
 //! LiteLLM and models.dev publish different shapes. This module fetches both,
 //! projects them into the compact LiteLLM-shaped document `super::embedded::parse`
-//! already reads, and owns the authoritative provider and prefix allowlists.
+//! already reads, and owns the bare-provider and alias-prefix allowlists.
+//! Every models.dev provider also contributes scoped rows without bare aliases.
 //! The hidden `rimz pricing-refresh` helper and the runtime refresh use the same
 //! projection, so release snapshots and post-release cache updates cannot drift.
 
@@ -14,15 +15,15 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use super::PriceBook;
+use super::{PriceBook, scoped_model_key};
 
 /// LiteLLM's canonical pricing document (`main`).
 const LITELLM_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json";
 /// models.dev's aggregate model catalogue.
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 /// Per-document budget for the weekly runtime refresh. Generous enough for a
-/// slow link to pull both documents (1.6MB and 3.1MB today), because a refresh
-/// that times out leaves the table untouched for another hour.
+/// slow link to pull each document (3.4MB and 6.0MB on 2026-11-05), because a
+/// refresh that times out leaves the table untouched for another hour.
 const RUNTIME_TIMEOUT_SECS: u64 = 15;
 const REFRESH_TIMEOUT_SECS: u64 = 30;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -132,6 +133,7 @@ pub type Result<T> = std::result::Result<T, SourceErr>;
 pub struct RefreshReport {
     pub model_count: usize,
     pub litellm_model_count: usize,
+    pub scoped_model_count: usize,
     pub provider_model_counts: BTreeMap<&'static str, usize>,
 }
 
@@ -242,6 +244,7 @@ pub(super) fn project_sources(
 ) -> Result<(BTreeMap<String, Value>, RefreshReport)> {
     let mut snapshot = compact_litellm(litellm)?;
     let litellm_model_count = snapshot.len();
+    let mut scoped_model_count = 0;
     let mut provider_model_counts = MODELS_DEV_PROVIDERS
         .into_iter()
         .map(|provider| (provider, 0))
@@ -250,12 +253,14 @@ pub(super) fn project_sources(
     if let Some(models_dev) = models_dev {
         let projection = compact_models_dev(models_dev)?;
         provider_model_counts = projection.provider_model_counts;
+        scoped_model_count = projection.scoped_model_count;
         merge_missing_fields(&mut snapshot, projection.models);
     }
 
     let report = RefreshReport {
         model_count: snapshot.len(),
         litellm_model_count,
+        scoped_model_count,
         provider_model_counts,
     };
     Ok((snapshot, report))
@@ -433,6 +438,7 @@ fn strip_date_suffix(model: &str) -> Option<&str> {
 struct ModelsDevProjection {
     models: BTreeMap<String, Value>,
     provider_model_counts: BTreeMap<&'static str, usize>,
+    scoped_model_count: usize,
 }
 
 fn compact_models_dev(json: &str) -> Result<ModelsDevProjection> {
@@ -465,9 +471,24 @@ fn compact_models_dev(json: &str) -> Result<ModelsDevProjection> {
         provider_model_counts.insert(provider_id, count);
     }
 
+    let mut scoped_model_count = 0;
+    for (provider_id, provider) in &providers {
+        let Some(models) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        for (model, details) in models {
+            let Some(fields) = compact_models_dev_fields(details) else {
+                continue;
+            };
+            scoped_model_count += 1;
+            out.insert(scoped_model_key(provider_id, model), Value::Object(fields));
+        }
+    }
+
     Ok(ModelsDevProjection {
         models: out,
         provider_model_counts,
+        scoped_model_count,
     })
 }
 
@@ -741,6 +762,67 @@ mod tests {
                 .provider_model_counts
                 .values()
                 .all(|count| *count > 0)
+        );
+    }
+
+    #[test]
+    fn models_dev_projects_every_provider_without_new_bare_aliases_and_keeps_free_rows() {
+        let projection = compact_models_dev(MODELS_DEV_FIXTURE).unwrap();
+        let book =
+            PriceBook::from_litellm_json(&serde_json::to_string(&projection.models).unwrap());
+        let actual = [
+            "opencode_go/hy4",
+            "opencode_go/free-model",
+            "gateway/collision",
+            "openai/gpt-6-astra",
+            "hy4",
+            "free-model",
+            "opencode_go/unpriced",
+        ]
+        .map(|model| book.price(model).map(|price| (price.input, price.output)));
+        assert_eq!(
+            actual,
+            [
+                Some((0.834 / 1e6, 2.501 / 1e6)),
+                Some((0.0, 0.0)),
+                Some((500.0 / 1e6, 500.0 / 1e6)),
+                Some((10.0 / 1e6, 50.0 / 1e6)),
+                None,
+                None,
+                None,
+            ]
+        );
+        assert_eq!(projection.models.len(), 38);
+    }
+
+    #[test]
+    fn scoped_collisions_keep_litellm_rates_and_fill_missing_fields() {
+        let litellm = r#"{"opencode_go/hy4": {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004
+        }}"#;
+        let (snapshot, report) = project_sources(litellm, Some(MODELS_DEV_FIXTURE)).unwrap();
+        let price = fields(&snapshot, "opencode_go/hy4");
+        assert_eq!(
+            [
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "cache_read_input_token_cost"
+            ]
+            .map(|field| price.get(field).and_then(Value::as_f64)),
+            [Some(2e-6), Some(4e-6), Some(0.1 / 1e6)]
+        );
+        assert_eq!(report.provider_model_counts.len(), 8);
+    }
+
+    #[test]
+    fn report_counts_scoped_rows_before_merging_or_without_models_dev() {
+        let (_, report) = project_sources(LITELLM_FIXTURE, Some(MODELS_DEV_FIXTURE)).unwrap();
+        assert_eq!(report.scoped_model_count, 21);
+        let litellm = LITELLM_FIXTURE;
+        assert_eq!(
+            project_sources(litellm, None).unwrap().1.scoped_model_count,
+            0
         );
     }
 

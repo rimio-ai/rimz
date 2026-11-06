@@ -18,7 +18,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 use super::database::{MessageTime, open_readonly};
-use crate::agents::pricing::{PriceBook, TokenSplit};
+use crate::agents::pricing::{PriceBook, TokenSplit, scoped_model_key};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, ToolCounts, origin_path,
     record_unknown_model,
@@ -258,7 +258,9 @@ fn parse_message_entry(
         cost = match price_tokens(prices, model, provider, split) {
             Some(cost) => cost,
             None => {
-                record_unknown_model(unknown_models, model, ts_secs);
+                for candidate in model_candidates(model, provider) {
+                    record_unknown_model(unknown_models, &candidate, ts_secs);
+                }
                 0.0
             }
         };
@@ -286,9 +288,15 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 }
 
 fn price_tokens(prices: &PriceBook, model: &str, provider: &str, split: TokenSplit) -> Option<f64> {
-    model_candidates(model, provider)
-        .into_iter()
-        .find_map(|candidate| prices.price(&candidate))
+    let candidates = model_candidates(model, provider);
+    candidates
+        .iter()
+        .find_map(|candidate| prices.exact_price(candidate))
+        .or_else(|| {
+            candidates
+                .iter()
+                .find_map(|candidate| prices.price(candidate))
+        })
         .map(|price| price.cost_of(split))
 }
 
@@ -306,13 +314,15 @@ fn model_candidates(model: &str, provider: &str) -> Vec<String> {
     }
 
     let provider = provider.trim();
-    if !provider.is_empty() && provider != "unknown" {
-        let prefix = provider.replace('-', "_");
-        for base in out.clone() {
-            push_unique(&mut out, format!("{prefix}/{base}"));
-        }
+    if provider.is_empty() || provider == "unknown" {
+        return out;
     }
-    out
+    let mut scoped = out
+        .iter()
+        .map(|base| scoped_model_key(provider, base))
+        .collect::<Vec<_>>();
+    scoped.extend(out);
+    scoped
 }
 
 fn claude_dotted_normalized(lower: &str) -> Option<String> {
@@ -579,6 +589,92 @@ mod tests {
         assert_eq!(parsed.entries[1].input, 10);
         assert_eq!(parsed.entries[1].output, 20);
         assert_eq!(parsed.unknown_models.get("unknown-future"), Some(&3));
+        assert_eq!(parsed.unknown_models.get("openai/unknown-future"), Some(&3));
+    }
+
+    #[test]
+    fn provider_rows_win_before_bare_rows_and_aliases() {
+        let prices = PriceBook::from_litellm_json(
+            r#"{
+            "opencode_go/hy4": {"input_cost_per_token": 2, "output_cost_per_token": 4},
+            "hy4": {"input_cost_per_token": 9, "output_cost_per_token": 9},
+            "opencode/glm-5-free": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            "glm-5": {"input_cost_per_token": 1, "output_cost_per_token": 3.2},
+            "gateway/vendor/model": {"input_cost_per_token": 3, "output_cost_per_token": 5},
+            "vendor/model": {"input_cost_per_token": 8, "output_cost_per_token": 8},
+            "openai/gpt-provider": {"input_cost_per_token": 4, "output_cost_per_token": 6},
+            "openai/gpt-4o": {"input_cost_per_token": 2.5, "output_cost_per_token": 10},
+            "openai/gpt-4o-mini": {"input_cost_per_token": 0.15, "output_cost_per_token": 0.6},
+            "gpt-4o-mini-2024-07-18": {"input_cost_per_token": 0.15, "output_cost_per_token": 0.6},
+            "gpt-4o": {"input_cost_per_token": 30, "output_cost_per_token": 40},
+            "gpt-priced": {"input_cost_per_token": 5, "output_cost_per_token": 7},
+            "anthropic/claude-sonnet-4-5": {"input_cost_per_token": 6, "output_cost_per_token": 8},
+            "claude-sonnet-4.5": {"input_cost_per_token": 9, "output_cost_per_token": 9}
+        }"#,
+        );
+        let cases = [
+            ("hy4", "opencode-go", 6.0),
+            ("glm-5-free", "opencode", 0.0),
+            ("vendor/model", "gateway", 8.0),
+            ("gpt-provider", "openai", 10.0),
+            ("gpt-4o-mini-2024-07-18", "openai", 0.75),
+            ("gpt-4o-via-gateway", "openai", 12.5),
+            ("gpt-priced", "custom", 12.0),
+            ("hy4", "unknown", 18.0),
+            ("claude-sonnet-4.5", "anthropic", 14.0),
+        ];
+        let mut actual = Vec::new();
+        for (model, provider, _) in cases {
+            let mut unknowns = BTreeMap::new();
+            let message = serde_json::from_value(serde_json::json!({
+                "cost": 0,
+                "model": {"id": model, "providerID": provider},
+                "tokens": {"input": 1, "output": 1}
+            }))
+            .unwrap();
+            let entry = parse_message_entry(message, None, false, &prices, &mut unknowns).unwrap();
+            actual.push((entry.cost_usd, unknowns.is_empty()));
+        }
+        assert_eq!(actual, cases.map(|(_, _, cost)| (cost, true)));
+    }
+
+    #[test]
+    fn unknown_aliases_record_every_scoped_then_bare_candidate() {
+        let mut unknowns = BTreeMap::new();
+        let message = serde_json::from_str(
+            r#"{
+            "model": {"id": "claude-sonnet-4.5", "providerID": "custom-provider"},
+            "time": {"created": 3000}, "tokens": {"input": 1}
+        }"#,
+        )
+        .unwrap();
+        parse_message_entry(
+            message,
+            None,
+            false,
+            &PriceBook::from_litellm_json("{}"),
+            &mut unknowns,
+        )
+        .unwrap();
+        let expected = [
+            "custom_provider/claude-sonnet-4.5",
+            "custom_provider/claude-sonnet-4-5",
+            "claude-sonnet-4.5",
+            "claude-sonnet-4-5",
+        ];
+        assert_eq!(
+            (
+                model_candidates("claude-sonnet-4.5", "custom-provider"),
+                unknowns
+            ),
+            (
+                expected.map(str::to_owned).to_vec(),
+                expected
+                    .into_iter()
+                    .map(|key| (key.to_owned(), 3))
+                    .collect()
+            )
+        );
     }
 
     #[test]

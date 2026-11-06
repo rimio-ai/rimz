@@ -41,6 +41,10 @@ use super::spending::is_priceable_model_name;
 const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
 
+pub(super) fn scoped_model_key(provider: &str, model: &str) -> String {
+    format!("{}/{model}", provider.replace('-', "_"))
+}
+
 /// Estimate rebuilding a context through the same cache-write pricing as spending.
 /// Only an observed one-hour write selects that tier, not a configured lifetime.
 pub fn cache_rewarm_cost_usd(

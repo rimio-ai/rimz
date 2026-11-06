@@ -473,6 +473,42 @@ fn opencode_wal_commit_refreshes_spending() {
 }
 
 #[test]
+fn opencode_unknowns_heal_from_scoped_or_bare_rows_on_an_unchanged_database() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("opencode.db");
+    let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+    db.message("msg", "ses", "assistant", 1_750_000_000_000,
+        r#"{"cost":0,"model":{"id":"hy4","providerID":"opencode-go"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#);
+    let files = [spending_file(opencode_adapter(), path.clone())];
+    let key = path.to_string_lossy().into_owned();
+    let mut actual = Vec::new();
+    for model in ["opencode_go/hy4", "hy4"] {
+        let mut cache = SpendingDiskCache::default();
+        let empty = PriceBook::from_litellm_json("{}");
+        let initial = compute_spending(&files, &mut cache, &empty, NOW_SECS);
+        assert_eq!(initial.total.headline.usd, 0.0);
+        assert_eq!(initial.total.headline.tokens, 15);
+        let stat = cache.files[&key].stat;
+        let prices = PriceBook::from_litellm_json(
+            &serde_json::json!({model: {
+                "input_cost_per_token": 1.0, "output_cost_per_token": 2.0
+            }})
+            .to_string(),
+        );
+        let heals =
+            super::super::refresh::has_healed_unknown(&cache.files[&key], &prices, NOW_SECS);
+        let healed = compute_spending(&files, &mut cache, &prices, NOW_SECS);
+        assert_eq!(cache.files[&key].stat, stat);
+        actual.push((
+            heals,
+            healed.total.headline.usd,
+            cache.files[&key].unknown_models.is_empty(),
+        ));
+    }
+    assert_eq!(actual, [(true, 20.0, true), (true, 20.0, true)]);
+}
+
+#[test]
 fn cold_parse_skip_ignores_new_files_outside_widest_window() {
     assert!(!cold_parse_out_of_window(
         1_000,
