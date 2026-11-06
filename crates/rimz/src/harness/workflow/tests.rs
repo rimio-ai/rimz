@@ -33,6 +33,7 @@ impl FakeHost {
                 status: RunStatus::Running,
                 ask: None,
                 limited: None,
+                stopped: None,
                 children: Children::default(),
                 cost_usd: Some(0.25),
                 turn: None,

@@ -400,18 +400,10 @@ fn stop_records_recursive_children_and_leaves_peers_and_cohorts_live() {
 }
 
 #[test]
-fn turn_error_wakes_and_preserves_typed_limit_reset() {
+fn turn_error_wakes_and_holds_the_live_attempt_on_provider_limits() {
     for child in [false, true] {
         let room = Room::with_kind("", "claude");
         crate::common::trust_claude_project(&room.env, &room.env.project_root);
-        let definition = room.env.rimz_home().join("workflows/review");
-        let spec = fs::read_to_string(definition.join("workflow.toml")).unwrap();
-        fs::write(
-            definition.join("workflow.toml"),
-            format!("{spec}on.pending='@wait'\ntimeout='1h'\n"),
-        )
-        .unwrap();
-        fs::write(definition.join("checks/pr.sh"), "if grep -q '^  \"node\": \"pr\"' \"$RIMZ_WORKFLOW_DIR/context.json\"; then printf '{\"outcome\":\"go\"}'; else r=$(sed -n 's/^ *\"reset_at\": \\([^,]*\\),*$/\\1/p' \"$RIMZ_WORKFLOW_DIR/context.json\" | head -n 1); printf '{\"outcome\":\"pending\",\"recheck_at\":%s}' \"${r:-null}\"; fi\n").unwrap();
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         room.hook(
@@ -419,7 +411,6 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
             &run,
             json!({"hook_event_name":"UserPromptSubmit", "prompt":"work"}),
         );
-        let reset = super::super::judges::capacity(&room.env, 100);
         let mut payload = json!({"hook_event_name":"StopFailure", "error":"rate_limit", "last_assistant_message":"Try later"});
         if child {
             let snapshot = room.env.store().snapshot_cached().unwrap();
@@ -492,35 +483,14 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
             }
         }
         let value = until(&room.env, &id, |value| {
-            value["record"]["wait"]["outcome"] == "pending"
+            value["record"]["attempt"]["held_since"].is_string()
         });
-        assert_eq!(value["record"]["prev_attempt"]["outcome"], "limited");
-        assert_eq!(
-            value["record"]["prev_attempt"]["children"]["stopped"]
-                .as_array()
-                .unwrap()
-                .len(),
-            usize::from(child)
-        );
-        assert_eq!(
-            value["record"]["prev_attempt"]["limited"]["reset_at"],
-            reset.to_string()
-        );
-        let zone = jiff::tz::TimeZone::system();
-        let local_reset = reset.to_zoned(zone.clone());
-        let reset_format = if local_reset.date() == jiff::Timestamp::now().to_zoned(zone).date() {
-            "%H:%M"
-        } else {
-            "%a %H:%M"
-        };
-        assert!(
-            success(
-                room.command(&["workflow", "show", &id, "--history"])
-                    .output()
-                    .unwrap()
-            )
-            .contains(&format!("reset_at: {}", local_reset.strftime(reset_format)))
-        );
+        assert_eq!(value["record"]["state"], "active");
+        assert_eq!(value["record"]["node"], "build");
+        assert!(value["record"]["prev_attempt"].is_null());
+        assert!(value["record"]["wait"].is_null());
+        assert!(events(&value, "attempt").is_empty());
+        assert_eq!(value["record"]["visits"]["build"]["total"], 1);
         let count = events(&value, "evaluation").len();
         success(
             room.command(&["workflow", "advance", &id])
@@ -529,5 +499,13 @@ fn turn_error_wakes_and_preserves_typed_limit_reset() {
         );
         assert_eq!(events(&show(&room.env, &id), "evaluation").len(), count);
         success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+        let canceled = settled(&room.env, &id, "canceled");
+        assert_eq!(
+            canceled["record"]["prev_attempt"]["children"]["stopped"]
+                .as_array()
+                .unwrap()
+                .len(),
+            usize::from(child),
+        );
     }
 }

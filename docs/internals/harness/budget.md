@@ -4,7 +4,7 @@
 
 ## What the engine does
 
-A budget is a dollar cap RimZ enforces itself, at a scale the provider has no concept of: this agent, this turn, this room, this login. Crossing one **parks** the agent: RimZ presses Esc in its pane, stamps the park in a ledger, and leaves everything else alone. The provider CLI keeps running and the session files stay where the provider put them. A supervised turn run is the one exception: the park ends its run as `budget_exceeded`, and a blocking run launched without `--keep` then closes the agent's pane ([scripting.md](./scripting.md)). A staying workflow step's session run stays open, and the step stays with the user ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
+A budget is a dollar cap RimZ enforces itself, at a scale the provider has no concept of: this agent, this turn, this room, this login. Crossing one **parks** the agent: RimZ presses Esc in its pane, stamps the park in a ledger, and leaves everything else alone. The provider CLI keeps running and the session files stay where the provider put them. A non-workflow supervised turn run is the exception: the park ends its run as `budget_exceeded`, and a blocking run launched without `--keep` then closes the agent's pane ([scripting.md](./scripting.md)). Every workflow step keeps its run and agent open, including `turn`; a turn step's timeout pauses for the park ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
 
 The engine reads spend that already exists. Agents write transcripts, the spending walk prices them, and the walk publishes per-room and per-history-pool local-day tallies, plus UTC-month totals per pool ([spending.md § What reads the totals](../agents/spending.md#what-reads-the-totals)). Budgets compare those figures against caps and turn a crossing into a stop.
 
@@ -161,7 +161,7 @@ The helper, [`cli/agents_cmd/budget_park.rs`](../../../crates/rimz/src/cli/agent
 1. Refuses unless the pane is still bound to the agent.
 2. Wakes the pane if hibernation froze it (`harness::hibernate::wake_pane`). A wake failure ends the helper before anything else runs.
 3. Presses Esc.
-4. Moves every non-terminal turn run record of that agent to `budget_exceeded` through `harness::run::budget_exceeded`, and wakes each run it wrote. That transition leaves a session run open ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
+4. Moves every non-terminal, non-workflow turn run record of that agent to `budget_exceeded` through `harness::run::budget_exceeded`, and wakes each run it wrote. That transition leaves session runs and all workflow runs open ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
 5. Reports the keypress error, if there was one. The run transition happens even when the keypress fails.
 
 The cost the helper records is the agent's own (`total_cost_usd`, falling back to the agent ledger's park stamp), never the fleet or account figure. A run record describes its own spend, and the broader figure only explains why the pane stopped.
@@ -181,7 +181,7 @@ Interactive work gets a park and a waiver. Automation gets a refusal before it s
 | Supervised run ([scripting.md](./scripting.md#status-and-exit-codes)) | `SupervisedRunOutcome::BudgetExceeded` and exit `125`, before a run record or agent pane exists |
 | Loop fire ([loops.md](./loops.md#one-fire)) | one `budget skipped` history row, no strike |
 
-Supervised runs check the gate at the top of every attempt, so a retry ladder stops as soon as a cap closes mid-sequence. Exit `125` has a second source: a turn run already under way whose agent is parked by any cap ends as `budget_exceeded` through the helper in [The park](#the-park). Both callers also check an exact managed-launch provider quota, and that gate belongs to [providers.md](../agents/providers.md).
+Supervised runs check the gate at the top of every attempt, so a retry ladder stops as soon as a cap closes mid-sequence. Exit `125` has a second source: a non-workflow turn run already under way whose agent is parked by any cap ends as `budget_exceeded` through the helper in [The park](#the-park). Both callers also check an exact managed-launch provider quota, and that gate belongs to [providers.md](../agents/providers.md).
 
 A loop fire checks its task's own daily cap first, in `run_log::daily_budget_gate`. The ladder and the reservation rule are [loops.md § One fire](./loops.md#one-fire).
 

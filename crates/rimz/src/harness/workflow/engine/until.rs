@@ -13,7 +13,7 @@ fn eligible(observed: &Observed) -> Option<&LeaderTurn> {
     observed
         .turn
         .as_ref()
-        .filter(|turn| turn.at_rest && observed.ask.is_none() && observed.limited.is_none())
+        .filter(|turn| turn.at_rest && observed.ask.is_none() && observed.stopped.is_none())
 }
 
 pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool> {
@@ -85,6 +85,7 @@ pub(super) fn prepare(
             .expect("observed held session")
             .attempt,
         observed.ask.as_ref(),
+        observed.stopped.as_ref(),
         t.now,
     );
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {

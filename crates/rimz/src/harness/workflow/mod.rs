@@ -127,9 +127,24 @@ pub struct Observed {
     pub status: RunStatus,
     pub ask: Option<Asking>,
     pub limited: Option<Limited>,
+    pub stopped: Option<Stopped>,
     pub children: Children,
     pub cost_usd: Option<f64>,
     pub turn: Option<LeaderTurn>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stopped {
+    pub since: jiff::Timestamp,
+    pub kind: StopKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopKind {
+    Limit,
+    Error,
+    Interrupt,
+    Budget,
 }
 
 #[derive(Clone, Debug)]

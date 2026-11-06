@@ -824,7 +824,7 @@ fn evaluate(
 
 /// Stamp ledger park projections onto agent state for producer and consumer
 /// folds. This reads runtime caches and standing fleet choices without writing either.
-pub(crate) fn project_parks(
+pub fn project_parks(
     mut deferred: impl FnMut(&AgentState) -> bool,
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,

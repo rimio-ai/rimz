@@ -205,7 +205,8 @@ fn spawn(record: &RunRecord) -> Result<()> {
     Ok(())
 }
 
-fn persist(t: &Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
+fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
+    t.record.version = workflow::VERSION;
     for entry in &t.entries {
         workflow::append(t.paths, entry, guard)?;
     }
@@ -463,7 +464,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 }
             }
         }
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         if t.record.state != RunState::Active
             || (t.record.wait.is_some() && !recheck_woken && !until::has_pending_verdict(&t.record))
         {
@@ -539,7 +540,7 @@ fn command_step(
         head_end,
         reason,
     )?;
-    persist(&t, &guard)?;
+    persist(&mut t, &guard)?;
     Ok(t.record.state == RunState::Active)
 }
 
@@ -584,7 +585,7 @@ fn prepare(
     }
     if t.bound()? {
         admission.capacity = None;
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         return Ok(
             if t.record.state != RunState::Active
                 || (t.record.wait.is_some() && !until::has_pending_verdict(&t.record))
@@ -611,7 +612,7 @@ fn prepare(
             None,
             Some(reason),
         )?;
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         return Ok(Decision::Again);
     }
     if t.record.recheck_at.is_some_and(|at| at > t.now)
@@ -621,7 +622,7 @@ fn prepare(
             wait.last = t.now;
             wait.count += 1;
         }
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         return Ok(Decision::Stop);
     }
     let mut launch_error = None;
@@ -640,7 +641,7 @@ fn prepare(
                 ParkReason::Cap,
             )?;
             admission.capacity = None;
-            persist(&t, &guard)?;
+            persist(&mut t, &guard)?;
             return Ok(Decision::Again);
         }
         if let Some(spec::StepKind::Agent(agent)) = step.kind() {
@@ -666,7 +667,7 @@ fn prepare(
                 && let Some(detail) = window_wait_for_groups(&t.record, &groups, raw, windows)?
             {
                 t.step_wait("window", Some(detail));
-                persist(&t, &guard)?;
+                persist(&mut t, &guard)?;
                 return Ok(Decision::Stop);
             }
             let mut evict = false;
@@ -682,12 +683,12 @@ fn prepare(
                     Occupancy::Free => {}
                     Occupancy::Blocked(_) => {
                         t.step_wait("takeover", None);
-                        persist(&t, &guard)?;
+                        persist(&mut t, &guard)?;
                         return Ok(Decision::Stop);
                     }
                     Occupancy::Occupied(_) if !step.takeover.unwrap_or_default() => {
                         t.step_wait("occupied", None);
-                        persist(&t, &guard)?;
+                        persist(&mut t, &guard)?;
                         return Ok(Decision::Stop);
                     }
                     Occupancy::Occupied(_) => evict = true,
@@ -709,7 +710,7 @@ fn prepare(
             && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows)?
         {
             t.step_wait("window", Some(detail));
-            persist(&t, &guard)?;
+            persist(&mut t, &guard)?;
             return Ok(Decision::Stop);
         }
         if check.window.is_some()
@@ -754,7 +755,7 @@ fn prepare(
     t.now = Timestamp::now();
     if t.bound()? {
         admission.capacity = None;
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         return Ok(Decision::Again);
     }
     if step.is_some() {
@@ -781,6 +782,7 @@ fn prepare(
         host: agent::identity(),
         woken: false,
         asking: None,
+        held_since: None,
         asked_ms: 0,
         judged: None,
         child: None,
@@ -810,7 +812,7 @@ fn prepare(
             &agent::empty_observation(),
         );
     }
-    persist(&t, &guard)?;
+    persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
     if let Some(mut prompt) = prompt {
         if let Some(reason) = launch_error {
@@ -1034,7 +1036,7 @@ pub fn cancel(
         if !busy {
             t.record.attempt.as_mut().expect("agent cancel").host = agent::identity();
         }
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         let record = t.record;
         drop(guard);
         if !busy {
@@ -1053,7 +1055,7 @@ pub fn cancel(
         None,
         None,
     )? {
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         return Ok(true);
     }
     t.record.state = RunState::Canceled;
@@ -1070,7 +1072,7 @@ pub fn cancel(
             state: RunState::Canceled,
         },
     );
-    persist(&t, &guard)?;
+    persist(&mut t, &guard)?;
     Ok(true)
 }
 
@@ -1150,7 +1152,7 @@ pub fn resume(
                 deadline: t.record.deadline,
             },
         );
-        persist(&t, &guard)?;
+        persist(&mut t, &guard)?;
         t.record
     };
     spawn(&record)?;
@@ -1237,7 +1239,7 @@ pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
                     signal: signal.name.as_str().into(),
                 },
             );
-            persist(&t, &guard)?;
+            persist(&mut t, &guard)?;
             drop(guard);
             spawn(&t.record)
         })();

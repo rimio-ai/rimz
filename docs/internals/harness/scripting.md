@@ -54,7 +54,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | Provider process | `provider_pid`, `provider_process_start` |
 | Provenance | `prompt`, `worktree_path`, `permission_mode`, `budget`, `retry_of`, `loop_task`, `workflow` |
 | Retention | `keep`, `subagent` |
-| Outcome | `status`, `lifecycle`, `last_message`, `parked_answer`, `verify`, `failure_tail`, `transcript_path` |
+| Outcome | `status`, `lifecycle`, `last_message`, `parked_answer`, `stopped_turn`, `verify`, `failure_tail`, `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens`, `earlier_sessions` |
 | Reporting | `reader`, `report_to`, `joined_at`, `report_message_id` |
 | Follow-ups | `follow_ups`, `follow_up`, `opened_by`, `earlier_answers` ([subagents.md](./subagents.md#follow-ups-and-resume)) |
@@ -125,6 +125,8 @@ The fold filters before it classifies:
 - A turn run's session binding is strict once made. An unbound record adopts the observed `agent_id` and name. A bound record ignores an observation for a different session id and an observation with no session id, so a same-kind descendant with its own session cannot end the run.
 
 For turn-lifecycle runs, what passes is classified by `LifecycleSignal::terminal_disposition` in `agents::lifecycle`, and `fold_lifecycle` maps the disposition to a status:
+
+Workflow-owned runs are the exception: an errored turn end or interrupt keeps them Running and records optional `stopped_turn = {at, disposition: failed | canceled}`. It clears an inherited `parked_at` and is cleared by the next `TurnStarted`, `ToolUsed`, `AwaitingInput`, or clean end. Session runs retain the same evidence across turns. This marker is not an owed-wake park and cannot trigger stranded-park settlement. Workflow budget parks also leave the run open; a turn run's later clean end completes it, while provider exit still uses the death backstop below ([workflow.md](./workflow.md#how-an-attempt-ends)). The table otherwise remains unchanged for subagents, loops, and peers.
 
 | Lifecycle signal | Result |
 | --- | --- |

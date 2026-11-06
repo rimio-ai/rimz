@@ -8,7 +8,7 @@ use rimz::harness::schedule::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
 use rimz::ids::EventId;
 use rimz::launcher::{self, LaunchOutcome, Preparation};
-use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
+use rimz::store::run::{ReportTo, RunLifecycle, RunRecord, StoppedTurnDisposition};
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::workflow::{
     Asked, Asking, AttemptOutcome, AttemptRun, ChildRef, Children, Limited, TeamRef,
@@ -260,11 +260,25 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
-            let snapshot = ctx.cached_snapshot()?;
+            let mut snapshot = ctx.cached_snapshot()?;
+            rimz::harness::budget::project_parks(
+                |_| false,
+                &mut snapshot,
+                ctx.runtime(),
+                Some(ctx.store.paths()),
+                &rimz::config::MachineConfig::load_lenient(),
+            );
             let mut observed = workflow::Observed {
                 status: run.status,
                 ask: None,
                 limited: None,
+                stopped: run.stopped_turn.as_ref().map(|stopped| workflow::Stopped {
+                    since: stopped.at,
+                    kind: match stopped.disposition {
+                        StoppedTurnDisposition::Failed => workflow::StopKind::Error,
+                        StoppedTurnDisposition::Canceled => workflow::StopKind::Interrupt,
+                    },
+                }),
                 children: Children::default(),
                 cost_usd: run.cost_usd,
                 turn: None,
@@ -301,25 +315,47 @@ impl workflow::AttemptHost for Host<'_> {
                         },
                     });
                 }
-                if observed.limited.is_none()
-                    && current
-                        .displayed_turn_error(snapshot.now)
-                        .is_some_and(|(class, _)| {
-                            matches!(
-                                class,
-                                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-                            )
-                        })
-                {
-                    observed.limited = Some(Limited {
-                        reset_at: ProviderCapacity::read(ctx.runtime(), &current.login_key())
-                            .and_then(|capacity| {
-                                capacity.latest_spent_window_reset_for_model(
-                                    Timestamp::now(),
-                                    current.model.as_deref(),
+                let error = current
+                    .displayed_turn_error(snapshot.now)
+                    .map(|(class, error)| {
+                        let limited = matches!(
+                            class,
+                            TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+                        );
+                        if limited && observed.limited.is_none() {
+                            observed.limited = Some(Limited {
+                                reset_at: ProviderCapacity::read(
+                                    ctx.runtime(),
+                                    &current.login_key(),
                                 )
-                            }),
+                                .and_then(|capacity| {
+                                    capacity.latest_spent_window_reset_for_model(
+                                        Timestamp::now(),
+                                        current.model.as_deref(),
+                                    )
+                                }),
+                            });
+                        }
+                        workflow::Stopped {
+                            since: error.at,
+                            kind: if limited {
+                                workflow::StopKind::Limit
+                            } else {
+                                workflow::StopKind::Error
+                            },
+                        }
                     });
+                let budget = current.budget_park.as_ref().map(|park| workflow::Stopped {
+                    since: park.at,
+                    kind: workflow::StopKind::Budget,
+                });
+                for stopped in error.into_iter().chain(budget) {
+                    if observed.stopped.as_ref().is_none_or(|previous| {
+                        previous.kind == workflow::StopKind::Interrupt
+                            || stopped.since < previous.since
+                    }) {
+                        observed.stopped = Some(stopped);
+                    }
                 }
             }
             if matches!(observation, workflow::Observation::LeaderTurn)

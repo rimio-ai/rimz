@@ -753,7 +753,8 @@ pub fn budget_exceeded(
     cost_usd: Option<f64>,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, now| {
-        if record.lifecycle == RunLifecycle::Session
+        if record.workflow.is_some()
+            || record.lifecycle == RunLifecycle::Session
             || !record.mark_terminal(RunStatus::BudgetExceeded, now)
         {
             return Ok(RecordMutation::Keep(false));
@@ -1205,7 +1206,7 @@ fn fold_lifecycle(
         return LifecycleFold::Ignored;
     }
     if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
-        return fold_team_lifecycle(record, observation, last_message);
+        return fold_team_lifecycle(record, observation, last_message, now);
     }
     match (&record.agent_id, &observation.agent_id) {
         (Some(bound), Some(observed)) if observed != bound => return LifecycleFold::Ignored,
@@ -1260,12 +1261,17 @@ fn fold_lifecycle(
         record.parked_answer = None;
         record.failure_tail = None;
     }
+    let stop_changed = fold_stopped_turn(record, &observation.signal, now);
     if let Some(disposition) = observation.signal.terminal_disposition() {
         if let Some(path) = observation.transcript_path.as_ref() {
             record.transcript_path = Some(path.clone());
         }
         if let Some(message) = last_message {
             set_turn_message(record, message);
+        }
+        if record.stopped_turn.is_some() && !matches!(observation.signal, LifecycleSignal::Ended) {
+            record.status = RunStatus::Running;
+            return LifecycleFold::Updated;
         }
         if disposition == TerminalDisposition::Completed
             && let Some(owed) = owed
@@ -1307,7 +1313,12 @@ fn fold_lifecycle(
     }
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
-    if !reopen && !unparked && record.status != RunStatus::Pending && !first_transcript_path {
+    if !reopen
+        && !unparked
+        && !stop_changed
+        && record.status != RunStatus::Pending
+        && !first_transcript_path
+    {
         return LifecycleFold::Ignored;
     }
     record.status = RunStatus::Running;
@@ -1327,11 +1338,13 @@ fn fold_team_lifecycle(
     record: &mut RunRecord,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
+    now: Timestamp,
 ) -> LifecycleFold {
     let Some(observed) = observation.agent_id.as_ref() else {
         return LifecycleFold::Ignored;
     };
     let mut changed = rebind_session(record, observed);
+    changed |= fold_stopped_turn(record, &observation.signal, now);
     if let Some(name) = observation.agent_name.clone() {
         record.agent_name = Some(name);
     }
@@ -1356,6 +1369,33 @@ fn fold_team_lifecycle(
     } else {
         LifecycleFold::Ignored
     }
+}
+
+fn fold_stopped_turn(record: &mut RunRecord, signal: &LifecycleSignal, now: Timestamp) -> bool {
+    use crate::store::run::{StoppedTurn, StoppedTurnDisposition};
+
+    if record.workflow.is_none() {
+        return false;
+    }
+    let disposition = match signal {
+        LifecycleSignal::TurnEnded { errored: true, .. } => Some(StoppedTurnDisposition::Failed),
+        LifecycleSignal::TurnInterrupted { .. } => Some(StoppedTurnDisposition::Canceled),
+        LifecycleSignal::TurnStarted { .. }
+        | LifecycleSignal::ToolUsed { .. }
+        | LifecycleSignal::AwaitingInput { .. }
+        | LifecycleSignal::TurnEnded { errored: false, .. } => None,
+        _ => return false,
+    };
+    let stopped = disposition.map(|disposition| StoppedTurn {
+        at: now,
+        disposition,
+    });
+    if stopped.is_some() {
+        record.parked_at = None;
+    }
+    let changed = record.stopped_turn != stopped;
+    record.stopped_turn = stopped;
+    changed
 }
 
 fn rebind_session(record: &mut RunRecord, agent_id: &AgentSessionId) -> bool {
