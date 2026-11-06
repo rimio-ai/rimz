@@ -633,6 +633,14 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
+    if let Some(workflow) = &request.identity.params.workflow {
+        match crate::store::workflow::load(&inputs.state.workflow(&workflow.run)) {
+            Ok(record) => reminders.workflow_definition = Some(record.spec_dir),
+            Err(error) => warnings.push(LaunchPlanWarning::LaunchEnv(format!(
+                "workflow definition folder unavailable: {error}"
+            ))),
+        }
+    }
     reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
     if request
         .allowed_tools
@@ -878,7 +886,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             );
         }
     }
-    for key in ["RIMZ_WORKFLOW_RUN", "RIMZ_WORKFLOW_DIR"] {
+    for key in [
+        "RIMZ_WORKFLOW_RUN",
+        "RIMZ_WORKFLOW_DIR",
+        "RIMZ_WORKFLOW_DEFINITION",
+    ] {
         unset.insert(key.to_owned(), sandbox::EnvPin::Unset);
     }
     if let Some(workflow) = &request.identity.params.workflow {
@@ -897,6 +909,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     .to_string(),
             ),
         );
+        if let Some(definition) = &reminders.workflow_definition {
+            unset.insert(
+                "RIMZ_WORKFLOW_DEFINITION".to_owned(),
+                sandbox::EnvPin::Set(definition.display().to_string()),
+            );
+        }
     }
     if !unset.is_empty() {
         process.pin_env(unset);
