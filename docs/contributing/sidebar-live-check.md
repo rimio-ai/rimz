@@ -869,6 +869,19 @@ A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set
 
 To show that the provider's model received RimZ's text, ask a question that only that text answers for the launch's shape, with no tools needed. A launch with no profile or role, such as a bare `rimz agents opencode`, gets a reminder that names no handle (`crates/rimz/src/harness/launch_reminders.rs::model_line`), so asking for its handle proves nothing. Ask instead for the subagent profiles that the reminder's Subagents section lists (`crates/rimz/src/harness/subagent_policy.rs::reminder`). To show that a resumed session reads the current system prompt rather than its own earlier turns, change the prompt between `rimz agents stop` and `rimz agents resume`, then ask for the new value. An answer with the old value is the conversation repeating itself.
 
+### Bring an OpenCode login into a held room
+
+An OpenCode turn can run in a held sandbox room once a login is imported into the room's home. OpenCode 2.x keeps its login in a SQLite database under `XDG_DATA_HOME` and reads `auth.json` only as a legacy migration input, so copying that file brings no login. `opencode auth export` prints the login's secrets, and an agent's safety classifier refuses to run it, so the user runs the import from a host shell.
+
+A room an agent holds with `cargo xtask sandbox room` sits in that agent's private `/tmp`. From the host, the same root is `~/.rimz/ws/<workspace>/tmp/<agent temp unit>/rimz-sandbox-XXXXXX`, and `sandbox in` refuses a root outside `/tmp`, so the import points OpenCode at the sandbox's home and XDG directories itself:
+
+```sh
+R=<host path of the room root>
+opencode auth export | env HOME="$R/home" XDG_DATA_HOME="$R/data" XDG_CONFIG_HOME="$R/config" XDG_STATE_HOME="$R/state" XDG_CACHE_HOME="$R/cache" opencode auth import --standalone
+```
+
+Inside the room, `opencode auth list --standalone` lists the imported login. Write the kind base `$ROOT/home/.rimz/agents/opencode.md` with a nonempty body, and run `rz hooks install opencode` ([the shell functions](#run-a-command-as-an-agent)) before the first `a subagents opencode`. After the check, delete the whole room root, which holds the login, and confirm that neither the `/tmp` path nor the host path remains.
+
 ## Check a workflow against a real provider
 
 Use the [real-provider venue](#check-against-a-real-provider-login), not a held sandbox room. Keep the real `HOME` and account login, but isolate RimZ's state and runtime. Resolve the worktree's build directory rather than assuming `target/debug`:
@@ -1030,7 +1043,7 @@ BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/de
 
 ## Traps
 
-- A live check of anything the host, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
+- A live check of anything the host, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check, except an OpenCode turn after the user [imports a login](#bring-an-opencode-login-into-a-held-room).
 - Look before clicking or inspecting current figures: a settled unwatched sidebar mirrors layout changes from the most recently active painted view, without reducing its own view. A card appearing, a reorder, scroll or toggle should repaint the hidden pane before a native switch; capture that hidden grid without revealing it to prove the mirror. For a negative control, use a number-only change to an existing line that neither appears nor wraps: it emits no hidden frame bytes. Establish known ownership and let startup or reconciliation finish first. Input can reveal the pane; a real hidden resize re-mirrors in the new geometry without routing a view. With no painted view, hidden panes keep their last frame. Pane-local reconciliation obligations still run.
 - Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` does not move the Zellij client: the sidebar stays narrow with its clock stopped at `0:00` until a `go-to-tab` widens it and resumes the clock.
 - A previously selected card stays held open, with its stats line and its subagent and wait entries, until collapsing it would no longer move the selected card, or until a wheel tick, unread-banner jump, or toggle releases it. A check of an unselected card's shape (a stale card's one line, a hidden subagents and waits line) releases the hold first; otherwise the held card reads as a shape that failed to change.
