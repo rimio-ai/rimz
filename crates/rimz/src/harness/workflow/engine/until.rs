@@ -25,12 +25,16 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
     if attempt.lifecycle != StepLifecycle::Until || attempt.judged.as_ref() == Some(&turn.end) {
         return Ok(false);
     }
-    let check = t.spec.steps[&attempt.node].then.clone().ok_or_else(|| {
-        WorkflowErr::Refused(format!(
-            "steps.{}.then: an until step requires a then check",
-            attempt.node
-        ))
-    })?;
+    let check = t.spec.steps[&attempt.node]
+        .then
+        .first()
+        .cloned()
+        .ok_or_else(|| {
+            WorkflowErr::Refused(format!(
+                "steps.{}.then: an until step requires a then check",
+                attempt.node
+            ))
+        })?;
     attempt.judged = Some(turn.end.clone());
     t.record.held = Some(HeldSession {
         attempt: t.record.attempt.take().expect("observed until attempt"),
@@ -54,14 +58,20 @@ pub(super) fn interrupt(t: &mut Transition<'_>, reason: &str) {
         .verdict
         .clone();
     t.abandon_check("canceled");
-    t.restore_session();
-    let attempt = t.record.attempt.as_ref().expect("restored session").clone();
+    let attempt = t
+        .record
+        .held
+        .as_ref()
+        .expect("held session")
+        .attempt
+        .clone();
     t.turn_end(
         &attempt,
         TurnEndAction::Interrupted,
         verdict.as_ref(),
         Some(reason.into()),
     );
+    t.restore_session();
 }
 
 pub(super) fn prepare(
@@ -214,6 +224,28 @@ pub(super) fn prepare(
         write_context(&t.record, t.paths, t.spec)?;
         return Ok(Some(Decision::Push(Box::new(t.record.clone()))));
     }
+    let held = t.record.held.as_ref().expect("held verdict");
+    if t.spec.steps[&held.attempt.node]
+        .then
+        .contains(&verdict.target)
+    {
+        if eligible(&observed).is_none() {
+            if hold_changed {
+                persist(t, guard)?;
+            }
+            return Ok(Some(Decision::Stop));
+        }
+        let attempt = held.attempt.clone();
+        t.close_wait();
+        t.turn_end(&attempt, TurnEndAction::Kept, Some(&verdict), None);
+        t.record.held.as_mut().expect("moving held session").verdict = None;
+        t.record.node = verdict.target;
+        t.record.entered_at = t.now;
+        t.record.check_retry = 0;
+        t.record.check_retry_context = None;
+        persist(t, guard)?;
+        return Ok(Some(Decision::Again));
+    }
     if super::super::close_after(t.spec, &t.record).is_some_and(|(at, _)| t.now < at)
         || eligible(&observed).is_none()
     {
@@ -247,10 +279,16 @@ fn restore(
     reason: Option<String>,
 ) -> Result<Decision> {
     // Restoring a held session always publishes its original agent attempt.
+    let attempt = t
+        .record
+        .held
+        .as_ref()
+        .expect("held session")
+        .attempt
+        .clone();
+    t.turn_end(&attempt, action, verdict, reason);
     t.restore_session();
     seen.clear();
-    let attempt = t.record.attempt.as_ref().expect("restored session").clone();
-    t.turn_end(&attempt, action, verdict, reason);
     persist(t, guard)?;
     write_context(&t.record, t.paths, t.spec)?;
     Ok(Decision::Again)

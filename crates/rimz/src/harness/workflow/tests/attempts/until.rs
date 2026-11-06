@@ -9,6 +9,7 @@ pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[st
 mod answers;
 mod checks;
 mod delay;
+mod list;
 
 #[test]
 fn stopped_turns_wait_for_a_clean_rest_before_the_check_judges() {

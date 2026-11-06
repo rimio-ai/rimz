@@ -348,12 +348,11 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
         let held_steps = spec
             .steps
             .iter()
-            .filter_map(|(name, step)| {
-                (step.lifecycle() == crate::store::workflow::StepLifecycle::Until
-                    && step.then.as_deref() == Some(node))
-                .then_some(name.as_str())
+            .filter(|(_, step)| {
+                step.lifecycle() == crate::store::workflow::StepLifecycle::Until
+                    && step.then.contains(node)
             })
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         for (outcome, route) in &mut check.on {
             let Route::Delayed { to, delay } = route else {
                 continue;
@@ -364,7 +363,12 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 Ok(_) => Ok(()),
                 Err(error) => Err(error.to_string()),
             });
-            if held_steps.is_empty() || to == "@wait" || held_steps.contains(to.as_str()) {
+            if held_steps.is_empty()
+                || to == "@wait"
+                || held_steps
+                    .iter()
+                    .any(|(name, step)| *name == to || step.then.contains(to))
+            {
                 ignore(
                     delay,
                     &path,

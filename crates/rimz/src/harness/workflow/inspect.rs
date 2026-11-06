@@ -361,7 +361,12 @@ fn attempt_superseded(
 pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Timestamp, &'a str)> {
     let held = record.held.as_ref()?;
     let verdict = held.verdict.as_ref()?;
-    if verdict.target == "@wait" || verdict.target == held.attempt.node {
+    if verdict.target == "@wait"
+        || verdict.target == held.attempt.node
+        || spec.steps[&held.attempt.node]
+            .then
+            .contains(&verdict.target)
+    {
         return None;
     }
     let delay = spec
