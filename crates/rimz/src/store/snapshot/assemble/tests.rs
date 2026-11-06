@@ -606,11 +606,6 @@ fn snapshot_place_and_row_stamp_contract_is_version_81() {
 }
 
 #[test]
-fn snapshot_published_capacity_contract_is_version_81() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 81);
-}
-
-#[test]
 fn pre_capacity_snapshot_is_not_a_fresh_view() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
