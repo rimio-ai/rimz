@@ -10,9 +10,9 @@ expression: strip_sgr(&ansi)
   2    1    2    1                ⢿ 5   󰤄 0    2
 
 ▎ theme-tune  #94 ┄┄┄┄┄┄┄ ⇡2 ⇣1  +1320 -540   main🮇
-▌ opencode-2 · GPT 5.5 · xhigh · 272k          $0.68▐
+▌ opencode-2 · GPT 5.5 · xhigh · 231k/272k     $0.68▐
 ▌  pick gallery color ramp                           ▐
-▌  󰕰 ━━━━━╺────────────────────────────── 15.0% 󰪥  1h▐
+▌  󰕰 ━━━━━╺────────────────────────────── 18.2% 󰪥  1h▐
 ▌  󰿦 42k · 󱥸 40k  1k  5k                           ▐
 ▎⢄ claude-5 · Opus 4.8 · xhigh · 1M             $6.95🮇
 ▎  verify 256-color fallback                         🮇
@@ -54,9 +54,9 @@ expression: strip_sgr(&ansi)
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
 
   observer-lag                 ⇡1  +980 -360   main
- ⠁ opencode · GPT 5.5 · xhigh · 272k            $3.07
+ ⠁ opencode · GPT 5.5 · xhigh · 231k/272k       $3.07
    trace tmux layout parity
-   󰕰 ━━━━━━━━━━━━━╺────────────────────── 38.0%
+   󰕰 ━━━━━━━━━━━━━━━╺──────────────────── 45.0%
    󰿦 103k · 󱥸 99k  4k  12k ·  1
  ⢄ codex-2 · GPT 5.5 · xhigh · 257k/286k        $3.83
    triage stale pane sample

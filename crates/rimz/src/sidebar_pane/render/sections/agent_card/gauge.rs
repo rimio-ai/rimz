@@ -85,8 +85,9 @@ pub(super) fn bar_row(
 /// The context meter — the resting card's one bar. A context glyph on the left,
 /// the **percent used** on the right, the bar between. A compaction-scaled track
 /// ends in a wall, paired with the identity line's point/capacity label; fallback
-/// cards keep an open track and the window alone. The fill amount and its calm-blue →
-/// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
+/// cards keep an open track and the published capacity alone, falling back to
+/// the usable window. The fill amount and its calm-blue → continuous OKLab
+/// warn/caution/alarm severity ([`row_severity`], bands from
 /// `[theme.display.context_meter]`) come from the selected scale's percentage
 /// and the absolute tokens. Fill geometry is log-scaled by default, with curve
 /// strength scaling from linear at denominators up to 256k to the full curve

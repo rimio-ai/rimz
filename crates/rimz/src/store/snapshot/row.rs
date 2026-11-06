@@ -250,25 +250,24 @@ impl SidebarRow {
             return ContextMeterReading::default();
         };
         let window = display_context_window(self);
-        let compaction = match scale {
-            ContextMeterScale::Compaction => window.and_then(|window| {
-                let limits = agent.context.as_ref().and_then(|context| {
-                    context
-                        .model_context_limits
-                        .as_ref()
-                        .filter(|limits| context.model_id.as_deref() == Some(limits.model.as_str()))
-                });
-                crate::agents::registry::native_compaction(
-                    &self.name,
-                    agent.auto_compact,
-                    window,
-                    agent.usage.context_capacity,
-                    limits,
-                )
-            }),
-            ContextMeterScale::Window => None,
-        };
-        let compact_at = compaction.map(|limits| limits.point);
+        let compaction = window.and_then(|window| {
+            let limits = agent.context.as_ref().and_then(|context| {
+                context
+                    .model_context_limits
+                    .as_ref()
+                    .filter(|limits| context.model_id.as_deref() == Some(limits.model.as_str()))
+            });
+            crate::agents::registry::native_compaction(
+                &self.name,
+                agent.auto_compact,
+                window,
+                agent.usage.context_capacity,
+                limits,
+            )
+        });
+        let compact_at = compaction
+            .filter(|_| scale == ContextMeterScale::Compaction)
+            .map(|limits| limits.point);
         let compacted = agent.compacted_unmeasured;
         let percent = if compacted {
             agent.usage.context_pct
@@ -841,12 +840,12 @@ impl AgentCard {
     /// The context gauge's value (0..=100): the statusline's authoritative
     /// `used_percentage` when it is paired with its own window, else the
     /// statusline's token composition over that same window, else the
-    /// fold-derived scalar. The pairing matters — the identity line shows
-    /// `context_window_size` when present, so trusting a percentage only
-    /// alongside that window keeps the bar and the window label on one
-    /// denominator. A nonzero rich composition with no window is explicitly
-    /// unknown rather than falling through to a synthetic lifecycle 0%; other
-    /// untethered context falls through to the fold-derived `context_pct`.
+    /// fold-derived scalar. Trusting a percentage only alongside its own window
+    /// keeps the gauge on the reported denominator, independently of the
+    /// published-capacity label. A nonzero rich composition with no window is
+    /// explicitly unknown rather than falling through to a synthetic lifecycle
+    /// 0%; other untethered context falls through to the fold-derived
+    /// `context_pct`.
     pub fn context_gauge_percent(&self) -> Option<u8> {
         let context_tokens = self
             .context
