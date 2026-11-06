@@ -33,6 +33,8 @@ For definitions naming `tier:`, edit the ordered model list in machine config; s
 
 Usually nothing. An unpriced model resolves to no price, never to its predecessor's: `PriceBook::price` rejects a purely numeric version bump ([Resolving a model](../internals/agents/spending.md#resolving-a-model)). Once the spend walk records the model, the unknown-model chase refetches LiteLLM and models.dev on a 30-minute gate. The embedded snapshot seeds only a missing or unusable shared table; an existing table never layers a binary's snapshot beneath its rows. `cargo xtask dist` refreshes that fresh-install seed before every release build ([The refresh](../internals/agents/spending.md#the-refresh)). Run `cargo xtask pricing-refresh` by hand only to ship a seed price before the next release.
 
+A model priced by its provider in models.dev needs no code edit. The shared projection keeps the eight first-party bare catalogues and adds every provider's priced rows under scoped `provider/model` keys, with provider hyphens replaced by underscores and the model id unchanged. $0 rows are included, and LiteLLM wins per field on collisions. OpenCode tries exact matches before related-model fallbacks, with provider-scoped names before bare names within each pass; Pi and OMP keep their existing lookups, and Hermes has no price lookup.
+
 The snapshot, `crates/rimz/pricing/litellm-pricing.json`, is generated and gitignored, so a fresh worktree has none and its builds embed an empty price book: check a key against the primary checkout's copy, or run `cargo xtask pricing-refresh` first.
 
 Two cases need an edit, both in `crates/rimz/src/agents/pricing/`:

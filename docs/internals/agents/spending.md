@@ -63,7 +63,7 @@ Parsing is mostly shared. Two concerns differ by provider, and each adapter page
 | OpenCode | SQLite rows keyed by `session_id`. A row with no tokens is dropped even with a positive `cost`, except a compaction row. | a positive stored `cost`, otherwise tokens through the price book. The database takes its first row's directory as its one origin for every session ([adapter_opencode.md](./adapter_opencode.md#cost)). |
 | Qwen | `uuid` per record, keeping the active root branch plus sidechains, and each changed file replaces its cached entries | tokens through the price book ([adapter_qwen.md](./adapter_qwen.md#pricing-a-transcript)) |
 
-A token-priced entry whose model misses the book still contributes tokens and sessions with zero dollars. The file cache records the trimmed model name and its youngest timestamp for the [unknown-model chase](#the-refresh). Sentinel names such as Claude's `<synthetic>` are skipped because they are not API model ids, and unknowns older than the 365-day window do not chase. When a chased model resolves, the walk cold re-parses the file from byte zero, so its zero-dollar entries recover their spend on the same due walk.
+A token-priced entry whose model misses the book still contributes tokens and sessions with zero dollars. The file cache records the trimmed model name and its youngest timestamp for the [unknown-model chase](#the-refresh). OpenCode records every candidate it tried, provider-scoped names and bare aliases included, so either kind of row landing heals the file. Sentinel names such as Claude's `<synthetic>` are skipped because they are not API model ids, and unknowns older than the 365-day window do not chase. When a chased model resolves, the walk cold re-parses the file from byte zero, so its zero-dollar entries recover their spend on the same due walk.
 
 ### Session and seat folds
 
@@ -234,7 +234,7 @@ An unknown model heals without a binary upgrade once the chase lands its price, 
 
 ### Price table precedence
 
-The embedded snapshot seeds only a missing or unusable table. Once a usable file exists, no snapshot is loaded or layered beneath it. Each refresh is one projection by [`source.rs`](../../../crates/rimz/src/agents/pricing/source.rs): LiteLLM supplies the base catalogue, and the allowlisted models.dev catalogues fill missing models and fields.
+The embedded snapshot seeds only a missing or unusable table. Once a usable file exists, no snapshot is loaded or layered beneath it. Each refresh is one projection by [`source.rs`](../../../crates/rimz/src/agents/pricing/source.rs): LiteLLM supplies the base catalogue, and models.dev fills missing models and fields with first-party bare rows and every provider's scoped rows. LiteLLM wins per field on a shared key.
 
 | Build input | When | Source |
 | --- | --- | --- |
@@ -244,7 +244,9 @@ The embedded snapshot seeds only a missing or unusable table. Once a usable file
 
 A binary upgrade does not replace an existing table with its newer snapshot. A model present only in that snapshot waits for the next refresh or unknown-model chase. A dropped upstream model keeps its last fetched rate rather than reverting to an older snapshot.
 
-The authoritative models.dev catalogues are `anthropic`, `openai`, `google`, `xai`, `zai`, `zhipuai`, `alibaba`, and `moonshotai`, in that precedence order. They fill missing models and fields, including context capacities and request-selected context tiers.
+The first-party models.dev catalogues are `anthropic`, `openai`, `google`, `xai`, `zai`, `zhipuai`, `alibaba`, and `moonshotai`, in that precedence order for bare model ids. They fill missing models and fields, including context capacities and request-selected context tiers.
+
+Every models.dev provider, those eight included, also projects priced rows under `provider/model`, replacing hyphens in the provider id with underscores and keeping the model id as listed. These scoped rows gain no bare alias, and $0 rates stay $0. OpenCode tries exact matches across every candidate before falling back to boundary-aware fuzzy matches, with names scoped to its session provider before bare names within each pass. A listed provider rate, including $0, therefore wins over a bare rate, but an exact bare row beats a scoped fuzzy hit. A logged slash id can reach the scoped row its prefix names on another adapter too; Pi and OMP otherwise keep their existing lookups, and Hermes has no price lookup.
 
 Claude adds a provider-local layer when an administrator deploys `modelPricing` in the system `managed-settings.json` or an alphabetically merged `managed-settings.d/*.json` fragment. RimZ reads the same locations as Claude Code: `/etc/claude-code` on Linux and WSL, `/Library/Application Support/ClaudeCode` on macOS, and `C:\Program Files\ClaudeCode` on Windows.
 
@@ -287,7 +289,7 @@ The unknown-model chase rides the same producer walk and has no timer of its own
 | Invocation | Does |
 | --- | --- |
 | `--out <path>` | writes the snapshot to that destination |
-| `--check` | fetches without writing, and fails when the LiteLLM catalogue is implausibly small, an authoritative models.dev provider disappears, a built-in default model loses its price, or a long-context canary loses its tier |
+| `--check` | fetches without writing, reports the projected scoped-row count before merging, and fails when the LiteLLM catalogue is implausibly small, a first-party models.dev provider disappears, a built-in default model loses its price, or a long-context canary loses its tier. A missing reseller does not fail coverage. |
 | `RIMZ_PRICING_JSON_PATH`, `RIMZ_PRICING_MODELS_DEV_JSON_PATH` | substitute a local document for the LiteLLM or the models.dev fetch. Under `--check`, a LiteLLM override without a models.dev override fails. A models.dev override alone still fetches LiteLLM. |
 
 `cargo xtask dist` runs the refresh before release builds, and the crate's Cargo `include` list carries the snapshot, so `cargo install rimz` embeds it too. GPT-6 Astra is the long-context canary: its fixtures cover both upstream shapes, standard and cache rates, and the whole-request price switch above 272,000 input tokens. Pricing capacity metadata never supplies Codex's context window; only its rollout reports do.

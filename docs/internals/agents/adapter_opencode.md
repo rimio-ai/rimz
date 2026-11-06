@@ -297,8 +297,8 @@ Go readings, including their cached entries, use `ProviderAccountScope::sub_prov
 - An assistant row needs `model.id`, `model.providerID`, and a token object with a nonzero split, or it is dropped, whatever its cost.
 - A compaction row needs tokens or a positive cost. It takes its own model, otherwise the session's latest assistant model, and the row's `time_created`. Compaction rows never reach the transcript or the used-provider choice.
 - Output adds reasoning. A reported `total` above the itemized sum adds the difference to output.
-- A positive stored `cost` is authoritative. A zero cost is priced from tokens, with reasoning at the output rate and both cache rates. The price lookup tries the model id, a few aliases, and each name prefixed with the provider (`crates/rimz/src/agents/adapters/opencode/spend.rs::model_candidates`).
-- An unknown model keeps its tokens at zero dollars until a pricing refresh.
+- A positive stored `cost` is authoritative. A zero cost is priced from tokens, with reasoning at the output rate and both cache rates. Candidates are the model id and its aliases scoped to the session provider, then the bare id and aliases (`crates/rimz/src/agents/adapters/opencode/spend.rs::model_candidates`). Lookup tries every candidate exactly before trying boundary-aware fuzzy matches in that same order (`crates/rimz/src/agents/adapters/opencode/spend.rs::price_tokens`), so an exact bare row beats a scoped fuzzy hit. A listed $0 rate wins too; provider ids replace hyphens with underscores in scoped keys, and `unknown` adds no scoped candidates.
+- An unknown model keeps its tokens at zero dollars until a pricing refresh. It records every attempted candidate for the chase, so a scoped or bare price landing causes the history walk to re-parse the database and clear those unknown names.
 - Token, time, and cost fields accept numeric strings.
 - Tool counts come from each assistant row's `tool` content entries, by `name`. Live tool counts come from `tool_after`.
 

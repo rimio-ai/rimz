@@ -8369,7 +8369,7 @@ reason = "Reached by inference from the binary; narrowing is a private-interface
 [[verdict]]
 kind = "item"
 key = "agents::pricing::source::RefreshReport"
-reason = "Returned by pub refresh; the binary's pricing-refresh command reads its three counts (pass 22c)."
+reason = "Returned by pub refresh; the binary's pricing-refresh command reads its four counts (pass 22c)."
 
 [[verdict]]
 kind = "item"

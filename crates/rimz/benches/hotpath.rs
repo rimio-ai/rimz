@@ -2576,10 +2576,10 @@ fn enrich_cached(bencher: Bencher) {
         });
 }
 
-#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
-fn price_book_cold_open(bencher: Bencher) {
+#[divan::bench(args = [4_000, 12_500], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn price_book_cold_open(bencher: Bencher, rows: usize) {
     let workspace = BenchWorkspace::new();
-    let models = (0..4_000)
+    let models = (0..rows)
         .map(|index| {
             (
                 format!("rimz-bench-model-{index:04}"),

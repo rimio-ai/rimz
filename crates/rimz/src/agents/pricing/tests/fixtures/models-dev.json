@@ -53,5 +53,10 @@
   "moonshotai": {"models": {
     "kimi-k2.5": {"cost": {"input": 0.6, "output": 3, "cache_read": 0.1}}
   }},
-  "gateway": {"models": {"collision": {"cost": {"input": 500, "output": 500}}}}
+  "gateway": {"models": {"collision": {"cost": {"input": 500, "output": 500}}}},
+  "opencode-go": {"models": {
+    "hy4": {"cost": {"input": 0.834, "output": 2.501, "cache_read": 0.1}},
+    "free-model": {"cost": {"input": 0, "output": 0}},
+    "unpriced": {"cost": {"input": 1}}
+  }}
 }
