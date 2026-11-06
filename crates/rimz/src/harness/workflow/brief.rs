@@ -86,10 +86,11 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
     let (mut after, questions) = lifecycle(spec, step, record);
-    let check = step.then.as_deref().expect("validated step then");
-    if let Some(note) = check_note(spec, check) {
-        after.push(' ');
-        after.push_str(&note);
+    for check in &step.then {
+        if let Some(note) = check_note(spec, check) {
+            after.push(' ');
+            after.push_str(&note);
+        }
     }
     let more = format!(
         "{CONTEXT} `rimz workflow show $RIMZ_WORKFLOW_RUN` draws the graph with this run's position and trail."
@@ -281,7 +282,8 @@ pub(super) fn push(spec: &WorkflowSpec, record: &RunRecord) -> Result<String, su
     // A pending push has already applied this check's answer as the step's input.
     let name = spec.steps[&record.node]
         .then
-        .as_deref()
+        .first()
+        .map(String::as_str)
         .expect("validated step then");
     let check = &spec.checks[name];
     let input = record.input.as_ref().expect("published push-back answer");
@@ -439,8 +441,8 @@ fn ordinal(count: u64) -> String {
 }
 
 fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, String) {
-    // Validation requires every agent step's `then` to name a check.
-    let check = span(step.then.as_deref().expect("validated step then"));
+    // Validation requires a nonempty `then` list of checks.
+    let check = span(step.then.first().expect("validated step then"));
     match step.lifecycle() {
         StepLifecycle::Turn => {
             let cleanup = if step.keep.unwrap_or(false) {
@@ -489,8 +491,13 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                 } else {
                     "Other routes close your pane and move the run on."
                 };
+                let listed = if step.then.len() > 1 {
+                    " You stay open while the run moves between the listed checks; your next turn end starts at the first check."
+                } else {
+                    ""
+                };
                 format!(
-                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
+                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
                 )
             };
             (

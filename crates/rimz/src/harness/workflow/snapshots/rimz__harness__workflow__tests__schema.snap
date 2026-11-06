@@ -390,7 +390,18 @@ expression: value
           ]
         },
         "then": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
         },
         "throttle": {
           "type": [

@@ -1313,7 +1313,7 @@ mod horizontal_sweep {
         if let Some(step) = spec.steps.get(node)
             && step.lifecycle() == StepLifecycle::Until
         {
-            base.node = step.then.clone().unwrap();
+            base.node = step.then.first().unwrap().clone();
             base.held = Some(
                 serde_json::from_value(serde_json::json!({
                     "attempt": {

@@ -387,8 +387,9 @@ pub struct Step {
     #[schemars(with = "Option<String>")]
     pub capacity_wait: Option<crate::config::CapacityWait>,
     pub limit: Option<Limit>,
-    #[schemars(required)]
-    pub then: Option<String>,
+    #[serde(default, deserialize_with = "then_checks")]
+    #[schemars(required, with = "ResetOn", !default)]
+    pub then: Vec<String>,
     #[serde(default)]
     pub on: StepEdges,
     #[schemars(range(min = 1))]
@@ -416,6 +417,13 @@ pub enum OutcomeCap {
 enum ResetOn {
     One(String),
     Many(#[schemars(length(min = 1))] Vec<String>),
+}
+
+fn then_checks<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    ResetOn::deserialize(deserializer).map(|checks| match checks {
+        ResetOn::One(check) => vec![check],
+        ResetOn::Many(checks) => checks,
+    })
 }
 
 impl<'de> Deserialize<'de> for OutcomeCap {

@@ -270,15 +270,8 @@ impl Transition<'_> {
             event: JournalEvent::TurnEnd {
                 action,
                 turn,
-                check: verdict.map_or_else(
-                    || {
-                        self.spec.steps[&attempt.node]
-                            .then
-                            .clone()
-                            .expect("validated then check")
-                    },
-                    |verdict| verdict.node.clone(),
-                ),
+                check: verdict
+                    .map_or_else(|| self.record.node.clone(), |verdict| verdict.node.clone()),
                 outcome: verdict
                     .and_then(|verdict| verdict.object["outcome"].as_str().map(str::to_owned)),
                 target: verdict.map(|verdict| verdict.target.clone()),

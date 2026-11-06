@@ -310,27 +310,57 @@ pub(super) fn validate_spec(
         {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
-        if !step
+        if step.then.is_empty() {
+            report.error(
+                &format!("{path}.then"),
+                "then must name a check or a nonempty list of checks",
+            );
+        }
+        if step
             .then
-            .as_ref()
-            .is_some_and(|target| spec.checks.contains_key(target))
+            .iter()
+            .any(|target| !spec.checks.contains_key(target))
         {
             report.error(
                 &format!("{path}.then"),
                 "then must name a check, never a step or @done",
             );
         }
+        if step.lifecycle() != StepLifecycle::Until && step.then.len() > 1 {
+            report.warnings.push(issue(
+                &format!("{path}.then"),
+                concat!(
+                    "only an until step keeps its agent open across the list; ",
+                    "enter the first check and let its routes decide the rest"
+                ),
+            ));
+        }
         if step.lifecycle() == StepLifecycle::Until
             && step
                 .then
-                .as_ref()
-                .and_then(|node| spec.checks.get(node))
-                .is_some_and(|check| check.is_sleep())
+                .iter()
+                .filter_map(|node| spec.checks.get(node))
+                .any(|check| check.is_sleep())
         {
             report.error(
                 &format!("{path}.then"),
                 "an until step cannot use a sleep as its turn-end check; use lifecycle = \"turn\"",
             );
+        }
+        for pair in step.then.windows(2) {
+            if !spec.edges(&pair[0]).iter().any(|edge| {
+                edge.outcome != "deadline"
+                    && edge.target == pair[1]
+                    && edge.fires != super::Fireability::Never
+            }) {
+                report.error(
+                    &format!("{path}.then"),
+                    format!(
+                        "{} requires a direct route to the next listed check {}",
+                        pair[0], pair[1]
+                    ),
+                );
+            }
         }
         if agent && let Some(target) = &step.on.capacity {
             report.target(spec, &format!("{path}.on.capacity"), target);

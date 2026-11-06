@@ -242,6 +242,121 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn then_lists_validate_every_entry_and_direct_link() {
+    let (_home, dir) = fixture();
+    let base = VALID
+        .replace("lifecycle = \"turn\"", "lifecycle = 'until'")
+        .replace("then = \"pick\"", "then = ['pick', 'review']")
+        .replace("done = \"@done\"", "done = 'review'")
+        + "[checks.review]\nrun='true'\non.ok='@done'\n";
+    for (text, error, warning) in [
+        (base.clone(), None, false),
+        (
+            base.replace("['pick', 'review']", "[]"),
+            Some("nonempty"),
+            false,
+        ),
+        (
+            base.replace("['pick', 'review']", "['pick', 'build']"),
+            Some("must name a check"),
+            false,
+        ),
+        (
+            base.replace("done = 'review'", "done = '@done'"),
+            Some("direct route"),
+            false,
+        ),
+        (
+            base.replace("run='true'\non.ok='@done'", "sleep='1m'\nthen='@done'"),
+            Some("cannot use a sleep"),
+            false,
+        ),
+        (
+            base.replace("lifecycle = 'until'", "lifecycle = 'turn'"),
+            None,
+            true,
+        ),
+        (
+            base.replace("lifecycle = 'until'", "lifecycle = 'turn'")
+                .replace("['pick', 'review']", "['pick']"),
+            None,
+            false,
+        ),
+        (
+            base.replace("lifecycle = 'until'", "lifecycle = 'stay'"),
+            None,
+            true,
+        ),
+        (
+            base.replace("agent = \"claude\"", "shell='true'\ntimeout='1m'"),
+            None,
+            true,
+        ),
+    ] {
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        match error {
+            Some(message) => assert!(
+                report.errors.iter().any(
+                    |issue| issue.path == "steps.build.then" && issue.message.contains(message)
+                ),
+                "{report:?}"
+            ),
+            None => assert!(report.errors.is_empty(), "{report:?}"),
+        }
+        assert_eq!(
+            report
+                .warnings
+                .iter()
+                .any(|issue| issue.path == "steps.build.then"
+                    && issue
+                        .message
+                        .contains("only an until step keeps its agent open")),
+            warning,
+            "{report:?}"
+        );
+        if let Ok(spec) = load(&dir) {
+            assert!(
+                spec.ignored
+                    .iter()
+                    .all(|issue| issue.path != "steps.build.then"),
+                "{:?}",
+                spec.ignored
+            );
+        }
+    }
+}
+
+#[test]
+fn delays_between_listed_checks_are_ignored_but_closing_delays_remain() {
+    let (_home, dir) = fixture();
+    let text = VALID
+        .replace("lifecycle = \"turn\"", "lifecycle = 'until'")
+        .replace("then = \"pick\"", "then = ['pick', 'review']")
+        .replace("done = \"@done\"", "done = {to='review',delay='1m'}")
+        + "[checks.review]\nrun='true'\non.ok={to='@done',delay='30m'}\n";
+    fs::write(dir.join("workflow.toml"), &text).unwrap();
+    let spec = load(&dir).unwrap();
+    assert!(spec.checks["pick"].on["done"].delay().is_none());
+    assert_eq!(spec.checks["review"].on["ok"].delay(), Some("30m"));
+    assert!(
+        spec.ignored
+            .iter()
+            .any(|issue| issue.path == "checks.pick.on.done.delay"
+                && issue.message.contains("closes the held session")),
+        "{:?}",
+        spec.ignored
+    );
+    let land = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen=['ruled','ruled-read']\n[checks.ruled]\nrun='true'\non={read='ruled-read',settled={to='@done',delay='30m'}}\n[checks.ruled-read]\nrun='true'\non.settled={to='@done',delay='30m'}\n";
+    fs::write(dir.join("workflow.toml"), land).unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    assert!(report.errors.is_empty(), "{report:?}");
+    let spec = load(&dir).unwrap();
+    assert_eq!(spec.checks["ruled"].on["settled"].delay(), Some("30m"));
+    assert_eq!(spec.checks["ruled-read"].on["settled"].delay(), Some("30m"));
+}
+
+#[test]
 fn validation_rejects_unanswerable_resets_and_requires_a_total_after_cleanup() {
     let (_home, dir) = fixture();
     let text = format!(

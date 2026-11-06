@@ -162,20 +162,19 @@ impl WorkflowSpec {
         self.steps
             .iter()
             .filter_map(|(node, step)| {
-                let parent = step.then.as_ref()?;
-                if !self.checks.contains_key(parent)
-                    || positions.get(parent)? >= positions.get(node)?
-                {
-                    return None;
-                }
-                self.edges(parent)
-                    .iter()
-                    .any(|edge| {
-                        edge.outcome != "deadline"
-                            && edge.target == *node
-                            && edge.fires != Fireability::Never
-                    })
-                    .then(|| (node.clone(), parent.clone()))
+                let parent = step.then.iter().find(|parent| {
+                    self.checks.contains_key(*parent)
+                        && positions
+                            .get(*parent)
+                            .zip(positions.get(node))
+                            .is_some_and(|(parent, step)| parent < step)
+                        && self.edges(parent).iter().any(|edge| {
+                            edge.outcome != "deadline"
+                                && edge.target == *node
+                                && edge.fires != Fireability::Never
+                        })
+                })?;
+                Some((node.clone(), parent.clone()))
             })
             .collect()
     }
@@ -400,7 +399,7 @@ impl Check {
 impl Step {
     fn edges(&self) -> BTreeMap<&'static str, (&str, bool)> {
         [
-            ("then", self.then.as_deref(), None),
+            ("then", self.then.first().map(String::as_str), None),
             ("asked", self.on.asked.as_deref(), None),
             ("cap", self.on.cap.as_deref(), Some("@user")),
             ("capacity", self.on.capacity.as_deref(), Some("@failed")),
