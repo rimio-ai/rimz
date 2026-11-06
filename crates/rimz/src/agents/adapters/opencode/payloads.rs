@@ -29,6 +29,7 @@ pub(super) struct OpencodeHookPayload {
     pub agent_version: Option<String>,
     pub effort: Option<String>,
     pub context_window: Option<u64>,
+    pub context_capacity: Option<u64>,
     pub total_tokens: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,

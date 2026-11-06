@@ -622,16 +622,15 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     );
     assert_eq!(registered.launch.effort.as_deref(), Some("xhigh"));
     assert_eq!(registered.usage.context_window, Some(200_000));
+    assert_eq!(registered.usage.context_capacity, None);
     assert_eq!(registered.usage.fresh_input_tokens, Some(100));
     assert_eq!(registered.usage.cache_write_input_tokens, Some(40));
     assert_eq!(registered.usage.cache_read_input_tokens, Some(30));
     assert_eq!(registered.usage.output_tokens, Some(20));
     assert_eq!(registered.usage.total_tokens, Some(190));
 
-    // A non-Claude session has no local fallback window; the plugin resolves it
-    // from the model catalog — the model's max input tokens (`Model.limit.input`,
-    // 272k for gpt-5.5, not the 400k total) — and stamps `context_window` on the
-    // envelope, so the wire-carried value is used verbatim.
+    // A non-Claude session has no local fallback window. The plugin stamps
+    // the usable window and published total from the same catalog entry.
     let catalog_window = hook_lifecycle(
         &OpencodeAdapter,
         "chat_message",
@@ -639,10 +638,18 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             "session_id": "ses_2",
             "model": "gpt-5.5",
             "provider_id": "openai",
-            "context_window": 272_000
+            "context_window": 200_000,
+            "context_capacity": 400_000
         }),
     );
-    assert_eq!(catalog_window.usage.context_window, Some(272_000));
+    assert_eq!(catalog_window.usage.context_window, Some(200_000));
+    assert_eq!(catalog_window.usage.context_capacity, Some(400_000));
+    let older_plugin = hook_lifecycle(
+        &OpencodeAdapter,
+        "chat_message",
+        &json!({ "session_id": "ses_2", "context_window": 200_000 }),
+    );
+    assert_eq!(older_plugin.usage.context_capacity, None);
     // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
     let unknown_window = hook_lifecycle(
         &OpencodeAdapter,

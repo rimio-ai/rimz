@@ -85,6 +85,23 @@ function fixture() {
 const payloads = () => records.map(r => r.payload);
 const last = () => payloads().at(-1);
 
+for (const [label, limit, window, capacity] of [
+  ["input above context", { input: 400000, context: 200000 }, 200000, 200000],
+  ["context only", { context: 100 }, 100, 100],
+  ["input only", { input: 100000 }, 100000, undefined],
+  ["invalid limits", { input: -1, context: 0 }, undefined, undefined],
+]) {
+  await test("catalog " + label, async () => {
+    const f = fixture();
+    await f.start();
+    f.ctx.data.location.model.list = () => [{ id: "switched", providerID: "p", name: label, limit }];
+    await f.emit("session.model.selected", { sessionID: "A", model: { id: "switched", providerID: "p" } });
+    await f.emit("session.execution.succeeded", { sessionID: "A" });
+    assert.equal(last().context_window, window);
+    assert.equal(last().context_capacity, capacity);
+  });
+}
+
 await test("inert gates", async () => {
   const f = fixture();
   delete process.env.RIMZ_WORKSPACE_ID;
@@ -113,6 +130,7 @@ await test("arrival and identity", async () => {
   assert.equal(last()?.hook_event_name, "client_idle");
   assert.equal(last().session_id, "A"); assert.equal(last().on_screen, true);
   assert.equal(last().total_tokens, 195); assert.equal(last().context_window, 200000);
+  assert.equal(last().context_capacity, 400000);
   assert.equal(last().session_name, "A");
   const env = records[0].env;
   assert.equal(env.RIMZ_AGENT_PID, String(process.pid));

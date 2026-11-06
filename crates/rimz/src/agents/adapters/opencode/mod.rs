@@ -713,6 +713,10 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         observation.usage.context_window = parsed
             .context_window
             .or_else(|| context_window_for(parsed.model.as_deref()));
+        observation.usage.context_capacity = parsed
+            .context_window
+            .and(parsed.context_capacity)
+            .filter(|capacity| *capacity > 0);
         observation.usage.total_tokens = parsed.total_tokens;
         observation.usage.cache_read_input_tokens = parsed.cache_read_input_tokens;
         observation.usage.cache_write_input_tokens = parsed.cache_write_input_tokens;

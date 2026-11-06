@@ -24,6 +24,8 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             "child-1",
             SubagentContext {
                 usage: Some(crate::agents::AgentUsageSummary {
+                    context_window: Some(200_000),
+                    context_capacity: Some(400_000),
                     fresh_input_tokens: Some(12_400),
                     ..Default::default()
                 }),
@@ -104,6 +106,8 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         Some(crate::store::snapshot::SubAgentTokens::Window(12_400))
     );
     assert_eq!(child.usage.output_tokens, Some(9));
+    assert_eq!(child.usage.context_window, Some(200_000));
+    assert_eq!(child.usage.context_capacity, Some(400_000));
     assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
     assert_eq!(child.model.as_deref(), Some("child-model"));

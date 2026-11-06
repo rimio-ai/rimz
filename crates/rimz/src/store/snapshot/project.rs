@@ -899,12 +899,13 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     }
 }
 
-/// Drop a reading's current-window figures, keeping the window size and the
+/// Drop a reading's current-window figures, keeping the window/capacity pair and the
 /// whole-run total. A completed compaction retires the carried reading this
 /// way, and a later re-report of the retired occupancy contributes nothing.
 fn clear_current_window(usage: &mut AgentUsageSummary) {
     *usage = AgentUsageSummary {
         context_window: usage.context_window,
+        context_capacity: usage.context_capacity,
         run_total_tokens: usage.run_total_tokens,
         ..AgentUsageSummary::default()
     };

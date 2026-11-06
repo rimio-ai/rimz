@@ -896,6 +896,7 @@ fn usage_summary_stays_flat_in_persisted_state_wire() {
     agent.usage = AgentUsageSummary {
         context_pct: Some(42),
         context_window: Some(200_000),
+        context_capacity: None,
         total_tokens: Some(84_000),
         run_total_tokens: None,
         cache_read_input_tokens: Some(60_000),

@@ -8,7 +8,7 @@ type ModelRef = { id: string; providerID: string; variant?: string };
 type Gauge = {
   model?: string; providerID?: string; effort?: string;
   input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number;
-  contextWindow?: number; modelDisplayName?: string;
+  contextWindow?: number; contextCapacity?: number; modelDisplayName?: string;
 };
 type Ask = { kind: "permission" | "form"; request: any; sessionID: string };
 type Session = {
@@ -91,6 +91,7 @@ function activate(ctx: Context, rimz: string): Cleanup {
       session_name: typeof info.title === "string" && !DEFAULT_SESSION_TITLE.test(info.title) ? info.title : undefined,
       agent_version: info.version, model: gauge.model, provider_id: gauge.providerID, effort: gauge.effort,
       model_display_name: gauge.modelDisplayName, context_window: gauge.contextWindow,
+      context_capacity: gauge.contextCapacity,
       input_tokens: gauge.input, output_tokens: gauge.output,
       cache_read_input_tokens: gauge.cacheRead, cache_write_input_tokens: gauge.cacheWrite,
       total_tokens: gauge.total, ...extra,
@@ -141,14 +142,17 @@ function activate(ctx: Context, rimz: string): Cleanup {
     state.gauge = {
       ...prior, model: model.id, providerID: model.providerID, effort: model.variant,
       contextWindow: same ? prior.contextWindow : undefined,
+      contextCapacity: same ? prior.contextCapacity : undefined,
       modelDisplayName: same ? prior.modelDisplayName : undefined,
     };
     const location = state.info.location;
     await ctx.data.location.model.sync(location);
     const entry = ctx.data.location.model.list(location)?.find((item) => item.providerID === model.providerID && item.id === model.id);
     if (disposed || !entry || state.gauge.model !== model.id || state.gauge.providerID !== model.providerID) return;
+    const windows = [entry.limit.input, entry.limit.context].filter((limit): limit is number => limit !== undefined && limit > 0);
     state.gauge = { ...state.gauge,
-      contextWindow: [entry.limit.input, entry.limit.context].find((limit) => limit !== undefined && limit > 0),
+      contextWindow: windows.length ? Math.min(...windows) : undefined,
+      contextCapacity: entry.limit.context !== undefined && entry.limit.context > 0 ? entry.limit.context : undefined,
       modelDisplayName: entry.name,
     };
   }

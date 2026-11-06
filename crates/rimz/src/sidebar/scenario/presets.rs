@@ -2219,6 +2219,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
         usage: crate::agents::AgentUsageSummary {
             context_pct,
             context_window,
+            context_capacity: None,
             total_tokens,
             run_total_tokens: None,
             cache_read_input_tokens: split.map(|tokens| tokens.0),
