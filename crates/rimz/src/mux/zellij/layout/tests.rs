@@ -621,7 +621,7 @@ fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
                         "RIMZ_CHANNEL=feature".to_owned(),
                         "zsh".to_owned(),
                     ],
-                    name: Some("#feature".to_owned()),
+                    name: Some("#feature".into()),
                 }],
                 stacked: false,
             }],
@@ -805,7 +805,7 @@ fn session_layout_renders_resume_columns() {
 fn session_layout_names_an_empty_resumed_channel_pane() {
     let opts = background_view_opts(vec![]).sidebar;
     let mut tab = resume_tab("#feature", &[&["/bin/sh"]], "/proj/feature");
-    tab.layout.columns[0].panes[0].name = Some("#feature".to_owned());
+    tab.layout.columns[0].panes[0].name = Some("#feature".into());
     let resume = vec![tab];
 
     let layout = render_session_layout(&opts, None, &resume, None).expect("render resume layout");
@@ -835,7 +835,7 @@ fn session_layout_injects_resume_tab_env_into_every_pane_without_renaming() {
         .flat_map(|column| &mut column.panes)
         .zip(["claude", "codex", "#feature"])
     {
-        pane.name = Some(name.to_owned());
+        pane.name = Some(name.into());
     }
 
     let layout = render_session_layout(&opts, None, &[tab], None).expect("render resume layout");

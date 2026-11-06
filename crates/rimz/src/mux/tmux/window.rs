@@ -9,7 +9,8 @@ use crate::mux::{PaneRect, ViewGeometry};
 
 use super::TmuxBackend;
 use super::options::{
-    RIMZ_TAB_BASE_OPTION, RIMZ_TAB_FOUNDERS_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
+    RIMZ_ORIGIN_OPTION, RIMZ_TAB_BASE_OPTION, RIMZ_TAB_FOUNDERS_OPTION, RIMZ_TITLE_LEAD_OPTION,
+    RIMZ_TITLE_OPTION, RIMZ_TITLE_REST_OPTION, sidebar_serve_command,
     spawn_command_is_sidebar_serve, window_option_argv,
 };
 use super::parse::parse_new_window_ids;
@@ -436,11 +437,11 @@ impl TmuxBackend {
 
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
     /// not writable through terminal escape sequences, unlike `pane_title`.
-    pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) {
+    pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &crate::pane::PaneTitle) {
         if let Err(err) = self.set_pane_rimz_title_command(pane_id, name).run() {
             tracing::warn!(
                 pane = pane_id,
-                title = name,
+                title = %name,
                 tags.operation = "tmux.set_pane_title",
                 error = &err as &dyn std::error::Error,
                 "could not set the pane's RimZ title; using its process fallback",
@@ -448,22 +449,48 @@ impl TmuxBackend {
         }
     }
 
-    fn set_pane_rimz_title_command(&self, pane_id: &str, name: &str) -> CommandSpec {
-        self.cmd().args([
+    fn set_pane_rimz_title_command(
+        &self,
+        pane_id: &str,
+        name: &crate::pane::PaneTitle,
+    ) -> CommandSpec {
+        let mut command = self.cmd().args([
             "set-option".to_owned(),
             "-p".to_owned(),
             "-t".to_owned(),
             pane_id.to_owned(),
             RIMZ_TITLE_OPTION.to_owned(),
-            name.to_owned(),
-        ])
+            name.as_str().to_owned(),
+        ]);
+        if let Some((origin, lead, rest)) = name.lead() {
+            let origin = match origin {
+                crate::pane::PaneTitleOrigin::Team => "team",
+                crate::pane::PaneTitleOrigin::Automation => "automation",
+            };
+            for (option, value) in [
+                (RIMZ_ORIGIN_OPTION, origin),
+                (RIMZ_TITLE_LEAD_OPTION, lead),
+                (RIMZ_TITLE_REST_OPTION, rest),
+            ] {
+                command = command.args([";", "set-option", "-p", "-t", pane_id, option, value]);
+            }
+        } else {
+            for option in [
+                RIMZ_ORIGIN_OPTION,
+                RIMZ_TITLE_LEAD_OPTION,
+                RIMZ_TITLE_REST_OPTION,
+            ] {
+                command = command.args([";", "set-option", "-pu", "-t", pane_id, option]);
+            }
+        }
+        command
     }
 
     pub(super) fn claim_window_command(
         &self,
         anchor: &PaneId,
         name: &str,
-        pane_name: &str,
+        pane_name: &crate::pane::PaneTitle,
     ) -> Result<CommandSpec> {
         let rename = Self::rename_window_args(anchor, name)?;
         Ok(self
@@ -499,20 +526,12 @@ impl TmuxBackend {
         .collect()
     }
 
-    pub(super) fn window_pane_ids_command(&self, anchor: &PaneId) -> Result<CommandSpec> {
-        ensure_pane_backend(anchor, MuxName::Tmux)?;
-        Ok(self
-            .cmd()
-            .args(["list-panes", "-t", anchor.raw(), "-F", "#{pane_id}"]))
-    }
-
-    /// Hand the window back to inherited naming and drop every listed pane's
-    /// RimZ title pin, in one command list.
+    /// Hand the window back to inherited naming and clear its title pins,
+    /// including every pane's copies, in one command list.
     pub(super) fn release_window_command(
         &self,
         anchor: &PaneId,
         name: &str,
-        pane_ids: &[String],
     ) -> Result<CommandSpec> {
         let mut command = self.rename_window_command(anchor, name)?;
         for option in [
@@ -522,15 +541,13 @@ impl TmuxBackend {
         ] {
             command = command.args([";", "set-option", "-wu", "-t", anchor.raw(), option]);
         }
-        for pane_id in pane_ids {
-            command = command.args([
-                ";",
-                "set-option",
-                "-pu",
-                "-t",
-                pane_id.as_str(),
-                RIMZ_TITLE_OPTION,
-            ]);
+        for option in [
+            RIMZ_TITLE_OPTION,
+            RIMZ_ORIGIN_OPTION,
+            RIMZ_TITLE_LEAD_OPTION,
+            RIMZ_TITLE_REST_OPTION,
+        ] {
+            command = command.args([";", "set-option", "-wU", "-t", anchor.raw(), option]);
         }
         Ok(command)
     }
@@ -1281,7 +1298,7 @@ impl TmuxBackend {
                 &tab.env,
             ) {
                 Ok(opened) => {
-                    if let Some(name) = first.name.as_deref() {
+                    if let Some(name) = first.name.as_ref() {
                         self.set_pane_rimz_title(&opened.first_pane, name);
                     }
                     if focus_window.is_none() {

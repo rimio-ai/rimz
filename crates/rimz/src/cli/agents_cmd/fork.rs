@@ -285,7 +285,7 @@ fn fork_tab_names(
     seed: &ForkSeed,
     channel: Option<&str>,
     launch: &AgentLaunchIdentity,
-) -> (String, String) {
+) -> (String, rimz::pane::PaneTitle) {
     let title = channel.map_or_else(
         || {
             rimz::agents::pane_title::short_label(seed.launch.profile.as_deref(), &seed.kind)
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn fork_tab_names_follow_the_seed_profile_else_kind() {
-        let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
+        let pair = |title: &str, pane: &str| (title.to_string(), rimz::pane::PaneTitle::from(pane));
         let names = |seed: &ForkSeed, channel| {
             fork_tab_names(
                 seed,

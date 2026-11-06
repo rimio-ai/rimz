@@ -317,7 +317,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
             },
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "60".to_owned()]),
-            title: Some("rimz-new-stack".to_owned()),
+            title: Some("rimz-new-stack".into()),
             close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::Stacked,

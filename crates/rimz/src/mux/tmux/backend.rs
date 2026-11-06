@@ -1426,16 +1426,7 @@ impl MuxBackend for TmuxBackend {
             TabNameIntent::Status { .. } | TabNameIntent::Rest { .. } => {
                 self.rename_window_command(anchor, name)?
             }
-            TabNameIntent::Release { .. } => {
-                let output = self
-                    .window_pane_ids_command(anchor)?
-                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
-                let panes = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                self.release_window_command(anchor, name, &panes)?
-            }
+            TabNameIntent::Release { .. } => self.release_window_command(anchor, name)?,
         };
         let command = match intent.observed() {
             Some(observed) => self.window_name_guarded_command(anchor, observed, name, &command)?,

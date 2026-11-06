@@ -461,7 +461,7 @@ fn ensure_session_diffs_window_options_at_250_windows() {
         let (_, values) = window.split_once('|').unwrap();
         assert!(values.starts_with("on|1|top|double|1|"), "{window}");
         assert!(
-            values.contains("#[fg=") && values.contains(" #{@rimz_title} ,"),
+            values.contains("#[fg=") && values.contains(" #{@rimz_title}} ,"),
             "{window}",
         );
     }

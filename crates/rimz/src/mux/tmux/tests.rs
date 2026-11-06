@@ -1180,7 +1180,7 @@ fn tab_claim_pins_the_verbatim_pane_title_not_the_tab_name() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let claim = backend
-        .claim_window_command(&pane, "#feat:one.2", "opus.fast (@brave-fox)")
+        .claim_window_command(&pane, "#feat:one.2", &"opus.fast (@brave-fox)".into())
         .expect("tmux pane");
     assert_eq!(
         verb_args(&claim),
@@ -1191,6 +1191,24 @@ fn tab_claim_pins_the_verbatim_pane_title_not_the_tab_name() {
             "%7",
             "@rimz_title",
             "opus.fast (@brave-fox)",
+            ";",
+            "set-option",
+            "-pu",
+            "-t",
+            "%7",
+            "@rimz_origin",
+            ";",
+            "set-option",
+            "-pu",
+            "-t",
+            "%7",
+            "@rimz_title_lead",
+            ";",
+            "set-option",
+            "-pu",
+            "-t",
+            "%7",
+            "@rimz_title_rest",
             ";",
             "rename-window",
             "-t",
@@ -1215,16 +1233,66 @@ fn tab_claim_pins_the_verbatim_pane_title_not_the_tab_name() {
 }
 
 #[test]
-fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
+fn tab_claim_publishes_the_origin_parts() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
-    let list = backend.window_pane_ids_command(&pane).expect("tmux pane");
-    assert_eq!(
-        verb_args(&list),
-        ["list-panes", "-t", "%7", "-F", "#{pane_id}"]
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let launch = crate::agents::LaunchParams {
+        team: Some("recon".into()),
+        role: Some("planner".into()),
+        ..Default::default()
+    };
+    let title = crate::agents::pane_title::title(
+        crate::agents::pane_title::Seat::from_launch(&kind, Some("swift-otter"), &launch),
+        &[],
     );
+    let claim = backend
+        .claim_window_command(&pane, "team:recon", &title)
+        .unwrap();
+    assert_eq!(
+        verb_args(&claim)
+            .iter()
+            .take(27)
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "set-option",
+            "-p",
+            "-t",
+            "%7",
+            "@rimz_title",
+            "recon · planner (@swift-otter)",
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            "%7",
+            "@rimz_origin",
+            "team",
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            "%7",
+            "@rimz_title_lead",
+            "recon",
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            "%7",
+            "@rimz_title_rest",
+            " · planner (@swift-otter)",
+        ]
+    );
+}
+
+#[test]
+fn tab_release_clears_all_window_and_pane_title_pins() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let release = backend
-        .release_window_command(&pane, "zsh", &["%7".to_owned(), "%8".to_owned()])
+        .release_window_command(&pane, "zsh")
         .expect("tmux pane");
     assert_eq!(
         verb_args(&release)[15..],
@@ -1238,16 +1306,28 @@ fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
             "@rimz_tab_founders",
             ";",
             "set-option",
-            "-pu",
+            "-wU",
             "-t",
             "%7",
             "@rimz_title",
             ";",
             "set-option",
-            "-pu",
+            "-wU",
             "-t",
-            "%8",
-            "@rimz_title",
+            "%7",
+            "@rimz_origin",
+            ";",
+            "set-option",
+            "-wU",
+            "-t",
+            "%7",
+            "@rimz_title_lead",
+            ";",
+            "set-option",
+            "-wU",
+            "-t",
+            "%7",
+            "@rimz_title_rest",
         ]
     );
 }
@@ -1273,7 +1353,7 @@ fn release_clears_ownership_inside_the_observed_name_guard() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let release = backend
-        .release_window_command(&pane, "sh", &["%7".to_owned()])
+        .release_window_command(&pane, "sh")
         .expect("release");
     let guarded = backend
         .window_name_guarded_command(&pane, "opus", "sh", &release)

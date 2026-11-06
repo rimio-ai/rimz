@@ -1150,6 +1150,7 @@ impl ResumeCandidate {
                 profile_scope: None,
                 role: None,
                 team: None,
+                automation: None,
                 launch_group: None,
                 launch_ordinal: None,
                 channel: None,
@@ -2725,6 +2726,7 @@ fn plan_resume_candidates_detailed(
             profile: candidate.identity.profile.clone(),
             team: candidate.identity.team.clone(),
             role: candidate.identity.role.clone(),
+            automation: candidate.identity.automation.clone(),
             ..Default::default()
         };
         let pane_name = crate::agents::pane_title::title(

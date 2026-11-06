@@ -380,7 +380,7 @@ reason = "Initial tab labels, survivor labels and pane titles share the profile-
 [[verdict]]
 kind = "item"
 key = "agents::pane_title::title"
-reason = "Every agent pane spawn uses one bounded, parent-aware seat and handle title rule."
+reason = "Every agent pane spawn uses one bounded, parent-aware seat and handle title rule, retaining the root origin lead and its class."
 
 [[verdict]]
 kind = "item"
@@ -3252,7 +3252,9 @@ path = "crates/rimz/src/pane"
 # Daemon-host classification splits in two: card admission and the view reap read
 # the command-marker arm, view-level classifiers keep the broad predicate.
 # Canonical named-key inventory is also shared with CLI help.
-surface-budget = 44
+# PaneTitle, PaneTitleOrigin and the title's text/lead accessors and builders carry origin metadata (+6).
+# The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -9697,6 +9699,36 @@ reason = "Pass 24a: carried by the kept public EffectiveConfigErr::Tasks::source
 kind = "item"
 key = "pane::ElevatedAgent"
 reason = "Pass 24a: floored by the `pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind}` at lib.rs:76, which this pass does not own; RuntimeOwner::new is also named by tests/integration/message.rs:916."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitle"
+reason = "The title composer and both mux publishers share verbatim pane text and an optional typed origin boundary; plain callers cannot infer a lead from text."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitleOrigin"
+reason = "Crate-only team and automation classes connect the title composer to tmux's theme-role projection."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitle::as_str"
+reason = "Non-tmux publishers and listings read the full verbatim title without projecting its origin."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitle::lead"
+reason = "The crate-only accessor lets tmux read the recorded class and exact title parts instead of parsing display text."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitle::with_origin"
+reason = "Only the agent title rule constructs a lead, keeping its text and class at one decision point."
+
+[[verdict]]
+kind = "item"
+key = "pane::PaneTitle::push_str"
+reason = "The title rule appends handles and child segments without losing the ancestor's origin boundary."
 
 [[verdict]]
 kind = "item"

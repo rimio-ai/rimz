@@ -178,7 +178,7 @@ Each rename carries a `TabNameIntent`:
 | `Status { observed }` | Add the projected status glyph; no record or option changes. |
 | `Rest { observed }` | Clear a stale glyph; no record or option changes. |
 | `Rebuild { observed, base }` | Write the surviving agents' label and status glyph, recording the supplied base without re-deriving it from another theme. |
-| `Release { observed }` | Rename to the shell's name and clear ownership. tmux restores inherited `automatic-rename` and clears every pane's `@rimz_title`. Zellij retains pane names and keeps the explicit shell name. |
+| `Release { observed }` | Rename to the shell's name and clear ownership. tmux restores inherited `automatic-rename` and clears every pane's `@rimz_title`, `@rimz_origin`, `@rimz_title_lead`, and `@rimz_title_rest`. Zellij retains pane names and keeps the explicit shell name. |
 
 Every intent except `Claim` applies only while the tab still bears the name it was projected from. The room host projects `Status`, `Rest`, `Rebuild`, and `Release` from the tab's contents, without waiting for an agent-exit hook, and applies them off-thread from a frame it observed earlier. Without the check, a projection from a frame that predates an in-place launch would overwrite that launch's `Claim`, and nothing would converge back. A miss is a silent `Ok`: the next frame projects again from the current name. `Claim` is unconditional.
 
@@ -245,7 +245,7 @@ Rebirth re-pins on both backends. Panes also carry a pane-scope pin ([`pane_pin_
 
 `RIMZ_WORKTREE_PATH` therefore marks more than agent panes, and code reading it cannot take it as proof of an agent. The pane-scope pin goes to agent launches (fresh, forked, restarted, resumed, and supervised runs), `rimz pane split` shells, and reborn tabs. Two non-pane processes set the key alone, without `RIMZ=1` or a channel: a loop check, where it names the task's run directory on top of the session pin, and a worktree hook, where it names the worktree the hook fired for. The room's first shell carries only the session pin.
 
-A pane's display-title pin is separate from room identity and tab labels. `agents::pane_title` composes the seat, handle, and optional parent context at spawn ([pane-title shapes](../guide/multiplexer.md#everything-in-the-room-is-an-ordinary-pane-operation)). tmux stores it verbatim in the pane option `@rimz_title` and removes it from every pane in a released window; only window names keep the `:`/`.` sanitizer. Zellij uses the same title as its pane name and keeps it on release.
+A pane's display-title pin is separate from room identity and tab labels. `agents::pane_title` composes the seat, handle, origin, and optional parent context at spawn ([pane-title shapes](../guide/multiplexer.md#everything-in-the-room-is-an-ordinary-pane-operation)). Its `pane::PaneTitle` carries the full text and the origin lead's class and byte boundary; ancestry appends retain the root lead. tmux stores the full text verbatim in `@rimz_title`, with no style markup. A led title also sets `@rimz_origin` (`team` or `automation`), `@rimz_title_lead`, and `@rimz_title_rest` (starting with ` · `), in the same command list. A plain title unsets those three options. Releasing a window uses one `set-option -wU` per title option to clear all four from the window and every pane, without listing panes or growing the command with pane count. Older titles without `@rimz_origin` render as plain titles. Only window names keep the `:`/`.` sanitizer. Zellij uses the full text as its pane name and keeps it on release.
 
 ### Pane metadata
 
@@ -272,7 +272,7 @@ RimZ sets the attached terminal's title for every pane it creates. Both backends
 
 Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and caller-identified command panes by that identity. Other command panes, and runtime splits, fall back to the executable basename.
 
-tmux enables session-scoped `set-titles`. For a caller-identified pane the backend writes `@rimz_title`, which terminal escape sequences cannot change, and the fixed `set-titles-string` shows that value or falls back to `#{pane_current_command}`. The format excludes `#T` and `#{pane_title}`, which applications rewrite with OSC title sequences. Pane-scoped options arrived in tmux 3.1, below RimZ's 3.5 floor.
+tmux enables session-scoped `set-titles`. For a caller-identified pane the backend writes `@rimz_title`, which terminal escape sequences cannot change, and the fixed `set-titles-string` shows that full value or falls back to `#{pane_current_command}`. The border-only `@rimz_origin`, `@rimz_title_lead`, and `@rimz_title_rest` options do not change the outer title. The format excludes `#T` and `#{pane_title}`, which applications rewrite with OSC title sequences. Pane-scoped options arrived in tmux 3.1, below RimZ's 3.5 floor.
 
 ## Reading the room
 

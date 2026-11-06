@@ -675,7 +675,7 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
             &anchor,
             "#feat",
             TabNameIntent::Claim {
-                pane_name: "opus".to_owned(),
+                pane_name: "opus".into(),
             },
         )
         .expect("name existing launch tab");
@@ -904,7 +904,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
                         .into_iter()
                         .map(|name| PaneCmd {
                             argv: vec!["sleep".to_owned(), "600".to_owned()],
-                            name: Some(name.to_owned()),
+                            name: Some(name.into()),
                         })
                         .collect(),
                 )],

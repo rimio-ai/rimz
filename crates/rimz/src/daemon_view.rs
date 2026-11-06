@@ -864,7 +864,7 @@ fn split_managed_pane(
         },
         cwd: Some(pane.cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
-        title: Some(title),
+        title: Some(title.into()),
         // Match view-born managed panes on both backends: an exit leaves no pane.
         close_on_exit: true,
         env: Default::default(),

@@ -734,7 +734,7 @@ pub struct SplitPaneOptions {
     pub command: Option<Vec<String>>,
     /// Pane display title, not a short tab label, kept while
     /// foreground children churn.
-    pub title: Option<String>,
+    pub title: Option<crate::pane::PaneTitle>,
     /// Close the pane when its command exits on either backend, regardless of
     /// user retention. On tmux the printed pane is pinned to `remain-on-exit off`;
     /// a failed pin only warns. `false` leaves retention unchanged.
@@ -919,7 +919,7 @@ pub struct HostPane {
 pub struct PaneCmd {
     pub argv: Vec<String>,
     /// Pane display title, independent of the tab's short label.
-    pub name: Option<String>,
+    pub name: Option<crate::pane::PaneTitle>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

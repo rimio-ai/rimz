@@ -75,7 +75,7 @@ fn rebuild_updates_the_record_only_while_the_observed_name_matches() {
             &anchor,
             "founder",
             TabNameIntent::Claim {
-                pane_name: "founder".to_owned(),
+                pane_name: "founder".into(),
             },
         )
         .unwrap();
@@ -128,7 +128,15 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
     require_tmux!();
     let session = "rimz-claim-title";
     let server = TmuxServer::new();
-    ensure_rimz_session(&server, session, Some((120, 40)));
+    let mut opts = session_opts(
+        session,
+        WorkspaceId::from_project_root(server._tempdir.path()),
+        server._tempdir.path(),
+        server._tempdir.path(),
+        Some((120, 40)),
+    );
+    opts.config.theme = toml::from_str("meta = '#aabbcc'\naccent = '#778899'").unwrap();
+    server.backend.ensure_session(&opts).unwrap();
     let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
     server
         .backend
@@ -148,7 +156,7 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
             &anchor,
             "#feat",
             TabNameIntent::Claim {
-                pane_name: "opus.fast (@brave-fox)".to_owned(),
+                pane_name: "opus.fast (@brave-fox)".into(),
             },
         )
         .expect("claim in-place pane");
@@ -173,6 +181,134 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
         server.display(anchor.raw(), &format),
         format!("{session} | opus.fast (@brave-fox)")
     );
+    server.output(&[
+        "set-option",
+        "-p",
+        "-t",
+        anchor.raw(),
+        "@rimz_kind",
+        "claude",
+    ]);
+    let title_format = |format: &str| {
+        String::from_utf8(
+            server
+                .output(&["display-message", "-p", "-t", anchor.raw(), format])
+                .stdout,
+        )
+        .unwrap()
+        .trim_end_matches('\n')
+        .to_owned()
+    };
+    let kind = rimz::ids::AgentKind::new_unchecked("claude");
+    for (launch, origin, lead, rest, tone) in [
+        (
+            rimz::agents::LaunchParams {
+                team: Some("recon".into()),
+                role: Some("planner".into()),
+                ..Default::default()
+            },
+            "team",
+            "recon",
+            " · planner (@brave-fox)",
+            "#aabbcc",
+        ),
+        (
+            rimz::agents::LaunchParams {
+                profile: Some("coder".into()),
+                automation: Some(rimz::agents::Automation::Loop),
+                ..Default::default()
+            },
+            "automation",
+            "loop",
+            " · coder (@brave-fox)",
+            "#778899",
+        ),
+        (
+            rimz::agents::LaunchParams {
+                automation: Some(rimz::agents::Automation::Workflow {
+                    workflow: "nightly".into(),
+                    step: "build".into(),
+                }),
+                ..Default::default()
+            },
+            "automation",
+            "nightly",
+            " · build (@brave-fox)",
+            "#778899",
+        ),
+    ] {
+        let title = rimz::agents::pane_title::title(
+            rimz::agents::pane_title::Seat::from_launch(&kind, Some("brave-fox"), &launch),
+            &[],
+        );
+        let claim = |pane_name| {
+            server
+                .backend
+                .rename_tab(
+                    session,
+                    &anchor,
+                    "#feat",
+                    TabNameIntent::Claim { pane_name },
+                )
+                .unwrap();
+        };
+        claim(title.clone());
+        assert_eq!(
+            server.display(anchor.raw(), "#{@rimz_title}"),
+            format!("{lead}{rest}")
+        );
+        for (option, expected) in [
+            ("#{@rimz_origin}", origin),
+            ("#{@rimz_title_lead}", lead),
+            ("#{@rimz_title_rest}", rest),
+        ] {
+            assert_eq!(title_format(option), expected, "{option}");
+        }
+        assert_eq!(
+            title_format("#{E:pane-border-format}"),
+            format!("#[fg={tone}] {lead}#[fg=#d97757]{rest} ")
+        );
+        claim("plain · literal (@brave-fox)".into());
+        assert_eq!(
+            server.display(anchor.raw(), "#{@rimz_title}"),
+            "plain · literal (@brave-fox)"
+        );
+        for option in [
+            "#{@rimz_origin}",
+            "#{@rimz_title_lead}",
+            "#{@rimz_title_rest}",
+        ] {
+            assert_eq!(server.display(anchor.raw(), option), "", "{option}");
+        }
+        assert_eq!(
+            title_format("#{E:pane-border-format}"),
+            "#[fg=#d97757] plain · literal (@brave-fox) "
+        );
+        claim(title);
+    }
+    let mut release_panes = vec![anchor.raw().to_owned()];
+    for _ in 0..2 {
+        let pane = server.stdout(&[
+            "split-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            anchor.raw(),
+            "sleep 30",
+        ]);
+        for option in [
+            "@rimz_title",
+            "@rimz_origin",
+            "@rimz_title_lead",
+            "@rimz_title_rest",
+        ] {
+            let value = title_format(&format!("#{{{option}}}"));
+            server.output(&["set-option", "-p", "-t", &pane, option, &value]);
+        }
+        release_panes.push(pane);
+    }
     server
         .backend
         .rename_tab(
@@ -184,6 +320,16 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
             },
         )
         .expect("release pin");
+    for pane in release_panes {
+        for option in [
+            "#{@rimz_title}",
+            "#{@rimz_origin}",
+            "#{@rimz_title_lead}",
+            "#{@rimz_title_rest}",
+        ] {
+            assert_eq!(server.display(&pane, option), "", "{pane} {option}");
+        }
+    }
     let roster = list_session_panes(&server, session);
     assert_eq!(
         roster
@@ -211,7 +357,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "30".to_owned()],
-                    name: Some("codex (@swift-otter)".to_owned()),
+                    name: Some("codex (@swift-otter)".into()),
                 }])],
                 focused_pane: 0,
             },
@@ -243,7 +389,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             target: SplitTarget::Pane(anchor),
             cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "30".to_owned()]),
-            title: Some("coder (@swift-otter) › claude subagent (@gold-tower)".to_owned()),
+            title: Some("coder (@swift-otter) › claude subagent (@gold-tower)".into()),
             close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
@@ -341,7 +487,7 @@ fn projected_rename_keeps_a_claim_made_after_its_observation() {
             &anchor,
             "opus",
             TabNameIntent::Claim {
-                pane_name: "opus".to_owned(),
+                pane_name: "opus".into(),
             },
         )
         .expect("claim");
