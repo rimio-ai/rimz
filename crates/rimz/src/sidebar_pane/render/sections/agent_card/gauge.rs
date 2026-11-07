@@ -82,6 +82,21 @@ pub(super) fn bar_row(
     Line::from(trim_spans_to_width(spans, width))
 }
 
+/// Space after the percentage: a separator and five-cell age cluster at L2.
+/// A gap with a cache keeps it below L2 because its stats line is hidden.
+pub(super) fn gauge_age_width(ctx: &RowCtx<'_>, row: &SidebarRow) -> usize {
+    if ctx.tier == Tier::L2
+        || (row
+            .as_agent()
+            .is_some_and(|agent| agent.compacted_unmeasured)
+            && !matches!(cache_age(ctx, row), CacheAge::NoCache))
+    {
+        6
+    } else {
+        0
+    }
+}
+
 /// The context meter — the resting card's one bar. A context glyph on the left,
 /// the **percent used** on the right, the bar between. A compaction-scaled track
 /// ends in a wall, paired with the identity line's point/capacity label; fallback
@@ -108,9 +123,9 @@ pub(super) fn bar_row(
 /// its own fraction with a percentage; without one, the glyph is healthy green
 /// and the empty track stays muted, without a percentage.
 ///
-/// At L2 every meter reserves a five-cell age cluster after a space; below L2
-/// the bar keeps that room and the stats line pins the age instead, except in
-/// a compaction gap with a cache, whose meter keeps the cluster at every width.
+/// The age slot follows [`gauge_age_width`], shared with the message marks.
+/// Below L2 the stats line pins the age instead, except in a compaction gap
+/// with a cache, whose meter keeps the cluster at every width.
 /// The age appears from five minutes quiet, filling over an hour
 /// ([`hour_age_glyph`]) and staying full past it. Its continuous tone is muted
 /// until half the known TTL, or the last ten minutes if earlier, and never
@@ -182,13 +197,7 @@ pub(super) fn gauge_line(
     } else {
         bar_color
     };
-    // A gap with a cache keeps the age below L2 because its stats line is hidden.
-    let age_width =
-        if ctx.tier == Tier::L2 || (compacted_unmeasured && !matches!(age, CacheAge::NoCache)) {
-            6
-        } else {
-            0
-        };
+    let age_width = gauge_age_width(ctx, row);
     let segments = segments
         .as_ref()
         .map(|segments| &segments[..])

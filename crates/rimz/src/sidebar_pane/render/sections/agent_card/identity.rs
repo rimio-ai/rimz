@@ -132,10 +132,9 @@ pub(super) fn agent_identity_line(
         attention,
     ));
     if show_marks {
-        let budget = width.saturating_sub(
-            spans_width(&left) + spans_width(&right) + 1 + usize::from(!right.is_empty()),
-        );
-        let mut marks = message_marks(row_ctx, row, budget);
+        let trailing_width = spans_width(&right) + usize::from(!right.is_empty());
+        let budget = width.saturating_sub(spans_width(&left) + trailing_width + 1);
+        let mut marks = message_marks(row_ctx, row, budget, trailing_width);
         if !marks.is_empty() {
             if !right.is_empty() {
                 marks.push(Span::raw(" "));
@@ -310,8 +309,9 @@ pub(super) fn stale_line(
         &row.name,
         attention,
     ));
-    let budget = width.saturating_sub(spans_width(&left) + spans_width(&right) + 2);
-    let mut marks = message_marks(ctx, row, budget);
+    let trailing_width = spans_width(&right) + 1;
+    let budget = width.saturating_sub(spans_width(&left) + trailing_width + 1);
+    let mut marks = message_marks(ctx, row, budget, trailing_width);
     if !marks.is_empty() {
         marks.push(Span::raw(" "));
         marks.extend(right);

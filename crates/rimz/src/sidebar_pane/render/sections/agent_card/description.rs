@@ -47,7 +47,7 @@ pub(super) fn description_lines(
         spans.extend(description_spans(ctx, row, attention));
         return vec![pin_right(
             spans,
-            message_marks(ctx, row, width.saturating_sub(3)),
+            message_marks(ctx, row, width.saturating_sub(3), 0),
             width,
         )];
     };
@@ -74,7 +74,12 @@ pub(super) fn description_lines(
             *last = format!("{}{suffix}", ellipsize(&format!("{last}…"), budget));
         }
     }
-    let marks = message_marks(ctx, row, wrap_width.saturating_sub(text_width(&suffix) + 1));
+    let marks = message_marks(
+        ctx,
+        row,
+        wrap_width.saturating_sub(text_width(&suffix) + 1),
+        0,
+    );
     if !marks.is_empty()
         && let Some(last) = lines.last_mut()
     {

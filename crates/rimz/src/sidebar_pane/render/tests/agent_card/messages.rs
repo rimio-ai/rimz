@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::CardDensityMode;
 use crate::sidebar_pane::render::layout::text_width;
+use crate::store::snapshot::CacheClock;
 
 fn message_card(status: AgentStatus, description: Option<&str>) -> SidebarSnapshot {
     let mut snapshot = snapshot_with(vec![agent(
@@ -37,6 +38,120 @@ fn set_message_marks(snapshot: &mut SidebarSnapshot, due: usize, typing: bool) {
                 .insert(pane, snapshot.now + Duration::from_secs(30));
         }
     }
+}
+
+fn end_column(line: &str, text: &str) -> Option<usize> {
+    line.split_once(text)
+        .map(|(before, _)| text_width(before) + text_width(text))
+}
+
+#[test]
+fn message_marks_align_with_the_percentage_across_card_shapes_and_tier_edges() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for set in ["unicode", "nerd_font"] {
+        for width in [31, 32, 33, 45, 46, 47] {
+            let mut running = message_card(AgentStatus::Running, Some("store refactor"));
+            running.theme.glyphs.set = Some(set.to_owned());
+            let theme = Theme::fixed_for_theme(false, &running.theme);
+            let reference = line_texts(&group_lines_at_width(&running, &theme, 0, width));
+            let percentage_end = reference
+                .iter()
+                .find_map(|line| end_column(line, "%"))
+                .unwrap();
+            let pen = theme.glyph(GlyphRole::CardTyping);
+            let queued = theme.glyph(GlyphRole::CardMessageQueued);
+            let cluster = if width < 32 {
+                format!("{pen} {queued}")
+            } else {
+                format!("{pen} {queued} 3")
+            };
+            for shape in ["running", "fresh_labeled", "fresh", "ask"] {
+                let mut snapshot = running.clone();
+                let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+                if shape.starts_with("fresh") {
+                    card.status = AgentStatus::Idle;
+                    card.delegated_cost_usd = None;
+                    if shape == "fresh" {
+                        card.task = None;
+                    }
+                }
+                if shape == "ask" {
+                    card.status = AgentStatus::Waiting;
+                    card.ask_detail = Some("Should I refresh the pricing cache and every downstream consumer before continuing the build?".to_owned());
+                    card.extra_questions = 2;
+                }
+                set_message_marks(&mut snapshot, 3, true);
+                let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width));
+                actual.push((
+                    set,
+                    width,
+                    shape,
+                    lines.iter().find_map(|line| end_column(line, &cluster)),
+                ));
+                expected.push((set, width, shape, Some(percentage_end)));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn message_marks_yield_to_the_cost_with_one_cell_between() {
+    let theme = Theme::fixed(false);
+    let running = message_card(AgentStatus::Running, Some("store refactor"));
+    let reference = line_texts(&group_lines_at_width(&running, &theme, 0, 46));
+    let percentage_end = reference
+        .iter()
+        .find_map(|line| end_column(line, "%"))
+        .unwrap();
+    let actual = [(1.27, "$1.27"), (12.34, "$12.34")].map(|(cost, label)| {
+        let mut snapshot = message_card(AgentStatus::Idle, None);
+        snapshot.theme.display.card_density = CardDensityMode::Compact;
+        let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+        card.prompt = Some("history".to_owned());
+        card.delegated_cost_usd = Some(cost);
+        set_message_marks(&mut snapshot, 3, true);
+        let lines = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, 46));
+        (
+            lines[1].contains(&format!("✎ ↧ 3 {label}")),
+            end_column(&lines[1], "✎ ↧ 3"),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (true, Some(percentage_end)),
+            (true, Some(percentage_end - 1))
+        ]
+    );
+}
+
+#[test]
+fn message_marks_follow_the_compaction_gaps_percentage_below_l2() {
+    let theme = Theme::fixed(false);
+    let actual = [true, false].map(|has_cache| {
+        let mut snapshot = message_card(AgentStatus::Running, Some("store refactor"));
+        let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+        card.compacted_unmeasured = true;
+        card.compacted_since_prompt = !has_cache;
+        card.usage.context_window = Some(100_000);
+        card.usage.context_pct = Some(40);
+        card.usage.total_tokens = Some(40_000);
+        card.cache = Some(CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: None,
+            warm_until: None,
+            rewarm_cost_usd: None,
+        });
+        set_message_marks(&mut snapshot, 3, true);
+        let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 32));
+        (
+            lines.iter().find_map(|line| end_column(line, "✎ ↧ 3")),
+            lines.iter().find_map(|line| end_column(line, "%")),
+        )
+    });
+    assert_eq!(actual, [(Some(25), Some(25)), (Some(31), Some(31))]);
 }
 
 #[test]

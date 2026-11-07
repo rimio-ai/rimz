@@ -370,7 +370,24 @@ pub(super) fn row_lines(
         .collect()
 }
 
-fn message_marks(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> Vec<Span<'static>> {
+/// The marks, padded to end at the meter's percentage column. `trailing_width` is
+/// what the line pins after them, gap included; a cluster wider than the padding
+/// pushes the marks left of that column.
+fn message_marks(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    width: usize,
+    trailing_width: usize,
+) -> Vec<Span<'static>> {
+    let padding = gauge_age_width(ctx, row).saturating_sub(trailing_width);
+    let mut marks = message_mark_spans(ctx, row, width.saturating_sub(padding));
+    if !marks.is_empty() && padding > 0 {
+        marks.push(Span::raw(" ".repeat(padding)));
+    }
+    marks
+}
+
+fn message_mark_spans(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> Vec<Span<'static>> {
     let Some(agent) = row.as_agent() else {
         return Vec::new();
     };
