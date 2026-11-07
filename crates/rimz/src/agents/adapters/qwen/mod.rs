@@ -733,6 +733,7 @@ fn lifecycle_signal(
             let tool = parse_tool_use(payload);
             spec.blocking_tool_kind(tool.tool_name.as_deref())
                 .map(|kind| LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind,
                     ask_id: None,
                     detail: None,
@@ -742,6 +743,7 @@ fn lifecycle_signal(
         "PermissionRequest" => {
             let tool = parse_tool_use(payload);
             Some(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: spec
                     .blocking_tool_kind(tool.tool_name.as_deref())
                     .unwrap_or(AskKind::Permission),

@@ -369,6 +369,7 @@ fn agents_show_ambiguity_excludes_ended_matches() {
         if n < 2 {
             observation.signal = if n == 0 {
                 rimz::agents::LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: rimz::agents::AskKind::Question,
                     ask_id: None,
                     detail: Some("Which strategy?".into()),

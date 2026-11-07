@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::layout::text_width;
 use ratatui::text::Span;
 
 fn waiting_asker() -> AgentState {
@@ -15,6 +16,7 @@ fn waiting_asker() -> AgentState {
     asker.waiting_since = Some(fixed_now() - Duration::from_secs(60));
     asker.last_activity = asker.waiting_since.unwrap();
     asker.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: "ask_0123456789abcdef".parse().unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("Allow the pricing cache write?".to_owned()),
@@ -22,6 +24,71 @@ fn waiting_asker() -> AgentState {
         since: asker.last_activity,
     });
     asker
+}
+
+#[test]
+fn waiting_question_count_follows_short_text() {
+    let mut asker = waiting_asker();
+    let ask = asker.open_ask.as_mut().unwrap();
+    ask.detail = Some("Q?".to_owned());
+    ask.extra_questions = 2;
+    let snapshot = snapshot_with(vec![asker]);
+    let screen = snapshot_to_screen(&snapshot, 32, 22);
+    assert!(screen.contains("Q? +2"), "{screen}");
+    assert_eq!(screen.matches("+2").count(), 1);
+    assert_snapshot("waiting_question_count_short", screen);
+}
+
+#[test]
+fn waiting_question_count_survives_wrapping_and_ellipsis() {
+    let mut asker = waiting_asker();
+    let ask = asker.open_ask.as_mut().unwrap();
+    ask.detail = Some(
+        concat!(
+            "Should I refresh the pricing cache and every downstream consumer before ",
+            "continuing the build with the latest complete dataset?"
+        )
+        .to_owned(),
+    );
+    ask.extra_questions = 2;
+    let snapshot = snapshot_with(vec![asker]);
+    let screen = snapshot_to_screen(&snapshot, 32, 22);
+    assert!(screen.contains("… +2"), "{screen}");
+    assert_eq!(screen.matches("+2").count(), 1);
+    assert_snapshot("waiting_question_count_truncated", screen);
+}
+
+#[test]
+fn waiting_question_count_keeps_two_full_width_lines() {
+    let mut asker = waiting_asker();
+    let ask = asker.open_ask.as_mut().unwrap();
+    ask.detail = Some("Should I refresh the pricing cache before the build?".to_owned());
+    ask.extra_questions = 2;
+    let snapshot = snapshot_with(vec![asker]);
+    let screen = snapshot_to_screen(&snapshot, 32, 22);
+    assert!(screen.contains("Should I refresh the pricing"), "{screen}");
+    assert!(screen.contains("cache before the build? +2"), "{screen}");
+    assert!(!screen.contains('…'), "{screen}");
+}
+
+#[test]
+fn waiting_question_count_fits_a_narrow_card() {
+    let mut asker = waiting_asker();
+    let ask = asker.open_ask.as_mut().unwrap();
+    ask.detail = Some("漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字?".to_owned());
+    ask.extra_questions = 2;
+    let snapshot = snapshot_with(vec![asker]);
+    let theme = Theme::fixed(false);
+    for width in [16, 17, 18] {
+        let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width));
+        let text = lines.join("\n");
+        assert_eq!(text.matches("+2").count(), 1, "{text}");
+        assert!(lines.iter().all(|line| text_width(line) <= width), "{text}");
+    }
+    assert_snapshot(
+        "waiting_question_count_narrow",
+        snapshot_to_screen(&snapshot, 16, 22),
+    );
 }
 
 #[test]

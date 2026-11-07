@@ -1170,6 +1170,7 @@ mod tests {
             ),
             (
                 LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: crate::agents::AskKind::Question,
                     ask_id: None,
                     detail: None,

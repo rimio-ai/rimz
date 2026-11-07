@@ -2693,6 +2693,7 @@ fn register_waiting_caller(env: &Env) -> std::path::PathBuf {
     for signal in [
         LifecycleSignal::TurnStarted { turn_id: None },
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,

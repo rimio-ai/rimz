@@ -485,6 +485,8 @@ pub struct AgentCard {
     /// The visible blocking ask's summary, omitted during automatic review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub extra_questions: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_asks: Vec<crate::agents::QueuedAsk>,
     /// Every armed one-shot delivery, soonest first, copied from the enriched rollup.
@@ -639,6 +641,7 @@ impl Default for AgentCard {
         Self {
             status: AgentStatus::Idle,
             ask_detail: None,
+            extra_questions: 0,
             queued_asks: Vec::new(),
             pending_waits: Vec::new(),
             idle_stop: None,
@@ -692,21 +695,23 @@ pub enum CardDescription {
 impl AgentCard {
     /// Project the base card before pane, child, and display-status enrichment.
     pub fn from_agent(agent: &crate::agents::AgentState, now: Timestamp) -> Self {
-        let (status, phase, ask_detail) = if agent.is_reviewing_permission(now) {
+        let (status, phase, ask) = if agent.is_reviewing_permission(now) {
             (AgentStatus::Running, TurnPhase::Reasoning, None)
         } else if agent.is_awaiting_input() {
             (
                 AgentStatus::Waiting,
                 TurnPhase::Idle,
-                agent
-                    .open_ask
-                    .as_ref()
-                    .and_then(|ask| ask.detail.as_deref())
-                    .and_then(crate::agents::single_line_description),
+                agent.open_ask.as_ref(),
             )
         } else {
             (agent.status, agent.phase, None)
         };
+        let ask_detail = ask
+            .and_then(|ask| ask.detail.as_deref())
+            .and_then(crate::agents::single_line_description);
+        let extra_questions = ask
+            .filter(|_| ask_detail.is_some())
+            .map_or(0, |ask| ask.extra_questions);
         let compacted_unmeasured = agent.compacted_unmeasured
             && !agent
                 .context
@@ -717,6 +722,7 @@ impl AgentCard {
         Self {
             status,
             ask_detail,
+            extra_questions,
             queued_asks: agent.queued_asks.clone(),
             pending_waits: agent.pending_waits.clone(),
             idle_stop: agent.idle_stop.clone(),
@@ -996,6 +1002,10 @@ fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
 }
 
 fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_zero_usize(n: &usize) -> bool {
     *n == 0
 }
 

@@ -1417,8 +1417,10 @@ fn fold_lifecycle(
             kind,
             ask_id: Some(id),
             detail,
+            extra_questions,
             native_key,
         } => Some(crate::agents::OpenAsk {
+            extra_questions: *extra_questions,
             id: id.clone(),
             kind: *kind,
             detail: detail.clone(),

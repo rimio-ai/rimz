@@ -429,6 +429,7 @@ mod tests {
     fn team_waiting_fires_once_per_entry() {
         let member = member("coder", "auth", AgentStatus::Waiting);
         let waiting = LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,

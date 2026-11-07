@@ -739,6 +739,7 @@ fn lifecycle_signal(
             turn_id: None,
         },
         "Notification" => LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: notification_ask(payload)?,
             ask_id: None,
             detail: payloads::notification_label(payload).map(ToOwned::to_owned),

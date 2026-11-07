@@ -17,6 +17,7 @@ fn turn_ended_waiting_pair(wait_age_secs: i64, class: TurnErrorClass) -> (AgentS
     child.mode = Some(crate::agents::PermissionMode::Auto);
     child.waiting_since = Some(child.last_activity);
     child.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: Some("shell: cargo test".to_owned()),

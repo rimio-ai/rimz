@@ -670,6 +670,7 @@ fn notification_types_drive_asks_and_interrupts_through_step() {
         assert_eq!(
             signal,
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: ask,
                 ask_id: None,
                 detail: Some(message.clone()),

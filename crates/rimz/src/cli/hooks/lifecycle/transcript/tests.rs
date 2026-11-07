@@ -395,6 +395,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &recorded(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: rimz::agents::AskKind::Question,
             ask_id: Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
             detail: None,
@@ -451,6 +452,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         ),
         (
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: rimz::agents::AskKind::Question,
                 ask_id: None,
                 detail: None,
@@ -1812,6 +1814,7 @@ fn replay_does_not_count_a_queued_ask_as_the_blocking_ask() {
     queued.questions = vec![question.clone()];
     rimz::transcript::append(store.paths(), &queued).unwrap();
     let mut waiting = recorded(LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
         kind: rimz::agents::AskKind::Question,
         ask_id: Some(blocking_id.clone()),
         detail: None,

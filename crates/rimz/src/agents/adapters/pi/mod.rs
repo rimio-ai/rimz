@@ -623,12 +623,14 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                 turn_id: None,
             }),
             "tool_call" => ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind,
                 ask_id: None,
                 detail: None,
                 native_key: optional_payload_string(payload, &["tool_call_id"]),
             }),
             "ui_prompt_start" => ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind,
                 ask_id: None,
                 detail: ui_prompt_title,

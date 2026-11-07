@@ -693,6 +693,7 @@ fn wrap_up_skips_an_input_prompt_raised_while_it_waited_for_the_pane_lock() {
         .unwrap();
     let mut release = before.arrive();
     fixture.lifecycle(LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
         kind: AskKind::Permission,
         ask_id: None,
         detail: None,

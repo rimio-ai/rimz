@@ -56,6 +56,7 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
                 turn_id: None,
             },
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: crate::agents::AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -1450,6 +1451,7 @@ fn parked_run_resumes_and_completes_once() {
 #[test]
 fn parked_run_resumes_at_a_blocking_prompt() {
     assert_parked_run_resumes(LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
         kind: crate::agents::AskKind::Permission,
         ask_id: None,
         detail: None,
@@ -2370,6 +2372,7 @@ fn live_status_keeps_raw_waiting_with_permission_review_evidence() {
     agent.last_activity = since;
     agent.waiting_since = Some(since);
     agent.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: None,

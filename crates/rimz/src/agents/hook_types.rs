@@ -108,6 +108,7 @@ enum CanonicalHookFact {
     Lifecycle(Box<AgentLifecycleObservation>),
     Ask {
         questions: Vec<AskQuestion>,
+        total_questions: usize,
         detail: Option<String>,
     },
     NativeAnswers(Vec<AskAnswer>),
@@ -219,7 +220,35 @@ impl HookOutput {
             .iter()
             .position(|fact| matches!(fact, CanonicalHookFact::Lifecycle(_)))?;
         match self.event.facts.remove(index) {
-            CanonicalHookFact::Lifecycle(observation) => Some(*observation),
+            CanonicalHookFact::Lifecycle(mut observation) => {
+                if let LifecycleSignal::AwaitingInput {
+                    detail,
+                    extra_questions,
+                    ..
+                } = &mut observation.signal
+                {
+                    let (questions, total_questions, fallback) = self
+                        .event
+                        .facts
+                        .iter()
+                        .find_map(|fact| match fact {
+                            CanonicalHookFact::Ask {
+                                questions,
+                                total_questions,
+                                detail,
+                            } => Some((questions.as_slice(), *total_questions, detail.as_deref())),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    (*detail, *extra_questions) = super::question::summary(
+                        questions,
+                        total_questions,
+                        detail.as_deref(),
+                        fallback,
+                    );
+                }
+                Some(*observation)
+            }
             _ => unreachable!("matched lifecycle fact"),
         }
     }
@@ -235,7 +264,8 @@ impl HookOutput {
             .unwrap_or_default()
     }
 
-    pub fn ask_detail(&self) -> Option<&str> {
+    #[cfg(test)]
+    pub(super) fn ask_detail(&self) -> Option<&str> {
         self.event.facts.iter().find_map(|fact| match fact {
             CanonicalHookFact::Ask { detail, .. } => detail.as_deref(),
             _ => None,
@@ -324,9 +354,23 @@ impl HookOutput {
     }
 
     pub(super) fn set_ask(&mut self, questions: Vec<AskQuestion>, detail: Option<String>) {
+        let total_questions = questions.len();
+        self.set_ask_with_total(questions, total_questions, detail);
+    }
+
+    pub(super) fn set_ask_with_total(
+        &mut self,
+        questions: Vec<AskQuestion>,
+        total_questions: usize,
+        detail: Option<String>,
+    ) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Ask { .. }),
-            Some(CanonicalHookFact::Ask { questions, detail }),
+            Some(CanonicalHookFact::Ask {
+                questions,
+                total_questions,
+                detail,
+            }),
         );
     }
 

@@ -168,6 +168,7 @@ mod tests {
         let mut agent = AgentState::stub(provider, "session", crate::agents::AgentStatus::Waiting);
         agent.waiting_since = Some(agent.last_activity);
         agent.open_ask = Some(OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
             kind,
             detail: None,

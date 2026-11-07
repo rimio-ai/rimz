@@ -247,7 +247,9 @@ fn open_ask_tracks_the_waiting_lifecycle_edge() {
                 "signal": "awaiting_input",
                 "kind": "question",
                 "ask_id": "ask_0123456789abcdef",
-                "detail": "Choose a rollout"
+                "detail": "Choose a rollout",
+                "extra_questions": 2,
+                "native_key": "ask-call"
             },
         }),
     );
@@ -256,7 +258,10 @@ fn open_ask_tracks_the_waiting_lifecycle_edge() {
         3,
         serde_json::json!({
             "agent_id": "sess-1",
-            "signal": { "signal": "tool_used", "mutates": false, "edits": false },
+            "signal": {
+                "signal": "tool_used", "mutates": false, "edits": false,
+                "native_key": "ask-call"
+            },
         }),
     );
 
@@ -265,6 +270,18 @@ fn open_ask_tracks_the_waiting_lifecycle_edge() {
     assert_eq!(ask.id.as_str(), "ask_0123456789abcdef");
     assert_eq!(ask.kind, crate::agents::AskKind::Question);
     assert_eq!(ask.detail.as_deref(), Some("Choose a rollout"));
+    assert_eq!(ask.extra_questions, 2);
+
+    let sibling = raw_lifecycle_at(
+        "claude",
+        3,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": {"signal": "tool_used", "mutates": false, "native_key": "sibling"}
+        }),
+    );
+    let carried = reduce_agent_states(&[start.clone(), waiting.clone(), sibling]);
+    assert_eq!(carried[0].open_ask.as_ref(), Some(ask));
 
     let closed = reduce_agent_states(&[start.clone(), waiting, answered]);
     assert!(closed[0].open_ask.is_none());

@@ -407,6 +407,7 @@ fn lifecycle(
             turn_id: None,
         },
         "PermissionRequest" => LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: spec
                 .blocking_tool_kind(hook.tool_name.as_deref())
                 .unwrap_or(AskKind::Permission),

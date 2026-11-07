@@ -320,10 +320,14 @@ fn card_auto_compact_projects_the_record_and_accepts_legacy_json() {
 fn card_open_ask_round_trips_and_follows_display_status() {
     let mut value = serde_json::to_value(AgentCard::default()).unwrap();
     assert!(value.get("ask_detail").is_none());
+    assert!(value.get("extra_questions").is_none());
     value["ask_detail"] = serde_json::json!("Allow this write?");
     value["status"] = serde_json::json!("waiting");
+    value["extra_questions"] = serde_json::json!(2);
     let mut card: AgentCard = serde_json::from_value(value).unwrap();
     assert_eq!(card.open_ask(), Some("Allow this write?"));
+    assert_eq!(card.extra_questions, 2);
+    assert_eq!(serde_json::to_value(&card).unwrap()["extra_questions"], 2);
     assert_eq!(
         serde_json::to_value(&card).unwrap()["ask_detail"],
         "Allow this write?"
@@ -334,6 +338,37 @@ fn card_open_ask_round_trips_and_follows_display_status() {
     }
     card.status = AgentStatus::Waiting;
     assert_eq!(card.open_ask(), Some("Allow this write?"));
+
+    let now = row_time();
+    let mut agent = AgentState::stub("codex", "asker", AgentStatus::Waiting);
+    agent.last_activity = now;
+    agent.waiting_since = Some(now);
+    agent.open_ask = Some(crate::agents::OpenAsk {
+        id: "ask_0123456789abcdef".parse().unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("Which route?".to_owned()),
+        extra_questions: 2,
+        native_key: None,
+        since: now,
+    });
+    let card = AgentCard::from_agent(&agent, now);
+    assert_eq!(
+        (card.open_ask(), card.extra_questions),
+        (Some("Which route?"), 2)
+    );
+    for status in [AgentStatus::Running, AgentStatus::Idle, AgentStatus::Failed] {
+        agent.status = status;
+        let card = AgentCard::from_agent(&agent, now);
+        assert_eq!((card.open_ask(), card.extra_questions), (None, 0));
+    }
+    agent.status = AgentStatus::Waiting;
+    agent.mode = Some(crate::agents::PermissionMode::Auto);
+    agent.open_ask.as_mut().unwrap().kind = crate::agents::AskKind::Permission;
+    let card = AgentCard::from_agent(&agent, now);
+    assert_eq!((card.open_ask(), card.extra_questions), (None, 0));
+    agent.open_ask = None;
+    let card = AgentCard::from_agent(&agent, now);
+    assert_eq!((card.open_ask(), card.extra_questions), (None, 0));
 }
 
 #[test]

@@ -117,6 +117,21 @@ pub(super) fn questions(input: &Value, preview_policy: PreviewPolicy) -> Option<
     })
 }
 
+pub(super) fn summary(
+    questions: &[AskQuestion],
+    total_questions: usize,
+    lifecycle_detail: Option<&str>,
+    ask_detail: Option<&str>,
+) -> (Option<String>, usize) {
+    if let Some(first) = questions.first() {
+        return (
+            first.question.lines().next().map(ToOwned::to_owned),
+            total_questions - 1,
+        );
+    }
+    (lifecycle_detail.or(ask_detail).map(ToOwned::to_owned), 0)
+}
+
 pub(super) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<AskQuestion>> {
     let plan = non_empty(Some(plan))?;
     Some(vec![AskQuestion {
@@ -263,6 +278,80 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn summary_questions(texts: &[&str]) -> Vec<AskQuestion> {
+        let native = texts
+            .iter()
+            .map(|text| json!({"question": text}))
+            .collect::<Vec<_>>();
+        questions(&json!({"questions": native}), PreviewPolicy::None).unwrap()
+    }
+
+    #[test]
+    fn summary_uses_one_question_instead_of_adapter_details() {
+        assert_eq!(
+            summary(
+                &summary_questions(&["Which route?"]),
+                1,
+                Some("Form"),
+                Some("Tool")
+            ),
+            (Some("Which route?".to_owned()), 0)
+        );
+    }
+
+    #[test]
+    fn summary_uses_only_the_first_line() {
+        assert_eq!(
+            summary(
+                &summary_questions(&["Which route?\nMore context"]),
+                1,
+                None,
+                None
+            ),
+            (Some("Which route?".to_owned()), 0)
+        );
+    }
+
+    #[test]
+    fn summary_counts_extra_questions() {
+        assert_eq!(
+            summary(
+                &summary_questions(&["First?", "Second?", "Third?"]),
+                3,
+                None,
+                None
+            ),
+            (Some("First?".to_owned()), 2)
+        );
+    }
+
+    #[test]
+    fn summary_counts_the_native_total_before_storage_caps() {
+        assert_eq!(
+            summary(&summary_questions(&["First?", "Second?"]), 6, None, None),
+            (Some("First?".to_owned()), 5)
+        );
+    }
+
+    #[test]
+    fn summary_without_questions_preserves_fallback_order() {
+        let actual = [
+            summary(&[], 0, Some("Lifecycle"), Some("Ask")),
+            summary(&[], 0, None, Some("Ask")),
+            summary(&[], 0, Some("Lifecycle"), None),
+            summary(&[], 0, None, None),
+        ];
+        assert_eq!(
+            actual,
+            [
+                (Some("Lifecycle".to_owned()), 0),
+                (Some("Ask".to_owned()), 0),
+                (Some("Lifecycle".to_owned()), 0),
+                (None, 0),
+            ]
+        );
+    }
 
     #[test]
     fn normalizes_all_multi_select_spellings_and_preview_policies() {

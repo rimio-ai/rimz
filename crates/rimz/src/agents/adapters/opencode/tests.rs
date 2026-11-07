@@ -699,6 +699,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert_eq!(
         proposed_plan.signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::PlanApproval,
             ask_id: None,
             detail: None,
@@ -787,11 +788,42 @@ fn opencode_observes_native_questions() {
     assert_eq!(
         observed.signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: Some("Which database?".to_owned()),
             native_key: None,
         }
+    );
+}
+
+#[test]
+fn taken_question_summary_overrides_title_and_counts_before_cap() {
+    let mut output = hook_output(
+        &OpencodeAdapter,
+        "question_ask",
+        &json!({
+            "session_id": "ses_1", "title": "Questions",
+            "questions": [
+                {"question": "First question?\nMore context"},
+                {"question": "Second?"}, {"question": "Third?"},
+                {"question": "Fourth?"}, {"question": "Fifth?"}, {"question": "Sixth?"},
+                {"question": "  "}
+            ]
+        }),
+    );
+    assert_eq!(output.questions().len(), 4);
+    let LifecycleSignal::AwaitingInput {
+        detail,
+        extra_questions,
+        ..
+    } = output.take_lifecycle().unwrap().signal
+    else {
+        panic!("question wait")
+    };
+    assert_eq!(
+        (detail.as_deref(), extra_questions),
+        (Some("First question?"), 5)
     );
 }
 
@@ -830,16 +862,6 @@ fn opencode_parses_structured_native_questions() {
             multi_select: true,
             has_option_previews: false,
         }]
-    );
-    assert_eq!(
-        hook_output(
-            &OpencodeAdapter,
-            "question_ask",
-            &json!({ "questions": [{ "question": "Which database?\nPick one" }] })
-        )
-        .ask_detail()
-        .map(str::to_owned),
-        Some("Which database?".to_owned())
     );
     assert!(
         hook_output(
@@ -966,6 +988,7 @@ fn opencode_asks_carry_native_request_ids() {
         actual,
         [AskKind::Question, AskKind::Permission].map(|kind| {
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind,
                 ask_id: None,
                 detail: None,

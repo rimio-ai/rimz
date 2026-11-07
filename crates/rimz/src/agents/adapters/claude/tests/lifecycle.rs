@@ -3,6 +3,34 @@ use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::ids::AgentSessionId;
 
 #[test]
+fn taken_question_summary_uses_first_line_and_extra_count() {
+    let mut output = hook_output(
+        &ClaudeAdapter,
+        "PreToolUse",
+        &json!({
+            "session_id": "sess-1",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [
+                {"question": "Which route?\nMore context", "options": []},
+                {"question": "When?", "options": []}
+            ]}
+        }),
+    );
+    let LifecycleSignal::AwaitingInput {
+        detail,
+        extra_questions,
+        ..
+    } = output.take_lifecycle().unwrap().signal
+    else {
+        panic!("question wait")
+    };
+    assert_eq!(
+        (detail.as_deref(), extra_questions),
+        (Some("Which route?"), 1)
+    );
+}
+
+#[test]
 fn stop_failure_lifecycle_matches_the_error_class() {
     use TurnErrorClass::{
         Failed, NotEntitled, PausedOverloaded, PausedRateLimit, PausedSpendLimit,

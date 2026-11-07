@@ -937,6 +937,7 @@ fn same_second_lifecycle_state_is_accepted_without_replacing_turn_start() {
         .active_ago(10);
     durable.turn_started_at = Some(turn_started_at);
     durable.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("durable question".to_owned()),
@@ -974,6 +975,7 @@ fn exact_identity_only_codex_observation_preserves_hook_owned_wait() {
     durable.turn_started_at = Some(turn_started_at);
     durable.waiting_since = Some(waiting_since);
     durable.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("Which database?".to_owned()),
@@ -1038,6 +1040,7 @@ fn identity_only_session_adopts_launch_identity_as_idle() {
     provisional.channel = Some("auth".to_owned());
     provisional.prompt = Some("launch placeholder".to_owned());
     provisional.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: None,

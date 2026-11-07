@@ -439,6 +439,7 @@ fn turn_wait_reason_defers_person_until_permission_review_expires() {
     agent.mode = Some(crate::agents::PermissionMode::Auto);
     agent.waiting_since = Some(at);
     let ask = crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: None,

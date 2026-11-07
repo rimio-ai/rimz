@@ -317,6 +317,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
                 },
             },
             "permission_ask" => LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,

@@ -1296,6 +1296,7 @@ fn awaiting_input_projects_to_waiting() {
                 None,
                 PriorTurnIds::default(),
                 &LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: ask_kind,
                     ask_id: None,
                     detail: None,

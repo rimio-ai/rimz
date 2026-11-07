@@ -60,6 +60,7 @@ fn snapshot_replay_and_cacheless_fold_agree_on_the_transition() {
         ),
         (
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: lifecycle::AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -930,6 +931,7 @@ fn read_only_tool_uses_latest_durable_waiting_state() {
         (
             "PermissionRequest",
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 ask_id: None,
                 kind: crate::agents::AskKind::Permission,
                 detail: None,

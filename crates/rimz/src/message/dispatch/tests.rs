@@ -31,6 +31,7 @@ fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
     receiver.last_activity = now() - Duration::from_secs(61);
     receiver.waiting_since = Some(receiver.last_activity);
     receiver.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: None,

@@ -213,6 +213,7 @@ impl CanonicalEvent {
                     class: AgentHookClass::AwaitingUser,
                     ask_kind: Some(*ask),
                     signal: Some(LifecycleSignal::AwaitingInput {
+                        extra_questions: 0,
                         kind: *ask,
                         ask_id: None,
                         detail: detail.clone(),

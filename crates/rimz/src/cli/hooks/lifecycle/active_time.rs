@@ -357,6 +357,7 @@ mod tests {
             ),
             (
                 LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: AskKind::Question,
                     ask_id: None,
                     detail: None,

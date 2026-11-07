@@ -124,6 +124,8 @@ Pi runs ordinary tools unasked and has no native question or permission prompt. 
 
 [`@juicesharp/rpiv-ask-user-question`](../../externals/agent-adapter/pi-reference.md#rpiv-ask-user-question-questionnaire), when the user installs it, registers the `ask_user_question` tool and draws its questionnaire in Pi's pane. RimZ's extension sees the awaited `tool_call`, adds the call id to its open-questionnaire set, and forwards the input with `has_ui` and the call id. `decode_hook` classifies the call through the descriptor's `blocking` list and records `AwaitingInput { Question }` keyed by `tool_call_id` only when `has_ui` is not false. An absent `has_ui` counts as true, for an extension that predates the field. `ask::question_detail` parses the Claude-compatible `questions` input through the shared question decoder, which also accepts JSON-string arrays and objects, as rpiv does.
 
+The questionnaire's waiting card shows the first line of its first question, then ` +N` for N more questions in that questionnaire. It does not show options. Extension dialogs have no structured questions and keep their trimmed title instead.
+
 The matching `tool_execution_end` carries the same key, so a sibling tool's completion leaves the questionnaire open. It also carries rpiv's `result.details` as `tool_details`, which `ask::answer_detail` turns into structured answers:
 
 | `details.answers[].kind` | Recorded `AskAnswer.chosen` |

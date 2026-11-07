@@ -82,6 +82,7 @@ fn permission_ask_visibility_uses_the_list_snapshot_clock() {
     state.mode = Some(rimz::agents::PermissionMode::Auto);
     state.waiting_since = Some(since);
     state.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: rimz::ids::AskId::new(),
         kind: rimz::agents::AskKind::Permission,
         detail: Some("approve this?".to_owned()),

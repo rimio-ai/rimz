@@ -59,7 +59,7 @@ The catalog accepts `SubagentStart`, `SubagentStop`, `TaskStarted`, `UserPromptQ
 
 ### Asks
 
-A permission ask opens only when Kimi's policy resolves a call to ask. Policy-approved, mode-approved, YOLO-approved, and statically denied calls fire no `PermissionRequest` ([approvals](../../externals/agent-adapter/kimi-reference.md#approvals)). The wait's detail is the payload's `action`, and a question's detail is its first question text.
+A permission ask opens only when Kimi's policy resolves a call to ask. Policy-approved, mode-approved, YOLO-approved, and statically denied calls fire no `PermissionRequest` ([approvals](../../externals/agent-adapter/kimi-reference.md#approvals)). The wait's detail is the payload's `action`, and a question's detail is the first line of its first question.
 
 Kimi exposes no question hook. `PreToolUse` for `AskUserQuestion` opens the wait, and the correlated post-tool hook, an interrupt, or a turn or session close resolves it. A question with `background: true` starts a background task and leaves the turn runnable, so its `PreToolUse` opens no wait.
 

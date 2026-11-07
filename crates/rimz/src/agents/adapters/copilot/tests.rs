@@ -79,6 +79,7 @@ fn classifies_native_asks_and_lifecycle_events() {
         )
         .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,
@@ -93,6 +94,7 @@ fn classifies_native_asks_and_lifecycle_events() {
         )
         .map(|observation| observation.signal),
         Some(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
@@ -604,6 +606,7 @@ fn elicitation_notifications_raise_questions_only() {
             .unwrap()
             .signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: Some("Please answer".to_owned()),

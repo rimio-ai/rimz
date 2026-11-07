@@ -215,6 +215,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         AskKind::Question,
     ] {
         signals.push(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind,
             ask_id: None,
             detail: None,

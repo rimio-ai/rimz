@@ -43,7 +43,7 @@ Launch reminders arrive in `RIMZ_LAUNCH_REMINDERS`, the `SystemTextChannel::Exte
 | `turn_end` | `turn_end` | Progress and a gauge refresh, no lifecycle signal |
 | `message_update` | `message_update` | Progress when the gauge changed, at most once per second |
 | `after_provider_response` | `after_provider_response` | Context only, including rate-limit windows |
-| `tool_call` for `ask`, with UI | `tool_call` | `AwaitingInput { Question }`, keyed by `tool_call_id`. Questions and options come from `tool_input` |
+| `tool_call` for `ask`, with UI | `tool_call` | `AwaitingInput { Question }`, keyed by `tool_call_id`. Questions and options come from `tool_input`; the summary is the first line of the first question, and the card adds ` +N` for the other questions |
 | `tool_execution_end` | `tool_execution_end` | Named `ToolUsed { mutates, edits }`, keyed by `tool_call_id`. Completes an ask wait |
 | `tool_approval_requested`, with UI | `tool_approval_requested` | `AwaitingInput { Permission }`, keyed by `tool_call_id`. The detail is the reason, else the tool name |
 | `tool_approval_resolved` | `tool_approval_resolved` | Unnamed keyed `ToolUsed`, which clears the permission wait |
