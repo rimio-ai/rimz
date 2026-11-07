@@ -57,8 +57,8 @@ fn assert_detached_writer_handoff(reuse_client: bool) {
             workspace_id: opts.workspace_id.clone(),
             wasm: wasm.clone(),
             rimz_bin: state.room_bin.clone(),
-            focus_key: None,
-            zoom_key: None,
+            keymap: Default::default(),
+            project_root: room.path().to_path_buf(),
             session_options: zellij::zellij_session_options(&opts.config.zellij),
         })
         .unwrap();
@@ -429,10 +429,17 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
         format!(
             "#!/bin/sh\n\
              printf '%s\\n' \"$*\" >> {log}\n\
-             if [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"focus\" ]; then\n\
+             is_sidebar() {{\n\
+               keymap_test_verb=$1; shift\n\
+               while [ \"$#\" -ge 2 ]; do\n\
+                 case \"$1\" in --mux|--root) shift 2 ;; *) break ;; esac\n\
+               done\n\
+               [ \"${{1:-}}\" = sidebar ] && [ \"${{2:-}}\" = \"$keymap_test_verb\" ]\n\
+             }}\n\
+             if is_sidebar focus \"$@\"; then\n\
                {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
-             elif [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"serve\" ]; then\n\
+             elif is_sidebar serve \"$@\"; then\n\
                exec {real_rimz} \"$@\" 2>> {focus_exec_log}\n\
              else\n\
                {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
@@ -510,6 +517,17 @@ fn logged_arg<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn logged_command_is(line: &str, command: &str) -> bool {
+    let mut args = line.split_whitespace().peekable();
+    while matches!(args.peek().copied(), Some("--mux" | "--root")) {
+        args.next();
+        args.next();
+    }
+    command
+        .split_whitespace()
+        .all(|word| args.next() == Some(word))
 }
 
 fn focus_action_count(log: &Path) -> usize {
@@ -618,7 +636,7 @@ fn birth_keeps_presence_suppressed_across_attach_floating_toggle_and_reentry() {
             },
             |lines| {
                 lines.iter().any(|line| {
-                    line.starts_with(command)
+                    logged_command_is(line, command)
                         && logged_arg(line, "--session-name") == Some(room.name())
                 })
             },
@@ -651,8 +669,8 @@ fn birth_keeps_presence_suppressed_across_attach_floating_toggle_and_reentry() {
             workspace_id: sidebar.workspace_id.clone(),
             wasm: zellij::presence_plugin_path().unwrap(),
             rimz_bin: state.room_bin,
-            focus_key: Some(machine.sidebar.focus_key.clone()),
-            zoom_key: Some(machine.sidebar.zoom_key.clone()),
+            keymap: machine.room_keymap(),
+            project_root: sidebar.project_root.clone(),
             session_options: zellij::zellij_session_options(&sidebar.config.zellij),
         })
         .expect("room re-entry boot");
@@ -976,8 +994,8 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         workspace_id: workspace_id.clone(),
         wasm,
         rimz_bin: rimz_shim,
-        focus_key: None,
-        zoom_key: None,
+        keymap: Default::default(),
+        project_root: room.path().to_path_buf(),
         session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
     };
     backend
@@ -1116,8 +1134,8 @@ fn assert_presence_hides_and_leaves_floating_toggle_to_terminals(load_before_att
         workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
         wasm,
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
-        focus_key: None,
-        zoom_key: None,
+        keymap: Default::default(),
+        project_root: room.path().to_path_buf(),
         session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
     };
     backend
@@ -1186,8 +1204,8 @@ fn presence_identity_transition_keeps_global_background_updates() {
         workspace_id: workspace_id.clone(),
         wasm,
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
-        focus_key: None,
-        zoom_key: None,
+        keymap: Default::default(),
+        project_root: room.path().to_path_buf(),
         session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
     };
     backend
@@ -1232,7 +1250,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
 
     // A configuration change is the same Zellij identity transition as a wasm
     // upgrade. Converge while tab one owns the attached client's focus.
-    opts.focus_key = Some("Alt+p".to_owned());
+    opts.keymap = rimz::config::MachineConfig::default().room_keymap();
     backend
         .converge_presence_plugin_for(&opts)
         .expect("converge changed presence identity");
@@ -1509,8 +1527,8 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             workspace_id: sidebar.workspace_id.clone(),
             wasm,
             rimz_bin: room_bin,
-            focus_key: Some("Alt+p".to_owned()),
-            zoom_key: Some("Alt+g".to_owned()),
+            keymap: rimz::config::MachineConfig::default().room_keymap(),
+            project_root: sidebar.project_root.clone(),
             session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("converge presence plugin");
@@ -1672,8 +1690,8 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
             workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
             wasm,
             rimz_bin: rimz_shim,
-            focus_key: Some("Alt+p".to_owned()),
-            zoom_key: Some("Alt+g".to_owned()),
+            keymap: rimz::config::MachineConfig::default().room_keymap(),
+            project_root: room.path().to_path_buf(),
             session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("pipe load against a live session");

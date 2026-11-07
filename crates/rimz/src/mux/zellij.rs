@@ -13,6 +13,7 @@
 
 mod backend;
 mod background_plugins;
+mod keymap;
 mod layout;
 mod pane_pid;
 pub mod pane_topology;

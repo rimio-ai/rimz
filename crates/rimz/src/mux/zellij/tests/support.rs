@@ -82,8 +82,8 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
         workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         wasm: PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
         rimz_bin: PathBuf::from(rimz_bin),
-        focus_key: None,
-        zoom_key: None,
+        keymap: crate::config::MachineConfig::default().room_keymap(),
+        project_root: PathBuf::from("/project"),
         session_options: super::super::zellij_session_options(
             &crate::config::ZellijConfig::default(),
         ),

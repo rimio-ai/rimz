@@ -810,8 +810,8 @@ fn presence_options(
         &ws.workspace_id,
         wasm,
         rimz_bin,
-        &config.sidebar,
-        &config.zellij,
+        config,
+        &ws.project_root,
     ))
 }
 

@@ -1076,6 +1076,15 @@ fn zellij_actions_must_name_the_session() {
     std::fs::write(&backend, named).unwrap();
     ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&backend)).unwrap();
 
+    let keymap = "json!({\"action\": [\"MoveFocus\", \"Left\"]})\n";
+    std::fs::write(&backend, keymap).unwrap();
+    assert!(
+        ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&backend)).is_ok(),
+        "a keymap JSON field is not a Zellij CLI action"
+    );
+    std::fs::write(&backend, format!("{keymap}{bare}")).unwrap();
+    assert!(ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&backend)).is_err());
+
     let tests = zellij.join("tests.rs");
     std::fs::write(&tests, bare).unwrap();
     ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&tests)).unwrap();

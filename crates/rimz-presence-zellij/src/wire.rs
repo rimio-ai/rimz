@@ -6,14 +6,11 @@
 
 use crate::policy::{self, PaneFields};
 
-/// The pipe message name the focus-sidebar keybind sends to this plugin. The
-/// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
-/// the plugin runs `rimz sidebar focus --toggle` — reaching the sidebar from any
-/// pane, since a Zellij keybind cannot focus a pane by id on its own.
-pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
+mod keymap;
+pub use keymap::Keymap;
 
-/// Pipe message name for the sidebar-aware smart-zoom keybind.
-pub const ZOOM_PANE_PIPE: &str = "rimz:zoom_pane";
+/// Keybind payloads index the complete command vectors supplied by the host.
+pub const KEY_PIPE: &str = "rimz:key";
 
 /// Pipe message name for opening the host-side palette with this client's focus.
 pub const PALETTE_PIPE: &str = "rimz:palette";
@@ -40,6 +37,9 @@ pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 /// Zellij returns it with `RunCommandResult`, so results can be ordered by issue
 /// time and unrelated commands cannot reset the stale-writer rejection counter.
 pub const TOPOLOGY_PUBLISH_CONTEXT: &str = "rimz_topology_publish";
+
+/// Run-command context separating user actions from presence-wake failure recovery.
+pub const KEY_COMMAND_CONTEXT: &str = "rimz_key_command";
 
 /// Maximum bytes carried in one topology argv value. Linux limits each argv
 /// entry independently, so topology travels as repeated bounded arguments.
@@ -68,83 +68,6 @@ pub fn fullscreen_pane(payload: Option<&str>) -> Option<policy::ClientPaneId> {
         .map(policy::ClientPaneId::Plugin)
 }
 
-/// The modifier half of a focus-key chord.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChordModifier {
-    Alt,
-    Ctrl,
-}
-
-/// A focus-key chord such as `Alt+p`, parsed from the rimz-injected
-/// `focus_key` load configuration so the wasm shell can bind it. The grammar
-/// matches the host's tmux binding (`rimz::mux::FocusChord`); it lives here too
-/// because the plugin cannot depend on the rimz crate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FocusChord {
-    pub modifier: ChordModifier,
-    pub key: char,
-}
-
-impl FocusChord {
-    /// Parse a `Mod+key` (or `Mod-key`) chord. The modifier is case-insensitive
-    /// (`alt`/`meta`/`m` or `ctrl`/`control`/`c`); the key is one printable
-    /// ASCII character. Any other shape returns `None` so the caller skips the
-    /// bind rather than register a broken one.
-    pub fn parse(raw: &str) -> Option<Self> {
-        let (modifier, key) = raw.trim().split_once(['+', '-'])?;
-        let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
-            "alt" | "meta" | "m" => ChordModifier::Alt,
-            "ctrl" | "control" | "c" => ChordModifier::Ctrl,
-            _ => return None,
-        };
-        let mut chars = key.trim().chars();
-        let key = chars.next()?;
-        if chars.next().is_some() || !key.is_ascii_graphic() {
-            return None;
-        }
-        Some(Self { modifier, key })
-    }
-}
-
-/// Runtime keybind KDL targeting this plugin instance by id in normal and
-/// locked modes. One fragment carries every configured room key so one
-/// `Reconfigure` installs them atomically.
-pub fn room_keybinds_kdl(
-    focus: Option<FocusChord>,
-    zoom: Option<FocusChord>,
-    plugin_id: u32,
-) -> Option<String> {
-    let bindings = [(focus, FOCUS_SIDEBAR_PIPE), (zoom, ZOOM_PANE_PIPE)]
-        .into_iter()
-        .filter_map(|(chord, pipe)| chord.map(|chord| (chord, pipe)))
-        .collect::<Vec<_>>();
-    if bindings.is_empty() {
-        return None;
-    }
-    let mut kdl = String::from("keybinds {\n");
-    for mode in ["normal", "locked"] {
-        kdl.push_str(&format!("    {mode} {{\n"));
-        for (chord, pipe) in &bindings {
-            let key = kdl_string(&focus_key_label(*chord));
-            let pipe = kdl_string(pipe);
-            kdl.push_str(&format!(
-                "        bind {key} {{\n            MessagePluginId {plugin_id} {{\n                name {pipe}\n            }}\n        }}\n"
-            ));
-        }
-        kdl.push_str("    }\n");
-    }
-    kdl.push_str("}\n");
-    Some(kdl)
-}
-
-fn focus_key_label(chord: FocusChord) -> String {
-    let modifier = match chord.modifier {
-        ChordModifier::Alt => "Alt",
-        ChordModifier::Ctrl => "Ctrl",
-    };
-    format!("{modifier} {}", chord.key)
-}
-
 fn kdl_string(value: &str) -> String {
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('"');
@@ -165,8 +88,8 @@ fn kdl_string(value: &str) -> String {
 #[derive(Default)]
 pub struct RuntimeReconfigure<'a> {
     pub plugin_id: Option<u32>,
-    pub focus_key: Option<&'a str>,
-    pub zoom_key: Option<&'a str>,
+    pub keymap: Option<&'a Keymap>,
+    pub rimz_bin: Option<&'a str>,
     pub session_options: &'a [(String, String)],
 }
 
@@ -197,13 +120,9 @@ pub fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String
         kdl.push('\n');
     }
     if let Some(plugin_id) = config.plugin_id
-        && let Some(keybinds) = room_keybinds_kdl(
-            config.focus_key.and_then(FocusChord::parse),
-            config.zoom_key.and_then(FocusChord::parse),
-            plugin_id,
-        )
+        && let Some(keymap) = config.keymap
     {
-        kdl.push_str(&keybinds);
+        kdl.push_str(&keymap.kdl(plugin_id, config.rimz_bin.unwrap_or("rimz")));
     }
     (!kdl.is_empty()).then_some(kdl)
 }
@@ -308,6 +227,25 @@ pub fn fold_failure(
             Some(CommandFailure::new(exit_code, stderr, now_ms))
         }
     }
+}
+
+/// Fold one finished plugin command into the counters and the retained failure.
+/// A key or palette command is the user's action, not a wake, and `rimz doctor`
+/// reads both as wake health, so its result leaves them as they were.
+pub fn fold_command_result(
+    counters: &mut CommandCounters,
+    last_failure: Option<CommandFailure>,
+    key_command: bool,
+    published_topology: bool,
+    exit_code: Option<i32>,
+    stderr: &[u8],
+    now_ms: u64,
+) -> Option<CommandFailure> {
+    if key_command {
+        return last_failure;
+    }
+    let outcome = counters.record(exit_code, published_topology);
+    fold_failure(last_failure, outcome, exit_code, stderr, now_ms)
 }
 
 impl CommandCounters {
@@ -446,37 +384,6 @@ fn push_session(ctx: &WakeContext<'_>, argv: &mut Vec<String>) -> Option<()> {
     argv.push("--session-name".to_owned());
     argv.push(session_name.to_owned());
     Some(())
-}
-
-pub fn focus_sidebar_argv(ctx: &WakeContext<'_>) -> Vec<String> {
-    let mut argv = vec![
-        ctx.rimz_bin.unwrap_or("rimz").to_owned(),
-        "sidebar".to_owned(),
-        "focus".to_owned(),
-        "--toggle".to_owned(),
-    ];
-    if let Some(session_name) = ctx.session_name {
-        argv.push("--session-name".to_owned());
-        argv.push(session_name.to_owned());
-    }
-    argv.push("--mux".to_owned());
-    argv.push("zellij".to_owned());
-    argv
-}
-
-pub fn zoom_pane_argv(ctx: &WakeContext<'_>) -> Vec<String> {
-    let mut argv = vec![
-        ctx.rimz_bin.unwrap_or("rimz").to_owned(),
-        "pane".to_owned(),
-        "zoom".to_owned(),
-    ];
-    if let Some(session_name) = ctx.session_name {
-        argv.push("--session-name".to_owned());
-        argv.push(session_name.to_owned());
-    }
-    argv.push("--mux".to_owned());
-    argv.push("zellij".to_owned());
-    argv
 }
 
 pub fn palette_argv(

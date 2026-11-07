@@ -346,7 +346,11 @@ The sidebar's in-pane keys fire only when its pane is focused, so a room-scoped 
 The backends bind the chords differently:
 
 - **tmux** compiles native and RimZ styles through one script path. Root bindings are server-global: the last apply wins for every room on the server, while commands resolve the pressing session at keypress. One read collects the `@rimz_keys` root-key marker, the `@rimz_mode_keys` ownership marker, and the global copy-mode key style; one `source-file -` script removes recorded keys and the `rimz-prefix`, `rimz-resize`, and `rimz-move` tables, installs the new map, and updates the markers. Prefix actions return to root; resize and move actions re-enter their table without a repeat timeout. An unbound prefix key leaves the table and is swallowed; a root chord can still fire its root action there. Uppercase Alt letters bind both legacy and shifted extended-key names. RimZ style owns global `mode-keys vi` until native restores the marked prior value. Native alone leaves the user's value alone. Mouse bindings, the user's prefix table, and RimZ's `S-Enter`, `M-Enter`, and `User240` bindings are untouched. A user binding overwritten by a RimZ root binding is not restored on removal; restarting the server reloads it. Command arguments are shell-quoted, literal `#` is doubled against tmux format expansion, and user `run` commands use the pressing session's cwd without appending a verb-specific `--session-name`.
-- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration, and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. A client attach reloads its stock bindings, so the plugin replays already-applied runtime configuration once per observed increase in connected clients. The focus pipe runs the sidebar toggle and the zoom pipe runs `rimz pane zoom`. The user's `config.kdl` is unchanged, and the bindings end with the session.
+- **Zellij** sends the resolved map through one `keymap` load-configuration value: JSON with `%` escaped as `%25` and `,` as `%2C`, decoded once by the plugin. Layout children and pipe configuration carry exactly the same encoded value, included in the replacement identity hash. Commands are complete argv after the binary; named commands carry session and backend, while user `run` commands carry project root and backend. The plugin validates mode words, key shapes, native actions and arguments, and command indexes before rendering KDL; a bad bind is skipped independently. Every rendered variable string uses `kdl_string`, never raw KDL from the wire.
+
+Zellij runs one presence replica per `(plugin, client)`, not one wasm instance per session. Each replica installs its own client's runtime keymap, targets its own plugin id, and replays applied configuration on an observed increase in connected clients. Native style adds its two bindings to `locked` and `normal` without clearing. RimZ style clears `locked`, `tmux`, `resize`, `move`, `scroll`, `entersearch`, and `search`, removing both old RimZ keys and user keys in those modes. Prefix actions append a switch to locked; resize and move stay in their modes. Fixed vi-like scroll/search tables and a floating `rimz keys --wait` help pane complete the map. The user's `config.kdl` is unchanged. Switching back to native on an attached client restores the full stock/user map only at its next attach.
+
+Indexed command bindings use `rimz:key`; the plugin forks its configured binary plus the indexed argv only when granted and unmuted. Palette bindings reserve `rimz:palette` for the palette integration. The wire carries `report_modes`, currently false; installing keys emits no mode wakes.
 
 ### Palette popups
 
@@ -703,13 +707,12 @@ An announced topology with neither `clients` nor the `focused_pane` field of plu
 
 The first manifest after load names every pre-existing pane, so the host accepts it as a baseline, and an announced baseline emits only one topology nudge.
 
-Six named pipes reach the plugin from the host:
+Five named pipes reach the plugin from the host or its runtime keybindings:
 
 | Pipe | Effect |
 | --- | --- |
 | `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives a muted same-id copy with its current manifest and clients withheld until a post-dump client query replies. |
-| `rimz:focus_sidebar` | Fork `rimz sidebar focus --toggle`; the focus keybind sends this. |
-| `rimz:zoom_pane` | Fork `rimz pane zoom`; the zoom keybind sends this. |
+| `rimz:key` | Fork the command selected by its validated keymap index, only when granted and unmuted. |
 | `rimz:palette` | Fork `rimz palette --popup --mode <mode>` with the pressing client's focused pane as `--from-pane` when known. Payloads `cards`, `commands`, and `new` select the mode; absent or unknown payloads select `cards`. |
 | `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
 | `rimz:retire` | Retire this instance if the payload's writer identity outranks it ([retirement](#retirement)). |
@@ -743,7 +746,7 @@ At session birth, RimZ loads the presence plugin through a top-level `load_plugi
 
 The idempotent `zellij … action pipe --plugin --skip-plugin-cache` remains the route for room re-entry, reload upgrade and convergence, and post-retirement boots. Birth also keeps this pipe to publish the desired identity, deliver the boot payload, and cover hosts that did not load the layout entry. A clientless birth can still hold the pipe through its two-second deadline. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
-Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. One ordered configuration supplies both the layout entry and the pipe string, so the boot and re-entry pipes address the same suppressed background instance. Changing an identity uses the pipe route; the host accepts the replacement's proof and retires the old identity.
+Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the encoded room keymap, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. One ordered configuration supplies both the layout entry and the pipe string, so the boot and re-entry pipes address the same suppressed background instance. Changing an identity uses the pipe route; the host accepts the replacement's proof and retires the old identity.
 
 The canonical artifact path is the same across upgrades, but Zellij keys its compiled-module cache by that path, not the wasm bytes. Every plugin-addressed pipe therefore skips the cache: a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path. Background layout loads do not bypass that cache, so a birth immediately after a build swap can still load stale compiled bytes.
 
@@ -752,8 +755,8 @@ RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin before spawn
 | Permission | What it grants |
 | --- | --- |
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
-| `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, `rimz pane zoom`, and `rimz palette --popup` forks. |
-| `Reconfigure` | The resolved session option list and optional focus and zoom keybinds, applied without writing `config.kdl`. |
+| `RunCommands` | `rimz sidebar wake`, `rimz palette --popup`, and indexed room-key commands, including machine-only user bindings. |
+| `Reconfigure` | The resolved session option list and allowlisted room keymap, applied without writing `config.kdl`. |
 | `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id. |
 | `InterceptInput` | `UserAction` observations for the per-client input clock; no action payload is stored or forwarded. Requested even with `typing_hold = "off"`. |
 

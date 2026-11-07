@@ -783,6 +783,17 @@ fn existing_session_attach_has_no_creation_or_options_tail() {
 }
 
 #[test]
+fn existing_session_attach_starts_rimz_style_in_locked_mode() {
+    let spec = ZellijBackend::default()
+        .existing_attach_with_style("rimz-test", crate::config::RoomStyle::Rimz);
+    assert_eq!(
+        spec.args,
+        ["attach", "rimz-test", "options", "--default-mode", "locked"]
+    );
+    assert!(!spec.args.iter().any(|arg| arg == "--create"));
+}
+
+#[test]
 fn managed_attach_never_creates_and_removes_outer_mux_context() {
     let spec = ZellijBackend::default()
         .attach_command("rimz-test", &crate::config::MultiplexerConfig::default());

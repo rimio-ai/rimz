@@ -558,8 +558,8 @@ impl RoomContext {
             StatePaths::for_project_root(&self.workspace.project_root)
                 .ok()?
                 .room_bin,
-            &self.machine_config.sidebar,
-            &self.machine_config.zellij,
+            &self.machine_config,
+            &self.workspace.project_root,
         ))
     }
 

@@ -164,29 +164,10 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
     } else {
         pairs.push(("rimz_bin".to_owned(), bin.into_owned()));
     }
-    // Room chords the plugin binds at load. Grammar validation and user-facing
-    // warnings happen at room birth for both backends; here we only guard the
-    // plugin-config separators.
-    if let Some(focus_key) = opts.focus_key.as_deref() {
-        if focus_key.contains([',', '=']) {
-            tracing::debug!(
-                focus_key,
-                "focus_key contains a plugin-configuration separator; the Zellij focus keybind is disabled",
-            );
-        } else {
-            pairs.push(("focus_key".to_owned(), focus_key.to_owned()));
-        }
-    }
-    if let Some(zoom_key) = opts.zoom_key.as_deref() {
-        if zoom_key.contains([',', '=']) {
-            tracing::debug!(
-                zoom_key,
-                "zoom_key contains a plugin-configuration separator; the Zellij zoom keybind is disabled",
-            );
-        } else {
-            pairs.push(("zoom_key".to_owned(), zoom_key.to_owned()));
-        }
-    }
+    pairs.push((
+        "keymap".to_owned(),
+        super::keymap::encode(&opts.keymap, &opts.session_name, &opts.project_root),
+    ));
     // Resolved values are bools, digits, or bare enum words: no ',' or '=' by construction.
     for option in &opts.session_options {
         pairs.push((

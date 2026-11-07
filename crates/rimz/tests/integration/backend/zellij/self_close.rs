@@ -86,8 +86,8 @@ fn check_sidebar_self_close(lingering_root: bool) {
             workspace_id: workspace_id.clone(),
             wasm,
             rimz_bin: rimz,
-            focus_key: None,
-            zoom_key: None,
+            keymap: Default::default(),
+            project_root: cwd.path().to_path_buf(),
             session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("load presence plugin for self-close topology");

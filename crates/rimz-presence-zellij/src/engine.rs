@@ -21,12 +21,14 @@ pub trait Host {
 /// What the shell must execute, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Fire-and-forget host fork: wake pokes, focus-sidebar, zoom, and palette.
+    /// Fire-and-forget presence wake whose failures can trigger binary recovery.
     /// The shell pins its cwd to `/` so a deleted launch worktree cannot strand the plugin.
     RunCommand {
         argv: Vec<String>,
         topology_issued_at: Option<u64>,
     },
+    /// Explicit key actions whose exit status must not change wake-fork recovery.
+    RunKeyCommand { argv: Vec<String> },
     /// Suppress this plugin's own pane.
     HideSelf,
     /// Runtime `reconfigure(kdl, false)`.
@@ -531,8 +533,7 @@ pub struct EngineConfig {
     pub client_id: Option<u16>,
     pub plugin_build: Option<String>,
     pub plugin_config: Option<String>,
-    pub focus_key: Option<String>,
-    pub zoom_key: Option<String>,
+    pub keymap: Option<wire::Keymap>,
     pub session_options: Vec<(String, String)>,
 }
 
@@ -862,22 +863,19 @@ impl Engine {
         self.finish_update(now, host, effects)
     }
 
-    pub fn on_focus_sidebar_pipe(&mut self) -> Vec<Effect> {
-        if self.muted {
+    pub fn on_key_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
+        // MessagePluginId targets this client's replica, not the topology writer.
+        // Retiring topology authority must not swallow that client's keys.
+        if !self.granted {
             return Vec::new();
         }
-        let mut effects = Vec::new();
-        self.run_focus_sidebar(&mut effects);
-        effects
-    }
-
-    pub fn on_zoom_pane_pipe(&mut self) -> Vec<Effect> {
-        if self.muted {
-            return Vec::new();
-        }
-        let mut effects = Vec::new();
-        self.run_zoom_pane(&mut effects);
-        effects
+        self.config
+            .keymap
+            .as_ref()
+            .and_then(|keymap| keymap.command_argv(payload, self.config.rimz_bin.as_deref()))
+            .map(|argv| Effect::RunKeyCommand { argv })
+            .into_iter()
+            .collect()
     }
 
     pub fn on_palette_pipe(
@@ -893,9 +891,8 @@ impl Engine {
             Some("new") => "new",
             _ => "cards",
         };
-        vec![Effect::RunCommand {
+        vec![Effect::RunKeyCommand {
             argv: wire::palette_argv(&self.wake_context(), mode, focus),
-            topology_issued_at: None,
         }]
     }
 
@@ -957,7 +954,11 @@ impl Engine {
         topology_issued_at: Option<u64>,
         now: u64,
         host: &impl Host,
+        key_command: bool,
     ) -> Vec<Effect> {
+        if key_command {
+            return Vec::new();
+        }
         if let (Some(issued_at), Some(wire::STALE_WRITER_EXIT_CODE)) =
             (topology_issued_at, exit_code)
         {
@@ -1150,34 +1151,13 @@ impl Engine {
     fn apply_runtime_reconfigure(&self, effects: &mut Vec<Effect>) {
         let config = wire::RuntimeReconfigure {
             plugin_id: self.config.plugin_id,
-            focus_key: self.config.focus_key.as_deref(),
-            zoom_key: self.config.zoom_key.as_deref(),
+            keymap: self.config.keymap.as_ref(),
+            rimz_bin: self.config.rimz_bin.as_deref(),
             session_options: &self.config.session_options,
         };
         if let Some(kdl) = wire::runtime_reconfigure_kdl(&config) {
             effects.push(Effect::Reconfigure(kdl));
         }
-    }
-
-    /// Run `rimz sidebar focus --toggle` for the focus-key pipe.
-    fn run_focus_sidebar(&self, effects: &mut Vec<Effect>) {
-        if !self.granted {
-            return;
-        }
-        effects.push(Effect::RunCommand {
-            argv: wire::focus_sidebar_argv(&self.wake_context()),
-            topology_issued_at: None,
-        });
-    }
-
-    fn run_zoom_pane(&self, effects: &mut Vec<Effect>) {
-        if !self.granted {
-            return;
-        }
-        effects.push(Effect::RunCommand {
-            argv: wire::zoom_pane_argv(&self.wake_context()),
-            topology_issued_at: None,
-        });
     }
 }
 

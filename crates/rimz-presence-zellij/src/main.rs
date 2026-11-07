@@ -15,8 +15,7 @@ mod shell {
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
-        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, PALETTE_PIPE, RETIRE_PIPE,
-        TOGGLE_FULLSCREEN_PIPE, ZOOM_PANE_PIPE,
+        self, DUMP_TOPOLOGY_PIPE, KEY_PIPE, PALETTE_PIPE, RETIRE_PIPE, TOGGLE_FULLSCREEN_PIPE,
     };
     use zellij_tile::prelude::*;
     use zellij_utils::input::mouse::MouseEventType;
@@ -88,8 +87,9 @@ mod shell {
                 client_id: Some(plugin_ids.client_id),
                 plugin_build: configuration.get("plugin_build").cloned(),
                 plugin_config: configuration.get("plugin_config").cloned(),
-                focus_key: configuration.get("focus_key").cloned(),
-                zoom_key: configuration.get("zoom_key").cloned(),
+                keymap: configuration
+                    .get("keymap")
+                    .and_then(|value| wire::Keymap::decode(value)),
                 session_options: configuration
                     .iter()
                     .filter_map(|(key, value)| {
@@ -114,13 +114,18 @@ mod shell {
                 let topology_issued_at = context
                     .get(wire::TOPOLOGY_PUBLISH_CONTEXT)
                     .and_then(|value| value.parse().ok());
+                let key_command = context.contains_key(wire::KEY_COMMAND_CONTEXT);
                 // Zellij hands back the host's stderr with the exit code; it is
                 // the only account of why a wake failed that ever reaches here.
-                let outcome = self
-                    .commands
-                    .record(exit_code, topology_issued_at.is_some());
-                self.last_failure =
-                    wire::fold_failure(self.last_failure.take(), outcome, exit_code, &stderr, now);
+                self.last_failure = wire::fold_command_result(
+                    &mut self.commands,
+                    self.last_failure.take(),
+                    key_command,
+                    topology_issued_at.is_some(),
+                    exit_code,
+                    &stderr,
+                    now,
+                );
                 let Some(engine) = self.engine.as_mut() else {
                     return false;
                 };
@@ -129,7 +134,13 @@ mod shell {
                     last_failure: self.last_failure.as_ref(),
                     zellij_version: &self.zellij_version,
                 };
-                execute(engine.on_run_command_result(exit_code, topology_issued_at, now, &host));
+                execute(engine.on_run_command_result(
+                    exit_code,
+                    topology_issued_at,
+                    now,
+                    &host,
+                    key_command,
+                ));
                 return false;
             }
             let Some(engine) = self.engine.as_mut() else {
@@ -227,16 +238,8 @@ mod shell {
             let Some(engine) = self.engine.as_mut() else {
                 return false;
             };
-            // The focus-key channel: a keybind pipes `FOCUS_SIDEBAR_PIPE` and
-            // the plugin runs `rimz sidebar focus --toggle`, reaching the
-            // sidebar from any pane — a Zellij keybind cannot focus a pane by
-            // id itself.
-            if pipe_message.name == FOCUS_SIDEBAR_PIPE {
-                execute(engine.on_focus_sidebar_pipe());
-                return false;
-            }
-            if pipe_message.name == ZOOM_PANE_PIPE {
-                execute(engine.on_zoom_pane_pipe());
+            if pipe_message.name == KEY_PIPE {
+                execute(engine.on_key_pipe(pipe_message.payload.as_deref()));
                 return false;
             }
             if pipe_message.name == PALETTE_PIPE {
@@ -282,7 +285,6 @@ mod shell {
                     argv,
                     topology_issued_at,
                 } => {
-                    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
                     let mut context = BTreeMap::new();
                     if let Some(issued_at) = topology_issued_at {
                         context.insert(
@@ -290,13 +292,12 @@ mod shell {
                             issued_at.to_string(),
                         );
                     }
-                    run_command_with_env_variables_and_cwd(
-                        &refs,
-                        BTreeMap::new(),
-                        PathBuf::from("/"),
-                        context,
-                    );
+                    run_host_command(&argv, context);
                 }
+                Effect::RunKeyCommand { argv } => run_host_command(
+                    &argv,
+                    BTreeMap::from([(wire::KEY_COMMAND_CONTEXT.to_owned(), String::new())]),
+                ),
                 Effect::HideSelf => hide_self(),
                 Effect::Reconfigure(kdl) => reconfigure(kdl, false),
                 Effect::CloseSelf => close_self(),
@@ -311,6 +312,11 @@ mod shell {
                 }
             }
         }
+    }
+
+    fn run_host_command(argv: &[String], context: BTreeMap<String, String>) {
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run_command_with_env_variables_and_cwd(&refs, BTreeMap::new(), PathBuf::from("/"), context);
     }
 
     fn subscribed_events() -> [EventType; 11] {
