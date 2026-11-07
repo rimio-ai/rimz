@@ -280,7 +280,7 @@ An unrecorded checkout retries a sustained-true condition every five minutes. A 
 
 These states remain for legacy runs sealed with `route_defaults = "park"` (also the default when absent). New runs route failures through on-break or explicit edges instead.
 
-A parked run appears under NEEDS YOU in `workflow list` and, when it belongs to a loop task, `loop list`. A dismissable sidebar notice names its address, or the parked-run count, and points to `rimz workflow list` without giving a reason. A new park raises the notice again after `x` dismisses it; `show` explains why and prints the available next commands.
+A legacy parked run appears under NEEDS YOU in `workflow list` and, when it belongs to a loop task, `loop list`. It raises no sidebar notice; the worktree strip keeps its `parked` word. `show` explains why and prints the available next commands.
 
 The list's park phrase is `<reason>[: <text>]`. Cap, timeout, and deadline phrases derive `cap: <used> of <max> visits`, `timeout: waited <timeout>`, and `deadline: passed <clock>` from the sealed spec and record; other reasons keep the recorded text on one line.
 

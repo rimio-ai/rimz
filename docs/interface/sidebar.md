@@ -975,33 +975,7 @@ At 46 columns the same notices keep their suffixes:
  ⚠ starts held: cannot · 2 held · rimz doctor
 ```
 
-A [workflow run](../guide/workflows.md) that parks for you raises one warning notice after the held-start notices and above the blank line and footer. It names the run's address, or counts every parked run when several are parked, then points to `rimz workflow list` and offers `x dismiss`. It never gives a park reason or question; the command names the parked runs and explains why they stopped. The notice is not a click target and keeps the footer unfolded. On a watched tab a new park appears within one data tick.
-
-At 80 columns, one parked run reads:
-
-```
- ⚠ land#dollar-align parked · rimz workflow list · x dismiss
-
-                                                                     ? for help
-```
-
-Several parked runs replace the address with their count:
-
-```
- ⚠ 3 workflow runs parked · rimz workflow list · x dismiss
-```
-
-At 46 columns, the label clips first:
-
-```
- ⚠ land#doll · rimz workflow list · x dismiss
-
-                                   ? for help
-```
-
-Press `x` to dismiss the parks the notice shows on screen; a park the pane has not drawn yet stays undismissed. Another run parking, or the same run parking again, raises it again with the full parked count, including dismissed runs. Resuming or canceling a run reduces that count; no parked runs means no notice. Dismissal is shared by co-viewers and lasts until the sidebar host restarts. The per-worktree strip keeps its `parked` word after dismissal, and `rimz workflow list` still shows every parked run.
-
-Narrow panes clip the address or count first. When the full suffix would leave less than the warning glyph, a space, and one cell of leading text, `· x dismiss` drops and `· rimz workflow list` stays; `x` still works. Below that, the line clips at the right edge.
+A [workflow run](../guide/workflows.md) raises no attention notice. Failures lead to an on-break agent or end the run; an agent asks in its own pane. Legacy parked runs retain the worktree strip's yellow `parked` word and appear in `rimz workflow list`.
 
 When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor` (singular `setting` for one). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice.
 
@@ -1045,7 +1019,7 @@ When several agents are affected, it names the earliest one's card: `coder and 2
  ⚠ last alert 2m ago: hook drainer unreachable for 40s · x dismiss
 ```
 
-An active `Sidebar degraded` alert hides the park notice and hook-drainer line. Pressing `x` clears that alert without dismissing the park notice it hid. Once the notice shows, the next `x` dismisses its parks together with any recovered drainer or refresh alerts. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert and the park notice above the footer. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
+An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `x` clears that alert and any recovered drainer alert. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
 
 ### The help overlay
 
@@ -1097,7 +1071,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `←` / `→` | switch the dashboard tab |
 | `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `r` | reload this tab's sidebar |
-| `x` | dismiss the park notice and recovered alerts on screen, or an active `Sidebar degraded` alert without dismissing the park notice it hides |
+| `x` | dismiss recovered alerts or clear an active `Sidebar degraded` alert |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
 | `Esc` | clear only the text search; while help is open, close help only |

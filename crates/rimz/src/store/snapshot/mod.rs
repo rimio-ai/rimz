@@ -58,8 +58,8 @@ pub use row::{
 };
 pub(crate) use view::sort_windows;
 pub use view::{
-    AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, ParkedWorkflow,
-    agent_idle_since, card_status, find_agent, group_live_agents_by_worktree, needs_you,
+    AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, agent_idle_since,
+    card_status, find_agent, group_live_agents_by_worktree, needs_you,
 };
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan, RedeemForecast,

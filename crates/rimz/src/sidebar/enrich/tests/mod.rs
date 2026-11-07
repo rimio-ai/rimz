@@ -99,7 +99,7 @@ fn hook_drainer_outages_are_projected_on_producer_and_consumer_folds() {
 }
 
 #[test]
-fn parked_workflows_are_projected_without_agents_and_oldest_first() {
+fn legacy_workflow_parks_do_not_publish_attention_notices() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
     for (suffix, status, entered) in [
@@ -122,21 +122,7 @@ fn parked_workflows_are_projected_without_agents_and_oldest_first() {
         })).unwrap()).unwrap();
     }
     let projected = serde_json::to_value(fold_cached(snapshot, None, &runtime)).unwrap();
-    assert_eq!(
-        projected["parked_workflows"].as_array().map(Vec::len),
-        Some(2)
-    );
-    assert_eq!(
-        projected["parked_workflows"][0]["run"],
-        "wf_0190b8172c0070008000000000000002"
-    );
-    assert_eq!(
-        projected["parked_workflows"][0],
-        serde_json::json!({
-            "run": "wf_0190b8172c0070008000000000000002",
-            "address": "review#repo", "since": "2026-01-01T00:00:00Z"
-        })
-    );
+    assert!(projected.get("parked_workflows").is_none(), "{projected}");
 }
 
 #[test]
