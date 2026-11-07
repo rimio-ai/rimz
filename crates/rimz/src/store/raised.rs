@@ -16,6 +16,14 @@ pub enum RaisedErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error("the user already replied to this turn")]
     AlreadyAnswered,
+    #[error("target has no recorded turn or registration")]
+    NoBasis,
+    #[error("an outside raise without TEXT requires an agent resting cleanly")]
+    NotResting,
+    #[error("no recorded reply; provide TEXT")]
+    NoReply,
+    #[error(transparent)]
+    Transcript(#[from] crate::transcript::TranscriptLogErr),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +140,65 @@ pub(crate) fn attach(agents: &mut Arc<Vec<AgentState>>, paths: &StatePaths) {
     }
 }
 
+pub fn prepare_raise(
+    paths: &StatePaths,
+    agent: &AgentState,
+    is_self: bool,
+    text: Option<String>,
+    options: Vec<String>,
+    raised_by: Option<String>,
+    at: Timestamp,
+) -> Result<Entry<RaisedAsk>, RaisedErr> {
+    let basis_at = if is_self {
+        at
+    } else {
+        agent
+            .last_prompt_at
+            .max(agent.turn_started_at)
+            .or(agent.registered_at)
+            .ok_or(RaisedErr::NoBasis)?
+    };
+    let text = if text.is_none() && !is_self {
+        let (status, phase) = agent.rowless_status(&Default::default(), at);
+        if !matches!(
+            status,
+            crate::agents::AgentStatus::Idle | crate::agents::AgentStatus::Success
+        ) || phase == crate::agents::TurnPhase::Parked
+        {
+            return Err(RaisedErr::NotResting);
+        }
+        let since = agent
+            .last_prompt_at
+            .or(agent.registered_at)
+            .ok_or(RaisedErr::NoBasis)?;
+        Some(
+            crate::transcript::latest_assistant(paths, &agent.kind, &agent.agent_id, since)?
+                .ok_or(RaisedErr::NoReply)?
+                .text,
+        )
+    } else {
+        text
+    };
+    Ok(Entry {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        value: RaisedAsk {
+            ask_id: AskId::new(),
+            state: if is_self {
+                RaisedAskState::Armed
+            } else {
+                RaisedAskState::Open
+            },
+            raised_at: at,
+            basis_at,
+            opened_at: (!is_self).then_some(at),
+            raised_by,
+            text,
+            options,
+        },
+    })
+}
+
 #[must_use = "durability barrier; check the result"]
 pub fn raise(paths: &StatePaths, ask: Entry<RaisedAsk>) -> Result<(), RaisedErr> {
     update(paths, |record| {
@@ -213,7 +280,7 @@ pub(crate) fn retire(
         let removed = record
             .asks
             .iter()
-            .find(|ask| ask.matches(kind, agent_id))
+            .find(|ask| ask.matches(kind, agent_id) && !record.answered(ask))
             .map(|ask| ask.value.clone());
         record.asks.retain(|ask| !ask.matches(kind, agent_id));
         record.alerts.retain(|alert| !alert.matches(kind, agent_id));

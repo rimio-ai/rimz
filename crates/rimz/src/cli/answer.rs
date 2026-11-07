@@ -1,4 +1,4 @@
-//! `rimz answer` — validate and drive one current native prompt atomically.
+//! `rimz answer` — drive a native prompt or dispatch a reply to raised attention.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -94,7 +94,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let commands = ask_commands::AskCommands {
         detail: &detail,
         pane: &handle,
-        target: if child_name.is_some() {
+        target: if child_name.is_some() || detail.delivery == rimz::agents::AskDelivery::Raised {
             ask_id.as_str()
         } else {
             &handle
@@ -103,13 +103,16 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(message) = commands.pane_refusal(&who) {
         answer_exit(3, &message);
     }
-    let adapter = rimz::agents::definition_by_kind(kind.as_str())
-        .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     if args.selectors.is_empty() && args.text.is_none() && args.json.is_none() {
         answer_exit(3, &commands.missing_answer(&who));
     }
     let replies =
         parse_replies(&args, &commands).unwrap_or_else(|message| answer_exit(3, &message));
+    if detail.delivery == rimz::agents::AskDelivery::Raised {
+        return answer_raised(&ctx, agent, &detail, &replies, &handle, globals);
+    }
+    let adapter = rimz::agents::definition_by_kind(kind.as_str())
+        .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     let steps = adapter
         .answer_plan(detail.open.kind, &detail.questions, &replies)
         .unwrap_or_else(|err| answer_exit(3, &format!("{err}; in the pane: {}", commands.focus())));
@@ -178,6 +181,108 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         out,
         "answered {who}: {}  {ask_id}",
         ask_commands::choice(&detail, &replies)
+    )?;
+    Ok(())
+}
+
+fn answer_raised(
+    ctx: &Ctx,
+    agent: &rimz::agents::AgentState,
+    detail: &rimz::agents::OpenAskDetail,
+    replies: &[AskReply],
+    handle: &str,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    use rimz::message::dispatch::{DispatchMode, DispatchOutcome, DispatchRequest};
+    let caller = rimz::launcher::context::resolve_caller(&ctx.store)?;
+    let sender = rimz::launcher::context::sender_for(caller.as_ref(), ctx.channel(), false);
+    let actor = caller.as_ref().map(|_| sender.render());
+    let text = detail
+        .questions
+        .iter()
+        .zip(replies)
+        .flat_map(|(question, reply)| {
+            reply
+                .picks
+                .iter()
+                .map(|index| question.options[*index].label.clone())
+                .chain(reply.text.iter().cloned())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let current = ctx.cached_snapshot()?;
+    if !current.agents.iter().any(|row| {
+        row.kind == agent.kind
+            && row.agent_id == agent.agent_id
+            && row
+                .raised_ask
+                .as_ref()
+                .is_some_and(|ask| ask.ask_id == detail.open.id)
+    }) {
+        answer_exit(2, "the raised ask was answered or replaced before dispatch");
+    }
+    let result = rimz::message::dispatch::dispatch(
+        &ctx.workspace,
+        &ctx.store,
+        DispatchRequest {
+            target: handle.to_owned(),
+            text,
+            target_scope: None,
+            current_channel: ctx.address_context(),
+            caller,
+            sender,
+            automated: false,
+            allow_fanout: false,
+            reply: None,
+            mux: globals.mux,
+            enter: true,
+            force: false,
+            auto_compact: None,
+            mode: DispatchMode::Boundary {
+                gate: rimz::store::message::DeliveryGate::Done,
+                not_before: None,
+                after: vec![],
+                when: vec![],
+            },
+            resuming_recipient: None,
+        },
+    )?;
+    let message_id = match result
+        .outcomes
+        .first()
+        .context("answer dispatch returned no outcome")?
+    {
+        DispatchOutcome::Sent { message_id, .. }
+        | DispatchOutcome::Queued { message_id, .. }
+        | DispatchOutcome::CompactionPending { message_id, .. }
+        | DispatchOutcome::SkippedWaiting { message_id, .. } => message_id,
+    };
+    if rimz::store::raised::withdraw(
+        ctx.store.paths(),
+        &agent.kind,
+        &agent.agent_id,
+        Some(&detail.open.id),
+    )?
+    .is_some()
+    {
+        let mut params = serde_json::json!({"ask_id": detail.open.id, "cause": "answered"});
+        if let Some(actor) = actor {
+            params["actor"] = serde_json::json!(actor);
+        }
+        rimz::store::raised::audit(
+            &ctx.store,
+            &ctx.workspace.session_name,
+            "ask.closed",
+            &agent.kind,
+            &agent.agent_id,
+            params,
+        )?;
+    }
+    writeln!(
+        super::render::out(),
+        "answered {handle}: {}  {}  message {message_id}",
+        ask_commands::choice(detail, replies),
+        detail.open.id
     )?;
     Ok(())
 }

@@ -3,6 +3,7 @@
 //! [`AgentState::actionable_asks`] supplies current identities and summaries. Structured
 //! questions and the agent's ask-time message join from RimZ transcript state
 //! only by exact ask ID; adapter-owned safe options supply the fallback shape.
+//! Raised questions materialize directly from their attached attention record.
 
 use crate::agents::{
     AgentErr, AgentState, AnswerPlanErr, AskDelivery, AskKind, OpenAsk, definition_by_kind,
@@ -24,6 +25,7 @@ pub struct OpenAskDetail {
     pub open: OpenAsk,
     pub delivery: AskDelivery,
     pub context: Option<String>,
+    pub raised_by: Option<String>,
     pub questions: Vec<AskQuestion>,
     pub route: AskRoute,
     pub pane_actions: Option<&'static str>,
@@ -48,13 +50,32 @@ pub fn read_open_ask(
     else {
         return Ok(None);
     };
+    if delivery == AskDelivery::Raised {
+        // actionable_asks yields Raised only from this attached record.
+        let raised = agent
+            .raised_ask
+            .as_ref()
+            .expect("actionable raised ask has its record");
+        return Ok(Some(OpenAskDetail {
+            questions: vec![AskQuestion {
+                question: open.detail.clone().unwrap_or_default(),
+                options: raised.options.iter().cloned().map(Into::into).collect(),
+                multi_select: false,
+                has_option_previews: false,
+            }],
+            context: raised.text.clone(),
+            raised_by: raised.raised_by.clone(),
+            open,
+            delivery,
+            route: AskRoute::Shell,
+            pane_actions: None,
+        }));
+    }
     let adapter = definition_by_kind(agent.kind.as_str())?;
     let (questions, context) = match open.kind {
         AskKind::Question | AskKind::PlanApproval => {
-            let entry = match delivery {
-                AskDelivery::Blocking => latest_open_ask(paths, &agent.kind, &agent.agent_id)?
-                    .filter(|entry| entry.id.as_ref() == Some(&open.id)),
-                AskDelivery::Async => read_since(paths, recent_floor())?
+            let entry = if delivery == AskDelivery::Async {
+                read_since(paths, recent_floor())?
                     .entries
                     .into_iter()
                     .rev()
@@ -63,7 +84,10 @@ pub fn read_open_ask(
                             && entry.kind == agent.kind
                             && entry.agent_id == agent.agent_id
                             && entry.id.as_ref() == Some(&open.id)
-                    }),
+                    })
+            } else {
+                latest_open_ask(paths, &agent.kind, &agent.agent_id)?
+                    .filter(|entry| entry.id.as_ref() == Some(&open.id))
             };
             entry
                 .map(|entry| {
@@ -96,6 +120,7 @@ pub fn read_open_ask(
         open,
         delivery,
         context,
+        raised_by: None,
         questions,
         route,
         pane_actions,
@@ -121,6 +146,47 @@ fn synthetic_questions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raised_asks_materialize_without_a_native_adapter_or_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(root.path()),
+            root.path(),
+        )
+        .unwrap();
+        let mut agent = AgentState::stub(
+            "unregistered",
+            "raised",
+            crate::agents::AgentStatus::Running,
+        );
+        let raised_at = jiff::Timestamp::UNIX_EPOCH;
+        let opened_at = jiff::Timestamp::from_second(1).unwrap();
+        let id = crate::ids::AskId::new();
+        agent.raised_ask = Some(crate::agents::state::RaisedAsk {
+            ask_id: id.clone(),
+            state: crate::agents::state::RaisedAskState::Open,
+            raised_at,
+            basis_at: raised_at,
+            opened_at: Some(opened_at),
+            raised_by: Some("@lead".into()),
+            text: Some("Ready. Which one?\nFull context.".into()),
+            options: vec!["safe".into(), "fast".into()],
+        });
+        assert_eq!(agent.actionable_asks().count(), 1);
+        assert!(!agent.is_awaiting_input());
+        let detail = read_open_ask(&paths, &agent, Some(&id)).unwrap().unwrap();
+        assert_eq!(detail.delivery.label(), "raised");
+        assert_eq!(detail.route, AskRoute::Shell);
+        assert_eq!(detail.open.kind, AskKind::Question);
+        assert_eq!(detail.open.detail.as_deref(), Some("Which one?"));
+        assert_eq!(detail.open.since, opened_at);
+        assert_eq!(
+            detail.context.as_deref(),
+            Some("Ready. Which one?\nFull context.")
+        );
+        assert_eq!(detail.questions[0].options[1].label, "fast");
+    }
 
     #[test]
     fn async_ask_never_opens_expired_buckets() {

@@ -1,6 +1,25 @@
 # Asks and answers
 
-An ask is a permission prompt, a plan approval, or a question. Blocking asks own an agent's input; async questions leave the agent working. `rimz asks` reads the open asks as structured data, and `rimz answer` answers a supported blocking ask by typing into the agent's own prompt UI, the same keys you would press in the pane. Every agent whose questions reach RimZ shows up in `rimz asks`; `rimz answer` works for Claude, Codex, and Pi, within the limits in [What each agent accepts](#what-each-agent-accepts). The workflow is taught in [the messaging guide](../../guide/messaging.md#asks-and-answers), and which agents surface their asks at all is in [agent support](../agent-support.md).
+An ask is a permission prompt, a plan approval, or a question. Blocking asks own an agent's input; async and raised questions do not. `rimz asks` reads the open asks as structured data. `rimz answer` answers a supported blocking ask by typing into the agent's own prompt UI, the same keys you would press in the pane, or answers a raised ask by sending a normal prompt. Every agent whose questions reach RimZ shows up in `rimz asks`; native answers work for Claude, Codex, and Pi, within the limits in [What each agent accepts](#what-each-agent-accepts), and raised asks work across providers. The workflow is taught in [the messaging guide](../../guide/messaging.md#asks-and-answers), and which agents surface their native asks at all is in [agent support](../agent-support.md).
+
+## Raise or withdraw an ask
+
+```sh
+rimz asks raise                            # ask with this turn's final reply
+rimz asks raise @me "Should we ship?" --option safe --option fast
+rimz asks raise @coder "Please review the result"
+rimz asks withdraw @coder
+```
+
+A self raise (bare, `@me`, or your own address) arms for the current turn. It appears only after a clean end, with the explicit text or that turn's final reply. An errored or interrupted end, or a later turn without a clean end, drops the armed ask; a turn parked on background work leaves it armed. Providers with no captured final reply, including Hermes, may open an ask without text: inspect the pane. Kimi and Hermes report interrupts as clean ends, so those can open an ask too.
+
+An outside raise opens immediately. Without TEXT it uses the last reply recorded after the latest submitted prompt, and only on a cleanly resting agent, not one sleeping on a wait. It refuses when that reply was not captured. With TEXT it can target an agent that is still working; the ask stays listed while the card keeps its real status. Closed agents refuse raises. A later human prompt closes the ask, including a prompt that was already submitted but not yet observed when the raiser read the agent. Compaction (the provider's command as the first trimmed word: `/compact`, or `/compress` for Qwen and Droid, including `agents compact`) never closes it. Agent messages, harness notices, subagent reports and reading the card leave it open. Typing into a supervised child's pane does not close it; `answer`, `withdraw` or stopping it does.
+
+The answer commands printed for raised asks name the ask id, so they still answer that question when the agent also has a native prompt open.
+
+A sole positional starting with `@` is a target; other sole positionals are text for yourself. To raise text starting with `@`, put it after `@me`. Use `--` before text that looks like a flag. A plain user shell must name a target; omitting it exits `2` with the explicit command to use. `withdraw` is open to anyone, removes only a raised ask, and exits `1` when none exists. A new raise replaces the previous one. Receipts name the agent and ask id; a self raise also explains that the final reply becomes the ask.
+
+Raised asks show KIND `raised`. Their card line is the first question sentence, otherwise the first non-blank line, collapsed and capped at 160 characters; `show` keeps the full text, numbered options and answer footer. An agent raiser's handle appears as `raised by @handle`; user shells and scripts have no agent attribution. Raise, withdraw, answer closes, lifecycle closes and card marks leave audit events, not conversation entries.
 
 ## List open asks
 
@@ -88,7 +107,8 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
 | `agent.kind` | The agent kind, such as `claude`. |
 | `agent.channel` | The agent's channel. Absent when it has none. |
 | `kind` | `permission`, `plan_approval`, or `question`. |
-| `delivery` | `blocking` owns the agent's input; `async` is a question the agent asks while continuing its turn. |
+| `delivery` | `blocking` owns the agent's input; `async` is a native question asked while continuing; `raised` is an explicitly raised question, independent of native input ownership. |
+| `raised_by` | The raising agent's handle, or `null` for a user shell or a native ask. |
 | `since` | When the prompt opened. |
 | `detail` | The shared prompt summary: the first line of the first structured question, otherwise the recorded summary, such as a permission ask's tool call. `null` when the agent recorded none. |
 | `context` | The message the agent wrote just before raising the prompt. Absent when it wrote none, and always absent on permission asks. |
@@ -121,6 +141,8 @@ rimz answer ask_0123456789abcdef --json < answers.json
 ```
 
 The target is an agent address or an ask id, resolved as for [`show`](#show-one-ask). One command answers the whole ask, every question at once.
+
+For a raised ask, `answer` sends the selected option label or free text as a normal message at the next completed-turn boundary, attributed to the caller. A successful dispatch closes that ask and prints the message id; a failed dispatch leaves it open. A selector without options or an out-of-range choice exits `3`. With no options, use `--text` or reply in the pane. This path does not type native answer keys or wait for native confirmation.
 
 | Flag | Effect |
 | --- | --- |

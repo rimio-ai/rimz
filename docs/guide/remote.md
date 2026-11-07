@@ -124,6 +124,8 @@ Keeping the agent processes themselves alive across a reboot is not something Ri
 
 A fleet that runs while you are out still stops to ask: a permission prompt, a plan approval, a question only you can decide. Claude Code and Codex each ship **remote control** (`claude remote-control` and `codex remote-control`), the bridge behind their official mobile apps: it links a machine to your account so the app can see and drive the sessions running on it. The feature is entirely the provider's. What RimZ adds is keeping it up, because the bridge only helps if it is already running when an agent stops to ask, and starting infrastructure with the room is a room's job.
 
+Explicitly [raised asks](../reference/cli/asks.md#raise-or-withdraw-an-ask) are RimZ questions, not native mobile prompts. They notify through [RimZ handlers](./notifications.md); answer them with `rimz answer` or a human prompt in the pane.
+
 Two per-machine toggles opt in. Both are off by default:
 
 ```sh

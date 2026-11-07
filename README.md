@@ -305,6 +305,8 @@ rimz config set remote_control.codex true     # ensure codex's remote-control da
 
 Both are off by default, and setting one back to `false` undoes it. The [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each toggle runs. For every other agent, a [notification handler](./docs/guide/notifications.md) pushes the ask anywhere a shell command can reach.
 
+Questions written in prose can request the same attention with [`rimz asks raise`](./docs/reference/cli/asks.md#raise-or-withdraw-an-ask), across providers. Raised asks notify through RimZ's handlers; they are not provider-native mobile prompts.
+
 ## Configuration
 
 RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Packs](./docs/reference/cli/packs.md) supply definitions and skills from Git or linked checkouts below your own home files; linked checkout edits load without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.

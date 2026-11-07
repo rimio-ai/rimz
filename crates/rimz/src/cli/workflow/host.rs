@@ -357,7 +357,7 @@ impl workflow::AttemptHost for Host<'_> {
                 if observed.ask.is_none()
                     && !current.is_reviewing_permission(snapshot.now)
                     && let Some(ask) = rimz::agents::read_open_ask(self.state, current, None)?
-                    && ask.delivery != AskDelivery::Async
+                    && ask.delivery == AskDelivery::Blocking
                 {
                     let text = ask
                         .context

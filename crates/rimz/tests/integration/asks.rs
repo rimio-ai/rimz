@@ -12,6 +12,8 @@ const QUESTION_CONTEXT: &str = concat!(
     "It also leaves time to observe each stage."
 );
 
+mod raised;
+
 #[test]
 fn codex_auto_review_hides_list_but_preserves_explicit_ask() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode};
