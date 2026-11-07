@@ -10,7 +10,7 @@ error: `rimz agents` needs a verb or a launch spec; to list agents, run `rimz ag
     rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)
 
   See:     list  show  logs  history  top  attribution
-  Drive:   focus  wait  stop  restart  compact  refresh  fork  molt  tune
+  Drive:   focus  wait  stop  restart  compact  refresh  mark  fork  molt  tune
   Start:   launch  resume  profiles  explain
   Define:  validate  register  check
 ```
@@ -25,7 +25,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | See what a launch would run | `profiles`, `explain` | [Inspect profiles and launch plans](#inspect-profiles-and-launch-plans) |
 | Check machine definitions | `validate` | [Validate definitions](#validate-definitions) |
 | Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
-| Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
+| Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `mark`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
 | Retune one agent's keep-warm, compaction, or spend cap | `tune` | [Tune a session](#tune) |
 
 Neighbouring commands have their own pages: [`rimz teams`](./teams.md) launches and drives configured teams, [`rimz subagents`](./subagents.md) launches supervised children from an agent, [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and types into raw panes, and [`rimz worktree`](./worktree.md) manages worktree lanes.
@@ -602,6 +602,7 @@ rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
 rimz agents attribution --md             # lane credit for a pull request
 rimz agents top --once --all             # one resource-ranked table of the room
 rimz agents focus @claude-2#cli-docs     # jump to the pane
+rimz agents mark @coder alert "Review the result" # raise a card alert
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents wait otter fox --any         # race two agents; print the first finisher
 rimz agents stop @claude --all           # stop every matching Claude in scope
@@ -627,6 +628,7 @@ rimz agents tune @coder keep-warm off    # release this session's idle cache hol
 | `restart` | one live agent | replaces its pane and resumes its session |
 | `compact` | one agent with a bound pane | sends its native compaction command, with the brief for its seat, at a turn boundary |
 | `tune` | one agent | reports, overrides, or resets keep-warm, idle-compaction, smart-compaction, and budget |
+| `mark` | live agent cards, `@all`, or `#channel`; optionally `--worktree NAME` | marks read, unread, or alert |
 
 `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, `compact`, and `tune` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`.
 
@@ -657,6 +659,18 @@ The three overrides last across same-session restart, resume, room rebirth, and 
 Keep-warm still requires the configured minimum cache TTL. Turning it off ends an idle hold, not the pings serving an agent sleeping on a wait. Launch-only choices stay fixed: tuning keep-warm does not change Pi's long cache retention. Tuning idle-compaction on a Claude session launched without a floor leaves Claude's native idle compaction running beside RimZ's; tuning it off on a session launched with a floor leaves neither running. Existing pacing is retained, and queued messages keep their enqueue-time smart-compaction threshold.
 
 With `--json`, one folded setting reports `{agent, setting, value, source, configured, set_by?, set_at?}`. Values are canonical strings (`2h`, `off`, `120k`, `70%`); `configured` is null when nothing resolves. `set_at` is present only for an override, and `set_by` only when an agent set it. The budget report keeps [its own shape](./budget.md#cap-one-agent). Reporting all settings yields `{agent, settings: [...], budget: {...}}`: three setting objects and one budget object, each without its repeated `agent` field.
+
+#### `mark`
+
+```sh
+rimz agents mark @coder read
+rimz agents mark @all unread --worktree feature
+rimz agents mark '#review' alert "Check the result"
+```
+
+`read` writes a read receipt without focusing and clears any alert that receipt reaches. It is refused from an agent caller with exit `1`: read means a person looked; agents can use `unread` or `alert` instead. `unread` opens a new unread episode without deleting the receipt or restoring an alert already read. Neither mark answers a raised question. Reading through `agents show` or `logs` does not write a receipt.
+
+`alert TEXT` raises `!` with that text until the card is read, except that native Waiting wins. An alert can cover a running card and opens a new notification episode when displayed, even on an already-unread card. TEXT is required (exit `2`) and accepts hyphen values; use `--` before text matching a flag, including `--help`. New alerts replace earlier ones. Closed agents are refused with exit `1`. Every successful mark appends a `card.marked` audit event for each target, attributed to the calling agent or unattributed for a user shell.
 
 #### `list`
 

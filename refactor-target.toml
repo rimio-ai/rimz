@@ -3655,7 +3655,33 @@ path = "crates/rimz/src/sidebar"
 # FOLD_FLOOR and UNWATCHED_FOLD_INTERVAL share room-fold cadence bounds (+2).
 # attention::reconcile_snapshot stamps final folds before observation and publication (+1).
 # stall and stall::read share classified host PSI with the host and CLI producers (+2).
-surface-budget = 251
+# marks shares target resolution, typed errors, and runtime read/unread operations (+5).
+surface-budget = 256
+
+[[verdict]]
+kind = "item"
+key = "sidebar::marks"
+reason = "Agent marks and notification tests share sidebar target resolution and runtime-only marks."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::marks::MarkErr"
+reason = "Mark target resolution reports typed address, production, and missing-row errors."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::marks::resolve"
+reason = "Operator commands reuse published rows with a fresh resolution fallback and channel shorthand."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::marks::read"
+reason = "Manual reads share max receipts, reached-episode removal, diagnostics, and wakeups."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::marks::unread"
+reason = "Manual unread marks share episode persistence, diagnostics, and wakeups without dropping receipts."
 
 [[verdict]]
 kind = "item"

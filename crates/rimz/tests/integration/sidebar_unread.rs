@@ -6,6 +6,104 @@ use serde_json::json;
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn agents_marks_alerts_clear_on_human_read_and_do_not_return_on_unread() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "marked", "feature", &[("TMUX_PANE", "%1")]);
+    let pane = tmux_pane("%1", "claude", &env.project_root);
+    let fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
+    let output = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &fixture)
+        .args(["agents", "mark", "@claude", "alert", "Check the result"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let snapshot: rimz::store::snapshot::SidebarSnapshot =
+        serde_json::from_value(env.snapshot_json_with_panes(std::slice::from_ref(&pane))).unwrap();
+    let row = snapshot.rows().find(|row| row.id == "marked").unwrap();
+    assert_eq!(row.status(), Some(rimz::agents::AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("Check the result"));
+    let output = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "marked")
+        .env("RIMZ_TEST_PANE_LIST", &fixture)
+        .args(["agents", "mark", "@claude", "read"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("a person looked"),
+        "{output:?}"
+    );
+    for mark in ["read", "unread"] {
+        let output = env
+            .rimz()
+            .env("RIMZ_TEST_PANE_LIST", &fixture)
+            .args(["agents", "mark", "@claude", mark])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let snapshot: rimz::store::snapshot::SidebarSnapshot =
+            serde_json::from_value(env.snapshot_json_with_panes(std::slice::from_ref(&pane)))
+                .unwrap();
+        let row = snapshot.rows().find(|row| row.id == "marked").unwrap();
+        assert_ne!(row.status(), Some(rimz::agents::AgentStatus::Failed));
+    }
+    assert!(
+        rimz::store::raised::read(env.store().paths())
+            .alerts
+            .is_empty()
+    );
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| event.method == "card.marked")
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn agents_marks_accept_channel_scopes_require_alert_text_and_refuse_closed_agents() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env = [("TMUX_PANE", "%1"), ("RIMZ_CHANNEL", "attention")];
+    register_running_agent(&env, "scoped-mark", "feature", &pane_env);
+    let pane = tmux_pane("%1", "claude", &env.project_root);
+    let fixture = env.write_pane_fixture(&[pane]);
+    let output = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &fixture)
+        .args(["agents", "mark", "#attention", "unread"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let output = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &fixture)
+        .args(["agents", "mark", "@all", "alert"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    run_hook(
+        &env,
+        json!({"hook_event_name":"SessionEnd", "session_id":"scoped-mark"}),
+        &pane_env,
+    );
+    let output = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &fixture)
+        .args(["agents", "mark", "@scoped-mark", "unread"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+}
+
+#[test]
 fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -22,12 +120,12 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
     let out = env
         .rimz()
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["--mux", "tmux", "sidebar", "mark-unread", "@claude"])
+        .args(["--mux", "tmux", "agents", "mark", "@claude", "unread"])
         .output()
         .expect("mark unread");
     assert!(
         out.status.success(),
-        "mark-unread failed: {}",
+        "agents mark unread failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let unread_file: serde_json::Value =
@@ -35,7 +133,7 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
             .expect("unread json");
     assert!(
         unread_file["episodes"]["sess-unread"].as_i64().is_some(),
-        "mark-unread writes unread.json: {unread_file}"
+        "agents mark unread writes unread.json: {unread_file}"
     );
     assert!(row_unread(
         &env.snapshot_json_with_panes(std::slice::from_ref(&pane)),
@@ -45,12 +143,12 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
     let out = env
         .rimz()
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["--mux", "tmux", "sidebar", "mark-read", "@claude"])
+        .args(["--mux", "tmux", "agents", "mark", "@claude", "read"])
         .output()
         .expect("mark read");
     assert!(
         out.status.success(),
-        "mark-read failed: {}",
+        "agents mark read failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
@@ -59,16 +157,16 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
     );
     let unread_file: serde_json::Value =
         serde_json::from_slice(&std::fs::read(env.runtime_paths().unread_path()).unwrap())
-            .expect("unread json after mark-read");
+            .expect("unread json after agents mark read");
     assert!(
         unread_file["episodes"]["sess-unread"].is_null(),
-        "mark-read removes the open episode immediately: {unread_file}"
+        "agents mark read removes the open episode immediately: {unread_file}"
     );
     let marks = std::fs::read_to_string(env.runtime_paths().read_marks_dir.join("marks.json"))
         .expect("room read mark");
     assert!(
         marks.contains("sess-unread"),
-        "mark-read writes a room receipt: {marks}"
+        "agents mark read writes a room receipt: {marks}"
     );
 }
 
@@ -88,12 +186,12 @@ fn sidebar_mark_unread_resolves_from_published_snapshot_without_mux() {
 
     let out = env
         .rimz()
-        .args(["sidebar", "mark-unread", "@claude"])
+        .args(["agents", "mark", "@claude", "unread"])
         .output()
         .expect("mark unread from published snapshot");
     assert!(
         out.status.success(),
-        "mark-unread failed without mux: {}",
+        "agents mark unread failed without mux: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let unread_file: serde_json::Value =
@@ -103,7 +201,7 @@ fn sidebar_mark_unread_resolves_from_published_snapshot_without_mux() {
         unread_file["episodes"]["sess-published-unread"]
             .as_i64()
             .is_some(),
-        "mark-unread writes unread.json from the published pane frame: {unread_file}"
+        "agents mark unread writes unread.json from the published pane frame: {unread_file}"
     );
 }
 
@@ -234,7 +332,10 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
 
 fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
     let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_installed_hook_in_pane("claude", &payload, pane_env);
+    let owner_pid = env.agent_owner_pid().to_string();
+    let mut pane_env = pane_env.to_vec();
+    pane_env.push(("RIMZ_AGENT_PID", &owner_pid));
+    let output = env.run_installed_hook_in_pane("claude", &payload, &pane_env);
     assert!(
         output.status.success(),
         "hook failed: {}",

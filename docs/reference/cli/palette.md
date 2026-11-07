@@ -44,6 +44,8 @@ Commands mode names its target above the list. Moving to a card in cards mode ma
 
 Every command starts with `rimz`. Card commands use the full `@handle#channel` address. When that would select another agent or none, they use `@<session id>`, and a process or an agent pane with no session yet uses its pane ID. A failed action keeps the palette open with the exit status and first stderr line. Output commands leave the palette view, run in the terminal, and wait for a key before closing. Each command retains its own refusals and checks.
 
+Card read, unread, and alert marks are shell commands: [`rimz agents mark TARGET read|unread|alert`](./agents.md#mark). They are not palette actions.
+
 ## Room and popup targeting
 
 Without `--session-name`, the command follows the current room identity, like other participant commands. `--session-name S` addresses that room explicitly; an unknown room refuses before any popup opens. `--from-pane PANE` supplies the opener when launching from outside its pane; otherwise the current pane is used when available.

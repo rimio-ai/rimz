@@ -123,7 +123,7 @@ esac
 
 The same handler can reach for anything else the room exposes. `rimz pane capture "$RIMZ_NOTIFY_PANE"` and `rimz pane send "$RIMZ_NOTIFY_PANE" 2 --enter` drive a prompt shape `rimz answer` does not support. `rimz message @reviewer "look at the migration @coder is stuck on"` hands the situation to another agent. `rimz agents codex -p "Is this diff safe to approve? answer yes or no"` spends a whole run on the decision ([scripting](./scripting.md)).
 
-Raised questions and card alerts also notify: their title says `needs you`, and the body is the ask line or alert text. A raised question carries `delivery: "raised"` and its own `RIMZ_NOTIFY_ASK`; `rimz answer` sends a normal prompt rather than native keys, then closes that ask after successful dispatch. `rimz asks raise @coder "Review this?"` can request attention from any provider; [`rimz agents mark @coder alert "Check the result"`](../reference/cli/agents.md) raises an alert instead. Reading hides an alert but does not answer a question.
+Raised questions and card alerts also notify when displayed: their title says `needs you`, and the body is the ask line or alert text. A raised question carries `delivery: "raised"` and its own `RIMZ_NOTIFY_ASK`; `rimz answer` sends a normal prompt rather than native keys, then closes that ask after successful dispatch. `rimz asks raise @coder "Review this?"` can request attention from any provider; [`rimz agents mark @coder alert "Check the result"`](../reference/cli/agents.md) raises an alert instead. Reading hides an alert but does not answer a question.
 
 Three rules keep an acting handler honest.
 

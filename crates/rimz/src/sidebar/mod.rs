@@ -13,6 +13,7 @@ pub mod enrich;
 pub mod event_store;
 pub mod frame;
 pub mod fuse;
+pub mod marks;
 pub mod meter;
 pub mod notify;
 pub mod observe;

@@ -221,6 +221,7 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
             | "resume"
             | "refresh"
             | "tune"
+            | "mark"
             | "budget"
             | "exec"
             | "session-step"

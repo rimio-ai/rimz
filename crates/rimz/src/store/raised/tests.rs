@@ -93,6 +93,33 @@ fn retirement_does_not_report_an_already_human_closed_ask_again() {
 }
 
 #[test]
+fn an_earlier_read_cannot_remove_a_later_alert_and_a_tied_read_can() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    let alert = Entry {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: "a".into(),
+        value: CardAlert {
+            text: "Check the result".into(),
+            raised_at: Timestamp::from_second(2).unwrap(),
+            raised_by: None,
+        },
+    };
+    set_alert(&paths, alert.clone()).unwrap();
+    clear_alert(&paths, &alert.kind, &alert.agent_id, Timestamp::UNIX_EPOCH).unwrap();
+    assert_eq!(
+        read(&paths).alerts,
+        vec![alert.clone()],
+        "a stale read must not clear later attention"
+    );
+    clear_alert(&paths, &alert.kind, &alert.agent_id, alert.value.raised_at).unwrap();
+    assert!(
+        read(&paths).alerts.is_empty(),
+        "a receipt reaches an equal alert stamp"
+    );
+}
+
+#[test]
 fn open_predicate_keeps_ties_and_rejects_later_human_turns() {
     let mut record = RaisedRecord::default();
     let ask = ask("a", RaisedAskState::Open);

@@ -22,7 +22,7 @@ use rimz::sidebar::presence::{
     ZellijPluginTelemetry, ZellijWake, ZellijWakeOutcome, ZellijWakeReason, ingest_zellij_wake,
 };
 use rimz::sidebar::produce::{InspectOptions, pane_fixture_active, produce_snapshot_with_refresh};
-use rimz::store::snapshot::{PaneAgent, SidebarRow, SidebarSnapshot};
+use rimz::store::snapshot::{SidebarRow, SidebarSnapshot};
 use rimz::wakeup::events::SidebarEvent;
 use rimz::workspace::{WorkspaceResolver, record};
 use rimz::{RuntimePaths, StatePaths};
@@ -146,20 +146,6 @@ enum SidebarSubcmd {
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
     #[command(hide = true)]
     Wake(Box<WakeArgs>),
-    /// Write a read receipt for a sidebar row. Hidden — test/API machinery.
-    #[command(hide = true)]
-    MarkRead {
-        target: String,
-        #[arg(long)]
-        worktree: Option<String>,
-    },
-    /// Open an unread episode for a sidebar row. Hidden — test/API machinery.
-    #[command(hide = true)]
-    MarkUnread {
-        target: String,
-        #[arg(long)]
-        worktree: Option<String>,
-    },
     /// Focus the session's sidebar pane — the global focus-key target. With
     /// `--toggle`, return to the last working pane when already on the sidebar.
     /// The tmux keybind passes `--session-name` (resolved per keypress); a bare
@@ -382,8 +368,6 @@ impl SidebarArgs {
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Click { .. } => "sidebar click",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
-            SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
-            SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
             SidebarSubcmd::Focus { .. } => "sidebar focus",
             SidebarSubcmd::RecordFocusRepair { .. } => "sidebar record-focus-repair",
             SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
@@ -541,8 +525,6 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 },
             )
         }
-        SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
-        SidebarSubcmd::MarkUnread { target, worktree } => mark_unread(globals, target, worktree),
         SidebarSubcmd::Focus {
             session_name,
             toggle,
@@ -1239,72 +1221,6 @@ fn broadcast_wake_event(
     }
 }
 
-fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) -> Result<()> {
-    let resolved = resolve_sidebar_targets(globals, &target, worktree.as_deref())?;
-    let ids = resolved
-        .rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<Vec<_>>();
-    let now_ms = unix_now_ms_i64();
-    rimz::sidebar::read_marks::write_read_marks(&resolved.runtime, ids, now_ms)
-        .context("writing manual read marks")?;
-    let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
-    let mut cleared = Vec::new();
-    for row in resolved.rows.iter() {
-        if episodes.remove_reached_for_row(row, now_ms) {
-            cleared.push(row);
-        }
-    }
-    if !cleared.is_empty() {
-        episodes
-            .persist(&resolved.runtime)
-            .context("writing unread episodes")?;
-    }
-    let diag = diag_for_workspace(&resolved.workspace);
-    for row in cleared {
-        diag.trace_notify(rimz::diag::notify::NotifyTraceEvent::UnreadCleared {
-            row_id: row.id.clone(),
-            label: Some(rimz::sidebar::unread::row_label(row)),
-            agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
-            agent_id: Some(AgentSessionId::from(row.id.clone())),
-            worktree: row
-                .worktree_branch
-                .clone()
-                .or_else(|| row.lane_path().map(ToOwned::to_owned)),
-            pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-            cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
-                .as_str()
-                .to_owned(),
-            cleared_at_ms: Some(now_ms),
-        });
-    }
-    wake_sidebars(&resolved.runtime);
-    emit_hidden_count("Marked read", resolved.rows.len())
-}
-
-fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) -> Result<()> {
-    let resolved = resolve_sidebar_targets(globals, &target, worktree.as_deref())?;
-    let now_ms = unix_now_ms_i64();
-    let opened = rimz::sidebar::unread::mark_rows_unread(&resolved.runtime, &resolved.rows, now_ms)
-        .context("writing unread episodes")?;
-    let diag = diag_for_workspace(&resolved.workspace);
-    for item in &opened {
-        diag.trace_notify(rimz::diag::notify::NotifyTraceEvent::UnreadMarked {
-            row_id: item.row_id.clone(),
-            label: Some(item.label.clone()),
-            agent_kind: Some(item.agent_kind.clone()),
-            agent_id: Some(item.agent_id.clone()),
-            worktree: item.worktree.clone(),
-            pane_id: item.pane_id.clone(),
-            status: item.status.as_str().to_owned(),
-            episode_ms: item.episode_ms,
-        });
-    }
-    wake_sidebars(&resolved.runtime);
-    emit_hidden_count("Marked unread", resolved.rows.len())
-}
-
 /// Focus the session's sidebar pane, the global focus-key target. `--toggle`
 /// returns to a working pane in the sidebar's tab when already on the sidebar,
 /// so one key reaches the sidebar and goes back. The session is the keypress's
@@ -1483,60 +1399,22 @@ fn resolve_sidebar_targets(
     rimz::address::require_mention(target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = super::require_existing_store(&workspace)?;
-    let state = store.paths();
     let runtime = store.runtime_paths().clone();
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let channel = current_channel(&workspace, Some(&store)).address_context();
-    if let Ok(snapshot) =
-        PublishedSnapshotReader::new(runtime.clone(), workspace.session_name.clone(), None)
-            .read(state)
-        && let Ok(rows) = resolve_rows(&snapshot, target, worktree, &channel)
-        && !rows.is_empty()
-    {
-        return Ok(ResolvedSidebarTargets {
-            workspace,
-            runtime,
-            rows,
-        });
-    }
-
-    let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, globals.mux)?;
-    let rows = resolve_rows(&snapshot, target, worktree, &channel)?;
+    let rows = super::resolve_hint(
+        target,
+        rimz::sidebar::marks::resolve(&workspace, &store, target, worktree, &channel, globals.mux)
+            .map_err(|error| match error {
+                rimz::sidebar::marks::MarkErr::Target(error) => anyhow::Error::from(error),
+                error => error.into(),
+            }),
+    )?;
     Ok(ResolvedSidebarTargets {
         workspace,
         runtime,
         rows,
     })
-}
-
-fn resolve_rows(
-    snapshot: &SidebarSnapshot,
-    target: &str,
-    worktree: Option<&str>,
-    channel: &rimz::address::AddressContext,
-) -> Result<Vec<SidebarRow>> {
-    let targets = super::resolve_pane_targets(snapshot, target, worktree, channel)?;
-    rows_for_targets(snapshot, &targets)
-}
-
-fn rows_for_targets(snapshot: &SidebarSnapshot, targets: &[&PaneAgent]) -> Result<Vec<SidebarRow>> {
-    let mut rows = Vec::new();
-    for target in targets {
-        let Some(row) = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| group.rows.iter())
-            .find(|row| {
-                row.pane
-                    .as_ref()
-                    .is_some_and(|pane| pane.pane_id == target.pane_id)
-            })
-        else {
-            bail!("target {} has no rendered sidebar row", target.label());
-        };
-        rows.push(row.clone());
-    }
-    Ok(rows)
 }
 
 fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
@@ -1550,24 +1428,6 @@ fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
         "reminder" => Ok(NotificationKind::Reminder),
         other => bail!("unknown notification kind `{other}`"),
     }
-}
-
-fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> rimz::diag::DiagSink {
-    rimz::diag::DiagSink::for_workspace(
-        workspace.workspace_id.clone(),
-        workspace.session_name.clone(),
-        None,
-    )
-}
-
-fn wake_sidebars(runtime: &RuntimePaths) {
-    if let Err(err) = rimz::wakeup::wake_store_delta(runtime, None, None) {
-        tracing::debug!(error = %err, "sidebar unread wake failed");
-    }
-}
-
-fn unix_now_ms_i64() -> i64 {
-    i64::try_from(rimz::utils::time::unix_now_ms()).unwrap_or(i64::MAX)
 }
 
 fn emit_hidden_count(label: &str, count: usize) -> Result<()> {
