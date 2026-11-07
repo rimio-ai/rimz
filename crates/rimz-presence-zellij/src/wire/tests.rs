@@ -459,6 +459,57 @@ fn focus_sidebar_argv_uses_zellij_mux_and_optional_session() {
 }
 
 #[test]
+fn palette_argv_preserves_the_opener_and_omits_absent_context() {
+    assert_eq!(PALETTE_PIPE, "rimz:palette");
+    assert_eq!(
+        palette_argv(&ctx(), "commands", Some(policy::ClientPaneId::Terminal(7))),
+        strings(&[
+            "/bin/rimz",
+            "palette",
+            "--popup",
+            "--mode",
+            "commands",
+            "--from-pane",
+            "zellij:terminal_7",
+            "--session-name",
+            "session-1",
+            "--mux",
+            "zellij",
+        ]),
+    );
+    assert_eq!(
+        palette_argv(
+            &WakeContext {
+                rimz_bin: None,
+                workspace_id: None,
+                session_name: None,
+            },
+            "cards",
+            None,
+        ),
+        strings(&[
+            "rimz", "palette", "--popup", "--mode", "cards", "--mux", "zellij"
+        ]),
+    );
+    assert_eq!(
+        palette_argv(&ctx(), "new", Some(policy::ClientPaneId::Plugin(8))),
+        strings(&[
+            "/bin/rimz",
+            "palette",
+            "--popup",
+            "--mode",
+            "new",
+            "--from-pane",
+            "zellij:plugin_8",
+            "--session-name",
+            "session-1",
+            "--mux",
+            "zellij",
+        ]),
+    );
+}
+
+#[test]
 fn zoom_pane_argv_uses_zellij_mux_and_optional_session() {
     assert_eq!(
         zoom_pane_argv(&ctx()),

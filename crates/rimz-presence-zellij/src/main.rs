@@ -15,8 +15,8 @@ mod shell {
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
-        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, TOGGLE_FULLSCREEN_PIPE,
-        ZOOM_PANE_PIPE,
+        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, PALETTE_PIPE, RETIRE_PIPE,
+        TOGGLE_FULLSCREEN_PIPE, ZOOM_PANE_PIPE,
     };
     use zellij_tile::prelude::*;
     use zellij_utils::input::mouse::MouseEventType;
@@ -237,6 +237,13 @@ mod shell {
             }
             if pipe_message.name == ZOOM_PANE_PIPE {
                 execute(engine.on_zoom_pane_pipe());
+                return false;
+            }
+            if pipe_message.name == PALETTE_PIPE {
+                let focus = get_focused_pane_info()
+                    .ok()
+                    .map(|(_, pane)| project_pane_id(pane));
+                execute(engine.on_palette_pipe(pipe_message.payload.as_deref(), focus));
                 return false;
             }
             if pipe_message.name == TOGGLE_FULLSCREEN_PIPE {

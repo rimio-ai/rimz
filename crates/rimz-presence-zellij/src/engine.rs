@@ -21,8 +21,8 @@ pub trait Host {
 /// What the shell must execute, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Fire-and-forget host fork: wake pokes and focus-sidebar. The shell pins
-    /// its cwd to `/` so a deleted launch worktree cannot strand the plugin.
+    /// Fire-and-forget host fork: wake pokes, focus-sidebar, zoom, and palette.
+    /// The shell pins its cwd to `/` so a deleted launch worktree cannot strand the plugin.
     RunCommand {
         argv: Vec<String>,
         topology_issued_at: Option<u64>,
@@ -878,6 +878,25 @@ impl Engine {
         let mut effects = Vec::new();
         self.run_zoom_pane(&mut effects);
         effects
+    }
+
+    pub fn on_palette_pipe(
+        &mut self,
+        payload: Option<&str>,
+        focus: Option<ProjectedPaneId>,
+    ) -> Vec<Effect> {
+        if self.muted || !self.granted {
+            return Vec::new();
+        }
+        let mode = match payload {
+            Some("commands") => "commands",
+            Some("new") => "new",
+            _ => "cards",
+        };
+        vec![Effect::RunCommand {
+            argv: wire::palette_argv(&self.wake_context(), mode, focus),
+            topology_issued_at: None,
+        }]
     }
 
     pub fn on_toggle_fullscreen_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
