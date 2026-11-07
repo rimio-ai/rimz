@@ -197,6 +197,10 @@ error: could not compile `toy` (lib) due to 1 previous error; 2 warnings emitted
 
     for output in [killed, sccache_text, sccache_bare] {
         assert!(compiler_died_without_diagnostic(output), "{output}");
+        assert!(
+            failure_next_step("test", output, "cargo xtask gate").contains("rustc was killed"),
+            "{output}"
+        );
     }
     assert!(!compiler_died_without_diagnostic(real));
     assert!(!compiler_died_without_diagnostic(&format!(
@@ -205,6 +209,44 @@ error: could not compile `toy` (lib) due to 1 previous error; 2 warnings emitted
     assert!(!compiler_died_without_diagnostic(
         "Summary [   1.0s] 3 tests run: 2 passed, 1 failed"
     ));
+}
+
+// The first form is a recorded `cargo xtask test` run; the second is the same shim failing at a
+// compile. Each path stands for a wrapper script whose target a sandbox `HOME` hides.
+#[test]
+fn a_wrapper_that_cannot_start_names_itself_not_the_memory_killer() {
+    let probing = "\
+error: failed to run `rustc` to learn about target-specific information
+
+Caused by:
+  process didn't exit successfully: `sccache /toolchain/bin/rustc - --crate-name ___` (exit status: 127)
+  --- stderr
+  /usr/local/bin/sccache: line 22: /tmp/sandbox/home/.cargo/bin/sccache: No such file or directory";
+    let compiling = "\
+/usr/local/bin/sccache: line 22: /tmp/sandbox/home/.cargo/bin/sccache: No such file or directory
+error: could not compile `toy` (lib)
+
+Caused by:
+  process didn't exit successfully: `sccache rustc --crate-name toy` (exit status: 127)";
+    for output in [probing, compiling] {
+        assert_eq!(
+            failure_next_step("test", output, "cargo xtask gate"),
+            "NEXT: compiler wrapper `sccache` could not start; rerun without it: \
+             `RIMZ_SCCACHE=off RUSTC_WRAPPER= cargo xtask gate`"
+        );
+    }
+
+    let build_script = "\
+error: failed to run custom build command for `toy v0.1.0`
+
+Caused by:
+  process didn't exit successfully: `/target/debug/build/toy/build-script-build` (exit status: 1)
+  --- stderr
+  sh: protoc: No such file or directory";
+    assert_eq!(
+        failure_next_step("test", build_script, "cargo xtask gate"),
+        "NEXT: fix the test errors above, then rerun `cargo xtask gate`"
+    );
 }
 
 #[test]
