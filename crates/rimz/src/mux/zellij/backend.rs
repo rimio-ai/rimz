@@ -909,6 +909,42 @@ pub(super) fn live_tab_shapes(
 }
 
 impl MuxBackend for ZellijBackend {
+    fn open_popup(&self, request: &crate::mux::PopupRequest) -> Result<()> {
+        let already_open = self
+            .list_panes(PaneListOptions {
+                session_name: Some(request.session_name.clone()),
+                ..Default::default()
+            })
+            .is_ok_and(|listing| {
+                listing
+                    .panes
+                    .iter()
+                    .any(|pane| pane.is_floating && pane.title.as_deref() == Some("rimz palette"))
+            });
+        if already_open {
+            return Ok(());
+        }
+        self.zellij_action(&request.session_name)
+            .args([
+                "new-pane",
+                "--floating",
+                "--close-on-exit",
+                "--name",
+                "rimz palette",
+                "--width",
+                "80%",
+                "--height",
+                "80%",
+                "--cwd",
+            ])
+            .arg(request.cwd.to_string_lossy())
+            .arg("--")
+            .arg(&request.program)
+            .args(&request.args)
+            .run()
+            .map(|_| ())
+    }
+
     fn view_geometry(
         &self,
         session: &str,

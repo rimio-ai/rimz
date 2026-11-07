@@ -485,6 +485,40 @@ impl TmuxBackend {
 }
 
 impl MuxBackend for TmuxBackend {
+    fn open_popup(&self, request: &crate::mux::PopupRequest) -> Result<()> {
+        let mut spec = self.cmd().arg("display-popup");
+        if let Some(client) = &request.client {
+            spec = spec.args(["-c", client]);
+        }
+        if let Some(pane) = &request.anchor_pane {
+            ensure_pane_backend(pane, MuxName::Tmux)?;
+            spec = spec.args(["-t", pane.raw()]);
+        }
+        spec = spec
+            .args(["-E", "-w", "80%", "-h", "80%", "-T", "rimz palette", "-d"])
+            .arg(request.cwd.to_string_lossy())
+            .arg(&request.program)
+            .args(&request.args);
+        // Like attach, this client lives as long as the interactive job. Its
+        // exit status belongs to that job unless tmux itself wrote a refusal:
+        // the job's own stderr goes to the popup, never to this client.
+        let output = spec
+            .to_command()
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        let refusal = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() && !refusal.trim().is_empty() {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: refusal.trim().to_owned(),
+            });
+        }
+        if !output.status.success() {
+            tracing::debug!(status = %output.status, "palette popup job exited unsuccessfully");
+        }
+        Ok(())
+    }
+
     fn view_geometry(
         &self,
         _session: &str,

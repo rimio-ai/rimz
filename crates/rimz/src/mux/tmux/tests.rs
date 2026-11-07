@@ -1,6 +1,60 @@
 use super::*;
 use crate::config::TmuxConfig;
 
+#[cfg(unix)]
+#[test]
+fn popup_argv_preserves_words_and_job_exit_is_not_an_open_failure() {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/argv\"\nexit 3\n",
+    );
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    for anchored in [true, false] {
+        let request = crate::mux::PopupRequest {
+            session_name: "room".to_owned(),
+            program: "/bin/rimz with space".to_owned(),
+            args: vec!["palette".to_owned(), "literal $word;".to_owned()],
+            cwd: "/project with space".into(),
+            client: anchored.then(|| "/dev/pts/1".to_owned()),
+            anchor_pane: anchored.then(|| crate::PaneId::from_parts(crate::MuxName::Tmux, "%4")),
+        };
+        let result = backend.open_popup(&request);
+        assert!(
+            result.is_ok(),
+            "popup should accept the job's exit: {result:?}"
+        );
+        let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+        let mut expected = vec!["-S", "/test/socket", "-u", "display-popup"];
+        if anchored {
+            expected.extend(["-c", "/dev/pts/1", "-t", "%4"]);
+        }
+        expected.extend([
+            "-E",
+            "-w",
+            "80%",
+            "-h",
+            "80%",
+            "-T",
+            "rimz palette",
+            "-d",
+            "/project with space",
+            "/bin/rimz with space",
+            "palette",
+            "literal $word;",
+        ]);
+        assert_eq!(argv.lines().collect::<Vec<_>>(), expected);
+    }
+    let (_temp, refusing) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\necho \"can't find client: gone\" >&2\nexit 1\n",
+    );
+    backend.program = Some(refusing);
+    let refused = backend.open_popup(&crate::mux::PopupRequest::default());
+    assert!(
+        refused.is_err_and(|error| error.to_string().contains("can't find client: gone")),
+        "a tmux refusal is a failed open, not a job exit"
+    );
+}
+
 #[test]
 fn width_request_freshness_boundaries() {
     assert!(!WidthRequest::After(10).accepts(9));
