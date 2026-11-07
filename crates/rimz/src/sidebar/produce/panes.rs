@@ -341,6 +341,8 @@ fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> PresenceSa
     PresenceSample {
         human_clients: view.presence.human_clients,
         last_input_ms: view.presence.last_input_ms(),
+        client_input_ms: view.presence.client_input_ms.clone(),
+        client_views: view.clients.clone(),
         sampled_at_ms: unix_now_ms(),
     }
 }
@@ -349,6 +351,32 @@ fn sample_client_presence(mux: MuxName, session: &str) -> Option<PresenceSample>
     client_view(mux, session)
         .ok()
         .map(|view| presence_sample_from_client_view(&view))
+}
+
+fn frame_client_view(
+    pushed: Option<crate::mux::ClientView>,
+    prior: Option<&PaneFrame>,
+    mux: MuxName,
+    read: impl FnOnce() -> Result<crate::mux::ClientView>,
+) -> (
+    Vec<PaneId>,
+    Vec<crate::pane::ClientPaneView>,
+    Option<PresenceSample>,
+    bool,
+) {
+    if let Ok(view) = pushed.map_or_else(read, Ok) {
+        let presence = presence_sample_from_client_view(&view);
+        return (view.viewed_panes, view.clients, Some(presence), true);
+    }
+    let Some(prior) = prior.filter(|_| mux == MuxName::Zellij) else {
+        return (Vec::new(), Vec::new(), None, false);
+    };
+    (
+        prior.viewed_panes.clone(),
+        prior.client_views.clone(),
+        prior.presence.clone(),
+        false,
+    )
 }
 
 /// Join a fresh frame to the last published same-session frame. Raced-null
@@ -1020,46 +1048,10 @@ impl FrameContext<'_> {
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
         // to a direct client sample.
-        let prior_client_view = || {
-            prior.as_ref().map_or_else(
-                || (Vec::new(), Vec::new(), None),
-                |prior| {
-                    (
-                        prior.viewed_panes.clone(),
-                        prior.client_views.clone(),
-                        prior.presence,
-                    )
-                },
-            )
-        };
-        let (viewed_panes, client_views, presence, client_view_resolved) = match pushed_client_view
-        {
-            Some(client_view) => {
-                let presence = presence_sample_from_client_view(&client_view);
-                (
-                    client_view.viewed_panes,
-                    client_view.clients,
-                    Some(presence),
-                    true,
-                )
-            }
-            None => match client_view(self.mux, self.session) {
-                Ok(client_view) => {
-                    let presence = presence_sample_from_client_view(&client_view);
-                    (
-                        client_view.viewed_panes,
-                        client_view.clients,
-                        Some(presence),
-                        true,
-                    )
-                }
-                Err(_) if self.mux == MuxName::Zellij => {
-                    let (viewed, clients, presence) = prior_client_view();
-                    (viewed, clients, presence, false)
-                }
-                Err(_) => (Vec::new(), Vec::new(), None, false),
-            },
-        };
+        let (viewed_panes, client_views, presence, client_view_resolved) =
+            frame_client_view(pushed_client_view, prior, self.mux, || {
+                client_view(self.mux, self.session)
+            });
         let (mut frame, diagnostics) =
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                 panes,
@@ -1541,7 +1533,7 @@ fn excerpt(value: &str, max_bytes: usize) -> String {
 }
 
 fn presence_sample_due(frame: &PaneFrame, probe_at_ms: Option<u64>, now_ms: u64) -> bool {
-    let Some(sample) = frame.presence else {
+    let Some(sample) = &frame.presence else {
         return false;
     };
     let sampled_or_probed_at_ms = probe_at_ms
@@ -1557,6 +1549,8 @@ fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &Presen
         Some(prior) => {
             prior.last_input_ms != sample.last_input_ms
                 || prior.human_clients != sample.human_clients
+                || prior.client_input_ms != sample.client_input_ms
+                || prior.client_views != sample.client_views
         }
         None => true,
     }

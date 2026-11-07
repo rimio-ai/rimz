@@ -344,7 +344,11 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     wait_frame(
         &env.runtime_paths(),
         |frame| {
-            frame.client_views.is_empty() && frame.presence.is_some_and(|p| p.human_clients == 0)
+            frame.client_views.is_empty()
+                && frame
+                    .presence
+                    .as_ref()
+                    .is_some_and(|p| p.human_clients == 0)
         },
         "host resolves full detach before the hold starts",
     );
@@ -388,7 +392,11 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     wait_frame(
         &env.runtime_paths(),
         |frame| {
-            frame.client_views.is_empty() && frame.presence.is_some_and(|p| p.human_clients == 0)
+            frame.client_views.is_empty()
+                && frame
+                    .presence
+                    .as_ref()
+                    .is_some_and(|p| p.human_clients == 0)
         },
         "host resolves the second full detach",
     );

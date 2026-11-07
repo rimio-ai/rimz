@@ -458,13 +458,7 @@ pub struct ClientView {
 
 impl ClientView {
     pub fn attended_until(&self, pane: &PaneId, hold: Duration) -> Option<u64> {
-        let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
-        self.clients
-            .iter()
-            .filter(|client| client.pane_id == *pane)
-            .filter_map(|client| self.presence.client_input_ms.get(&client.client_id))
-            .map(|input| input.saturating_add(hold_ms))
-            .max()
+        crate::pane::attended_until(&self.clients, &self.presence.client_input_ms, pane, hold)
     }
 
     /// Resolve fresh attached-client evidence only when every observation names

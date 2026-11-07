@@ -142,6 +142,9 @@ pub struct SidebarSnapshot {
     /// Full native attached-client observations for focus action fencing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub client_views: Vec<crate::pane::ClientPaneView>,
+    /// Per-pane input hold deadlines from the frame's attached-client sample.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub typing_until: HashMap<PaneId, Timestamp>,
     /// Mux session that produced the pane/client frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_session_name: Option<String>,
@@ -416,6 +419,7 @@ impl SidebarSnapshot {
             panes_observed_at_ms: None,
             viewed_panes: Vec::new(),
             client_views: Vec::new(),
+            typing_until: HashMap::new(),
             pane_session_name: None,
             focused_pane: None,
             presence: None,

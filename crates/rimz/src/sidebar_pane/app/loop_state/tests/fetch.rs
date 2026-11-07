@@ -290,10 +290,14 @@ fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
     let sample = crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(100),
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms: 100,
     };
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::classify(
-        sample, 199, 100,
+        sample.clone(),
+        199,
+        100,
     ));
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::classify(
@@ -982,6 +986,8 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(seed.now.as_millisecond() as u64),
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms: seed.now.as_millisecond() as u64,
     });
     let fold = WorkspaceFold {

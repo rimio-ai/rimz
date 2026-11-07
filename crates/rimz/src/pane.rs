@@ -12,7 +12,9 @@ pub mod keys;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::ids::{AgentKind, AgentSessionId, MuxClientId, PaneId, ViewKind};
 
@@ -21,6 +23,22 @@ use crate::ids::{AgentKind, AgentSessionId, MuxClientId, PaneId, ViewKind};
 pub struct ClientPaneView {
     pub client_id: MuxClientId,
     pub pane_id: PaneId,
+}
+
+/// Latest input-plus-hold deadline among attached clients viewing this pane.
+pub(crate) fn attended_until(
+    clients: &[ClientPaneView],
+    client_input_ms: &BTreeMap<MuxClientId, u64>,
+    pane: &PaneId,
+    hold: Duration,
+) -> Option<u64> {
+    let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
+    clients
+        .iter()
+        .filter(|client| client.pane_id == *pane)
+        .filter_map(|client| client_input_ms.get(&client.client_id))
+        .map(|input| input.saturating_add(hold_ms))
+        .max()
 }
 
 impl Ord for ClientPaneView {
