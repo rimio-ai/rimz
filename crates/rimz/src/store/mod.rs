@@ -47,6 +47,7 @@ pub mod live_roster;
 pub mod message;
 pub(crate) mod notes;
 pub(crate) mod pending_recovery;
+pub mod raised;
 pub mod run;
 pub mod runtime;
 pub(crate) mod session_death;
@@ -354,6 +355,12 @@ impl Store {
     }
 
     fn cached_snapshot(&self) -> Result<SidebarSnapshot> {
+        let mut snapshot = self.cached_snapshot_raw()?;
+        raised::attach(&mut snapshot.agents, self.paths());
+        Ok(snapshot)
+    }
+
+    fn cached_snapshot_raw(&self) -> Result<SidebarSnapshot> {
         let pending = self.pending_hook_events();
         let memo = self.frame_read(&pending)?;
         if let Some(mut memo) = memo {

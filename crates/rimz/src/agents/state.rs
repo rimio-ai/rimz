@@ -49,6 +49,37 @@ pub struct QueuedAsk {
     pub since: Timestamp,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaisedAskState {
+    Armed,
+    Open,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RaisedAsk {
+    pub ask_id: AskId,
+    pub state: RaisedAskState,
+    pub raised_at: Timestamp,
+    pub basis_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardAlert {
+    pub text: String,
+    pub raised_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_by: Option<String>,
+}
+
 fn is_zero_usize(n: &usize) -> bool {
     *n == 0
 }
@@ -1124,6 +1155,10 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop: Option<PendingIdleStop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_ask: Option<RaisedAsk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alert: Option<CardAlert>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hibernation: Option<Hibernation>,
     /// Background shells this session is running, folded from adapter hook
     /// reports and carried forward; cleared when the session ends or
@@ -1497,6 +1532,8 @@ impl AgentState {
             due_messages: 0,
             hibernation: None,
             idle_stop: None,
+            raised_ask: None,
+            alert: None,
             background_shells: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
