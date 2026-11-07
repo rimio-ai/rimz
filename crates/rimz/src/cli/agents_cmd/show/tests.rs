@@ -85,6 +85,7 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
     state.mode = Some(PermissionMode::Auto);
     state.waiting_since = Some(since);
     state.open_ask = Some(rimz::agents::OpenAsk {
+        extra_questions: 0,
         id: rimz::ids::AskId::new(),
         kind: rimz::agents::AskKind::Permission,
         detail: Some("approve this?".to_owned()),
@@ -324,6 +325,7 @@ fn card_projection_show_ask_next_step_uses_supported_or_pane_route() {
         state.status = AgentStatus::Waiting;
         state.waiting_since = Some(state.last_activity);
         state.open_ask = Some(rimz::agents::OpenAsk {
+            extra_questions: 0,
             id: "ask_0123456789abcdef".parse().unwrap(),
             kind,
             detail: Some("approve this?".into()),

@@ -115,6 +115,7 @@ fn card_projection_status_honors_card_and_rowless_demotion() {
 fn attention_uses_ask_age_and_error_description() {
     let mut state = agent("claude", "ask", AgentStatus::Waiting, 0);
     state.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: "ask_0123456789abcdef".parse().unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("which strategy?".into()),

@@ -170,6 +170,8 @@ pub enum LifecycleSignal {
         ask_id: Option<AskId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+        #[serde(default, skip_serializing_if = "is_zero_usize")]
+        extra_questions: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
     },
@@ -217,6 +219,10 @@ pub enum TerminalDisposition {
     Completed,
     Failed,
     Canceled,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 impl LifecycleSignal {

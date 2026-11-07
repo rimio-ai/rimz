@@ -1171,6 +1171,7 @@ mod tests {
         agent.status = AgentStatus::Waiting;
         agent.waiting_since = Some(since);
         agent.open_ask = Some(rimz::agents::OpenAsk {
+            extra_questions: 0,
             id: rimz::ids::AskId::new(),
             kind: rimz::agents::AskKind::Permission,
             detail: None,

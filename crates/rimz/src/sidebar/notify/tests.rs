@@ -279,6 +279,7 @@ fn projected_ask_rows_notify_as_waiting() {
     let mut agent = agent("a1", AgentStatus::Waiting, false);
     agent.waiting_since = Some(agent.last_activity);
     agent.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: AskKind::Question,
         detail: Some("Choose?".to_owned()),

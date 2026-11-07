@@ -120,6 +120,7 @@ fn ask_id_resolution_includes_waiting_subagents_in_every_scope() {
     child.waiting_since = Some(now);
     child.parent_agent_id = Some(rimz::ids::AgentSessionId::from("parent"));
     child.open_ask = Some(rimz::agents::OpenAsk {
+        extra_questions: 0,
         id: ask_id.clone(),
         kind: AskKind::Question,
         detail: None,

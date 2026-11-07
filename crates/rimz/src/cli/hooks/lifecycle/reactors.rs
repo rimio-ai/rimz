@@ -142,6 +142,7 @@ mod tests {
                 turn_id: None,
             },
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: rimz::agents::AskKind::Question,
                 ask_id: None,
                 detail: None,

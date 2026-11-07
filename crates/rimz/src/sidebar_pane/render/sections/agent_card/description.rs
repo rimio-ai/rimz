@@ -47,10 +47,11 @@ pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'
 }
 
 /// The open ask while waiting, led by its first question and word-wrapped over
-/// at most two lines with an ellipsis for omitted text. Other descriptions keep
-/// their single full-width line. Rich context metadata wins the fallback; for Codex that
-/// is thread `name`, then app-server `preview`. Named sessions and live task/prompt fallbacks keep the row
-/// labelled when richer metadata is absent. An idle agent with nothing to show
+/// at most two lines with an ellipsis for omitted text, then ` +N` for extra questions.
+/// Other descriptions keep their single full-width line. Rich context metadata
+/// wins the fallback; for Codex that is thread `name`, then app-server `preview`.
+/// Named sessions and live task/prompt fallbacks keep the row labelled when
+/// richer metadata is absent. An idle agent with nothing to show
 /// yet contributes no line; any non-idle empty description falls to an em dash.
 /// A turn that failed or paused on a provider API error takes the line over the
 /// fall-through — the soft upstream error text (`turn_error_label`, quoted
@@ -65,21 +66,36 @@ pub(super) fn description_lines(
     attention: CardAttention,
 ) -> Vec<Line<'static>> {
     let width = content_width(ctx.width);
-    let Some(ask) = row.as_agent().and_then(AgentCard::open_ask) else {
+    let Some((ask, extra_questions)) = row
+        .as_agent()
+        .and_then(|agent| agent.open_ask().map(|ask| (ask, agent.extra_questions)))
+    else {
         let mut spans = vec![Span::raw("  ")];
         spans.extend(description_spans(ctx, row, attention));
         return vec![Line::from(trim_spans_to_width(spans, width))];
     };
     let text = question_sentence(ask);
+    let suffix = if extra_questions > 0 {
+        format!(" +{extra_questions}")
+    } else {
+        String::new()
+    };
     let wrap_width = width.saturating_sub(2);
-    let mut lines = wrap_words(text, wrap_width);
+    // The count wraps as the text's last word, so only the line it lands on
+    // gives up its width.
+    let counted = format!("{text}{suffix}");
+    let mut lines = wrap_words(&counted, wrap_width);
     let omitted = lines.len() > 2
-        || text
+        || counted
             .split_whitespace()
             .any(|word| text_width(word) > wrap_width);
-    lines.truncate(2);
-    if omitted && let Some(last) = lines.last_mut() {
-        *last = ellipsize(&format!("{last}…"), wrap_width);
+    if omitted {
+        lines = wrap_words(text, wrap_width);
+        lines.truncate(2);
+        if let Some(last) = lines.last_mut() {
+            let budget = wrap_width.saturating_sub(text_width(&suffix));
+            *last = format!("{}{suffix}", ellipsize(&format!("{last}…"), budget));
+        }
     }
     lines
         .into_iter()

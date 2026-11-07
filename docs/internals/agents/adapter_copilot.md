@@ -27,7 +27,7 @@ Every installed command has the form `RIMZ_AGENT_PID=$PPID rimz hooks feed --sou
 | --- | --- | --- | --- |
 | `sessionStart` | lifecycle | `TurnStarted` when `initialPrompt` is non-empty, else `Registered` | `source` `startup` or `new` marks `SessionOrigin::Fresh`. `resume` keeps the existing lineage |
 | `userPromptSubmitted` | lifecycle | `TurnStarted` | the sanitized `prompt` becomes the row's task and prompt |
-| `preToolUse`, matcher `ask_user` | awaiting-user (`Question`) | `AwaitingInput` | question text from the call's arguments, see [Tool payloads](#tool-payloads-and-the-post-tool-edge) |
+| `preToolUse`, matcher `ask_user` | awaiting-user (`Question`) | `AwaitingInput` | first line of the question text from the call's arguments, see [Tool payloads](#tool-payloads-and-the-post-tool-edge) |
 | `preToolUse`, any other tool | lifecycle | `ToolUsed`, not mutating | only a hook file with no matcher sends these |
 | `notification` with `notification_type` `elicitation_dialog` | awaiting-user (`Question`) | `AwaitingInput` | `message` is the detail. Every other notification type produces no signal |
 | `postToolUse`, `postToolUseFailure` | lifecycle | `ToolUsed` | mutation and edit flags, and the command key |

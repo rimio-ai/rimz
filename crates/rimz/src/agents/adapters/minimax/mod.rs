@@ -395,6 +395,7 @@ impl HookCapability for MiniMaxAdapter {
                 turn_id,
             },
             "PermissionRequest" => LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,

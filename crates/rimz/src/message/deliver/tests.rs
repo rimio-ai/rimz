@@ -843,6 +843,7 @@ fn waiting_dwell_starts_when_permission_review_becomes_visible() {
     watched.mode = Some(crate::agents::PermissionMode::Auto);
     watched.waiting_since = Some(at);
     watched.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: None,

@@ -99,6 +99,7 @@ impl HookCapability for OmpAdapter {
             }
             "tool_call" | "tool_approval_requested" => {
                 ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind,
                     ask_id: None,
                     detail,

@@ -887,12 +887,7 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
-        let ask_detail = questions
-            .first()
-            .and_then(|question| question.question.lines().next())
-            .map(ToOwned::to_owned)
-            .filter(|detail| !detail.is_empty());
-        decoded.set_ask(questions, ask_detail);
+        decoded.set_ask(questions, None);
         decoded.set_turn_error(transcript.turn_error.clone());
         decoded.set_final_message(match &hook {
             CodexHook::Stop(stop) => stop
@@ -1923,6 +1918,7 @@ fn map_codex_lifecycle_signal(
 ) -> Option<LifecycleSignal> {
     let errored = || stop_payload_errored(payload) || turn_error.is_some();
     let awaiting = |kind| LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
         kind,
         ask_id: None,
         detail: None,

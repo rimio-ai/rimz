@@ -319,6 +319,7 @@ fn keyed_launched_child_keeps_parent_card_attention_after_activity() {
     child.launch_depth = Some(1);
     child.waiting_since = Some(ago(60));
     child.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: None,

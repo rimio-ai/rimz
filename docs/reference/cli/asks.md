@@ -90,7 +90,7 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
 | `kind` | `permission`, `plan_approval`, or `question`. |
 | `delivery` | `blocking` owns the agent's input; `async` is a question the agent asks while continuing its turn. |
 | `since` | When the prompt opened. |
-| `detail` | A one-line summary of the prompt, such as a permission ask's tool call. `null` when the agent recorded none. |
+| `detail` | The shared prompt summary: the first line of the first structured question, otherwise the recorded summary, such as a permission ask's tool call. `null` when the agent recorded none. |
 | `context` | The message the agent wrote just before raising the prompt. Absent when it wrote none, and always absent on permission asks. |
 | `questions[].question` | The question text. |
 | `questions[].options[].label` | The option label, which `answer` accepts as a selector. |

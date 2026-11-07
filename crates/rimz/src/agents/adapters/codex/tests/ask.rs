@@ -6,6 +6,31 @@ use crate::pane::keys::NamedKey;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn taken_question_summary_uses_first_line_without_a_suffix() {
+    let mut output = crate::agents::testkit::hook_output(
+        &super::super::CodexAdapter,
+        "PreToolUse",
+        &json!({
+            "session_id": "sess-1",
+            "tool_name": "request_user_input",
+            "tool_input": {"questions": [{"question": "Which route?\nMore context"}]}
+        }),
+    );
+    let crate::agents::LifecycleSignal::AwaitingInput {
+        detail,
+        extra_questions,
+        ..
+    } = output.take_lifecycle().unwrap().signal
+    else {
+        panic!("question wait")
+    };
+    assert_eq!(
+        (detail.as_deref(), extra_questions),
+        (Some("Which route?"), 0)
+    );
+}
+
+#[test]
 fn async_reply_envelopes_keep_known_ids_and_suppress_legacy_prompts() {
     use crate::agents::testkit::hook_observation;
     let native_key = json!(["request_user_input_async", "call", 0]).to_string();

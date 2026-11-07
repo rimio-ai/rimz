@@ -22,6 +22,7 @@ fn native_events_keep_turn_identity_and_map_without_tool_fallbacks() {
         (
             "PermissionRequest",
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,

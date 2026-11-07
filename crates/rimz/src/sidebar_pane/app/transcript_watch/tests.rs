@@ -189,6 +189,7 @@ fn newly_rostered_permission_rechecks_an_already_read_completion() {
         &state,
         "permission",
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: Some(crate::ids::AskId::new()),
             detail: None,

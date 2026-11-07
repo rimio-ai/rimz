@@ -280,6 +280,7 @@ impl HookCapability for HermesAdapter {
                 ask_id: None,
                 detail: None,
                 native_key: optional_payload_string(extra, &["request_id"]),
+                extra_questions: 0,
             },
             "on_human_input_resolved" => LifecycleSignal::AskResolved {
                 native_key: optional_payload_string(extra, &["request_id"]),

@@ -16,11 +16,8 @@ pub(super) fn record_lifecycle_observation(
     let Some(mut observation) = decoded.take_lifecycle() else {
         return Ok(None);
     };
-    if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
+    if let LifecycleSignal::AwaitingInput { ask_id, .. } = &mut observation.signal {
         ask_id.get_or_insert_with(rimz::ids::AskId::new);
-        if detail.is_none() {
-            *detail = decoded.ask_detail().map(ToOwned::to_owned);
-        }
     }
     if let Some(edit) = &mut observation.ask_queue {
         let prior = observation

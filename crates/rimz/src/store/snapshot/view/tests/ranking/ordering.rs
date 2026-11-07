@@ -79,6 +79,7 @@ fn closed_permissions_do_not_rank_as_waiting() {
         closed.mode = Some(crate::agents::PermissionMode::Auto);
         closed.waiting_since = Some(ago(90));
         closed.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: None,
@@ -123,6 +124,7 @@ fn auto_review_permission_listing_ranks_with_running_until_visible() {
         review.mode = Some(crate::agents::PermissionMode::Auto);
         review.waiting_since = Some(ago(age));
         review.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: None,

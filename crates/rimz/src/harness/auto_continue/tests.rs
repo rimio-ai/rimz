@@ -1491,6 +1491,7 @@ fn turn_ended_waiting_permission_only_nudges_auto_mode() {
         agent.status = AgentStatus::Waiting;
         agent.waiting_since = Some(agent.last_activity);
         agent.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: Some("shell: cargo test".to_owned()),

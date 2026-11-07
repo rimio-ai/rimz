@@ -472,6 +472,7 @@ fn client_snapshots_fold_status_without_resetting_turn_evidence() {
                 row.compaction_retired = true;
                 row.waiting_since = Some(ago(4));
                 row.open_ask = Some(crate::agents::OpenAsk {
+                    extra_questions: 0,
                     id: crate::ids::AskId::new(),
                     kind: lifecycle::AskKind::Permission,
                     detail: None,

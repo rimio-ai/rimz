@@ -283,6 +283,7 @@ fn wait_attention_handles_round_trip_beside_teamless_role_rivals() {
     for signal in [
         LifecycleSignal::TurnStarted { turn_id: None },
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,

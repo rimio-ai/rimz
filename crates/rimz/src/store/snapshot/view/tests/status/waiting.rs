@@ -9,6 +9,7 @@ fn completed_permission_cell_projects_root_and_child_as_running() {
         session.mode = Some(crate::agents::PermissionMode::Auto);
         session.waiting_since = Some(ago(age));
         session.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: None,
@@ -55,6 +56,7 @@ fn turn_ending_capacity_error_releases_root_permission() {
     session.mode = Some(crate::agents::PermissionMode::Auto);
     session.waiting_since = Some(session.last_activity);
     session.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
         id: crate::ids::AskId::new(),
         kind: crate::agents::AskKind::Permission,
         detail: Some("shell: cargo test".to_owned()),
@@ -90,6 +92,7 @@ fn codex_auto_permission_card_and_ladder_wait_for_review() {
         session.mode = Some(crate::agents::PermissionMode::Auto);
         session.waiting_since = Some(ago(age));
         session.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: Some("shell: cargo test".to_owned()),

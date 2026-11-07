@@ -436,6 +436,7 @@ fn notification_signal(notification: &DroidNotification) -> Option<LifecycleSign
         return Some(LifecycleSignal::TurnInterrupted { turn_id: None });
     }
     Some(LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
         kind: notification.ask_kind()?,
         ask_id: None,
         detail: notification.message.clone(),

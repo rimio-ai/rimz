@@ -628,6 +628,7 @@ mod tests {
         source.mode = Some(crate::agents::PermissionMode::Auto);
         source.waiting_since = Some(at);
         source.open_ask = Some(crate::agents::OpenAsk {
+            extra_questions: 0,
             id: crate::ids::AskId::new(),
             kind: crate::agents::AskKind::Permission,
             detail: None,

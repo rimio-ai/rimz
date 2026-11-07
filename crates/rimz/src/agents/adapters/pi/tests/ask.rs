@@ -21,6 +21,50 @@ fn ask_payload() -> Value {
     })
 }
 
+#[test]
+fn taken_questionnaire_summary_uses_first_question_and_extra_count() {
+    let mut payload = ask_payload();
+    payload["tool_input"]["questions"] = json!([
+        {"question": "Which route?\nMore context"}, {"question": "When?"}
+    ]);
+    let mut output = decode("tool_call", &payload);
+    let LifecycleSignal::AwaitingInput {
+        detail,
+        extra_questions,
+        ..
+    } = output.take_lifecycle().unwrap().signal
+    else {
+        panic!("question wait")
+    };
+    assert_eq!(
+        (detail.as_deref(), extra_questions),
+        (Some("Which route?"), 1)
+    );
+}
+
+#[test]
+fn taken_dialog_summary_keeps_its_title() {
+    let mut output = decode(
+        "ui_prompt_start",
+        &json!({
+            "session_id": "sess-1", "ui_prompt_title": "  Allow this?  ",
+            "ui_prompt_id": "ui_prompt:1", "has_ui": true
+        }),
+    );
+    let LifecycleSignal::AwaitingInput {
+        detail,
+        extra_questions,
+        ..
+    } = output.take_lifecycle().unwrap().signal
+    else {
+        panic!("dialog wait")
+    };
+    assert_eq!(
+        (detail.as_deref(), extra_questions),
+        (Some("Allow this?"), 0)
+    );
+}
+
 fn ask_question(option_count: usize, multi_select: bool, has_option_previews: bool) -> AskQuestion {
     AskQuestion {
         question: "Choose?".to_owned(),
@@ -37,6 +81,7 @@ fn questionnaire_opens_only_with_ui_and_closes_on_tool_end() {
     assert_eq!(
         signal("tool_call", &ask_payload()),
         Some(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
@@ -440,6 +485,7 @@ fn extension_dialog_waits_until_its_own_prompt_end() {
     assert_eq!(
         wait,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: Some("Allow rm -rf build?".to_owned()),

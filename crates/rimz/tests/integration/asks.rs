@@ -24,6 +24,7 @@ fn codex_auto_review_hides_list_but_preserves_explicit_ask() {
         let mut observation = AgentLifecycleObservation::new(
             Some("review".into()),
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: Some(ask_id.clone()),
                 detail: Some("shell: cargo test".to_owned()),
@@ -1179,6 +1180,7 @@ fn read_open_ask_rejects_ineligible_state_before_external_reads() {
 
     let mut not_waiting = AgentState::stub("unknown", "sess-not-waiting", AgentStatus::Idle);
     not_waiting.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::parse("ask_0123456789abcdef").expect("ask id"),
         kind: AskKind::Question,
         detail: Some("Ignored question".to_owned()),

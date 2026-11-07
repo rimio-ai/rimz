@@ -1238,11 +1238,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         let ask_detail = if matches!(hook, ClaudeHook::PermissionRequest(_)) {
             super::question::permission_detail(payload)
         } else {
-            questions
-                .first()
-                .and_then(|question| question.question.lines().next())
-                .map(ToOwned::to_owned)
-                .filter(|detail| !detail.is_empty())
+            None
         };
         decoded.set_ask(questions, ask_detail);
         decoded.set_native_answers(match &hook {
@@ -1707,6 +1703,7 @@ fn map_claude_lifecycle_signal(
             .blocking_tool_kind(request.tool_name.as_deref())
             .is_none()
             .then_some(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -1722,6 +1719,7 @@ fn map_claude_lifecycle_signal(
         ClaudeHook::PreToolUse(request) => {
             match spec.blocking_tool_kind(request.tool_name.as_deref()) {
                 Some(kind) => Some(LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind,
                     ask_id: None,
                     detail: None,

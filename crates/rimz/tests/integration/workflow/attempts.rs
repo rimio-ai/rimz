@@ -1615,6 +1615,7 @@ impl Room {
         let observation = rimz::agents::AgentLifecycleObservation::new(
             Some(source.agent_id.clone()),
             rimz::agents::LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: ask.kind,
                 ask_id: Some(ask.id.clone()),
                 detail: ask.detail.clone(),

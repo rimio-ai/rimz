@@ -373,6 +373,7 @@ fn actionable_asks_put_the_blocking_prompt_before_queued_questions() {
     let first = AskId::new();
     let blocking = AskId::new();
     agent.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: blocking.clone(),
         kind: AskKind::Permission,
         detail: None,
@@ -1803,6 +1804,7 @@ fn auto_review_permission() -> AgentState {
     agent.mode = Some(crate::agents::PermissionMode::Auto);
     agent.waiting_since = Some(agent.last_activity);
     agent.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::new(),
         kind: AskKind::Permission,
         detail: Some("shell: cargo test".to_owned()),
@@ -2198,6 +2200,7 @@ fn waiting_without_answer_evidence_stays_waiting() {
     }
     agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
     agent.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: AskKind::Question,
         detail: None,
@@ -2314,6 +2317,7 @@ fn keyed_wait_outranks_newer_activity_while_keyless_wait_self_clears() {
     let mut keyed = test_agent(AgentStatus::Waiting, 1_010);
     keyed.waiting_since = Some(waiting_since);
     keyed.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: AskKind::Question,
         detail: Some("Which route?".to_owned()),
@@ -2337,6 +2341,7 @@ fn an_admitted_interruption_marker_releases_a_waiting_ask() {
     let mut keyed = test_agent(AgentStatus::Waiting, 1_000);
     keyed.waiting_since = Some(waiting_since);
     keyed.open_ask = Some(OpenAsk {
+        extra_questions: 0,
         id: AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: AskKind::Question,
         detail: Some("Which route?".to_owned()),

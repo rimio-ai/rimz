@@ -57,6 +57,7 @@ fn terminal_disposition_table_pins_every_signal() {
         ),
         (
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: crate::agents::lifecycle::AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -1220,6 +1221,7 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         (tool(true), "tool_used"),
         (
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Question,
                 ask_id: None,
                 detail: None,

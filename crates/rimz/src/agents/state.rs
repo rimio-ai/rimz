@@ -25,14 +25,16 @@ use super::lifecycle::{
 use super::observation::AgentUsageSummary;
 
 /// Durable identity and summary for the blocking prompt currently owning an
-/// agent's input. Structured question detail stays in the transcript and joins
-/// by `id`; this projection is the authoritative openness record.
+/// agent's input, including its extra-question count. Full questions and options
+/// stay in the transcript and join by `id`; this is the authoritative openness record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAsk {
     pub id: AskId,
     pub kind: AskKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub extra_questions: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_key: Option<String>,
     pub since: Timestamp,
@@ -45,6 +47,10 @@ pub struct QueuedAsk {
     pub detail: String,
     pub native_key: String,
     pub since: Timestamp,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1908,6 +1914,7 @@ impl AgentState {
             .chain(self.queued_asks.iter().map(|ask| {
                 (
                     OpenAsk {
+                        extra_questions: 0,
                         id: ask.id.clone(),
                         kind: AskKind::Question,
                         detail: Some(ask.detail.clone()),

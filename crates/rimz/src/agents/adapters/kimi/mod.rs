@@ -381,6 +381,7 @@ fn kimi_root_signal(
                 && !parsed.question_background() =>
         {
             Some(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: super::AskKind::Question,
                 ask_id: None,
                 detail: ask_detail,
@@ -388,6 +389,7 @@ fn kimi_root_signal(
             })
         }
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: adapter
                 .spec()
                 .blocking_tool_kind(parsed.tool_name.as_deref())

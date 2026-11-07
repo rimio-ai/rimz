@@ -482,6 +482,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
             "userPromptSubmitted" => LifecycleSignal::TurnStarted { turn_id: None },
             "notification" if ask_kind == Some(AskKind::Question) => {
                 LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: AskKind::Question,
                     ask_id: None,
                     detail: parsed.message.clone(),
@@ -489,6 +490,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 }
             }
             "permissionRequest" => LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -499,6 +501,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 .blocking_tool_kind(tool.and_then(|tool| tool.name))
             {
                 Some(kind) => LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind,
                     ask_id: None,
                     detail: None,

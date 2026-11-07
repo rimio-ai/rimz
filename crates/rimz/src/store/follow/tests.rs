@@ -116,6 +116,7 @@ fn a_recently_ended_agent_keeps_its_prior_status_on_return() {
             ),
             (
                 LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: crate::agents::AskKind::Permission,
                     ask_id: None,
                     detail: None,
@@ -266,6 +267,7 @@ fn snapshots_update_live_and_replayed_state_without_emitting_edges_or_changing_t
                         },
                         AgentStatus::Running => LifecycleSignal::Compacting,
                         AgentStatus::Waiting => LifecycleSignal::AwaitingInput {
+                            extra_questions: 0,
                             kind: crate::agents::AskKind::Permission,
                             ask_id: Some(crate::ids::AskId::new()),
                             detail: None,
@@ -555,6 +557,7 @@ fn adapter_ask_without_id_does_not_hold_a_sibling_tool_waiting() {
     append(
         &store,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: crate::agents::AskKind::Permission,
             ask_id: None,
             detail: None,

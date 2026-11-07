@@ -404,6 +404,7 @@ fn on_screen_switches_and_background_asks_survive_durable_reap_and_rotation() {
                     "a",
                     3,
                     LifecycleSignal::AwaitingInput {
+                        extra_questions: 0,
                         kind: crate::agents::AskKind::Permission,
                         ask_id: None,
                         detail: None,

@@ -237,6 +237,7 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
             "PermissionRequest",
             "sess-interrupt",
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
@@ -511,6 +512,7 @@ fn auto_review_permission_refuses_steer_and_interrupt_with_review_wording() {
             "PermissionRequest",
             "sess-interrupt",
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: Some(rimz::ids::AskId::new()),
                 detail: Some("shell: cargo test".to_owned()),
@@ -14497,6 +14499,7 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
     let observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(session_id)),
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,

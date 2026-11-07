@@ -372,6 +372,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
                 &json!({"session_id":"s1","tool_name":tool_name})
             ),
             LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind,
                 ask_id: None,
                 detail: None,
@@ -386,6 +387,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
             &json!({"session_id":"s1","tool_name":"ask_user_question","tool_use_id":"ask-1"})
         ),
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
@@ -409,6 +411,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
         assert_eq!(
             observed.map(|observation| observation.signal),
             kind.map(|kind| LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind,
                 ask_id: None,
                 detail: None,

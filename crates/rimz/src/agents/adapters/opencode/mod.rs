@@ -572,18 +572,15 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         let questions = if event_name == "question_ask" {
             super::question::questions(payload, super::question::PreviewPolicy::None)
                 .unwrap_or_default()
-                .into_iter()
-                .take(4)
-                .collect()
         } else {
             Vec::new()
         };
-        let ask_detail = questions
-            .first()
-            .and_then(|question| question.question.lines().next())
-            .map(ToOwned::to_owned)
-            .filter(|detail| !detail.is_empty());
-        decoded.set_ask(questions, ask_detail);
+        let total_questions = questions.len();
+        decoded.set_ask_with_total(
+            questions.into_iter().take(4).collect(),
+            total_questions,
+            None,
+        );
         decoded.set_native_answers(match event_name {
             "permission_replied" => parsed.reply.as_deref().and_then(|reply| {
                 let reply = reply.trim().to_owned();
@@ -624,12 +621,14 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         let signal = match event_name {
             "session_created" | "client_idle" => Some(LifecycleSignal::Registered),
             "permission_ask" => Some(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: parsed.title.clone(),
                 native_key: parsed.request_id.clone(),
             }),
             "question_ask" => Some(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: AskKind::Question,
                 ask_id: None,
                 detail: parsed.title.clone(),
@@ -640,6 +639,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
             }
             "session_idle" if parsed.plan_proposed == Some(true) => {
                 Some(LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
                     kind: AskKind::PlanApproval,
                     ask_id: None,
                     detail: None,

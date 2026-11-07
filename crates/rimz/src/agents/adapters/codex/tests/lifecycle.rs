@@ -236,6 +236,7 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
     assert_eq!(
         observation.signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::PlanApproval,
             ask_id: None,
             detail: None,
@@ -381,6 +382,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(
         permission.signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,
@@ -404,6 +406,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(
         question.signal,
         LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,

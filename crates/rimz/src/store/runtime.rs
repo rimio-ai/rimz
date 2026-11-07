@@ -352,6 +352,7 @@ mod tests {
         }
         rows[2].status = AgentStatus::Waiting;
         let signal = LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
             kind: AskKind::Question,
             ask_id: None,
             detail: None,

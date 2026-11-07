@@ -228,6 +228,7 @@ mod tests {
         assert!(!DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnStarted { turn_id: None }));
         assert!(
             CONDITION_CHECKPOINT.contains(&LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
                 kind: super::super::AskKind::Question,
                 ask_id: None,
                 detail: None,
