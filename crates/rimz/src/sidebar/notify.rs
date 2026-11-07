@@ -323,21 +323,40 @@ impl NotificationState {
                 continue;
             }
             let key = AgentKey::new(opened.agent_kind.clone(), opened.agent_id.clone());
-            if self
-                .last_notified_at_ms
-                .get(&key)
-                .is_some_and(|last| now_ms.saturating_sub(*last) < prefs.debounce_ms)
+            let overlay = snapshot
+                .rows()
+                .find(|row| row.id == opened.row_id)
+                .and_then(|row| row.as_agent())
+                .and_then(|agent| agent.overlay_raised_at)
+                .is_some();
+            if !overlay
+                && self
+                    .last_notified_at_ms
+                    .get(&key)
+                    .is_some_and(|last| now_ms.saturating_sub(*last) < prefs.debounce_ms)
             {
                 continue;
             }
-            if self.pending.iter().any(|pending| pending.key == key) {
+            if overlay {
+                self.pending.retain(|pending| pending.key != key);
+            } else if self.pending.iter().any(|pending| pending.key == key) {
                 continue;
             }
             let mut pending = pending_notification(opened, notification_kind);
-            pending.agent.ask_id =
-                find_agent(&snapshot.agents, &opened.agent_kind, &opened.agent_id)
-                    .and_then(|agent| agent.open_ask.as_ref())
-                    .map(|ask| ask.id.clone());
+            if let Some(agent) = find_agent(&snapshot.agents, &opened.agent_kind, &opened.agent_id)
+            {
+                pending.agent.ask_id = agent.open_ask.as_ref().map(|ask| ask.id.clone());
+                if overlay {
+                    pending.title = format!("RimZ: {} needs you", opened.label);
+                    pending.agent.ask_id = None;
+                    if let Some(alert) = &agent.alert {
+                        pending.body.clone_from(&alert.text);
+                    } else if let Some(ask) = &agent.raised_ask {
+                        pending.body = ask.detail().unwrap_or_default();
+                        pending.agent.ask_id = Some(ask.ask_id.clone());
+                    }
+                }
+            }
             self.pending.push(pending);
         }
 

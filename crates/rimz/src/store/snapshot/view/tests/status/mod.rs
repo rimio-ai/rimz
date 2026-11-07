@@ -4,6 +4,7 @@ mod api_errors;
 mod card_status;
 mod compaction;
 mod native_permission;
+mod raised;
 mod sleeping;
 mod stall;
 mod stuck;

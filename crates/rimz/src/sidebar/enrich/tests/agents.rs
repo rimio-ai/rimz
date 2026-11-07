@@ -118,6 +118,42 @@ fn due_messages_project_every_sender_to_its_card_and_clear_when_queue_is_missing
 }
 
 #[test]
+fn read_receipts_hide_alerts_on_every_fold_without_removing_the_record() {
+    let (_dir, runtime, _) = runtime();
+    let paths = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    let raised_at = Timestamp::now();
+    std::fs::create_dir_all(paths.raised.parent().unwrap()).unwrap();
+    std::fs::write(
+        &paths.raised,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "asks": [], "human_turns": [],
+            "alerts": [{"kind": "claude", "agent_id": "alerted", "text": "look here",
+                "raised_at": raised_at}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let snapshot = SidebarSnapshot::build_with_agents(
+        runtime.workspace_id.clone(),
+        vec![root_agent("claude", "alerted", None)],
+        raised_at,
+    );
+    let before = fold_cached(snapshot.clone(), None, &runtime);
+    assert!(before.agents[0].alert.is_some());
+    crate::sidebar::read_marks::write_read_marks(
+        &runtime,
+        ["alerted".into()],
+        raised_at.as_millisecond(),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let read = fold_cached(snapshot.clone(), None, &runtime);
+        assert!(read.agents[0].alert.is_none());
+    }
+    assert_eq!(crate::store::raised::read(&paths).alerts.len(), 1);
+}
+
+#[test]
 fn cached_enrich_binds_reaped_codex_clear_session() {
     let (_dir, runtime, _) = runtime();
     let now = Timestamp::now();

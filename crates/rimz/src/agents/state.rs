@@ -72,6 +72,19 @@ pub struct RaisedAsk {
     pub options: Vec<String>,
 }
 
+impl RaisedAsk {
+    pub fn detail(&self) -> Option<String> {
+        let text = self.text.as_deref()?;
+        let question = question_sentence(text);
+        let line = if question.ends_with('?') {
+            question
+        } else {
+            text.lines().find(|line| !line.trim().is_empty())?
+        };
+        single_line_prefix(line, 160)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardAlert {
     pub text: String,
@@ -2397,6 +2410,23 @@ impl AgentState {
 /// values. Used at render boundaries.
 pub fn single_line_description(value: &str) -> Option<String> {
     single_line_prefix(value, usize::MAX)
+}
+
+pub(crate) fn question_sentence(text: &str) -> &str {
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        if matches!(ch, '.' | '!' | '?')
+            && chars.peek().is_none_or(|(_, next)| next.is_whitespace())
+        {
+            let end = at + ch.len_utf8();
+            if ch == '?' {
+                return text[start..end].trim();
+            }
+            start = end;
+        }
+    }
+    text
 }
 
 /// [`single_line_description`] cut to at most `max_chars` characters without

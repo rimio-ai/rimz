@@ -175,23 +175,30 @@ impl UnreadEpisodes {
         }
 
         let mut opened = Vec::new();
-        let live_open: BTreeSet<_> = self.episodes.keys().cloned().collect();
         for row in rows.values() {
             let Some(status) = row.status() else {
                 continue;
             };
-            if !status.needs_a_look() || live_open.contains(&row.id) {
+            let overlay = row.as_agent().and_then(|agent| agent.overlay_raised_at);
+            if !status.needs_a_look()
+                || self.episodes.get(&row.id).is_some_and(|episode_ms| {
+                    overlay.is_none_or(|at| at.as_millisecond() <= *episode_ms)
+                })
+            {
                 continue;
             }
-            let episode_at = (status == AgentStatus::Waiting)
-                .then(|| {
-                    snapshot
-                        .agents
-                        .iter()
-                        .find(|agent| agent.kind == row.name && agent.agent_id == row.id)
-                        .and_then(crate::agents::AgentState::permission_review_until)
+            let episode_at = overlay
+                .or_else(|| {
+                    (status == AgentStatus::Waiting)
+                        .then(|| {
+                            snapshot
+                                .agents
+                                .iter()
+                                .find(|agent| agent.kind == row.name && agent.agent_id == row.id)
+                                .and_then(crate::agents::AgentState::permission_review_until)
+                        })
+                        .flatten()
                 })
-                .flatten()
                 .unwrap_or(row.last_activity);
             if receipt_reaches(marks, &row.id, episode_at) {
                 continue;
@@ -528,6 +535,32 @@ mod tests {
         }]
         .into();
         snapshot
+    }
+
+    #[test]
+    fn overlays_reopen_once_at_their_own_stamp_despite_read_activity_or_a_live_episode() {
+        for already_unread in [false, true] {
+            let mut episodes = UnreadEpisodes::default();
+            let marks = ReadMarks::from_entries([("raised".into(), 100)]);
+            let mut initial = snapshot(vec![row("raised", AgentStatus::Success, 50)]);
+            if already_unread {
+                episodes.open_for_row(initial.rows().next().unwrap(), 150);
+            }
+            let row = &mut std::sync::Arc::make_mut(&mut initial.worktree_groups)[0];
+            std::sync::Arc::make_mut(&mut row.rows)[0]
+                .as_agent_mut()
+                .unwrap()
+                .overlay_raised_at = Some(jiff::Timestamp::from_millisecond(200).unwrap());
+            let opened = episodes.reconcile(&mut initial, &marks, false).opened;
+            assert_eq!(opened.len(), 1, "already_unread={already_unread}");
+            assert_eq!(opened[0].episode_ms, 200);
+            assert!(
+                episodes
+                    .reconcile(&mut initial, &marks, false)
+                    .opened
+                    .is_empty()
+            );
+        }
     }
 
     #[test]

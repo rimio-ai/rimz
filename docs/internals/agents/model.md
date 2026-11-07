@@ -327,6 +327,8 @@ A turn-class change must check card and nested-child status and attention (inclu
 
 ### The sidebar ladder
 
+Raised attention uses the same ladder before attention scoring. Native waiting wins first. Otherwise an unread card alert overrides the projected status with `failed` and its text; otherwise an open raised ask lifts only clean `idle` or `success` to `waiting`, with its first question sentence (or first non-blank line), normalized to at most 160 characters. Running, failed, paused, sleeping, and parked-background cards keep their real status for a raised ask. The ask remains available in `rimz asks` regardless. These enrich-only overlays never change native pane-input ownership.
+
 The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs), adds liveness, children, and provider budget windows on top. The first rung whose condition holds decides the displayed status:
 
 | Rung | Condition | Displays |

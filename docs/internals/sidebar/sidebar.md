@@ -313,7 +313,9 @@ The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/s
 
 ### Unread and read receipts
 
-Unread state is a runtime episode set (`lanes/unread.json`) plus one room read-mark record (`live/read-marks/marks.json`). The host opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file and the current marks. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
+A raised ask or alert carries its own `overlay_raised_at` card stamp: the later of an ask's opening time and the card's clean rest (turn end or admitted provider settle marker, the same instant for a self raise), or an alert's raise time. Reconcile uses that instead of activity and replaces an older live episode, so raising attention on an already-read or already-unread card opens one new notification episode. A read during an armed turn, or before an outside raise can display at clean rest, cannot absorb the question that appears afterward. Receipts hide alerts at or before their clear stamp without a store write; marking unread leaves those receipts intact and cannot revive a read alert. Reading a raised ask does not close it.
+
+Unread state is a runtime episode set (`lanes/unread.json`) plus one room read-mark record (`live/read-marks/marks.json`). The host opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches its activity or overlay stamp, and every fold derives `SidebarRow::unread` from that file and the current marks. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
 
 | Action | Effect |
 |---|---|

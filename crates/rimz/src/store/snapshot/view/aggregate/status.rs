@@ -149,7 +149,7 @@ pub(super) fn project_display_status(
             tool_repeat: agent.tool_repeat.as_ref(),
             tool_repeat_attention_after,
         });
-        let projected =
+        let mut projected =
             source_agent.map_or(projected, |state| state.display_rest_status(projected));
         if matches!(effective_status, AgentStatus::Idle | AgentStatus::Success)
             && agent.phase != TurnPhase::Parked
@@ -158,6 +158,28 @@ pub(super) fn project_display_status(
         }
         if let Some(label) = turn_error_label {
             agent.turn_error_label = label;
+        }
+        if let Some(alert) = source_agent.and_then(|state| state.alert.as_ref()) {
+            projected = AgentStatus::Failed;
+            agent.turn_error_label = Some(alert.text.clone());
+            agent.overlay_raised_at = Some(alert.raised_at);
+        } else if matches!(projected, AgentStatus::Idle | AgentStatus::Success)
+            && agent.phase != TurnPhase::Parked
+            && let Some(ask) = source_agent.and_then(|state| state.raised_ask.as_ref())
+        {
+            projected = AgentStatus::Waiting;
+            agent.ask_detail = ask.detail();
+            agent.extra_questions = 0;
+            let opened_at = ask.opened_at.unwrap_or(ask.raised_at);
+            let rested_at = source_agent.and_then(|state| {
+                let context = state.context.as_ref();
+                let marker =
+                    crate::agents::settled_outcome(state.status, context, state.last_activity)
+                        .and_then(|_| context?.settle)
+                        .map(|settle| settle.at);
+                state.turn_ended_at.max(marker)
+            });
+            agent.overlay_raised_at = Some(opened_at.max(rested_at.unwrap_or(opened_at)));
         }
         agent.status = projected;
         if projected != AgentStatus::Running

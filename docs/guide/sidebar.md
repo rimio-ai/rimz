@@ -171,8 +171,8 @@ Every card wears one state, and seven cover the life of a session:
 |-------|-------|---------|-----------|
 | `○` | idle | alive, nothing in flight | no |
 | `⢿` | running | working a turn, waiting on in-flight work, or running a background shell | no |
-| `?` | waiting | stopped mid-task for your answer: a permission, a plan approval, a question | **yes** |
-| `!` | failed | the turn errored, died on a provider API error, or tripped one of RimZ's safety nets | **yes** |
+| `?` | waiting | needs your answer: a permission, a plan approval, a question, or a raised question over a resting card | **yes** |
+| `!` | failed | a manually raised alert, or the turn errored, died on a provider API error, or tripped one of RimZ's safety nets | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload; the description quotes the reason | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
 | `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child; the description names the wait | nothing yet |
