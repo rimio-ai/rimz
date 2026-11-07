@@ -159,6 +159,7 @@ pub(super) fn parse_client_view(
                 .into_iter()
                 .filter_map(|id| Some((MuxClientId::Zellij(id), input_ms(id)?)))
                 .collect(),
+            ..Default::default()
         },
     })
 }

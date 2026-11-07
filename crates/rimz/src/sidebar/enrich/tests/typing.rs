@@ -33,6 +33,7 @@ fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
                 (clients[2].clone(), 110_000),
                 (clients[4].clone(), 300_000),
             ]),
+            ..Default::default()
         },
     };
     let hold = Duration::from_secs(30);
