@@ -1443,6 +1443,81 @@ fn harness_sender_round_trips_with_stable_notice_wire() {
 }
 
 #[test]
+fn open_and_due_covers_status_schedule_conditions_and_internal_lanes() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("real-session", Some("coder"));
+    let base = delivery_message(1, &receiver, DeliveryGate::Done, None);
+    let statuses = [
+        MessageStatus::Queued,
+        MessageStatus::Claimed,
+        MessageStatus::Sent,
+        MessageStatus::Delivered,
+        MessageStatus::TimedOut,
+        MessageStatus::Errored,
+        MessageStatus::Canceled,
+        MessageStatus::Abandoned,
+        MessageStatus::Expired,
+        MessageStatus::Archived,
+    ];
+    let actual = statuses.map(|status| {
+        let mut message = base.clone();
+        message.status = status;
+        message.is_open_and_due(now)
+    });
+    let mut resume = base.clone();
+    resume.gate = DeliveryGate::Resume;
+    let future = base
+        .clone()
+        .with_not_before(Some(now + Duration::from_secs(1)));
+    let after = base
+        .clone()
+        .with_after(vec![after_condition(&receiver, None)]);
+    let when = base.clone().with_when(vec![WhenCondition {
+        kind: receiver.kind.clone(),
+        agent_id: receiver.agent_id.clone(),
+        agent_name: receiver.name.clone(),
+        address: "@coder".to_owned(),
+        status: AgentStatus::Idle,
+        dwell_secs: 0,
+        met_at: None,
+    }]);
+    let mut expired = base
+        .clone()
+        .with_body(MessageBody::Command)
+        .with_automated(true);
+    expired.enqueued_at = now - DEFAULT_COMMAND_VALIDITY;
+    let mut wrap_up = base.clone();
+    wrap_up.soft_compact = Some(SoftCompactStep::WrapUp);
+    let provisional = delivery_message(
+        2,
+        &agent("launch_1", Some("coder")),
+        DeliveryGate::Any,
+        None,
+    );
+    assert_eq!(
+        (
+            actual,
+            [
+                resume.is_open_and_due(now),
+                future.is_open_and_due(now),
+                future.is_open_and_due(now + Duration::from_secs(1)),
+                after.is_open_and_due(now),
+                when.is_open_and_due(now),
+                expired.is_open_and_due(now),
+                wrap_up.is_open_and_due(now),
+                provisional.is_open_and_due(now) && provisional.same_agent_card(&receiver),
+            ]
+        ),
+        (
+            [
+                true, true, false, false, false, false, false, false, false, false
+            ],
+            [true, false, true, false, false, false, false, true]
+        )
+    );
+}
+
+#[test]
 fn queue_head_selects_oldest_deliverable_record_per_lane() {
     let now = Timestamp::now();
     let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
