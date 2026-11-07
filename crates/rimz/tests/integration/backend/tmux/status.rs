@@ -389,6 +389,31 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
             sessions
         );
     }
+    for (config, present, absent) in [
+        ("[room]\nstyle='rimz'", "M-j", &["M-x", "M-y"][..]),
+        (
+            "[sidebar]\nfocus_key='Alt+z'\nzoom_key='off'",
+            "M-z",
+            &["M-x", "M-y", "M-j"][..],
+        ),
+    ] {
+        std::fs::write(env.rimz_home().join("config.toml"), config).unwrap();
+        let result = env.rimz().arg("reload").output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let keys = server.list_keys("root");
+        let has_key = |key: &str| {
+            keys.lines()
+                .any(|line| line.split_whitespace().any(|word| word == key))
+        };
+        assert!(has_key(present), "{keys}");
+        for key in absent {
+            assert!(!has_key(key), "{keys}");
+        }
+    }
     assert!(
         server
             .backend

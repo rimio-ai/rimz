@@ -16,6 +16,7 @@ mod agent_lifecycle;
 mod card_commands;
 mod containment;
 mod hidden_geometry;
+mod keymap;
 mod large_paste;
 mod layout;
 mod pane_io;

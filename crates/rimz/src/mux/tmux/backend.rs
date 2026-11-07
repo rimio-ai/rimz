@@ -846,24 +846,12 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn register_room_key(&self, binding: &super::super::RoomKeyBinding) -> Result<()> {
-        // Root keytable (`-n`): the chord fires from any pane in the server, and
-        // `run-shell -b` runs the focus command off the server so the pane never
-        // blocks. The binding is server-global, so the command resolves the
-        // pressing session at keypress (`#{session_name}`) instead of baking one
-        // room in — a later room registering the same key stays correct for the
-        // first. Re-registering is idempotent: every room writes the same bind.
-        self.cmd()
-            .args([
-                "bind-key".to_owned(),
-                "-n".to_owned(),
-                binding.chord.to_tmux(),
-                "run-shell".to_owned(),
-                "-b".to_owned(),
-                binding.tmux_run_shell_command(),
-            ])
-            .run()
-            .map(|_| ())
+    fn apply_room_keymap(
+        &self,
+        keymap: &crate::config::keys::RoomKeymap,
+        rimz_bin: &Path,
+    ) -> Result<()> {
+        self.apply_keymap(keymap, rimz_bin)
     }
 
     fn capture_pane(

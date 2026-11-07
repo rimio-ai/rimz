@@ -10,7 +10,7 @@ mod capabilities;
 mod command;
 pub mod domain;
 pub mod focus_anchor;
-mod focus_key;
+mod keymap;
 mod mount_proof;
 mod pane_writer;
 mod reconcile;
@@ -29,8 +29,7 @@ pub use capabilities::drops_desktop_osc;
 pub(crate) use capabilities::{lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
-pub use focus_key::RoomKeyBinding;
-pub(crate) use focus_key::register_room_keys;
+pub(crate) use keymap::register_room_keys;
 pub use pane_writer::{PaneWriter, exclude_pane_input};
 use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
@@ -1215,11 +1214,12 @@ pub trait MuxBackend: Send + Sync {
     /// Record the absolute target inherited by sidebars born later in the
     /// session. Zellij layouts read the room override directly.
     fn record_sidebar_width_default(&self, session: &str, cols: u16) -> Result<()>;
-    /// Register a room-wide chord. tmux binds it in the root table; Zellij
-    /// routes it through the presence plugin, so its default is a no-op here.
-    /// Best-effort: a convenience key never blocks a room from opening.
-    fn register_room_key(&self, binding: &RoomKeyBinding) -> Result<()> {
-        let _ = binding;
+    /// Apply a resolved room keymap; Zellij installs it through its plugin.
+    fn apply_room_keymap(
+        &self,
+        _keymap: &crate::config::keys::RoomKeymap,
+        _rimz_bin: &std::path::Path,
+    ) -> Result<()> {
         Ok(())
     }
     /// Fail unless `session`'s authoritative listing holds `pane`. Zellij exits

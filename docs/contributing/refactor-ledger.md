@@ -163,7 +163,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `mux/zellij` | holds; landed pass-28c | `dbf48a52d` | 30 | companion balancer folded into step selection and a boundary walk, one output-error constructor; native convergence stays adapter-side; topology schema is the public wire. Reopened by user decision as a complexity round over the pass-10 hold; `sidebar.rs` width convergence and `reap.rs` not reviewed. |
 | `mux/capabilities` | holds; landed pass-24c | `e083557ba` | 30 | only `drops_desktop_osc` public. |
 | `mux/width` | holds; landed pass-24c | `e083557ba` | 30 | width types named by integration and `cli`. |
-| `mux/focus_key` | holds; landed pass-24c | `e083557ba` | 30 | floored by `MuxBackend::register_room_key`. |
+| `mux/keymap` | holds; landed pass-24c | `e083557ba` | 30 | Room key installation now uses `MuxBackend::apply_room_keymap`; the former per-chord signature floor is gone. |
 | `mux/focus_anchor` | holds; landed pass-24c | `e083557ba` | 30 | pass-18c verdicts hold. |
 | `mux/reconcile` | holds; landed pass-24c | `e083557ba` | 30 | liveness and recovery driven by the integration crate. |
 | `mux/recovery` | holds; landed pass-24c | `e083557ba` | 30 | at the reach its readers need. |

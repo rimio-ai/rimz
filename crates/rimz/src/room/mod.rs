@@ -583,7 +583,7 @@ impl RoomContext {
     fn register_room_keys(&self) {
         crate::mux::register_room_keys(
             self.backend.as_ref(),
-            &self.machine_config.sidebar,
+            &self.machine_config,
             &crate::proc::rimz_exe(),
         );
     }
