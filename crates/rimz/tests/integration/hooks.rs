@@ -21,6 +21,7 @@ use crate::common::{
 mod drain;
 mod minimax;
 mod opencode;
+mod raised;
 
 #[cfg(target_os = "linux")]
 #[test]
