@@ -606,6 +606,8 @@ Four report rows follow their own retention settings:
 
 The owned-class sweep removes a terminal workflow's whole home once its record mtime exceeds the 7-day owned grace, under the workspace lock. Active and parked workflow records are never candidates. A workflow home without its record, which only a crash during creation leaves, goes once the home directory's mtime exceeds the same grace.
 
+For a terminal workflow with kept notes, the CLI supplies an off-lock `history.txt` backfill before home removal. A failed copy keeps that home; after the callback the sweep rereads the run under the workspace lock and checks its state, age, notes path, and sequence again. A dry run does not create the copy. An archive already removed by notes retention or the user is not recreated.
+
 ### Automatic sweeps
 
 The sidebar host is the sole automatic trigger: once a day per room, after a five-minute settle, it runs `rimz gc --unattended`. The helper normally runs room scope. `harness::auto_gc::claim_machine_sweep` elects one machine sweep per 24 hours across the machine, using a stamp check, a nonblocking lock, and a locked stamp recheck, and it holds the guard through the sweep and the stamp write. `disk::paths::machine_auto_gc_stamp` names `cache_dir()/auto-gc.json`, and `RuntimePaths::shared_auto_gc_lock` names the shared runtime `auto-gc.lock`.

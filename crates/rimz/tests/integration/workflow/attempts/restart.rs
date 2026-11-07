@@ -61,6 +61,87 @@ fn agents_restart_clears_a_former_steps_pin_and_stays_outside_the_run() {
 }
 
 #[test]
+fn cancel_during_restart_keeps_the_terminal_history_copy() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let mut owner = dummy_agent_process();
+    let transcript = room.env.project_root.join("session.jsonl");
+    fs::write(&transcript, "{}\n").unwrap();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    super::until::wait_for_advances_to_exit(&room.env, &id);
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    let history = super::super::memory::history_path(&room.env, &id);
+    let mut cancel = room.command(&["workflow", "cancel", &id]);
+    let socket = room.env.runtime_root.join("restart-stop.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut restart = room
+        .command(&["workflow", "restart", &id])
+        .env("RIMZ_TEST_WORKFLOW_STOP_GATE", &socket)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut stopping = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break stream;
+        }
+        assert!(restart.try_wait().unwrap().is_none(), "restart exited");
+        assert!(Instant::now() < deadline, "restart never reached its stop");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let held = records::load(&paths).unwrap();
+    let attempt = held.attempt.as_ref().unwrap();
+    assert!(matches!(
+        &attempt.ending.as_ref().unwrap().cause,
+        records::EndCause::Restart { continued: false }
+    ));
+    assert_eq!(attempt.host.pid, restart.id());
+    assert!(rimz::proc::process_is_live(
+        attempt.host.pid,
+        attempt.host.start.as_deref()
+    ));
+    success(cancel.output().unwrap());
+    let pending = records::load(&paths).unwrap();
+    assert_eq!(
+        pending.state,
+        records::RunState::Active,
+        "cancel must land during the stop: {pending:#?}"
+    );
+    let pending = pending.attempt.as_ref().unwrap();
+    assert_eq!(pending.host, attempt.host);
+    assert_eq!(
+        pending.ending.as_ref().unwrap().cause,
+        records::EndCause::Cancel
+    );
+    assert!(!history.exists(), "cancel must leave the copy to restart");
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    stopping.write_all(&[1]).unwrap();
+    let receipt = success(restart.wait_with_output().unwrap());
+    assert!(
+        receipt.contains("run is canceled; no live replacement"),
+        "{receipt}"
+    );
+    super::super::memory::assert_history_copy(&room.env, &id);
+}
+
+#[test]
 fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
     let room = Room::new("");
     let (id, run) = room.launch();
@@ -212,6 +293,8 @@ fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
 fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
     let room = Room::new("");
     let (id, old) = room.launch();
+    let memory = super::super::memory::history_path(&room.env, &id);
+    fs::write(&memory, "earlier history").unwrap();
     let receipt = success(
         room.command(&["workflow", "restart", &id])
             .output()
@@ -267,6 +350,10 @@ fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
     )
     .unwrap();
     assert_eq!(card.name.as_deref(), Some(handle.trim_start_matches('@')));
+    assert_eq!(fs::read_to_string(&memory).unwrap(), "earlier history");
+    room.hook(&id, &replacement, json!({"hook_event_name":"Stop"}));
+    settled(&room.env, &id, "done");
+    super::super::memory::assert_history_copy(&room.env, &id);
 }
 
 #[test]

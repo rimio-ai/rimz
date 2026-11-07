@@ -32,6 +32,11 @@ pub(super) fn render(
 ) -> Result<()> {
     let journal = records::journal(&run.paths)?;
     let spec = workflow::load_run(&run.paths.home, &run.record);
+    let notes = run
+        .record
+        .notes
+        .as_ref()
+        .map(|relative| run.state.notes_run(paths::Class::AutomationNotes, relative));
     if json {
         let mut value = serde_json::json!({
             "address":run.record.address().to_string(),
@@ -40,9 +45,21 @@ pub(super) fn render(
         if let Ok(spec) = &spec {
             value["warnings"] = serde_json::json!(spec.ignored);
         }
+        if let Some(notes) = notes {
+            value["notes"] = serde_json::json!(notes);
+        }
         return render::json_pretty(&value);
     }
     let spec = spec?;
+    if history && run.record.state.is_terminal() {
+        return workflow_view::history::terminal(
+            &run.record,
+            &spec,
+            &journal,
+            render::prose::Prose::for_stdout(),
+            &mut render::out(),
+        );
+    }
     let view = View {
         record: &run.record,
         paths: &run.paths,
@@ -100,6 +117,9 @@ pub(super) fn render(
         "work dir {}",
         render::home_relative_path(&run.paths.work)
     )?;
+    if let Some(notes) = notes {
+        writeln!(out, "notes {}", notes.display())?;
+    }
     writeln!(
         out,
         "all of it: {}",

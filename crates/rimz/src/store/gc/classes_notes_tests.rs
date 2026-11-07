@@ -15,6 +15,71 @@ fn expire(run: &Path) {
 }
 
 #[test]
+fn terminal_home_removal_requires_a_history_copy_and_calls_the_writer_off_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut actual = Vec::new();
+    for succeeds in [true, false] {
+        let id = crate::ids::WorkflowRunId::new();
+        let at = jiff::Timestamp::now();
+        let relative = notes::allocate(
+            &paths,
+            notes::Kind::Workflow {
+                workflow: "test".into(),
+                run: id.clone(),
+            },
+            home.path(),
+            at,
+        )
+        .unwrap();
+        let record = serde_json::from_value(json!({
+            "version":3,"id":id,"workflow":"test","spec_dir":home.path(),
+            "spec_digest":"test","project_root":home.path(),"notes":relative,
+            "scope":{"kind":"worktree","path":home.path()},"state":"done","node":"build",
+            "created_at":at,"entered_at":at,"terminal_at":at,
+            "deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,
+        }))
+        .unwrap();
+        let guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+        workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+        drop(guard);
+        let run = paths.workflow(&id);
+        fs::File::open(&run.record)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+            .unwrap();
+        let calls = std::cell::Cell::new(0);
+        collect_owned(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(false),
+            &mut GcReport::default(),
+            &|state, record| {
+                calls.set(calls.get() + 1);
+                let _guard = WorkspaceLock::try_acquire(&state.workspace_lock)
+                    .unwrap()
+                    .expect("history rendering must run off-lock");
+                assert!(state.workflow(&record.id).record.exists());
+                if succeeds {
+                    fs::write(
+                        state
+                            .notes_run(Class::AutomationNotes, record.notes.as_ref().unwrap())
+                            .join("history.txt"),
+                        "history",
+                    )
+                    .unwrap();
+                }
+                succeeds
+            },
+        )
+        .unwrap();
+        actual.push((run.home.exists(), calls.get()));
+    }
+    assert_eq!(actual, [(false, 1), (true, 1)]);
+}
+
+#[test]
 fn automation_notes_sweep_reads_workflow_ownership_and_live_launch_records() {
     let home = tempfile::tempdir().unwrap();
     let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();

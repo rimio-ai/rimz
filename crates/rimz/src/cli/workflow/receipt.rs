@@ -26,6 +26,7 @@ pub(super) fn cancel(
         &Host::new(&run.state, globals, None),
         reason,
     )?;
+    write_history_copy(&run.state, &records::load(&run.paths)?)?;
     let address = run.record.address().to_string();
     let mut out = render::out();
     if changed {
@@ -152,6 +153,7 @@ pub(in crate::cli) fn restart(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
+    write_history_copy(&run.state, &record)?;
     let step = restarted
         .session_attempt()
         .map_or(&restarted.node, |attempt| &attempt.node);

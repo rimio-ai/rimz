@@ -122,6 +122,7 @@ pub struct GcPolicy {
     pub team_notes_retention: crate::config::HistoryRetention,
     pub automation_notes_retention: crate::config::HistoryRetention,
     pub team_notes_open: fn(&Path) -> bool,
+    pub workflow_history: fn(&paths::StatePaths, &crate::store::workflow::RunRecord) -> bool,
 }
 
 /// Sweep one room's state and runtime classes without visiting other rooms or shared runtime files.
@@ -360,6 +361,7 @@ mod tests {
             team_notes_retention: crate::config::HistoryRetention::Forever,
             automation_notes_retention: crate::config::HistoryRetention::Forever,
             team_notes_open: |_| false,
+            workflow_history: |_, _| false,
         }
     }
 

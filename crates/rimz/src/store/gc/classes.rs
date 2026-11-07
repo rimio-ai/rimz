@@ -79,7 +79,13 @@ pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<Stri
                 super::collect::collect_locks(&paths.lock_path(""), &mut sweep, &mut report)
             }
             Class::Owned => match &agents {
-                Some(agents) => collect_owned(paths, agents, &mut sweep, &mut report),
+                Some(agents) => collect_owned(
+                    paths,
+                    agents,
+                    &mut sweep,
+                    &mut report,
+                    &policy.workflow_history,
+                ),
                 None => Ok(()),
             },
             Class::Tmp => match &agents {
@@ -465,8 +471,31 @@ fn collect_owned(
     agents: &crate::store::snapshot::AgentRollup,
     sweep: &mut Sweep,
     report: &mut GcReport,
+    preserve_history: &impl Fn(&crate::StatePaths, &crate::store::workflow::RunRecord) -> bool,
 ) -> Result<()> {
     collect_units(&paths.agents_dir, agents, sweep, report)?;
+    let mut histories = std::collections::BTreeSet::new();
+    if !sweep.is_dry_run() {
+        for run in crate::store::workflow::list(paths)? {
+            if !run.state.is_terminal()
+                || !super::collect::is_older_than(
+                    &paths.workflow(&run.id).record,
+                    retention::OWNED_GRACE,
+                )?
+            {
+                continue;
+            }
+            let Some(relative) = &run.notes else {
+                continue;
+            };
+            let copy = paths
+                .notes_run(Class::AutomationNotes, relative)
+                .join("history.txt");
+            if copy.is_file() || preserve_history(paths, &run) {
+                histories.insert((run.id, run.next_seq, relative.clone()));
+            }
+        }
+    }
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
     for run in crate::store::run::list(&paths.runs_dir)? {
         let path = crate::store::run::run_path(&paths.runs_dir, &run.run_id);
@@ -483,6 +512,10 @@ fn collect_owned(
         let home = paths.workflow(&run.id);
         if run.state.is_terminal()
             && super::collect::is_older_than(&home.record, retention::OWNED_GRACE)?
+            && (sweep.is_dry_run()
+                || run.notes.as_ref().is_none_or(|relative| {
+                    histories.contains(&(run.id.clone(), run.next_seq, relative.clone()))
+                }))
         {
             let files = sweep.files_under(&home.home)?.len();
             sweep.remove_tree(&home.home, files, report)?;

@@ -13,4 +13,5 @@ started <clock> by hand · 0 attempts
 │
 trail  <clock> pr pending → @wait · now
 work dir <work>
+notes <notes>
 all of it: rimz workflow show 'review#project' --history
