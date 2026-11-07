@@ -149,7 +149,7 @@ out/<reader>/<wait-name>.output               watched-command output
 locks/*.lock                                  room, workspace, publish, subagent-zone, loop-instances,
                                               loop-run-<name>[-<checkout id>], loop-watch-<name>, lease-gate,
                                               message-sweep, sidebar-launch, snapshot,
-                                              topology-writer, authoritative-pane-probe, focus-anchor,
+                                              topology-writer, authoritative-pane-probe, focus-anchor, typing,
                                               pr-state, diff-stats, budget.fleet, hook-drainer,
                                               hook-drainer-spawn, hook-ingress, lsp-usage, and sidecar locks
 workspace.json                                room record, layout: 2
@@ -231,6 +231,7 @@ lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
 lanes/zellij-input-<session-hash>-<client>.json per-client input clocks
 lanes/room-settings.json                     asserted Zellij session and client settings
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
+lanes/typing.json                            Linux terminal-input timing and non-typing exclusions
 lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state

@@ -6,7 +6,9 @@ To hand work to an agent that is already running, you switch to its pane and typ
 
 Every send becomes a durable record before a byte reaches the pane. A busy agent, a room you close and reopen, or a failed write all leave a record you can read back, with the outcome on it, so nothing you send disappears quietly.
 
-Messages also wait while someone is using the receiving pane, until 30 seconds after that viewing client's last input. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
+Messages also wait for recent input to the receiving pane, until 30 seconds after the last counted input. On Linux, RimZ uses the terminal's input-read time, counts an advance only while a client views that pane, and keeps the hold after you leave it. On other platforms, the hold follows the last input of clients currently viewing the pane. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
+
+Linux terminal times are coarse, in eight-second blocks. RimZ excludes advances within eight seconds after a client arrives or RimZ writes to the pane. Switching panes, losing or regaining terminal focus, and opening or closing RimZ's palette without typing do not raise the pen. A pane or terminal-focus round trip between observations (about a second), a popup you open yourself, or a Zellij focus report within about a second after real input can still count. A first key after quiet can take up to eight seconds to count; continuous typing immediately after an arrival or a RimZ write can take up to about sixteen seconds (about twelve on average). A message can land during that gap. With the default hold, protection ends about 22 to 30 seconds after the last key.
 
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"     # parks: lands when @claude's turn ends
@@ -109,7 +111,7 @@ The agent card's `↧ N` counts open messages that are due, from every sender, n
 
 A parked message delivers the moment the agent can take it, which means all of these hold:
 
-- Nobody viewing its pane has input recent enough to keep the typing hold active.
+- No counted input to its pane is recent enough to keep the typing hold active.
 - Its `--schedule` floor has passed and every `--after` and `--when` condition is met.
 - It is the oldest ready message for that agent. Messages to one agent deliver oldest first, and scheduled or condition-held ones step out of line until they are ready.
 - The agent is not [compacting its context](#compact-before-the-message-lands), and its status opens the `--on` gate.

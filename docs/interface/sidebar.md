@@ -104,7 +104,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
 | `↧ N` (Nerd Font: `󱃚 N`) | N open messages are due for this agent, from any sender; delivery can still be waiting on another gate |
-| `✎` (Nerd Font: `󰏫`) | someone viewing this pane has input recent enough to hold a message sent here now |
+| `✎` (Nerd Font: `󰏫`) | recent counted input would hold a message sent to this pane now |
 | `C 34%` `M 512M` `⇅ 8M/s` | a working process row's CPU, resident memory, and I/O rate |
 | `· not tracked` | a recognized agent pane whose reporting is known to be unavailable |
 | `tip:` | how to enable reporting; the label drops below 32 pane columns |
@@ -444,7 +444,7 @@ This [46-column frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz_
 ▌  ▤ 0                                       ▐
 ```
 
-The count includes queued and claimed messages whose schedule has arrived, whose conditions have been recorded as met, and which have not expired, across all delivery gates and senders. Already-sent and terminal messages do not count. A condition newly true but not yet recorded waits for the next delivery sweep. The pen uses the configured [`typing_hold`](../reference/cli/message.md#when-a-message-lands) window (30 seconds by default); setting it to `"off"` removes the pen. Recent input follows the client currently viewing the pane, including input made before switching to it.
+The count includes queued and claimed messages whose schedule has arrived, whose conditions have been recorded as met, and which have not expired, across all delivery gates and senders. Already-sent and terminal messages do not count. A condition newly true but not yet recorded waits for the next delivery sweep. The pen uses the configured [`typing_hold`](../reference/cli/message.md#when-a-message-lands) window (30 seconds by default); setting it to `"off"` removes the pen. On Linux, counted terminal input belongs to the pane even after its viewer leaves; on other platforms, recent input follows clients currently viewing it. [Messaging](../guide/messaging.md#park-steer-interrupt-or-schedule) explains the Linux timing gaps.
 
 ### Subagents and waits
 
