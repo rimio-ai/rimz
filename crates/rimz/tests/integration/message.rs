@@ -11109,6 +11109,55 @@ fn message_to_bare_pane_keeps_the_harness_smart_compact_line() {
 }
 
 #[test]
+fn message_stores_tuned_smart_compact_unless_the_message_is_explicit() {
+    for (explicit, pane) in [(None, false), (Some("90%"), false), (None, true)] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        register_running_agent(
+            &env,
+            "sess-tuned-line",
+            "feature-tuned",
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        env.store()
+            .append_event(&EventEnvelope::new(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                "agent",
+                "agent.tune",
+                json!({"agent_id": "sess-tuned-line", "setting": "smart-compact", "value": "70%"}),
+            ))
+            .unwrap();
+        let mut command = traced_rimz(&env, "tuned-line.log");
+        let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+        command.env("RIMZ_TEST_PANE_LIST", panes);
+        command.args([
+            "message",
+            if pane { "zellij:terminal_3" } else { "@claude" },
+        ]);
+        if let Some(line) = explicit {
+            command.args(["--smart-compact", line]);
+        }
+        run_success(
+            command.args(["--", "carry the tuned line"]),
+            "queue tuned line",
+        );
+        let messages = env.store().list_messages().unwrap();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(
+            messages[0].auto_compact,
+            Some(AutoCompact::Percent(if explicit.is_some() {
+                90
+            } else {
+                70
+            }))
+        );
+    }
+}
+
+#[test]
 fn message_stores_the_recipients_smart_compact_line() {
     let actual: Vec<_> = [
         ("worker", None, false, None),

@@ -360,7 +360,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::disable_native_idle_compaction_args shares launch-local ownership (+1).
 # AgentTune and TuneOverride carry session-scoped settings through the read model (+2).
 # TuneSetting and AgentTune::apply share the typed parse-and-apply boundary (+2).
-surface-budget = 1272
+# AgentTune keeps override-first runtime policy at the agents boundary.
+# AgentTune's per-key accessors project effective overrides before configured fallback (+3).
+surface-budget = 1275
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2265,7 +2267,13 @@ path = "crates/rimz/src/harness"
 # workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
 # workflow::restart shares the manual agent-step restart transition with the CLI (+1).
 # workflow::condition_now shares live read-only condition answers with CLI inspection (+1).
-surface-budget = 1088
+# ConfiguredValues and SeatPolicy::configured_values expose declared settings to the CLI (+2).
+surface-budget = 1090
+
+[[verdict]]
+kind = "item"
+key = "harness::cache_keepalive::ConfiguredValues"
+reason = "The CLI reads configured seat values without exposing config's crate-private resolvers."
 
 [[verdict]]
 kind = "item"

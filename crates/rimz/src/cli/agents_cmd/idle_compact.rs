@@ -51,9 +51,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         })
         .context("idle-compaction target pane is no longer bound to the agent")?;
 
-    let (Some(occupied_tokens), Some(last_request_at)) =
-        (agent.occupied_context_tokens(), agent.last_request_at())
-    else {
+    let Some(occupied_tokens) = agent.occupied_context_tokens() else {
         return Ok(());
     };
     if request.occupied_tokens != occupied_tokens {
@@ -75,6 +73,16 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     }
     // A freeze can race the snapshot; waking may also outlast the cache window.
     rimz::harness::hibernate::wake_pane(store, &request.pane_id)?;
+    let snapshot = ctx
+        .published_snapshot()
+        .context("rereading idle-compaction delivery snapshot after wake")?;
+    let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
+        .context("idle-compaction target agent is no longer in the rollup")?;
+    let (Some(occupied_tokens), Some(last_request_at)) =
+        (agent.occupied_context_tokens(), agent.last_request_at())
+    else {
+        return Ok(());
+    };
     let now = Timestamp::now();
     let Some((window, expected_command)) = due_compaction(agent, &policy, &config.harness, now)
     else {

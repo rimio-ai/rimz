@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::disk::parse_cache::StampedPath;
 use crate::disk::paths::{self, rimz_home};
+pub(crate) use crate::store::message::AutoCompact;
 
 mod accounts;
 mod agents;

@@ -933,12 +933,14 @@ impl DispatchState<'_> {
                 .as_ref()
                 .or_else(|| target.bound(self.snapshot))
                 .map_or(defaults.harness.smart_compact, |agent| {
-                    SmartCompactSeat::from(agent).resolve(
-                        &defaults.teams,
-                        &defaults.profiles,
-                        &defaults.subagent_profiles,
-                        &defaults.harness,
-                    )
+                    agent.tune.smart_compact().unwrap_or_else(|| {
+                        SmartCompactSeat::from(agent).resolve(
+                            &defaults.teams,
+                            &defaults.profiles,
+                            &defaults.subagent_profiles,
+                            &defaults.harness,
+                        )
+                    })
                 });
         }
         if mode.resuming {

@@ -820,6 +820,31 @@ pub struct AgentTune {
 }
 
 impl AgentTune {
+    pub(crate) fn keep_warm(&self) -> Option<Option<std::time::Duration>> {
+        self.keep_warm.as_ref().map(|setting| match &setting.value {
+            crate::config::KeepWarm::Off => None,
+            crate::config::KeepWarm::For(horizon) => Some(*horizon),
+        })
+    }
+
+    pub(crate) fn idle_compact(&self) -> Option<Option<u64>> {
+        self.idle_compact
+            .as_ref()
+            .map(|setting| match &setting.value {
+                crate::config::IdleCompact::Off => None,
+                crate::config::IdleCompact::Tokens(floor) => Some(*floor),
+            })
+    }
+
+    pub(crate) fn smart_compact(&self) -> Option<Option<crate::config::AutoCompact>> {
+        self.smart_compact
+            .as_ref()
+            .map(|setting| match &setting.value {
+                crate::config::FlipCompact::Off => None,
+                crate::config::FlipCompact::Threshold(line) => Some(*line),
+            })
+    }
+
     /// Parse and apply one setting, retaining budget as an audit-only action.
     pub(crate) fn apply(
         &mut self,
