@@ -64,6 +64,139 @@ mod panes {
     }
 
     #[test]
+    fn launch_inherits_only_the_same_process_incarnation_in_interim_and_final_folds() {
+        let actual = [
+            (Some(2_000), Some(2_000), false, 2_000),
+            (None, Some(2_000), false, 2_000),
+            (Some(2_000), None, false, 2_000),
+            (Some(2_000), Some(4_000), false, 9_000),
+            (Some(2_000), Some(2_000), true, 9_000),
+            (None, None, false, 2_000),
+        ]
+        .map(|(stored_seen, current_seen, agent_tenant, expected)| {
+            let mut stamps = AttentionStamps::default();
+            let mut process = shell("terminal_1", 2_000);
+            process.pane.as_mut().unwrap().pane_process_start = Some(at(2_000));
+            process.pane.as_mut().unwrap().first_seen_at_ms = stored_seen;
+            let mut snapshot = snapshot(vec![
+                card("old", 1_000, AgentStatus::Idle),
+                process.clone(),
+                card("new", 3_000, AgentStatus::Idle),
+            ]);
+            reconcile(&mut stamps, &mut snapshot);
+            if agent_tenant {
+                stamps.panes.get_mut("zellij:terminal_1").unwrap().tenant =
+                    PaneTenant::Agent { active_ms: None };
+            }
+            let mut agent = card("agent", 9_000, AgentStatus::Idle);
+            agent.pane = process.pane;
+            agent.pane.as_mut().unwrap().first_seen_at_ms = current_seen;
+            *row_mut(&mut snapshot, "terminal_1") = agent;
+            snapshot.now = at(12_000);
+            stamps.derive(&mut snapshot);
+            snapshot.sort_groups_for_presentation();
+            let interim = (stamp(&snapshot, "agent"), order(&snapshot));
+            reconcile(&mut stamps, &mut snapshot);
+            let final_fold = (stamp(&snapshot, "agent"), order(&snapshot));
+            snapshot.now = at(13_000);
+            reconcile(&mut stamps, &mut snapshot);
+            let later = (stamp(&snapshot, "agent"), order(&snapshot));
+            let expected_order = if expected == 2_000 {
+                vec!["new".to_owned(), "agent".to_owned(), "old".to_owned()]
+            } else {
+                vec!["agent".to_owned(), "new".to_owned(), "old".to_owned()]
+            };
+            (interim, final_fold, later, (Some(expected), expected_order))
+        });
+        assert_eq!(
+            actual
+                .clone()
+                .map(|(interim, final_fold, later, _)| (interim, final_fold, later)),
+            actual.map(|(_, _, _, expected)| (expected.clone(), expected.clone(), expected))
+        );
+    }
+
+    #[test]
+    fn inherited_launch_still_restamps_on_attention_crossings_and_new_panes_lead() {
+        let mut stamps = AttentionStamps::default();
+        let process = shell("terminal_1", 2_000);
+        let asking = shell("terminal_2", 2_500);
+        let mut snapshot = snapshot(vec![
+            process.clone(),
+            asking.clone(),
+            card("old", 3_000, AgentStatus::Idle),
+        ]);
+        reconcile(&mut stamps, &mut snapshot);
+        let mut agent = card("agent", 9_000, AgentStatus::Idle);
+        agent.pane = process.pane;
+        *row_mut(&mut snapshot, "terminal_1") = agent;
+        let mut waiting = card("waiting", 9_500, AgentStatus::Waiting);
+        waiting.pane = asking.pane;
+        *row_mut(&mut snapshot, "terminal_2") = waiting;
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(
+            [stamp(&snapshot, "agent"), stamp(&snapshot, "waiting")],
+            [Some(2_000), Some(9_500)],
+            "only a calm first sighting inherits the shell's slot"
+        );
+        row_mut(&mut snapshot, "agent")
+            .as_agent_mut()
+            .unwrap()
+            .status = AgentStatus::Waiting;
+        snapshot.now = at(12_000);
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(stamp(&snapshot, "agent"), Some(12_000));
+
+        let mut fresh = card("fresh", 13_000, AgentStatus::Idle);
+        fresh.pane = shell("terminal_3", 13_000).pane;
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows).push(fresh);
+        snapshot.now = at(14_000);
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(stamp(&snapshot, "fresh"), Some(13_000));
+        assert_eq!(order(&snapshot), ["agent", "waiting", "fresh", "old"]);
+    }
+
+    #[test]
+    fn an_unbound_wrapper_row_leaves_the_shell_slot_to_the_bound_card() {
+        let mut stamps = AttentionStamps::default();
+        let process = shell("terminal_1", 2_000);
+        let mut snapshot = snapshot(vec![
+            card("old", 1_000, AgentStatus::Idle),
+            process.clone(),
+            card("new", 3_000, AgentStatus::Idle),
+        ]);
+        reconcile(&mut stamps, &mut snapshot);
+        let mut unbound = card("zellij:terminal_1", 9_000, AgentStatus::Idle);
+        unbound.pane = process.pane.clone();
+        *row_mut(&mut snapshot, "terminal_1") = unbound;
+        snapshot.now = at(11_000);
+        reconcile(&mut stamps, &mut snapshot);
+        assert_eq!(stamp(&snapshot, "zellij:terminal_1"), Some(2_000));
+        assert!(!stamps.cards.contains_key("zellij:terminal_1"));
+        assert_eq!(
+            pane_entry(&stamps, "terminal_1"),
+            serde_json::json!({
+                "tenant": "process", "at_ms": 2_000, "active_ms": 2_000, "seen_ms": 2_000,
+            })
+        );
+
+        let mut bound = card("bound", 9_000, AgentStatus::Idle);
+        bound.pane = process.pane;
+        *row_mut(&mut snapshot, "zellij:terminal_1") = bound;
+        snapshot.now = at(12_000);
+        stamps.derive(&mut snapshot);
+        snapshot.sort_groups_for_presentation();
+        let interim = (stamp(&snapshot, "bound"), order(&snapshot));
+        reconcile(&mut stamps, &mut snapshot);
+        let final_fold = (stamp(&snapshot, "bound"), order(&snapshot));
+        let expected = (
+            Some(2_000),
+            vec!["new".to_owned(), "bound".to_owned(), "old".to_owned()],
+        );
+        assert_eq!([interim, final_fold], [expected.clone(), expected]);
+    }
+
+    #[test]
     fn pane_slot_records_birth_launch_and_exit_and_keeps_the_mixed_order() {
         let mut stamps = AttentionStamps::default();
         let process = shell("terminal_1", 2_000);
@@ -99,9 +232,9 @@ mod panes {
                 serde_json::json!({
                     "tenant": "process", "at_ms": 2_000, "active_ms": 2_000, "seen_ms": 2_000,
                 }),
-                serde_json::json!({"tenant": "agent", "at_ms": 2_100, "seen_ms": 2_000}),
+                serde_json::json!({"tenant": "agent", "at_ms": 2_000, "seen_ms": 2_000}),
                 serde_json::json!({
-                    "tenant": "process", "at_ms": 2_100, "active_ms": 13_000, "seen_ms": 2_000,
+                    "tenant": "process", "at_ms": 2_000, "active_ms": 13_000, "seen_ms": 2_000,
                 }),
             ]
         );
