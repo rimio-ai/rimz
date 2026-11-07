@@ -660,7 +660,7 @@ Supersession comes first. The baseline is `panes_observed_at_ms.or(panes_produce
 The surviving overlays then apply in precedence order:
 
 1. `PaneClosed` deletes rows and clears a listed child's matching pane binding, returning its entry click to the parent. If it names `focused_pane`, the register clears and the renderer keeps its last highlight.
-2. `CommandChanged` overlays the command on panes that survived step 1 and were already admitted.
+2. `CommandChanged` overlays the command on panes that survived step 1 and were already admitted. When that command projects an unbound agent of the existing bound card's own kind, keep the card's name, payload, stamp, and shape while updating its pane command. A process row (exit to the shell) or another agent kind still replaces it.
 3. The newest `FocusChanged` sets or clears the session register, as in the taxonomy. With one observed client, a singleton focus replaces its old `viewed_panes` until the next pull, so the departed tab stops painting at once. Unknown or multiple clients keep the conservative union, and client-view membership changes only on a resolved sample. With one observed client, a singleton focus away from this sidebar also cancels its optimistic resize and focus watching.
 4. A requested focus intent lands last and outranks both the pulled register and `FocusChanged` for `FOCUS_ANCHOR_FRESH` (2.5 seconds), provided its pane is an admitted row's own pane or a listed child's. This presentation overlay adds to `viewed_panes`, not the observed `client_views`, and cannot make a strand's client-ambiguity guard defer repair.
 
