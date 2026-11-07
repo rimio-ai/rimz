@@ -30,6 +30,8 @@ use super::tone_color;
 pub(crate) enum Component {
     /// `◎` sessions glyph — the cockpit summary and the W/M store rows.
     Sessions,
+    /// The active needs-you lens's row count below the make-up buckets.
+    NeedsYouFilter,
     /// The selected worktree's lane bracket spine — the dim selection tone, so
     /// the bracket, band, and bright card spine read as one selection language.
     LaneSpine,
@@ -178,6 +180,7 @@ impl Component {
     /// mapped.
     pub(crate) const ALL: &'static [Component] = &[
         Component::Sessions,
+        Component::NeedsYouFilter,
         Component::LaneSpine,
         Component::EntrySpine,
         Component::WorktreeHeader,
@@ -271,7 +274,7 @@ impl Component {
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
             | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
-            | NotTrackedSuffix | NotTrackedTip | MessageQueued => palette.muted,
+            | NotTrackedSuffix | NotTrackedTip | MessageQueued | NeedsYouFilter => palette.muted,
         })
     }
 }
