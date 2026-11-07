@@ -403,6 +403,7 @@ fn rows_at(
         agents,
         readings,
         &BTreeMap::new(),
+        false,
     )
     .into_iter()
     .filter(|row| matches!(row.kind.as_str(), "claude" | "codex"))
@@ -492,7 +493,7 @@ fn lapsed_entitlement_preserves_setup_repairs() {
         row.status = status;
         row.problem = Some("fix the account setup first".to_owned());
         row.setup_error = None;
-        row.read(Some(&reading), || unreachable!("not a logout"));
+        row.read(Some(&reading), || "the command".to_owned());
         assert_eq!(row.status, status);
         assert_eq!(row.problem.as_deref(), Some("fix the account setup first"));
         let json = serde_json::to_value(&row).unwrap();
@@ -781,6 +782,15 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
         "CLAUDE_CONFIG_DIR='/srv/my alpha' claude"
     );
     assert_eq!(login_command(&login("default"), &ambient), "claude");
+    assert_eq!(
+        start_command(&login("alpha"), &ambient, true),
+        "rimz agents claude --account alpha"
+    );
+    assert_eq!(
+        start_command(&login("alpha"), &ambient, false),
+        login_command(&login("alpha"), &ambient)
+    );
+    assert_eq!(start_command(&login("default"), &ambient, true), "claude");
 
     let reading = |status| LoginReading {
         status,
@@ -802,6 +812,19 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
     assert_eq!(broken.status, AccountStatus::HomeMissing);
     assert_eq!(broken.problem, setup, "the setup problem is fixed first");
     assert_eq!(broken.login, Some(ProviderStatus::LoggedOut));
+
+    // Untrusted hooks yield to a logout: one start asks for both.
+    let mut untrusted = rows().remove(1);
+    untrusted.status = AccountStatus::HooksUntrusted;
+    untrusted.read(Some(&reading(ProviderStatus::LoggedOut)), || {
+        "the command".to_owned()
+    });
+    assert_eq!(untrusted.status, AccountStatus::LoggedOut);
+    assert_eq!(untrusted.setup_error, None);
+    assert_eq!(
+        untrusted.problem.as_deref(),
+        Some("claude account `alpha` is logged out; log in once: the command")
+    );
 
     for (index, kind_name, command) in [
         (1, "alpha", "CLAUDE_CONFIG_DIR=/srv/alpha claude"),

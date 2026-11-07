@@ -14,7 +14,7 @@ use serde::Serialize;
 use super::super::GlobalFlags;
 use super::super::render::{self, KeyVals, cell};
 use super::super::spinner::Spinner;
-use super::{ListArgs, login_command};
+use super::{ListArgs, in_live_room, start_command};
 use rimz::RuntimePaths;
 use rimz::agents::account::{AccountsCache, ProviderRecord, ProviderStatus};
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
@@ -244,6 +244,7 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         agents.as_ref(),
         &readings,
         &errors,
+        in_live_room(globals),
     );
     for row in &mut rows {
         if let Some(report) = reports.iter().find(|report| report.account == row.account) {
@@ -512,8 +513,10 @@ struct AccountRow {
     problem: Option<String>,
     #[serde(skip)]
     setup_error: Option<BirthLoginErr>,
+    /// The command that starts the provider for a logout or an untrusted-hooks
+    /// repair.
     #[serde(skip)]
-    login_command: Option<String>,
+    start_command: Option<String>,
     status: AccountStatus,
     entitlement: Entitlement,
     /// A launch from here uses this account for its kind.
@@ -585,9 +588,14 @@ impl AccountRow {
     }
 
     /// Fold login knowledge into healthy setup; setup problems stand because
-    /// they must be fixed first. Only a confident login leaves it ready.
-    fn read(&mut self, reading: Option<&LoginReading>, login_command: impl FnOnce() -> String) {
+    /// they must be fixed first, except untrusted hooks, which yield to a
+    /// logout: the provider asks for the login and the trust in the same start.
+    /// Only a confident login leaves it ready.
+    fn read(&mut self, reading: Option<&LoginReading>, start_command: impl Fn() -> String) {
         self.login = reading.map(|reading| reading.status);
+        if self.status == AccountStatus::HooksUntrusted {
+            self.start_command = Some(start_command());
+        }
         if self.status == AccountStatus::Ready
             && !matches!(
                 self.login,
@@ -612,18 +620,21 @@ impl AccountRow {
             ));
             return;
         }
-        if self.status == AccountStatus::Ready
-            && reading.status == ProviderStatus::LoggedOut
+        if matches!(
+            self.status,
+            AccountStatus::Ready | AccountStatus::HooksUntrusted
+        ) && reading.status == ProviderStatus::LoggedOut
             && rimz::agents::spec_by_kind(self.kind.as_str())
                 .is_some_and(|spec| !spec.user_coverage.account.is_unsupported())
         {
             self.status = AccountStatus::LoggedOut;
-            let command = login_command();
+            self.setup_error = None;
+            let command = start_command();
             self.problem = Some(format!(
                 "{} account `{}` is logged out; log in once: {}",
                 self.kind, self.account.name, command
             ));
-            self.login_command = Some(command);
+            self.start_command = Some(command);
         }
     }
 
@@ -685,6 +696,10 @@ struct LoginReading {
 
 /// Every known provider account, `default` first,
 /// plus a row for each account some layer selects but nothing declares.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each input is one independent read of the list's position; the test fixtures build them apart"
+)]
 fn account_rows(
     accounts: &AccountsConfig,
     catalog: &LoginCatalog,
@@ -693,6 +708,7 @@ fn account_rows(
     agents: Option<&BTreeMap<LoginKey, AgentStateCounts>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
     errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
+    in_room: bool,
 ) -> Vec<AccountRow> {
     let row = |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| {
         let key = LoginKey {
@@ -713,7 +729,7 @@ fn account_rows(
             entitlement: Entitlement::Ok,
             problem: problem.as_ref().map(ToString::to_string),
             setup_error: problem,
-            login_command: None,
+            start_command: None,
             active: standing.active(kind).as_ref() == Some(name),
             default_for: standing.scopes(kind, name),
             agents: agents.map(|agents| agents.get(&key).map_or(0, AgentStateCounts::total)),
@@ -752,7 +768,9 @@ fn account_rows(
                 login.home_dir(ambient),
                 login.health(ambient).err(),
             );
-            row.read(readings.get(&login.key()), || login_command(login, ambient));
+            row.read(readings.get(&login.key()), || {
+                start_command(login, ambient, in_room)
+            });
             row
         })
         .collect();
@@ -892,16 +910,25 @@ fn write_overview(
                 row.account.to_string()
             };
             let fix = if setup_problem(row) {
-                row.setup_error
-                    .as_ref()
-                    .map_or_else(|| problem.to_owned(), BirthLoginErr::repair)
+                match (&row.setup_error, &row.start_command) {
+                    (
+                        Some(BirthLoginErr::HooksUntrusted {
+                            fix,
+                            env_key: Some(_),
+                            ..
+                        }),
+                        Some(command),
+                    ) => format!("{fix}, started as `{command}`"),
+                    (Some(error), _) => error.repair(),
+                    (None, _) => problem.to_owned(),
+                }
             } else if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
                 format!(
                     "no {} access",
                     render::palette::identity_name(row.kind.as_str())
                 )
             } else {
-                row.login_command.as_ref().map_or_else(
+                row.start_command.as_ref().map_or_else(
                     || problem.to_owned(),
                     |command| format!("log in once: {command}"),
                 )

@@ -743,20 +743,15 @@ pub enum BirthLoginErr {
 }
 
 impl BirthLoginErr {
-    /// A concise repair for listings; configuration errors retain their full context.
+    /// A concise repair for listings; configuration errors retain their full
+    /// context. Untrusted hooks name only the action: the listing knows how the
+    /// user should start a named account's provider.
     pub fn repair(&self) -> String {
         match self {
             Self::MissingHome { kind, name, .. } | Self::HooksMissing { kind, name, .. } => {
                 format!("run {}", home_fix(kind, name))
             }
-            Self::HooksUntrusted {
-                kind,
-                home,
-                env_key,
-                fix,
-                ..
-            } => format!("{fix}{}", started_as(*env_key, home, kind)),
-            Self::HooksDisabled { fix, .. } => fix.to_string(),
+            Self::HooksUntrusted { fix, .. } | Self::HooksDisabled { fix, .. } => fix.to_string(),
             _ => self.to_string(),
         }
     }

@@ -48,6 +48,7 @@ fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        false,
     );
     rows.retain(|row| matches!(row.kind.as_str(), "claude" | "codex"));
     let mut out = anstream::StripStream::new(Vec::new());
@@ -115,7 +116,7 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             machine_default: false,
             problem: None,
             setup_error: None,
-            login_command: None,
+            start_command: None,
             status: AccountStatus::Ready,
             entitlement: report.entitlement,
             active: false,
@@ -497,6 +498,7 @@ fn detail_includes_the_account_home_without_a_pace_legend() {
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        false,
     );
     let reports: Vec<_> = reports
         .into_iter()
@@ -1453,6 +1455,9 @@ fn needs_you_orders_structured_repairs_and_keeps_detail_problems() {
         let mut row = row(kind, name);
         row.status = AccountStatus::of(Some(&error));
         row.problem = Some(error.to_string());
+        if row.status == AccountStatus::HooksUntrusted {
+            row.start_command = Some(format!("rimz agents {kind} --account {name}"));
+        }
         row.setup_error = Some(error);
         rows.push(row);
     }
@@ -1505,7 +1510,7 @@ fn needs_you_orders_structured_repairs_and_keeps_detail_problems() {
     assert!(needs.contains("run rimz hooks install claude"), "{text}");
     assert!(needs.contains("enable hooks"), "{text}");
     assert!(
-        needs.contains("trust hooks, started as `CLAUDE_CONFIG_DIR=/accounts/trust claude`"),
+        needs.contains("trust hooks, started as `rimz agents claude --account trust`"),
         "{text}"
     );
     assert!(needs.contains("no Pi access"), "{text}");
