@@ -21,7 +21,7 @@ A team is staged when it declares `stages` or any role `owns` a stage (`config::
 
 ## The run archive
 
-A staged team's board and notes live in room state, under `team-notes/<run>/`, and the checkout reaches them through the symlink `.rimz/team`. Removing the checkout therefore keeps the notes, and retention and reset of the archive belong to the [store catalog](../store.md#what-is-on-disk). A `blackboard.md` at the checkout root is never read or moved into a run.
+A staged team's board and notes live in room state, under `team-notes/<yyyymmdd>/<run>/`, and the checkout reaches them through the symlink `.rimz/team`. Removing the checkout therefore keeps the notes, and retention and reset of the archive belong to the [store catalog](../store.md#what-is-on-disk). A `blackboard.md` at the checkout root is never read or moved into a run.
 
 ### Registration
 
@@ -33,12 +33,12 @@ A staged team's board and notes live in room state, under `team-notes/<run>/`, a
 | A cohort resume (`crates/rimz/src/launcher/mod.rs::launch_resume_layout`) | `Resume` |
 | A restored team tab in lane restore or rebirth (`crates/rimz/src/harness/resume.rs::materialize_team_restore_tab`) | `Resume` |
 
-It canonicalizes the checkout and takes the [board lock](#the-board-lock) before it inspects or replaces the link. An existing link counts only when it resolves to a directory directly inside this room's `team-notes/` and that directory's `run.json` names the same team. A missing, unreadable, or invalid manifest is never a match. Then the mode decides:
+It canonicalizes the checkout and takes the [board lock](#the-board-lock) before it inspects or replaces the link. An existing link counts only when it resolves to a dated run directory or a legacy flat run directory in this room's `team-notes/` and that directory's `run.json` names the same team. A missing, unreadable, or invalid manifest is never a match. Then the mode decides:
 
 - `Fresh` reuses the linked run unless its board reads `Done`, and otherwise creates a new run. It never searches unlinked archives.
 - `Resume` reuses the linked run whatever its stage. Without one, it relinks the newest run by `created_at` whose manifest names this team and this canonical checkout, and creates a run only when none does.
 
-A new run is named `<UTC %Y%m%dT%H%M%SZ>-<team>-<checkout basename>`. Each name component keeps its first 80 characters, maps every character outside `[A-Za-z0-9_-]` to `-`, trims `-`, and falls back to `run`. A collision appends `-2`, `-3`, and so on. `run.json` is written once: `version`, `team`, `created_at`, `checkout`, and, for a RimZ worktree, its marker's `name`, `branch`, `base_branch`, `from_pr`, and `repo_root`. The link is then replaced atomically with the run's canonical absolute path. Replacing a link never changes the run it pointed at.
+A new run is named `<UTC %Y%m%d>/<%H%M%SZ>-<team>-<checkout basename>`. Each name component keeps its first 80 characters, maps every character outside `[A-Za-z0-9_-]` to `-`, trims `-`, and falls back to `run`. A collision appends `-2`, `-3`, and so on. `run.json` is written once: `version: 2`, `kind: "team"`, `team`, `created_at`, `checkout`, and, for a RimZ worktree, its marker's `name`, `branch`, `base_branch`, `from_pr`, and `repo_root`. A version 1 manifest without `kind` reads as a team. The link is then replaced atomically with the run's canonical absolute path. Replacing a link never changes the run it pointed at.
 
 `register` refuses, with the path and the fix, in four cases (`RegisterErr`):
 

@@ -105,24 +105,25 @@ fn global_keep_warm_config_round_trips_and_rejects_invalid_values() {
 #[test]
 fn team_notes_retention_config_round_trips_and_names_invalid_values() {
     let env = Env::new();
-    let key = "gc.team_notes_retention";
-    for value in ["forever", "30d"] {
-        env.rimz()
-            .args(["config", "set", key, value])
-            .assert()
-            .success();
-        env.rimz()
-            .args(["config", "get", key])
-            .assert()
-            .success()
-            .stdout(contains(value));
-    }
-    for value in ["0d", "never", "30"] {
-        env.rimz()
-            .args(["config", "set", key, value])
-            .assert()
-            .failure()
-            .stderr(contains(key));
+    for key in ["gc.team_notes_retention", "gc.automation_notes_retention"] {
+        for value in ["forever", "30d"] {
+            env.rimz()
+                .args(["config", "set", key, value])
+                .assert()
+                .success();
+            env.rimz()
+                .args(["config", "get", key])
+                .assert()
+                .success()
+                .stdout(contains(value));
+        }
+        for value in ["0d", "never", "30"] {
+            env.rimz()
+                .args(["config", "set", key, value])
+                .assert()
+                .failure()
+                .stderr(contains(key));
+        }
     }
 }
 

@@ -207,6 +207,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
 # transcript_retention = "forever"    # transcript and message history: forever or a positive duration (s/m/h/d)
 # team_notes_retention = "forever"    # whole team-note runs: forever or a positive duration (s/m/h/d)
+# automation_notes_retention = "forever" # workflow and loop notes: forever or a positive duration (s/m/h/d)
 # tmp_grace = "1d"                    # grace for ended agents' temp units (s/m/h/d)
 # tmp_floor_percent = 10              # free-space reserve as a percentage of capacity (0-100)
 # tmp_floor_min = "10GiB"             # minimum free-space reserve; zero both reserves to disable

@@ -77,7 +77,7 @@ fn gc_transcript_retention_expires_both_histories_independently_of_older_than() 
             class.get("bytes_retained").is_some(),
             matches!(
                 class["class"].as_str(),
-                Some("audit" | "transcript" | "team-notes")
+                Some("audit" | "transcript" | "team-notes" | "automation-notes")
             )
         );
     }
@@ -92,24 +92,48 @@ fn team_notes_retention_removes_whole_runs_without_following_links() {
         .root
         .join("team-notes");
     let old = SystemTime::now() - Duration::from_secs(2 * 86_400);
-    for run in ["stale", "fresh", "empty-fresh"] {
-        std::fs::create_dir_all(root.join(run).join("nested")).unwrap();
+    let date = root.join("20261107");
+    for run in ["stale", "fresh", "open", "empty-fresh"] {
+        std::fs::create_dir_all(date.join(run).join("nested")).unwrap();
         if run == "empty-fresh" {
             continue;
         }
         for file in ["blackboard.md", "nested/plan-notes.md"] {
-            let path = root.join(run).join(file);
-            std::fs::write(&path, b"notes").unwrap();
+            let path = date.join(run).join(file);
+            let text = if file == "blackboard.md" {
+                if run == "open" {
+                    "Stage: Build\n"
+                } else {
+                    "Stage: Done\n"
+                }
+            } else {
+                "notes"
+            };
+            std::fs::write(&path, text).unwrap();
             std::fs::File::open(path)
                 .unwrap()
                 .set_modified(old)
                 .unwrap();
         }
-        for dir in [root.join(run).join("nested"), root.join(run)] {
+        let manifest = date.join(run).join("run.json");
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({
+                "version": 2, "kind": "team", "team": "forge",
+                "created_at": "2026-11-07T00:00:00Z", "checkout": env.project_root,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::File::open(manifest)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        for dir in [date.join(run).join("nested"), date.join(run)] {
             std::fs::File::open(dir).unwrap().set_modified(old).unwrap();
         }
     }
-    std::fs::File::open(root.join("fresh/nested/plan-notes.md"))
+    std::fs::File::open(date.join("fresh/nested/plan-notes.md"))
         .unwrap()
         .set_modified(SystemTime::now())
         .unwrap();
@@ -135,18 +159,19 @@ fn team_notes_retention_removes_whole_runs_without_following_links() {
     };
     assert!(read(false)["bytes_retained"].as_u64().unwrap() >= 20);
     assert!(
-        root.join("stale/blackboard.md").exists(),
+        date.join("stale/blackboard.md").exists(),
         "forever retains stale runs"
     );
     write_machine_config(&env, "[gc]\nteam_notes_retention = \"1d\"\n");
     let preview = read(true);
     assert!(preview["files_removed"].as_u64().unwrap() >= 2);
-    assert!(root.join("stale/blackboard.md").exists());
+    assert!(date.join("stale/blackboard.md").exists());
     let actual = read(false);
     assert_eq!(actual, preview);
-    assert!(!root.join("stale").exists());
-    assert!(root.join("fresh/blackboard.md").exists());
-    assert!(root.join("empty-fresh").exists());
+    assert!(!date.join("stale").exists());
+    assert!(date.join("fresh/blackboard.md").exists());
+    assert!(date.join("open/blackboard.md").exists());
+    assert!(date.join("empty-fresh").exists());
     assert_eq!(std::fs::read(outside).unwrap(), b"keep");
 }
 

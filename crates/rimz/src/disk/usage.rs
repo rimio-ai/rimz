@@ -524,7 +524,7 @@ mod tests {
         .unwrap();
         assert!(!room.present);
         assert_eq!((room.entries, room.bytes), (0, 0));
-        assert_eq!(room.folders.len(), 10);
+        assert_eq!(room.folders.len(), 11);
         assert!(room.folders.iter().all(|folder| !folder.present
             && folder.entries == 0
             && folder.bytes == 0

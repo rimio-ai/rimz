@@ -1295,8 +1295,10 @@ fn doctor_does_not_create_state_for_an_unopened_project() {
             assert_eq!(room["present"], false, "{room}");
             assert_eq!(room["entries"], 0, "{room}");
             assert_eq!(room["bytes"], 0, "{room}");
-            let folders = room["folders"].as_array().expect("ten absent folder rows");
-            assert_eq!(folders.len(), 10, "{room}");
+            let folders = room["folders"]
+                .as_array()
+                .expect("eleven absent folder rows");
+            assert_eq!(folders.len(), 11, "{room}");
             assert!(
                 folders.iter().all(|folder| folder["present"] == false
                     && folder["entries"] == 0
@@ -2333,6 +2335,7 @@ fn doctor_audit_json_keeps_measured_disk_bytes() {
             "tmp",
             "shared",
             "team-notes",
+            "automation-notes",
             "out",
             "locks"
         ]
@@ -2353,7 +2356,7 @@ fn doctor_audit_json_keeps_measured_disk_bytes() {
     assert_eq!(
         never_swept,
         [
-            false, false, false, true, false, false, true, true, false, false
+            false, false, false, true, false, false, true, true, true, false, false
         ]
         .map(Some)
     );

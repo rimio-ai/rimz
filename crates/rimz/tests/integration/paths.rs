@@ -61,6 +61,11 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         state.team_notes_dir.to_str(),
         "paths must name the team archive"
     );
+    assert_eq!(
+        report.get("automation_notes").and_then(Value::as_str),
+        state.automation_notes_dir.to_str(),
+        "paths must name the workflow and loop archive"
+    );
     assert_eq!(path_of(&report, "out"), state.root.join("out"));
     assert!(report.get("scratch").is_none());
 
@@ -69,7 +74,8 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         .assert()
         .success()
         .stdout(predicates::str::contains("workspace dir"))
-        .stdout(predicates::str::contains("team notes"));
+        .stdout(predicates::str::contains("team notes"))
+        .stdout(predicates::str::contains("automation notes"));
 }
 
 #[test]

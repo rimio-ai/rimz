@@ -112,6 +112,7 @@ impl StatePaths {
             self.agents_dir.clone(),
             self.room_shared_dir.clone(),
             self.team_notes_dir.clone(),
+            self.automation_notes_dir.clone(),
             self.out_dir.clone(),
             self.skills_dir.clone(),
             self.events_log.clone(),

@@ -140,6 +140,7 @@ pub enum Class {
     Tmp,
     Shared,
     TeamNotes,
+    AutomationNotes,
     Out,
     Sock,
     Live,
@@ -149,7 +150,7 @@ pub enum Class {
 }
 
 impl Class {
-    pub(crate) const STATE: [Self; 10] = [
+    pub(crate) const STATE: [Self; 11] = [
         Self::Log,
         Self::Records,
         Self::Audit,
@@ -158,6 +159,7 @@ impl Class {
         Self::Tmp,
         Self::Shared,
         Self::TeamNotes,
+        Self::AutomationNotes,
         Self::Out,
         Self::Locks,
     ];
@@ -173,6 +175,7 @@ impl Class {
             Self::Tmp => "tmp",
             Self::Shared => "shared",
             Self::TeamNotes => "team-notes",
+            Self::AutomationNotes => "automation-notes",
             Self::Out => "out",
             Self::Sock => "sock",
             Self::Live => "live",
@@ -207,6 +210,7 @@ pub struct StatePaths {
     /// The room tier every agent reads and writes: `<state>/shared`.
     pub room_shared_dir: PathBuf,
     pub team_notes_dir: PathBuf,
+    pub automation_notes_dir: PathBuf,
     /// RimZ-written results, one `<reader>/` directory per agent they report to.
     pub out_dir: PathBuf,
     pub skills_dir: PathBuf,
@@ -364,6 +368,10 @@ impl StatePaths {
         &self.home
     }
 
+    pub fn notes_run(&self, class: Class, relative: &Path) -> PathBuf {
+        class.path_under(&self.root).join(relative)
+    }
+
     /// The machine-wide parent used for empty-dir folder trust.
     pub fn empty_dir_root(&self) -> PathBuf {
         self.empty_root.clone()
@@ -479,6 +487,7 @@ impl StatePaths {
             agents_dir: owned_dir.join("agents"),
             room_shared_dir: Class::Shared.path_under(&root),
             team_notes_dir: Class::TeamNotes.path_under(&root),
+            automation_notes_dir: Class::AutomationNotes.path_under(&root),
             out_dir: Class::Out.path_under(&root),
             skills_dir: cache_dir.join("skills"),
             ssh_config_copies_dir: cache_dir.join("ssh-config"),
