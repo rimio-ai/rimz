@@ -26,6 +26,8 @@ use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 mod list_tests;
 #[path = "loop_overlap.rs"]
 mod overlap_tests;
+#[path = "agents_tune.rs"]
+mod tune_tests;
 
 #[test]
 fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {
@@ -7114,7 +7116,7 @@ fn agent_budget_plain_reports_json_and_overflow() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-budget", "feature-budget");
     let text = loop_ok(&env, &["agents", "budget", "@claude"]);
-    insta::assert_snapshot!(text, @"@claude#main · no cap · set one: rimz agents budget @claude#main 5");
+    insta::assert_snapshot!(text, @"@claude#main · no cap · set one: rimz agents tune @claude#main budget 5");
     let json = loop_ok(&env, &["agents", "budget", "@claude", "--json"]);
     insta::assert_json_snapshot!(serde_json::from_str::<serde_json::Value>(&json).unwrap(), @r#"
     {
@@ -7127,7 +7129,7 @@ fn agent_budget_plain_reports_json_and_overflow() {
     }
     "#);
     let text = loop_ok(&env, &["agents", "budget", "@claude", "5"]);
-    insta::assert_snapshot!(text, @"@claude#main · unknown spend of $5.00 session · not parked · source override · raise: rimz agents budget @claude#main +10 · lift: rimz agents budget @claude#main off");
+    insta::assert_snapshot!(text, @"@claude#main · unknown spend of $5.00 session · not parked · source override · raise: rimz agents tune @claude#main budget +10 · lift: rimz agents tune @claude#main budget off");
     let kind = AgentKind::new_unchecked("claude");
     let id = AgentSessionId::from("sess-budget");
     let mut ledger = rimz::harness::budget::read_ledger(&env.runtime_paths(), &kind, &id).unwrap();

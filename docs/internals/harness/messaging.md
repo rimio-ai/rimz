@@ -106,7 +106,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Soft-compaction wrap-up and continue | `crates/rimz/src/cli/agents_cmd/soft_compact.rs::run`, `agents::soft_compact_prompt` or configured resume text, through `crates/rimz/src/message/soft_compact.rs::send_wrap_up` or `send_continue` | `System` / `Prompt`, tagged `wrap_up` (steer-only) or `continue` (boundary FIFO) |
 | Supervised verification reprompt | `crates/rimz/src/harness/prompt_compose.rs::verify_reprompt`, delivered by `crates/rimz/src/cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
 | Fleet or account budget continuation | `crates/rimz/src/cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
-| Agent budget continuation | `crates/rimz/src/cli/agents_cmd/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
+| Agent budget continuation | `crates/rimz/src/cli/agents_cmd/tune/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Idle compaction | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
 | Stage-flip compaction | `crates/rimz/src/harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
 | Operator compaction | `crates/rimz/src/cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `crates/rimz/src/message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
@@ -633,13 +633,13 @@ Accepted races: observation costs at least the producer tick plus one base-snaps
 
 Idle compaction sends a compact command to a resting seat, solo or team, with no prompt behind it. The point is to compact while the prompt cache is still warm, shortly before it expires. [`harness/idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) owns `due_compaction`, the one decision the producer and the helper share: `SeatPolicy::idle_compact_floor` ([`harness/cache_keepalive.rs`](../../../crates/rimz/src/harness/cache_keepalive.rs)) resolves the seat's token floor, `fire_point` turns it and the provider TTL into an `IdleWindow`, `should_compact` checks eligibility, and a [keep-warm](#prompt-cache-keepalive) hold defers it.
 
-The floor resolves along one path, and an explicit `off` anywhere on it ends the walk:
+An explicit session override replaces the configured floor, including on a launched child. Without one, the floor resolves along one path, and an explicit `off` anywhere on it ends the walk:
 
 1. A TOML team role's `idle-compact`.
 2. The first `idle-compact` up the seat's profile chain. A Markdown role's value rides its role overlay into the synthetic `<team>.<role>` profile, so `RoleBinding.idle_compact` stays `None` there.
 3. `[harness] idle_compact`.
 
-A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) resolves no floor. An agent-launched peer resolves like any other seat.
+A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) resolves no configured floor. An agent-launched peer resolves like any other seat.
 
 A seat is eligible when it is not a provider subagent, has a nonempty session id, and is effectively `Idle` or `Success` with no pending wait, input request, budget park, or compaction marker (`AgentState::compacted_since_prompt`). Occupied context must reach the floor and differ from `last_compact_command_tokens`, and the adapter must expose a compact command. The board stage, PR state, and teammate activity play no part, so a team seat compacts after `Done` like any idle seat. A seat [keep-warm](#prompt-cache-keepalive) holds is skipped, on both the producer pass and the helper recheck, so the two reflexes never race on one cache window.
 
@@ -693,11 +693,11 @@ No team or context-size gate applies. A window missed entirely is skipped for go
 
 ### The keep-warm hold
 
-Keep-warm extends the same reflex to an agent with nothing pending, for a configured horizon after its turn ends. `SeatPolicy` resolves the horizon from the trusted effective definitions and the machine default:
+Keep-warm extends the same reflex to an agent with nothing pending, for a horizon after its turn ends. `SeatPolicy` first uses a session override, which replaces the complete configured rule and drops its `while` clause. Without an override it resolves the horizon from the trusted effective definitions and the machine default:
 
 - A team seat resolves `max` and `while` per field through `Team::keep_warm_with_default`, role over team, then `harness.keep_warm` for an unset `max`; `off` cancels before the fallback can replace it. The profile behind the seat is ignored. `Team::keep_warm` keeps display rows declared-only, without the global default.
 - A solo seat takes its profile's `max`. A TOML profile with no `keep-warm` of its own takes the nearest one up its `agent` base chain, and an explicit `off` stops the walk. Markdown definitions arrive with inheritance resolved. An unset maximum, including on an unnamed seat, takes `harness.keep_warm` (default `off`).
-- A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) never resolves a horizon. An agent-launched peer resolves like any other seat.
+- A `rimz subagents` child (parent and launch depth both set, `AgentState::is_launched_child`) has no configured horizon but honours an explicit session override. An agent-launched peer resolves like any other seat.
 
 The horizon is admitted only when `ping_lifetime` admits the agent's lifetime, under the same margin and floor as sleeping pings. `SeatPolicy::horizon` evaluates a resolved `while` with the shared `WhenExpr` evaluator against the seat's `lane_path`. Only `team.stage` is admitted, at load in `prepare_team`. A false known reading returns no horizon, and an unknown reading passes. A `while` with no resolved maximum takes `harness.cache_keepalive_max` as its horizon, and has none when that cap is off. This includes an explicit `max: off` with an active `while`; an unset `max` first takes the global maximum when enabled.
 

@@ -67,13 +67,13 @@ pub use accounts::{
     AccountBudgetConfigError, AccountCap, AccountCapParseError, AccountHistory, AccountLabelError,
     AccountsConfig, NamedAccount,
 };
+pub(crate) use agents::retired_agents_key;
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
-    CommandsConfig, DONE_STAGE, HibernateConfig, HibernateScheduleErr, Isolation, LaunchPlacement,
-    Profile, ProfilesConfig, PromptSource, RoleBinding, Schedule, SubagentsConfig, Team,
-    TeamSignalBinding, TeamsConfig,
+    CommandsConfig, DONE_STAGE, FlipCompact, HibernateConfig, HibernateScheduleErr, Isolation,
+    LaunchPlacement, Profile, ProfilesConfig, PromptSource, RoleBinding, Schedule, SubagentsConfig,
+    Team, TeamSignalBinding, TeamsConfig,
 };
-pub(crate) use agents::{FlipCompact, retired_agents_key};
 use animation::validate_glyph_cells;
 pub(crate) use animation::{
     AnimationColor, AnimationEffect, AnimationRole, AnimationSpec, AnimationSpeed,

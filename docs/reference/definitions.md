@@ -238,13 +238,17 @@ A selector is `family.event` or `family.*`: the family begins with a lowercase A
 
 Resolution follows the team role's TOML override, then the first setting in the seat's profile chain, then [`harness.smart_compact`](../guide/configuration.md#smart-compaction), whose default is `258k`. A Markdown role's override belongs to its generated seat profile. A supervised child uses its launch profile's namespace, normally the subagent table. An explicit `off` stops inheritance. Unlike `auto-compact`, this field controls RimZ's compaction policy, not the provider's native window.
 
+[`rimz agents tune <AGENT> smart-compact <VALUE>`](./cli/agents.md#tune) replaces this configured resolution for one session; `reset` restores it. An explicit message threshold takes precedence over that override.
+
 The same line drives [mid-turn soft compaction](../guide/loops.md#smart-compaction) and compact-first message delivery to a resting agent. Mid-turn detection resolves current definitions; a queued message retains the line selected at enqueue. `rimz message --smart-compact` changes only that send's line.
 
 ### Idle compaction
 
 `idle-compact` accepts `off` or a positive token count: an integer or a string in digits or `k` such as `100k`, `250000`, or `1000k`, with no `m` suffix and no percentages. A bare YAML `off` (the boolean `false`) means `off`; `true` and `0` are refused. An idle seat compacts once its occupied context reaches the floor; see [idle compaction](../guide/configuration.md#idle-compaction) for the timing, provider defaults, and eligibility.
 
-On a standalone definition it sets the floor for an agent launched from that profile and is inherited through `agent`; a TOML profile inherits it through its `agent` base the same way, and an explicit `off` stops the walk. On a team role it overrides the floor the role's definition carries. Omitted everywhere, the seat uses `harness.idle_compact`, whose default is `100k`. A subagent definition that sets it is refused, since a `rimz subagents` child is never idle-compacted.
+On a standalone definition it sets the floor for an agent launched from that profile and is inherited through `agent`; a TOML profile inherits it through its `agent` base the same way, and an explicit `off` stops the walk. On a team role it overrides the floor the role's definition carries. Omitted everywhere, the seat uses `harness.idle_compact`, whose default is `100k`. A subagent definition that sets it is refused, since a `rimz subagents` child has no configured idle-compaction floor; an explicit runtime tune can supply one.
+
+[`rimz agents tune <AGENT> idle-compact <VALUE>`](./cli/agents.md#tune) replaces this configured floor for one session, including a pane-backed child; `reset` restores it.
 
 ### Keep-warm
 
@@ -255,6 +259,8 @@ Shorthand `6h` means `{ max: 6h }`; shorthand `off` means `{ max: off, while: of
 For team seats, resolve each field separately: role, then team. An unset `max` then takes machine-wide `harness.keep_warm` (default `off`); `while` has no global default. An explicit `off` cancels that field, including the global maximum. A role duration still inherits the team's `while`. Neither field reads the profile behind the seat. No resolved fields means no hold. `max` alone continues through `Done`; add `while: team.stage!=Done` to stop there. A `while` with no resolved maximum uses `harness.cache_keepalive_max` as a finite maximum, including when `max: off` cancels the global; with that cap `off` it holds nothing, and validate warns to set `max`.
 
 Standalone definitions and TOML profiles accept shorthand or a `max`-only block, inherited through `agent`, then fall back to `harness.keep_warm`; a nearer explicit `off` stops inheritance. A seat with no profile name also takes the global value. The global key accepts only duration or `off` shorthand, not a block. Any `while` field is refused on solo profiles, or on an unstaged team: they have no board. Other keys (forge or window readings), undeclared stage values, and malformed conditions are refused at load for teams and roles too. The horizon holds only when the agent's resolved prompt-cache lifetime exceeds `harness.prompt_cache_margin` and is at least `harness.keep_warm_min_ttl` (default `30m`). `rimz agents validate` checks the effective policy, including the global default, against settings, defaults, and the fallback, naming sign-in modes when they differ. It warns at the definition when the lifetime is off or under the floor, or `harness.cache_keepalive` is off; an unknown lifetime means the fallback is off. Lifetime warnings say this is a static check: an agent's own cache writes can change its lifetime. Validate also notes a resolved `max` longer than `harness.cache_keepalive_max`, which caps subsequent pings. A `subagents` definition may carry `max` but no seat reads it, and validate says so; children never inherit the global hold. See [keep-warm](../guide/configuration.md#keep-warm) for what a horizon does and costs.
+
+[`rimz agents tune <AGENT> keep-warm <DURATION|off>`](./cli/agents.md#tune) replaces the complete configured rule for one session, including a pane-backed child; `reset` restores it.
 
 For Pi, an enabled declared horizon also requests the one-hour Anthropic prompt cache at the next launch or restart when cache keepalive is on, unless the user sets the retention. Headless launches and launched children do not request it. See [keep-warm configuration](../guide/configuration.md#keep-warm) for overrides, native-child inheritance, and cache-write pricing.
 

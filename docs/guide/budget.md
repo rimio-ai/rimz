@@ -38,10 +38,11 @@ The cap never reaches the stock CLI: RimZ's own launcher carries it and the room
 Inspect or change a running agent's cap without relaunching:
 
 ```sh
-rimz agents budget @coder         # current spend, cap, window, park state
-rimz agents budget @coder 10      # replace the cap
-rimz agents budget @coder +5      # add headroom
-rimz agents budget @coder off     # remove it; `clear` is an alias
+rimz agents tune @coder budget         # current spend, cap, window, park state
+rimz agents tune @coder budget 10      # replace the cap
+rimz agents tune @coder budget +5      # add headroom
+rimz agents tune @coder budget off     # remove it; `clear` is an alias
+rimz agents tune @coder budget reset   # restore its launch cap, if any
 ```
 
 In a supervised `-p` run the park is also the run's ending: the run records `budget_exceeded` and exits `125`, distinct from a timeout or a failure, so a pipeline branches on it ([scripting](./scripting.md#one-run-one-exit-code)).
@@ -123,7 +124,7 @@ Two honest limits. A cap stops the next spend, never the request already in flig
 - **A new turn does.** A turn-budget park reopens on the next human prompt, which starts a fresh per-turn baseline. Teammate-triggered turns meet the cap too, and agent-to-agent traffic does not reopen an existing park.
 - **You do.** A human message delivered after the park waives that agent's next turn, once; the waiver is consumed when the turn ends. Background and agent-to-agent deliveries stay parked, so a chatty team cannot spend through your cap.
 - **The window does.** A `/day` park reopens at local midnight; an account `/month` park at 00:00 UTC on the next 1st. With [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt waits for the last binding window to reset and goes to agents RimZ interrupted, never to agents that were already at rest.
-- **A raise does.** Raising or clearing a cap (`rimz agents budget @coder +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
+- **A raise does.** Raising or clearing a cap (`rimz agents tune @coder budget +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
 - **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125` and loop fires record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
 
 ## The surplus gate
@@ -146,5 +147,5 @@ The gate applies to loop tasks and nothing else. The recipe, and what a closed g
 - [Loops](./loops.md#keep-the-fleet-moving): auto-continue, task budgets, and hands-off recovery in one loop.
 - [Scripting](./scripting.md): the `-p` exit-code contract, including `125` for a run over budget.
 - [Configuration → dollar budgets](./configuration.md#dollar-budgets): the `harness.turn_budget`, `harness.budget`, and `[accounts.budget]` keys.
-- [Budget reference](../reference/cli/budget.md): the complete `rimz budget` and `rimz agents budget` surface.
+- [Budget reference](../reference/cli/budget.md): the complete `rimz budget` and `rimz agents tune … budget` surface.
 - [Providers internals](../internals/agents/providers.md): spend windows, ledgers, and park mechanics in depth.
