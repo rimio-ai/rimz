@@ -105,8 +105,8 @@ fn show_now_skips_child_checks_and_plain_sleeps_but_reads_conditional_sleeps() {
         "run='true'",
         "shell='true'",
         "agent='claude'\nsummary='Review the work'\nprompt-file='judge.md'",
-        "sleep='1000000d'\nthen='@done'",
-        "sleep='1000000d'\nthen='@done'\nwhen=['team.stage=Done']",
+        "sleep='365d'\nthen='@done'",
+        "sleep='365d'\nthen='@done'\nwhen=['team.stage=Done']",
     ] {
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[checks.gate]\n{runner}\n"

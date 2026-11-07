@@ -115,6 +115,8 @@ pub enum TimeInputErr {
         #[source]
         source: ParseIntError,
     },
+    #[error("duration `{value}` is longer than the {maximum} maximum")]
+    DurationTooLong { value: String, maximum: String },
     #[error("invalid 24-hour time `{value}`; use HH:MM")]
     InvalidClockTime { value: String },
 }

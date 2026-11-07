@@ -91,8 +91,10 @@ pub struct Limit {
 }
 
 pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::time::TimeInputErr> {
-    use crate::utils::time::{DurationUnit, parse_duration_units};
-    parse_duration_units(
+    use crate::utils::time::{
+        DurationUnit, TimeInputErr, format_duration_compact, parse_duration_units,
+    };
+    let duration = parse_duration_units(
         raw,
         &[
             DurationUnit::Second,
@@ -100,7 +102,15 @@ pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::t
             DurationUnit::Hour,
             DurationUnit::Day,
         ],
-    )
+    )?;
+    let maximum = std::time::Duration::from_secs(365 * 86_400);
+    if duration > maximum {
+        return Err(TimeInputErr::DurationTooLong {
+            value: raw.to_owned(),
+            maximum: format_duration_compact(maximum),
+        });
+    }
+    Ok(duration)
 }
 
 impl Limit {

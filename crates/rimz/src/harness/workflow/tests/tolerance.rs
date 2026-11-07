@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 const SIMPLE: &str =
     "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
@@ -645,6 +646,149 @@ fn wrong_typed_live_routes_refuse_but_dead_routes_warn() {
         })
         .collect::<Vec<_>>();
     assert!(actual.iter().all(|(matches, _)| *matches), "{actual:#?}");
+}
+
+#[test]
+fn workflow_duration_limit_is_one_year_inclusive() {
+    for raw in ["365d", "8760h"] {
+        assert_eq!(
+            super::super::spec::duration(raw).unwrap(),
+            Duration::from_secs(365 * 86_400)
+        );
+    }
+    for raw in ["366d", "8761h", "3000000d"] {
+        let result = super::super::spec::duration(raw);
+        assert!(
+            result.is_err(),
+            "{raw} must exceed the workflow duration maximum"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("duration `{raw}` is longer than the 365d maximum")
+        );
+    }
+}
+
+#[test]
+fn overlong_optional_durations_warn_and_are_dropped() {
+    let sleep = "[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='365d'\n\
+                 when=['pr=merged']\nfor='VALUE'\nthen='@done'\n";
+    let cases = [
+        (
+            SIMPLE.to_owned() + "timeout='VALUE'\n",
+            "checks.pick.timeout",
+        ),
+        (
+            CONDITION.replace("when=['pr=merged']", "when=['pr=merged'],for='VALUE'"),
+            "checks.pick.cases.0.for",
+        ),
+        (sleep.to_owned(), "checks.nap.for"),
+        (
+            VALID.to_owned() + "timeout='VALUE'\n",
+            "steps.build.timeout",
+        ),
+        (
+            DELAY.replace("delay='30m'", "delay='VALUE'"),
+            "checks.pick.on.ok.delay",
+        ),
+        (
+            SIMPLE.replace(
+                "start='pick'",
+                "start='pick'\nlimit={max-parallel=1,stagger='VALUE'}",
+            ),
+            "workflow.limit.stagger",
+        ),
+        (
+            VALID.replace(
+                "max-visits = 3",
+                "max-visits = 3\nlimit={max-parallel=1,stagger='VALUE'}",
+            ),
+            "steps.build.limit.stagger",
+        ),
+    ];
+    let mut actual = Vec::new();
+    for (text, path) in cases {
+        for raw in ["366d", "8761h"] {
+            let text = text.replace("VALUE", raw);
+            let spec = loaded(&text).unwrap();
+            let dropped = match path {
+                "checks.pick.timeout" => spec.checks["pick"].timeout.is_none(),
+                "checks.pick.cases.0.for" => spec.checks["pick"].cases[0].hold.is_none(),
+                "checks.nap.for" => spec.checks["nap"].hold.is_none(),
+                "steps.build.timeout" => spec.steps["build"].timeout.is_none(),
+                "checks.pick.on.ok.delay" => spec.checks["pick"].on["ok"].delay().is_none(),
+                "workflow.limit.stagger" => spec.workflow.limit.as_ref().unwrap().stagger.is_none(),
+                "steps.build.limit.stagger" => spec.steps["build"]
+                    .limit
+                    .as_ref()
+                    .unwrap()
+                    .stagger
+                    .is_none(),
+                _ => unreachable!(),
+            };
+            actual.push((
+                path,
+                raw,
+                spec.ignored.iter().any(|issue| {
+                    issue.path == path
+                        && issue.message.contains("ignored field:")
+                        && issue
+                            .message
+                            .contains(&format!("duration `{raw}` is longer than the 365d maximum"))
+                }) && dropped,
+            ));
+            let valid = loaded(&text.replace(
+                raw,
+                if path == "checks.nap.for" {
+                    "364d"
+                } else {
+                    "365d"
+                },
+            ))
+            .unwrap();
+            assert!(
+                !valid.ignored.iter().any(|issue| issue.path == path),
+                "{path}: {:?}",
+                valid.ignored
+            );
+        }
+    }
+    assert!(actual.iter().all(|(_, _, warned)| *warned), "{actual:?}");
+}
+
+#[test]
+fn overlong_sleep_and_command_timeout_refuse_at_their_paths() {
+    let (_home, dir) = fixture();
+    let mut actual = Vec::new();
+    for (text, path) in [
+        (
+            "[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='366d'\nthen='@done'\n",
+            "checks.nap.sleep",
+        ),
+        (
+            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\ntimeout='366d'\nthen='@done'\n",
+            "steps.build.timeout",
+        ),
+    ] {
+        fs::write(dir.join("workflow.toml"), text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        actual.push(report.errors.iter().any(|issue| issue.path == path));
+        if path == "steps.build.timeout" {
+            actual.push(
+                report
+                    .warnings
+                    .iter()
+                    .any(|issue| issue.path == path && issue.message.contains("365d maximum")),
+            );
+        } else {
+            actual.push(report.errors.iter().any(|issue| {
+                issue
+                    .message
+                    .contains("duration `366d` is longer than the 365d maximum")
+            }));
+        }
+    }
+    assert_eq!(actual, [true; 4]);
 }
 
 #[test]

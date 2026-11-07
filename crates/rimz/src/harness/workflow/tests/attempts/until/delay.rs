@@ -101,22 +101,34 @@ fn a_new_turn_discards_a_delay_and_the_next_verdict_gets_its_own_clock() {
 }
 
 #[test]
-fn an_overflowing_delay_keeps_the_session_held() {
-    let text = definition().replace("delay='30m'", "delay='3000000d'");
+fn an_overlong_delay_warns_and_closes_the_session_at_once() {
+    let text = definition().replace("delay='30m'", "delay='366d'");
     let (dir, state, record) = setup(&text);
     check(dir.path(), json!({"outcome":"done"}));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
     host.observed.borrow_mut().turn = Some(turn());
-    let pending = advance_ok(&state, &record.id, &host);
-    assert!(
-        pending.held.is_some(),
-        "an overflowing delay must not close"
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        ended.state,
+        RunState::Done,
+        "an overlong delay must not hold the session"
     );
-    let spec = load(&state.workflow(&record.id).home).unwrap();
-    assert_eq!(close_after(&spec, &pending).unwrap().0, Timestamp::MAX);
-    assert_eq!(advance_ok(&state, &record.id, &host), pending);
-    assert_eq!(host.stops.get(), 0);
+    assert!(ended.held.is_none());
+    assert_eq!(host.stops.get(), 1);
+    let spec =
+        super::super::super::super::spec::load_run(&state.workflow(&record.id).home, &record)
+            .unwrap();
+    assert!(
+        spec.ignored
+            .iter()
+            .any(|issue| issue.path == "checks.pr.on.done.delay"
+                && issue.message.contains("365d maximum")),
+        "{:?}",
+        spec.ignored
+    );
+    assert_eq!(spec.checks["pr"].on["done"].target(), "@done");
+    assert!(spec.checks["pr"].on["done"].delay().is_none());
 }
 
 #[test]
