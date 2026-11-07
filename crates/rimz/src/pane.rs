@@ -188,6 +188,10 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
     if program != "rimz" || tokens.next() != Some("agents") {
         return false;
     }
+    // An option in this position never precedes a verb: `AgentsArgs` sets
+    // `args_conflicts_with_subcommands`, so clap reads the token after an option as the
+    // launch spec (`rimz agents -n 5 logs` launches a spec named `logs`). Only the hidden
+    // retired `--all`/`--json` are not launch flags, and they refuse before any pane draws.
     let Some(spec_or_command) = tokens.next() else {
         return false;
     };
