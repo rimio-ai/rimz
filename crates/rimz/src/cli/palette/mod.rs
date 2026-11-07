@@ -224,7 +224,7 @@ fn run_terminal(ctx: &Ctx, mode: Mode, opener: Option<PaneId>) -> Result<()> {
     terminal.clear()?;
     let config = MachineConfig::load_lenient();
     let theme = PaletteTheme::resolve(&config.theme, rimz::tui::truecolor(), rimz::tui::no_color());
-    let mut state = PaletteState::new(mode, opener);
+    let mut state = PaletteState::new(mode, opener, &ctx.workspace.session_name);
     let mut reader =
         PublishedSnapshotReader::new(ctx.runtime().clone(), &ctx.workspace.session_name, None);
     let mut next_refresh = Instant::now();

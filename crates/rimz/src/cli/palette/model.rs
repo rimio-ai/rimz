@@ -318,7 +318,7 @@ fn command(args: Vec<String>, effect: Effect) -> Entry {
     }
 }
 
-pub(super) fn command_entries(target: Option<&Candidate>) -> Vec<Entry> {
+pub(super) fn command_entries(target: Option<&Candidate>, session: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
     if let Some(target) = target {
         entries.push(command(
@@ -359,6 +359,18 @@ pub(super) fn command_entries(target: Option<&Candidate>) -> Vec<Entry> {
             args.into_iter().map(str::to_owned).collect(),
             Effect::Show,
         ));
+    }
+    for mut args in [
+        vec!["walk".into(), "next".into()],
+        vec!["walk".into(), "prev".into()],
+    ]
+    .into_iter()
+    .chain((1..=9).map(|n| vec!["slot".into(), n.to_string()]))
+    .chain([vec!["last".into()]])
+    {
+        args.insert(0, "sidebar".into());
+        args.extend(["--session-name".into(), session.to_owned()]);
+        entries.push(command(args, Effect::Act));
     }
     entries.push(command(
         vec!["sidebar".into(), "repair".into()],
@@ -429,12 +441,13 @@ pub(super) struct PaletteState {
     pub(super) closed: bool,
     cards: Vec<Candidate>,
     opener: Option<PaneId>,
+    session: String,
     card_target: Option<String>,
     published: bool,
 }
 
 impl PaletteState {
-    pub(super) fn new(mode: Mode, opener: Option<PaneId>) -> Self {
+    pub(super) fn new(mode: Mode, opener: Option<PaneId>, session: &str) -> Self {
         Self {
             query: mode.prefix().to_owned(),
             selected: 0,
@@ -442,6 +455,7 @@ impl PaletteState {
             closed: false,
             cards: Vec::new(),
             opener,
+            session: session.to_owned(),
             card_target: None,
             published: false,
         }
@@ -488,7 +502,7 @@ impl PaletteState {
             .trim();
         let entries = match mode {
             Mode::Cards => return self.card_entries(query),
-            Mode::Commands => command_entries(self.target()),
+            Mode::Commands => command_entries(self.target(), &self.session),
             Mode::Worktrees => self.worktree_entries(),
             Mode::New => {
                 return vec![Entry {

@@ -1,6 +1,121 @@
-//! Palette entry guards without a terminal or a live multiplexer.
+//! Palette guards and printed room commands without a live multiplexer.
+
+use std::num::NonZeroU16;
+use std::time::{Duration, Instant};
+
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::common::Env;
+use crate::common::ssh_trace::{Answers, FakeTerminal};
+
+#[track_caller]
+fn palette_footer(env: &Env, query: &str) -> String {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            ..Default::default()
+        })
+        .unwrap();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.home_root);
+    command.args([
+        "palette",
+        "--mode",
+        "commands",
+        "--session-name",
+        &session,
+        "--mux",
+        "tmux",
+    ]);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let terminal = FakeTerminal::new(pair.master, Duration::ZERO, Answers::StatusOnly);
+    let mut footer = String::new();
+    let mut cursor_replies = 0;
+    for input in ["", query] {
+        terminal.write(input.as_bytes());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let output = terminal.output();
+            let cursor_queries = output
+                .windows(4)
+                .filter(|bytes| *bytes == b"\x1b[6n")
+                .count();
+            while cursor_replies < cursor_queries {
+                terminal.write(b"\x1b[1;1R");
+                cursor_replies += 1;
+            }
+            let mut parser = vt100::Parser::new(
+                NonZeroU16::new(24).unwrap(),
+                NonZeroU16::new(120).unwrap(),
+                0,
+            );
+            parser.process(&output);
+            let screen = parser.screen().contents();
+            let heading = format!("palette: >{input}");
+            footer = screen
+                .lines()
+                .next_back()
+                .unwrap_or_default()
+                .trim_end()
+                .to_owned();
+            let prefix = if input.is_empty() {
+                "$ rimz agents list".to_owned()
+            } else {
+                format!("$ rimz {input} --session-name")
+            };
+            if screen.lines().next().map(str::trim_end) == Some(heading.as_str())
+                && (footer == "nothing to run" || footer.starts_with(&prefix))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "palette did not settle for {input:?}, footer {footer:?}: {screen}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    terminal.write(b"\x1b");
+    assert!(child.wait().unwrap().success());
+    terminal.finish();
+    footer
+}
+
+#[test]
+fn printed_sidebar_navigation_resolves_the_palettes_named_room_off_room() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let mut actual = Vec::new();
+    for verb in ["walk next", "walk prev", "slot 9", "last"] {
+        let footer = palette_footer(&env, &format!("sidebar {verb}"));
+        actual.push(footer);
+    }
+    assert_eq!(
+        actual,
+        ["walk next", "walk prev", "slot 9", "last"]
+            .map(|verb| format!("$ rimz sidebar {verb} --session-name {session}"))
+    );
+    for footer in actual {
+        let args = shlex::split(footer.trim_start_matches("$ ")).unwrap();
+        let output = env
+            .rimz()
+            .current_dir(&env.home_root)
+            .args(["--mux", "tmux"])
+            .args(&args[1..])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("rimz sidebar repair"), "{footer}: {stderr}");
+        assert!(!stderr.contains("no room"), "{footer}: {stderr}");
+    }
+}
 
 #[cfg(target_os = "linux")]
 struct PopupFixture {

@@ -40,9 +40,12 @@ Commands mode names its target above the list. Moving to a card in cards mode ma
 | Process | `pane focus` | Focus it and close on success. |
 | Process | `pane capture` | Show output. |
 | Room | `agents list`, `asks`, `teams list`, `worktree list`, `doctor`, `stats` | Show output. |
+| Room | `sidebar walk next`, `sidebar walk prev`, `sidebar slot 1` through `sidebar slot 9`, `sidebar last` | Navigate cards through the sidebar and close on success. |
 | Every live room | `sidebar repair` | Repair the sidebars of every live room, not only this one, and close on success. |
 
-Every command starts with `rimz`. Card commands use the full `@handle#channel` address. When that would select another agent or none, they use `@<session id>`, and a process or an agent pane with no session yet uses its pane ID. A failed action keeps the palette open with the exit status and first stderr line. Output commands leave the palette view, run in the terminal, and wait for a key before closing. Each command retains its own refusals and checks.
+Every command starts with `rimz`. Card-targeted commands use the full `@handle#channel` address. When that would select another agent or none, they use `@<session id>`, and a process or an agent pane with no session yet uses its pane ID. A failed action keeps the palette open with the exit status and first stderr line. Output commands leave the palette view, run in the terminal, and wait for a key before closing. Each command retains its own refusals and checks.
+
+Sidebar navigation rows carry `--session-name` for the palette's room. They use the sidebar's highlight, not the palette's card target. Walk follows the sidebar's visible roster; slots use the room-wide birth numbers; `last` returns to the view's previous card. See [sidebar cards](./sidebar.md) for their view rules and no-op behaviour. Sidebar close, filter, and reopen are not palette rows.
 
 Card read, unread, and alert marks are shell commands: [`rimz agents mark TARGET read|unread|alert`](./agents.md#mark). They are not palette actions.
 
