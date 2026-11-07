@@ -6,6 +6,7 @@ struct Fixture {
     clients: PathBuf,
     trace: PathBuf,
     panes: PathBuf,
+    tty: PathBuf,
 }
 
 impl Fixture {
@@ -69,14 +70,32 @@ esac"#,
             &frame,
         )
         .unwrap();
+        let tty = env.project_root.join("pane-tty");
+        std::fs::write(&tty, b"").unwrap();
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &env.runtime_paths().lane_path("typing.json"),
+            &serde_json::json!({
+                "panes": {
+                    "tmux:%3": {
+                        "tty": tty,
+                        "atime_s": 1,
+                        "viewers": [rimz::ids::MuxClientId::Tmux("human".into())],
+                        "quiet_until_ms": 0,
+                        "input_ms": null
+                    }
+                }
+            }),
+        )
+        .unwrap();
         let fixture = Self {
             env,
             bin,
             clients,
             trace,
             panes,
+            tty,
         };
-        // A future second leaves at least two seconds for assertions despite tmux's resolution.
+        // A future second leaves at least two seconds for assertions at whole-second resolution.
         fixture.input();
         fixture
     }
@@ -101,11 +120,43 @@ esac"#,
     }
 
     fn input(&self) {
+        let input_s = u64::try_from(jiff::Timestamp::now().as_second()).unwrap() + 1;
+        let quiet_ms = self.typing_record()["panes"]["tmux:%3"]["quiet_until_ms"]
+            .as_u64()
+            .unwrap_or(0);
+        self.tty_input_at(input_s.max(quiet_ms.div_ceil(1_000)));
+        let client_input_s = if cfg!(target_os = "linux") {
+            1
+        } else {
+            input_s
+        };
         std::fs::write(
             &self.clients,
-            format!("human|%3|{}|\n", jiff::Timestamp::now().as_second() + 1),
+            format!("human|%3|{client_input_s}|focused\n"),
         )
         .unwrap();
+    }
+
+    fn tty_input_at(&self, input_s: u64) {
+        std::fs::File::open(&self.tty)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(std::time::UNIX_EPOCH + Duration::from_secs(input_s)),
+            )
+            .unwrap();
+    }
+
+    fn typing_record(&self) -> serde_json::Value {
+        serde_json::from_slice(
+            &std::fs::read(self.env.runtime_paths().lane_path("typing.json")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn clear_input(&self) {
+        self.tty_input_at(1);
+        std::fs::write(&self.clients, "human|%3|1|focused\n").unwrap();
     }
 
     fn short_hold(&self) {
@@ -149,7 +200,7 @@ esac"#,
             .as_millis()
             .max(0) as u64;
         std::thread::sleep(Duration::from_millis(remaining + 20));
-        std::fs::write(&self.clients, "human|%3|1|\n").unwrap();
+        self.clear_input();
     }
 }
 
@@ -386,7 +437,7 @@ fn pushing_a_held_boundary_message_replays_it_in_the_requested_live_mode() {
 #[test]
 fn cancellation_after_pacing_stops_before_any_pane_write() {
     let fixture = Fixture::new(false);
-    std::fs::write(&fixture.clients, "human|%3|1|\n").unwrap();
+    fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "cancel-before-write");
     let child = fixture
         .command()
@@ -465,7 +516,7 @@ fn typing_hold_only_bypasses_for_forced_interrupt_disabled_setting_or_read_failu
 #[test]
 fn input_after_the_pacer_is_seen_before_any_paste_or_sent_record() {
     let fixture = Fixture::new(false);
-    std::fs::write(&fixture.clients, "human|%3|1|\n").unwrap();
+    fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "typing-before-write");
     let child = fixture
         .command()
@@ -497,7 +548,7 @@ fn compact_first_prompt_hold_never_repeats_the_compact() {
     let fixture = Fixture::new(false);
     fixture.short_hold();
     seed_context_fill(&fixture.env, "typing-session", 80);
-    std::fs::write(&fixture.clients, "human|%3|1|\n").unwrap();
+    fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "typing-compact-write");
     let child = fixture
         .command()
@@ -625,7 +676,7 @@ fn input_before_the_compact_command_keeps_the_prompts_compaction_intent() {
     let fixture = Fixture::new(false);
     fixture.short_hold();
     seed_context_fill(&fixture.env, "typing-session", 80);
-    std::fs::write(&fixture.clients, "human|%3|1|\n").unwrap();
+    fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "typing-before-compact");
     let child = fixture
         .command()
@@ -744,4 +795,137 @@ esac"#,
         .flat_map(|kind| [false, true].map(|fail| (kind, fail, true, true, true)))
         .collect();
     assert_eq!(actual, expected);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn counted_terminal_input_keeps_holding_after_the_viewer_leaves() {
+    let fixture = Fixture::new(false);
+    run_success(
+        fixture
+            .command()
+            .args(["message", "--steer", "@claude", "first"]),
+        "count viewed input",
+    );
+    let first = fixture.record();
+    assert_eq!(first.status, MessageStatus::Queued);
+    std::fs::write(&fixture.clients, "human|%4|1|\n").unwrap();
+    run_success(
+        fixture
+            .command()
+            .args(["message", "--steer", "@claude", "second"]),
+        "hold after departure",
+    );
+    let second = fixture
+        .env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.text == "second")
+        .unwrap();
+    assert_eq!(
+        (
+            second.status,
+            second.typing_hold.map(|hold| hold.until),
+            fixture.writes()
+        ),
+        (
+            MessageStatus::Queued,
+            first.typing_hold.map(|hold| hold.until),
+            0
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_advance_with_an_unfocused_client_does_not_hold_delivery() {
+    let fixture = Fixture::new(false);
+    std::fs::write(&fixture.clients, "human|%3|1|attached\n").unwrap();
+    run_success(
+        fixture.command().args(["message", "@claude", "go"]),
+        "unfocused terminal input",
+    );
+    assert_eq!(fixture.record().status, MessageStatus::Sent);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_advance_seen_elsewhere_is_consumed_without_a_hold() {
+    let fixture = Fixture::new(false);
+    let input_s = u64::try_from(jiff::Timestamp::now().as_second()).unwrap();
+    fixture.tty_input_at(input_s);
+    std::fs::write(&fixture.clients, format!("human|%4|{input_s}|\n")).unwrap();
+    run_success(
+        fixture.command().args(["message", "@claude", "go"]),
+        "unviewed input",
+    );
+    let typing = fixture.typing_record();
+    assert_eq!(
+        (
+            fixture.record().status,
+            typing["panes"]["tmux:%3"]["atime_s"].as_u64()
+        ),
+        (MessageStatus::Sent, Some(input_s))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_advance_after_pane_send_is_excluded() {
+    let fixture = Fixture::new(false);
+    run_success(
+        fixture
+            .command()
+            .args(["pane", "send", "tmux:%3", "explicit input"]),
+        "pane send exclusion",
+    );
+    let input_s = u64::try_from(jiff::Timestamp::now().as_second()).unwrap();
+    fixture.tty_input_at(input_s);
+    run_success(
+        fixture.command().args(["message", "@claude", "go"]),
+        "excluded input",
+    );
+    let typing = fixture.typing_record();
+    assert_eq!(
+        (
+            fixture.record().status,
+            typing["panes"]["tmux:%3"]["atime_s"].as_u64()
+        ),
+        (MessageStatus::Sent, Some(input_s))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_record_failures_send_without_falling_back_to_the_client_clock() {
+    let mut actual = Vec::new();
+    for case in ["missing", "stat", "lock"] {
+        let fixture = Fixture::new(false);
+        let lock = fixture.env.runtime_paths().locks_dir.join("typing.lock");
+        let _guard =
+            (case == "lock").then(|| rimz::disk::lock::WorkspaceLock::acquire(&lock).unwrap());
+        if case == "missing" {
+            std::fs::remove_file(fixture.env.runtime_paths().lane_path("typing.json")).unwrap();
+        }
+        if case == "stat" {
+            std::fs::remove_file(&fixture.tty).unwrap();
+        }
+        std::fs::write(
+            &fixture.clients,
+            format!("human|%3|{}|\n", jiff::Timestamp::now().as_second() + 1),
+        )
+        .unwrap();
+        run_success(fixture.command().args(["message", "@claude", "go"]), case);
+        actual.push((case, fixture.record().status, fixture.reads()));
+    }
+    assert_eq!(
+        actual,
+        [
+            ("missing", MessageStatus::Sent, 0),
+            ("stat", MessageStatus::Sent, 0),
+            ("lock", MessageStatus::Sent, 2),
+        ]
+    );
 }

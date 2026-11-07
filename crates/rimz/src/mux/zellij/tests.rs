@@ -2698,17 +2698,21 @@ printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n2 terminal_8
     );
     for view in [direct, listed] {
         assert_eq!(view.presence.last_input_ms(), Some(3_000));
+        let source = crate::mux::typing::InputSource::ClientClocks {
+            clients: &view.clients,
+            input_ms: &view.presence.client_input_ms,
+        };
         assert_eq!(
-            view.attended_until(
+            source.deadline(
                 &PaneId::from(ZellijPaneId::Terminal(7)),
-                Duration::from_secs(30)
+                Some(Duration::from_secs(30))
             ),
             Some(31_000)
         );
         assert_eq!(
-            view.attended_until(
+            source.deadline(
                 &PaneId::from(ZellijPaneId::Terminal(8)),
-                Duration::from_secs(30)
+                Some(Duration::from_secs(30))
             ),
             Some(32_000)
         );
