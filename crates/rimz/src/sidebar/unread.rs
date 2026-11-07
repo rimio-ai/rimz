@@ -224,7 +224,7 @@ impl UnreadEpisodes {
 }
 
 /// Open an unread episode for each row and persist `unread.json` — the one
-/// durable mark-unread write path, shared by the `rimz sidebar mark-unread` CLI
+/// durable manual-unread write path, shared by `rimz agents mark TARGET unread`
 /// and the renderer's `M` key. Each episode opens at `last_activity.max(now_ms)`
 /// so no read receipt can reach it, which keeps the host's reconcile from
 /// pruning it and makes the write safe from any process. Callers
@@ -237,8 +237,7 @@ pub fn mark_rows_unread(
     let mut episodes = UnreadEpisodes::load(runtime);
     // Unread is an agent-row concept: an episode opens on a `needs_a_look`
     // status, so a process row (no status) can never be unread. Skip non-agent
-    // rows so every caller — the renderer's `M` key and `rimz sidebar
-    // mark-unread @process-pane` alike — stays panic-free at `opened_unread`.
+    // rows so the renderer's `M` key stays panic-free at `opened_unread`.
     let opened = rows
         .iter()
         .filter(|row| row.status().is_some())
@@ -780,7 +779,7 @@ mod tests {
     fn mark_rows_unread_skips_process_rows_without_panicking() {
         // `opened_unread` asserts an agent status; a process row carries none.
         // The durable path must skip it rather than unwind, whether the target
-        // came from the `M` key or a `rimz sidebar mark-unread @process-pane`.
+        // came from the renderer's `M` key.
         // (Regression: R1-01.)
         let (_dir, runtime) = runtime();
         let rows = vec![

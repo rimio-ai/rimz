@@ -63,7 +63,7 @@ Focus: target/debug/xtask sandbox in '<root>' -- zellij --session '<session>' ac
 
 Its pane ids read `zellij:terminal_<n>`, and every other command carries `--zellij` in place of `--tmux`.
 
-Look moves the client to the sidebar's tab (`pane focus` on tmux, `go-to-tab` on Zellij). Arriving there arms the tab-read dwell ([`crates/rimz/src/sidebar/timing.rs::TAB_READ_DWELL`](../../crates/rimz/src/sidebar/timing.rs), 2.5 seconds): once the client has stayed that long, every unread card whose agent's pane is on that tab reads. A card marked unread with `sidebar mark-unread` and then looked at through its own tab's sidebar is usually read by the time you capture it, so capture an unread card through a sidebar on another tab.
+Look moves the client to the sidebar's tab (`pane focus` on tmux, `go-to-tab` on Zellij). Arriving there arms the tab-read dwell ([`crates/rimz/src/sidebar/timing.rs::TAB_READ_DWELL`](../../crates/rimz/src/sidebar/timing.rs), 2.5 seconds): once the client has stayed that long, every unread card whose agent's pane is on that tab reads. A card marked unread with `agents mark TARGET unread` and then looked at through its own tab's sidebar is usually read by the time you capture it, so capture an unread card through a sidebar on another tab.
 
 ## Seven checks
 
@@ -434,7 +434,7 @@ jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"SessionStart",session_id:$s,
 jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"UserPromptSubmit",session_id:$s,cwd:$w,prompt:"stale probe"}' | feed hooks feed --source claude
 jq -nc --arg s "$s" '{session_id:$s,model:{id:"claude-sonnet-4-6",display_name:"Sonnet 4.6"},context_window:{context_window_size:200000,used_percentage:20,current_usage:{input_tokens:10000,cache_read_input_tokens:30000,cache_creation_input_tokens:0,output_tokens:100}},cost:{total_cost_usd:0.01}}' | feed statusline feed --source claude
 jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,last_assistant_message:"done"}' | feed hooks feed --source claude
-rz sidebar mark-read '@coder#probe'
+rz agents mark '@coder#probe' read
 ```
 
 After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` keeps the token-bearing stub's age muted, without a cache line or expired meter, for the unresolved-lifetime case.

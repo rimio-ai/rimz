@@ -246,10 +246,14 @@ pub fn clear_alert(
     paths: &StatePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
+    cleared_at: Timestamp,
 ) -> Result<(), RaisedErr> {
     update(paths, |record| {
         record.prune_closed(kind, agent_id);
-        record.alerts.retain(|alert| !alert.matches(kind, agent_id));
+        record.alerts.retain(|alert| {
+            !alert.matches(kind, agent_id)
+                || alert.value.raised_at.as_millisecond() > cleared_at.as_millisecond()
+        });
         Ok(())
     })
 }

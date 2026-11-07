@@ -56,7 +56,7 @@ The room host's fetch worker decides agent notifications once for all its panes 
 2. It prunes episodes a receipt reaches, silently, and episodes whose row has left the snapshot, with an `unread_cleared` record of cause `row_gone`.
 3. It opens an episode for each row whose displayed status needs a look (`AgentStatus::needs_a_look`), that no receipt reaches at its activity or overlay stamp, and that has no episode or an older episode replaced by a new overlay.
 
-The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz sidebar mark-unread` or the renderer's `m` key goes straight to `unread.json` through `mark_rows_unread`, never appears in that list, and pushes nothing.
+The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz agents mark TARGET unread` or the renderer's `m` key goes straight to `unread.json` through `mark_rows_unread`, never appears in that list, and pushes nothing.
 
 A missing `unread.json` makes every open in that pass `silent`. Attaching to a busy room therefore renders its current attention rows unread without a burst of banners. Once the file exists, the durable set dedupes across host replacement and renderer restart: an episode already recorded does not open again. A file that is unreadable, invalid, or of another version loads as empty but not absent, so its opens do push.
 
@@ -238,8 +238,8 @@ The trace log records what reached delivery, because a tab `[!]` with no matchin
 | --- | --- | --- |
 | `notification_emitted` | The host, per delivered agent notification or reminder | `notification_kind`, `agents` (`kind`, `agent_id`, `label`, `pane_id`, `new_status`), `panes`, `unread_count` |
 | `bell_ring` | A renderer, per `Notify` event it handles | `notification_kind`, `fired`, `recheck_unread`, `panes`, `suppressed` (`notifications_disabled`, `no_own_view`, `daemon_view`, `pane_not_in_view`, `not_unread`) |
-| `unread_marked` | The host on reconcile opens; the renderer and `rimz sidebar mark-unread` on manual opens | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, the reached `status`, `episode_ms` |
-| `unread_cleared` | The renderer (`focus`, `tab_view`, `mark_read`), `rimz sidebar mark-read` (`mark_read`), the host (`row_gone`) | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, `cause`, `cleared_at_ms` |
+| `unread_marked` | The host on reconcile opens; the renderer and `rimz agents mark TARGET unread` on manual opens | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, the reached `status`, `episode_ms` |
+| `unread_cleared` | The renderer (`focus`, `tab_view`, `mark_read`), `rimz agents mark TARGET read` (`mark_read`), the host (`row_gone`) | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, `cause`, `cleared_at_ms` |
 
 The log has gaps by design. Push policy writes no record for an open it skips (silent, untriggered, focused, debounced, or pending). The host prunes receipt-reached episodes without a record, because the renderer or CLI that wrote the receipt already logged the clear. `rimz loop` and `notify-test` write no `notification_emitted`, though their renderer-side `bell_ring` records land. Remote link alerts write nothing here.
 

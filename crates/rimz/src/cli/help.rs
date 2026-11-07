@@ -61,7 +61,8 @@ pub(crate) const AGENTS_GROUPS: [(&str, &[&str]); 4] = [
     (
         "Drive",
         &[
-            "focus", "wait", "stop", "restart", "compact", "refresh", "fork", "molt", "tune",
+            "focus", "wait", "stop", "restart", "compact", "refresh", "mark", "fork", "molt",
+            "tune",
         ],
     ),
     ("Start", &["launch", "resume", "profiles", "explain"]),

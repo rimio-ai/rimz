@@ -18,6 +18,7 @@ mod launch;
 mod launch_resolve;
 mod list;
 mod logs;
+mod mark;
 mod molt;
 mod orphan_subagent;
 mod park_notice;
@@ -621,6 +622,8 @@ impl AgentsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
+    /// Mark agent cards read, unread, or alert.
+    Mark(mark::MarkArgs),
     /// Validate the machine's Markdown agent, subagent, and team definitions.
     Validate {
         /// Emit JSON.
@@ -993,6 +996,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         json,
     } = args;
     match command {
+        Some(AgentsSubcmd::Mark(args)) => return mark::run(args, globals),
         Some(AgentsSubcmd::Validate { json }) => return validate::run(json),
         Some(AgentsSubcmd::Launch(launch)) => {
             // The required `launch-spec` Clap group guarantees an explicit launch spec.

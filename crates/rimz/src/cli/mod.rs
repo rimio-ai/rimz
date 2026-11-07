@@ -76,7 +76,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rimz::agents::AgentState;
 use rimz::ids::{AskId, MuxName, WorkspaceId};
 use rimz::launcher::checkout::pinned_room_root;
-use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
+use rimz::store::snapshot::SidebarSnapshot;
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
@@ -524,22 +524,6 @@ fn find_open_ask<'a>(snapshot: &'a SidebarSnapshot, ask_id: &AskId) -> Option<&'
         .agents
         .iter()
         .find(|agent| agent.actionable_asks().any(|(ask, _)| &ask.id == ask_id))
-}
-
-/// Resolve a ref to every matching live agent pane for `message --steer` and
-/// send-now messages: the producer's bound panes, so a target reaches exactly the agent
-/// panes the producer saw — bound sessions (at their live pane) and lazy panes
-/// with no session yet.
-pub(crate) fn resolve_pane_targets<'a>(
-    snapshot: &'a SidebarSnapshot,
-    raw: &str,
-    worktree_flag: Option<&str>,
-    current_channel: &rimz::address::AddressContext,
-) -> Result<Vec<&'a PaneAgent>> {
-    map_resolve(
-        raw,
-        rimz::address::resolve_targets(snapshot, raw, worktree_flag, current_channel),
-    )
 }
 
 /// Turn a clean target miss into the launch-profile/command/layout hint when
