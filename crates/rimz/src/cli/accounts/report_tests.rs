@@ -48,7 +48,7 @@ fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        false,
+        &|| false,
     );
     rows.retain(|row| matches!(row.kind.as_str(), "claude" | "codex"));
     let mut out = anstream::StripStream::new(Vec::new());
@@ -498,7 +498,7 @@ fn detail_includes_the_account_home_without_a_pace_legend() {
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        false,
+        &|| false,
     );
     let reports: Vec<_> = reports
         .into_iter()

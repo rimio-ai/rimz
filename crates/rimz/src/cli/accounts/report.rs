@@ -236,6 +236,8 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
             )
         })
         .collect();
+    // Only a row that prints a start command pays for the room probe.
+    let in_room = std::cell::LazyCell::new(|| in_live_room(globals));
     let mut rows = account_rows(
         &config.accounts,
         &catalog,
@@ -244,7 +246,7 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         agents.as_ref(),
         &readings,
         &errors,
-        in_live_room(globals),
+        &|| *in_room,
     );
     for row in &mut rows {
         if let Some(report) = reports.iter().find(|report| report.account == row.account) {
@@ -708,7 +710,7 @@ fn account_rows(
     agents: Option<&BTreeMap<LoginKey, AgentStateCounts>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
     errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
-    in_room: bool,
+    in_room: &dyn Fn() -> bool,
 ) -> Vec<AccountRow> {
     let row = |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| {
         let key = LoginKey {
@@ -769,7 +771,7 @@ fn account_rows(
                 login.health(ambient).err(),
             );
             row.read(readings.get(&login.key()), || {
-                start_command(login, ambient, in_room)
+                start_command(login, ambient, in_room())
             });
             row
         })
