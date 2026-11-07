@@ -222,6 +222,8 @@ Turn and `until` steps warn when the leader adapter has no background reporting:
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`. Its tables keep `additionalProperties: false`, so editors flag unknown fields even though the loader ignores them with warnings. The `[workflow]` header accepts an optional `summary`: one nonempty line describing the graph. Blank or multiline values warn and are ignored at `workflow.summary`; omission never warns. Checks and steps accept their own summaries under the same rule, except that a judge requires one at admission. A blank or multiline judge summary is dropped, then refuses at `checks.<name>.summary` with `add summary = "..."`. Older sealed judges without one keep running with the fallback launch description.
 
+`workflow validate` and `workflow run` also warn at each `steps.<name>` with `max-visits = N` on a cycle of command steps and checks without a non-deadline `@wait` route: it can spend all N visits in one advance. Route through a check that can wait if that is not intended. Agent steps and checks with explicit or implicit waits (including sleeps and conditions) break this warning; a case's `for` hold does not. Warnings never refuse, and loop-started runs do not print them.
+
 ## Loop tasks
 
 A [loop task](./loop.md) starts a workflow with `workflow = "<name>"` in place of `agent` or `wait`:

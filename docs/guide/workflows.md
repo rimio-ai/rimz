@@ -274,6 +274,8 @@ Exit 0 records `ended`; another exit or a signal records `died`. A spawn or log-
 
 Make the action safe to repeat on a later visit, just like an agent step. A cycle still needs `max-visits`, and it should go through a waiting check: a command returns at once, so an immediate route back can consume the whole visit cap in one advance.
 
+`workflow validate` and `workflow run` warn for each command step bounded by `max-visits` on a cycle that never waits, naming that step's cap. An agent step or a check with a non-deadline `@wait` route breaks this warning, including a sleep or a condition's implicit wait. A case's `for` hold is not a wait edge. The warning does not refuse the run; loop-started runs do not print it.
+
 ## Wait on the outside world
 
 Some checks can only say "not yet". A PR whose CI still runs is one. Route that outcome to `@wait`, and the run stays at the check and asks again later. This workflow keeps one worktree's PR alive until it merges:

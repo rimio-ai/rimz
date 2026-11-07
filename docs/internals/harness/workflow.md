@@ -123,6 +123,8 @@ A check's `on` value is a target string or `{ to = "<target>", delay = "30m" }`,
 
 Validation warns, without refusing, about turn or `until` steps whose leader adapters do not report background work (`do_background`, which every row carries), and turn steps or judges while machine auto-continue is off. A per-outcome cap without `reset-on` also warns when the step is not the start, no `then` reaches it, and all incoming edges share one outcome name: it repeats `max-visits` unless a check answers keys. Script, shell, and agent checks do not suppress that warning.
 
+For each command step with `max-visits = N`, `validate_spec` warns at `steps.<name>` when a cycle through command steps and checks has no non-deadline `@wait` route: it can spend all N visits in one advance. Agent steps and checks with explicit or implicit waits break that cycle; a case hold does not. The warning asks for a check that can wait if this is unintended. It appears at `workflow validate` and `workflow run`, not loop-started admission, which drops warnings.
+
 ### `run` and `shell`
 
 `run` is an argv parsed with `shlex`, never shell text: pipes, variable expansion, and redirection belong inside a script. Every word containing `/` names a file relative to the workflow directory (`crates/rimz/src/harness/workflow/spec.rs::resolve_argv`). Only normal path components are accepted, and canonical resolution must stay inside the directory. Other words, such as `sh` or `uv`, resolve through `PATH`. Files are resolved and hashed again at every evaluation.

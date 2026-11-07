@@ -977,6 +977,82 @@ fn validation_rejects_each_invalid_spec() {
 }
 
 #[test]
+fn validation_warns_only_for_bounded_command_cycles_that_never_wait() {
+    let (_home, dir) = fixture();
+    let base = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\non.fail='build'\n";
+    let two = base.replace("on.fail='build'", "on.fail='pack'")
+        + "[steps.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[checks.back]\nrun='true'\non.fail='build'\n";
+    let route = "run='true'\non.fail='build'";
+    let condition = "cases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
+                     on={yes='@done',no='build'}\ntimeout='1m'";
+    let held_condition = "cases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
+                          on={yes='build',no='@done',unknown='@user'}";
+    let helper = "[steps.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\
+                  then='back'\nmax-visits=4\n[checks.back]\nrun='true'\non.fail='build'\n";
+    let judge = "agent='claude'\nprompt-file='prompts/build.md'\n\
+                 summary='Review the work'\non.fail='build'";
+    let list = base
+        .replace("then='pick'", "then=['pick','after']")
+        .replace("on.fail='build'", "on={fail='build',ok='after'}")
+        + "[checks.after]\nrun='true'\non.ok='@done'\n";
+    let cases = [
+        (base.to_owned(), vec![("build", 3)]),
+        (
+            base.replace("[steps.build]\nrun=", "[steps.build]\nshell="),
+            vec![("build", 3)],
+        ),
+        (two, vec![("build", 3), ("pack", 7)]),
+        (
+            base.replace("max-visits=3", "max-visits=3\nlimit={stagger='1m'}"),
+            vec![("build", 3)],
+        ),
+        (list, vec![("build", 3)]),
+        (
+            base.replace("start='build'", "start='build'\non.deadline='@wait'"),
+            vec![("build", 3)],
+        ),
+        (
+            base.to_owned() + "on.pending='@wait'\ntimeout='1m'\n",
+            vec![],
+        ),
+        (base.replace(route, "sleep='1m'\nthen='build'"), vec![]),
+        (base.replace(route, condition), vec![]),
+        (base.replace(route, held_condition), vec![("build", 3)]),
+        (
+            base.replace("on.fail='build'", "on.fail='helper'") + helper,
+            vec![],
+        ),
+        (base.replace(route, judge), vec![("build", 3)]),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (text, warnings) in cases {
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(report.errors.is_empty(), "{text}: {report:?}");
+        actual.push(
+            report
+                .warnings
+                .iter()
+                .filter(|issue| issue.message.contains("cycle through command steps"))
+                .map(|issue| (issue.path.clone(), issue.message.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let mut step_warnings = Vec::new();
+        for (node, visits) in warnings {
+            let message = format!(
+                "example: steps.{node}: cycle through command steps never waits and can spend \
+                 all {visits} visits in one advance; route it through a check that can wait \
+                 (@wait) if that is not intended"
+            );
+            step_warnings.push((format!("steps.{node}"), message));
+        }
+        expected.push(step_warnings);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn validation_accepts_command_steps_without_agent_warnings() {
     let results: Vec<_> = ["run", "shell"]
         .into_iter()
