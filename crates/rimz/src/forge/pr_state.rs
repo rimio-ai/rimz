@@ -93,6 +93,26 @@ pub struct PrLink {
 }
 
 impl PrLink {
+    /// The settled mergeability of an open link at its current nonempty forge head.
+    pub(crate) fn current_mergeability(&self) -> Option<&SettledMergeability> {
+        if self.state != WorktreePrState::Open {
+            return None;
+        }
+        let facts = self.open.as_ref()?;
+        if facts.head.is_empty() {
+            return None;
+        }
+        let settled = facts.mergeability.as_ref()?;
+        match settled {
+            SettledMergeability::Mergeable(head) | SettledMergeability::Conflicting(head)
+                if head == &facts.head =>
+            {
+                Some(settled)
+            }
+            _ => None,
+        }
+    }
+
     /// The merge-queue fact of a link that is still open.
     pub(crate) fn queue(&self) -> Option<&PrQueueFact> {
         (self.state == WorktreePrState::Open)
@@ -232,4 +252,50 @@ fn pr_state_probe_ok_default() -> bool {
 
 pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
     crate::disk::atomic::read_json_cache(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn current_mergeability_requires_a_settled_answer_at_the_current_open_head() {
+        let mut readings = Vec::new();
+        let mut expected = Vec::new();
+        for (state, head, settled, reading) in [
+            (
+                "open",
+                Some("head"),
+                Some(("conflicting", "head")),
+                Some("conflicting"),
+            ),
+            ("open", Some("head"), Some(("conflicting", "older")), None),
+            (
+                "open",
+                Some("head"),
+                Some(("mergeable", "head")),
+                Some("mergeable"),
+            ),
+            ("open", Some("head"), Some(("mergeable", "older")), None),
+            ("open", Some("head"), None, None),
+            ("open", Some(""), Some(("conflicting", "")), None),
+            ("closed", Some("head"), Some(("conflicting", "head")), None),
+            ("merged", Some("head"), Some(("conflicting", "head")), None),
+            ("open", None, None, None),
+        ] {
+            let open = head.map(|head| json!({
+                "head": head,
+                "mergeability": settled.map(|(state, head)| json!({"state": state, "head": head})),
+            }));
+            let link: PrLink =
+                serde_json::from_value(json!({"state": state, "open": open})).unwrap();
+            readings.push(link.current_mergeability().map(|answer| match answer {
+                SettledMergeability::Mergeable(_) => "mergeable",
+                SettledMergeability::Conflicting(_) => "conflicting",
+            }));
+            expected.push(reading);
+        }
+        assert_eq!(readings, expected);
+    }
 }

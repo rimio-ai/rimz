@@ -298,21 +298,10 @@ impl<'a> ForgeKey<'a> {
                 None if open.is_some_and(|facts| facts.auto_merge) => "armed",
                 None => "none",
             }),
-            Self::PrMergeable(_) => {
-                let facts = open?;
-                if facts.head.is_empty() {
-                    return None;
-                }
-                match facts.mergeability.as_ref()? {
-                    SettledMergeability::Mergeable(head) if head == &facts.head => {
-                        Some("mergeable")
-                    }
-                    SettledMergeability::Conflicting(head) if head == &facts.head => {
-                        Some("conflicting")
-                    }
-                    _ => None,
-                }
-            }
+            Self::PrMergeable(_) => link?.current_mergeability().map(|settled| match settled {
+                SettledMergeability::Mergeable(_) => "mergeable",
+                SettledMergeability::Conflicting(_) => "conflicting",
+            }),
             Self::PrReview(_) => open?.review.map(|review| match review {
                 PrReview::Draft => "draft",
                 PrReview::ChangesRequested => "changes_requested",
