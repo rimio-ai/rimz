@@ -275,6 +275,12 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
         limit(&mut step.limit, &format!("{path}.limit"), ignored);
         if matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_))) {
             ignore(
+                &mut step.notes,
+                &format!("{path}.notes"),
+                ignored,
+                "notes are for agent steps",
+            );
+            ignore(
                 &mut step.limit,
                 &format!("{path}.limit"),
                 ignored,

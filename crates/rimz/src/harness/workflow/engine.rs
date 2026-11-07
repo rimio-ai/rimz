@@ -112,7 +112,7 @@ pub fn create(
         )));
     }
     let now = Timestamp::now();
-    let record = RunRecord {
+    let mut record = RunRecord {
         version: workflow::VERSION,
         default_lifecycle: workflow::StepLifecycle::Until,
         id: WorkflowRunId::new(),
@@ -125,6 +125,7 @@ pub fn create(
         scope,
         project_root: roots.project.clone(),
         created_at: now,
+        notes: None,
         state: RunState::Active,
         park: None,
         node: spec.workflow.start.clone(),
@@ -155,6 +156,15 @@ pub fn create(
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         refuse_existing(state, &record.workflow, &roots)?;
+        record.notes = Some(crate::store::notes::allocate(
+            state,
+            crate::store::notes::Kind::Workflow {
+                workflow: record.workflow.clone(),
+                run: record.id.clone(),
+            },
+            &record.scope.path,
+            record.created_at,
+        )?);
         workflow::initialize(state, &record, &bytes, &guard)?;
     }
     spawn(&record)?;

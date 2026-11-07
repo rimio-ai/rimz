@@ -1627,6 +1627,11 @@ pub(super) fn finalize_agent_cell(
             .auto_compact
             .as_deref()
             .and_then(|value| AutoCompact::parse_native_window(value).ok()),
+        notes: cell
+            .launch
+            .record
+            .as_ref()
+            .and_then(|record| record.notes.clone()),
     }));
     if let Some(policy) = options.smart_compact {
         policy.append_warnings(cell, warnings);

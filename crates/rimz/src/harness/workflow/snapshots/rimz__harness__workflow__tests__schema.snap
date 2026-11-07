@@ -356,6 +356,12 @@ expression: value
             }
           ]
         },
+        "notes": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "on": {
           "$ref": "#/$defs/StepEdges"
         },

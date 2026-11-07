@@ -371,7 +371,9 @@ pub fn prepare_exec(
         model_refresh_failure = refresh_failure;
         // A child resolves its temp unit from its parent's row; a failed read
         // falls back to its own unit, and the plan's warning carries the error.
-        let agents = if request.identity.params.parent_agent_id.is_some() {
+        let agents = if request.identity.params.parent_agent_id.is_some()
+            || request.identity.params.launched_by.is_some()
+        {
             room_agents()
         } else {
             Ok(Vec::new())
@@ -648,6 +650,42 @@ fn idle_compact_covered(
 
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {
     let mut request = inputs.request.clone();
+    if matches!(request.action, launch::ExecAction::Fork { .. }) {
+        if let Some(record) = &mut request.identity.params.record {
+            record.notes = None;
+        }
+    } else {
+        let params = &request.identity.params;
+        let parent = params
+            .parent_agent_id
+            .as_ref()
+            .map(|id| {
+                (
+                    params.parent_agent_kind.as_ref().unwrap_or(&request.kind),
+                    id,
+                )
+            })
+            .or_else(|| {
+                params
+                    .launched_by
+                    .as_ref()
+                    .map(|parent| (&parent.kind, &parent.agent_id))
+            });
+        if let Some((kind, id)) = parent
+            && let Ok(agents) = inputs.agents
+            && let Some(notes) = crate::address::launch_row(agents, kind, id)
+                .and_then(|parent| parent.record.as_ref())
+                .and_then(|record| record.notes.clone())
+        {
+            request
+                .identity
+                .params
+                .record
+                .get_or_insert_with(Default::default)
+                .notes
+                .get_or_insert(notes);
+        }
+    }
     let adapter = crate::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
     let prompt = prompt_compose::plan_system_prompt(
@@ -669,7 +707,17 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     if let Some(workflow) = &request.identity.params.workflow {
         match crate::store::workflow::load(&inputs.state.workflow(&workflow.run)) {
-            Ok(record) => reminders.workflow_definition = Some(record.spec_dir),
+            Ok(record) => {
+                if workflow.role == crate::agents::WorkflowAttemptRole::Step {
+                    request
+                        .identity
+                        .params
+                        .record
+                        .get_or_insert_with(Default::default)
+                        .notes = record.notes;
+                }
+                reminders.workflow_definition = Some(record.spec_dir);
+            }
             Err(error) => warnings.push(LaunchPlanWarning::LaunchEnv(format!(
                 "workflow definition folder unavailable: {error}"
             ))),
@@ -778,27 +826,57 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.runtime.root.clone(),
         inputs.runtime.shared_root.clone(),
     ]);
-    reminders.team_notes_run = match crate::worktree::discover_checkout(inputs.cwd) {
-        Ok(Some(checkout)) => inputs
-            .cwd
-            .ancestors()
-            .take_while(|path| path.starts_with(&checkout))
-            .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
-        Ok(None) => inputs
-            .cwd
-            .ancestors()
-            .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
-        Err(_) => None,
-    }
-    .filter(|run| {
-        inputs
-            .request
-            .identity
-            .params
-            .team
-            .as_deref()
-            .is_none_or(|team| super::scratch::run_team(run).as_deref() == Some(team))
-    });
+    reminders.notes_runs = request
+        .identity
+        .params
+        .record
+        .as_ref()
+        .and_then(|record| record.notes.as_deref())
+        .filter(|relative| {
+            relative.components().count() == 2
+                && relative
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+        })
+        .and_then(|relative| {
+            inputs
+                .state
+                .notes_run(crate::disk::paths::Class::AutomationNotes, relative)
+                .canonicalize()
+                .ok()
+        })
+        .filter(|run| {
+            inputs
+                .state
+                .automation_notes_dir
+                .canonicalize()
+                .is_ok_and(|root| run.starts_with(root))
+        })
+        .into_iter()
+        .chain({
+            match crate::worktree::discover_checkout(inputs.cwd) {
+                Ok(Some(checkout)) => inputs
+                    .cwd
+                    .ancestors()
+                    .take_while(|path| path.starts_with(&checkout))
+                    .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
+                Ok(None) => inputs
+                    .cwd
+                    .ancestors()
+                    .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
+                Err(_) => None,
+            }
+            .filter(|run| {
+                inputs
+                    .request
+                    .identity
+                    .params
+                    .team
+                    .as_deref()
+                    .is_none_or(|team| super::scratch::run_team(run).as_deref() == Some(team))
+            })
+        })
+        .collect();
     if inputs
         .effective
         .is_none_or(|effective| effective.allow_routine_rimz)

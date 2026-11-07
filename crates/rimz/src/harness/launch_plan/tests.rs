@@ -2,6 +2,7 @@ use super::*;
 use crate::harness::launch::{ExecAction, ExecIdentity, ProviderAccountState, ReminderSection};
 use crate::ids::AgentKind;
 
+mod notes;
 #[path = "session_step_tests.rs"]
 mod session_step;
 

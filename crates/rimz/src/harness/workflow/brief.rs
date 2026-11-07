@@ -13,8 +13,7 @@ use crate::store::workflow::{
 };
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
-const CONTEXT: &str =
-    "`$RIMZ_WORKFLOW_DIR/context.json` holds this run's input and the previous attempt in full.";
+const MORE: &str = "`rimz workflow show` draws the graph with this run's position and trail, and `rimz workflow show --history` lists every step and check so far; a subagent of yours runs the same commands to find this run.";
 
 pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecord) -> String {
     let step = &spec.steps[&record.node];
@@ -95,9 +94,16 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
             after.push_str(&note);
         }
     }
-    let more = format!(
-        "{CONTEXT} `rimz workflow show $RIMZ_WORKFLOW_RUN` draws the graph with this run's position and trail."
-    );
+    let memory = match record.notes.as_ref().filter(|_| step.notes != Some(false)) {
+        Some(_) => paths.notes().canonicalize().ok().map(|folder| {
+            format!(
+                "`{}/{}-notes.md` is this step's working memory. Only this step's agent writes it, across visits, restarts and its subagents. Write it for someone arriving cold. Note any change you made outside this repository: pushes, PR or issue comments, databases, remote services. {MORE}",
+                folder.display(), record.node,
+            )
+        }),
+        None => None,
+    };
+    let more = memory.unwrap_or_else(|| MORE.into());
     [
         position(spec, record, "one step of", "step"),
         origin,
@@ -117,7 +123,8 @@ pub(super) fn judge(spec: &WorkflowSpec, record: &RunRecord) -> String {
         position(spec, record, "a check in", "check"),
         origin(record),
         "Your answer decides where the run goes next.".into(),
-        CONTEXT.into(),
+        "`rimz workflow show $RIMZ_WORKFLOW_RUN --history` lists every step and check so far."
+            .into(),
     ]
     .join("\n\n")
 }

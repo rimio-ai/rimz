@@ -3171,6 +3171,7 @@ fn restore_resume_cell(
                 agent: Some(base_name.to_owned()),
                 fast: rebased.launch.fast,
                 auto_compact: None,
+                notes: request.record.and_then(|record| record.notes.clone()),
             })),
             ..ResumeLaunchPosture::from(&rebased)
         }

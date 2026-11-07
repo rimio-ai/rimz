@@ -365,6 +365,11 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                             && prompt.contains("\n\n[pr]\n\n"),
                         "the compiled judge request must carry its Workflow section: {prompt}"
                     );
+                    assert!(
+                        !prompt.contains("context.json")
+                            && prompt.contains("rimz workflow show $RIMZ_WORKFLOW_RUN --history"),
+                        "judges must read the workflow view, not raw context: {prompt}"
+                    );
                 }
                 assert!(Path::new(context(&value)["output_path"].as_str().unwrap()).is_file());
             }

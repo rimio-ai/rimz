@@ -1466,7 +1466,7 @@ allowed-dependencies = [
 # Machine GC resolves empty roots under explicit homes (+1).
 # WorkflowPaths, its accessors, definition paths, and run discovery share the classed path boundary (+9).
 # WorkflowPaths::check_output owns per-attempt judge output paths (+1).
-# WorkflowPaths::notes owns cross-node scratch paths (+1).
+# WorkflowPaths::notes owns the work link to kept run notes and legacy scratch paths (+1).
 # DiskSpace, disk_space and the three DEFAULT_TMP_* constants share capacity and retention policy (+5).
 # RuntimePaths::shared_tmp_floor_lock elects one machine pressure helper (+1).
 # usage::dir_allocated_size shares allocated-byte accounting with pressure eviction (+1).

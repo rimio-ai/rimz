@@ -39,7 +39,15 @@ fn run(
     let attempt = record.attempt.as_ref().expect("prepared judge attempt");
     let output_path = paths.check_output(attempt.seq);
     let prompt = format!(
-        "{prompt}\n\nRIMZ_WORKFLOW_DIR is {}. Read context.json there; output_path is {}. Your final message must be exactly one JSON object: required string outcome; optional string reason, RFC 3339 string recheck_at, and string-or-integer key. Any other fields are carried to the next node as input. Use no prose and no Markdown fence. The scope checkout is read-only; write signs only under signs/<step>.md in RIMZ_WORKFLOW_DIR.",
+        concat!(
+            "{}\n\nRIMZ_WORKFLOW_DIR is {}. output_path is {}. ",
+            "Your final message must be exactly one JSON object: required string outcome; ",
+            "optional string reason, RFC 3339 string recheck_at, and string-or-integer key. ",
+            "Any other fields are carried to the next node as input. ",
+            "Use no prose and no Markdown fence. The scope checkout is read-only; ",
+            "write signs only under signs/<step>.md in RIMZ_WORKFLOW_DIR."
+        ),
+        prompt,
         paths.work.display(),
         output_path.display()
     );

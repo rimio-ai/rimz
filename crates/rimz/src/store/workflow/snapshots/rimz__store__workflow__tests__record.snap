@@ -30,6 +30,7 @@ expression: value
   "key": null,
   "next_seq": 2,
   "node": "pr",
+  "notes": "20260101/000000Z-workflow-review-project",
   "park": null,
   "prev_attempt": {
     "asked": null,

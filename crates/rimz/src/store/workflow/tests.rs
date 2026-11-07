@@ -17,6 +17,42 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn notes_round_trip_and_initialize_links_kept_memory() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let record = record();
+    let relative = crate::store::notes::allocate(
+        &state,
+        crate::store::notes::Kind::Workflow {
+            workflow: record.workflow.clone(),
+            run: record.id.clone(),
+        },
+        home.path(),
+        record.created_at,
+    )
+    .unwrap();
+    let mut value = serde_json::to_value(&record).unwrap();
+    value["notes"] = json!(relative);
+    let record: RunRecord = serde_json::from_value(value).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    let paths = state.workflow(&record.id);
+    let kept = state.notes_run(crate::disk::paths::Class::AutomationNotes, &relative);
+    assert_eq!(
+        (
+            serde_json::to_value(load(&paths).unwrap()).unwrap()["notes"].clone(),
+            fs::read_link(paths.notes()).ok(),
+        ),
+        (json!(relative), Some(kept.canonicalize().unwrap()))
+    );
+    fs::write(paths.notes().join("build-notes.md"), "remember").unwrap();
+    assert_eq!(
+        fs::read_to_string(kept.join("build-notes.md")).unwrap(),
+        "remember"
+    );
+}
+
+#[test]
 fn record_version_fence_accepts_one_through_three() {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
@@ -412,7 +448,19 @@ fn durable_record_round_trip_and_json_shape() {
     let home = tempfile::tempdir().unwrap();
     let state =
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
-    let mut value = serde_json::to_value(record()).unwrap();
+    let seed = record();
+    let relative = crate::store::notes::allocate(
+        &state,
+        crate::store::notes::Kind::Workflow {
+            workflow: seed.workflow.clone(),
+            run: seed.id.clone(),
+        },
+        &seed.scope.path,
+        seed.created_at,
+    )
+    .unwrap();
+    let mut value = serde_json::to_value(seed).unwrap();
+    value["notes"] = json!(relative);
     assert_eq!(
         value["visits"]["build"],
         json!({"total":2,"outcomes":[

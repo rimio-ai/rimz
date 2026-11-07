@@ -405,6 +405,10 @@ fn validate_fork_source(
         );
     }
     let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
+    let mut record = agent.record.clone();
+    if let Some(record) = &mut record {
+        record.notes = None;
+    }
     Ok(ForkSeed {
         kind: agent.kind.clone(),
         source_session_id: agent.agent_id.clone(),
@@ -416,7 +420,7 @@ fn validate_fork_source(
             profile: agent.profile.clone(),
             profile_scope: (scope == ProfileScope::Subagents).then_some(scope),
             login,
-            record: agent.record.clone(),
+            record,
             tier: agent.tier.clone(),
             mode: agent.mode,
             isolation: agent.isolation,

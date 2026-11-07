@@ -279,6 +279,10 @@ fn launch_and_supervise(
     if let Some(identity) = &mut launch_identity {
         identity
             .launch
+            .record
+            .clone_from(&request.identity.params.record);
+        identity
+            .launch
             .model
             .clone_from(&request.identity.params.model);
     }

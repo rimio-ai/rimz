@@ -76,6 +76,7 @@ fn finalized_launch_stamps_verbatim_record() {
             fast: false,
             agent: None,
             auto_compact: None,
+            ..Default::default()
         })
     );
 }
@@ -658,6 +659,7 @@ fn off_launch_record_keeps_its_wire_bytes() {
         agent: None,
         fast: false,
         auto_compact: None,
+        ..Default::default()
     };
     assert_eq!(
         serde_json::to_string(&record).unwrap(),

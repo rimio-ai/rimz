@@ -250,14 +250,56 @@ fn collect_automation_notes(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<u64> {
-    // No automation writer exists yet; record-based ownership is added with those writers.
     collect_notes(
         &paths.automation_notes_dir,
         retention,
         sweep,
         report,
         &mut newest_entry_modified,
-        &|_| Ok(None),
+        &|run| {
+            let Ok(manifest) = crate::store::notes::Manifest::read(run) else {
+                return Ok(None);
+            };
+            let Ok(relative) = run.strip_prefix(&paths.automation_notes_dir) else {
+                return Ok(None);
+            };
+            let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+            let agents = match crate::store::snapshot::catch_up_rollup(paths) {
+                Ok((_, agents, _)) => agents,
+                Err(error) => {
+                    tracing::warn!(%error, "automation notes GC skipped with unreadable rollup");
+                    return Ok(None);
+                }
+            };
+            if agents.iter().any(|agent| {
+                agent.ended_at.is_none()
+                    && agent
+                        .record
+                        .as_ref()
+                        .and_then(|record| record.notes.as_deref())
+                        == Some(relative)
+            }) {
+                return Ok(None);
+            }
+            let open = match &manifest.kind {
+                crate::store::notes::Kind::Workflow { run, .. } => {
+                    match crate::store::workflow::load(&paths.workflow(run)) {
+                        Ok(record) => {
+                            !record.state.is_terminal() && record.notes.as_deref() == Some(relative)
+                        }
+                        Err(crate::store::workflow::WorkflowStoreErr::Io { source, .. })
+                            if source.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            false
+                        }
+                        Err(_) => true,
+                    }
+                }
+                crate::store::notes::Kind::Loop { .. } => false,
+                crate::store::notes::Kind::Team { .. } => true,
+            };
+            Ok((!open).then_some(guard))
+        },
     )
 }
 

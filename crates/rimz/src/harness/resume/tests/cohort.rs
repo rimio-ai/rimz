@@ -401,6 +401,7 @@ fn recorded_team_restore_keeps_role_layers() {
                 fast: false,
                 agent: None,
                 auto_compact: None,
+                ..Default::default()
             })
         });
         let tabs = plan_team_restore_tabs(
@@ -1004,6 +1005,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
         fast: false,
         agent: None,
         auto_compact: None,
+        ..Default::default()
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -1135,6 +1137,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                     fast: false,
                     agent: Some("reviewer".into()),
                     auto_compact: None,
+                    ..Default::default()
                 }));
                 let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
                     crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -3179,6 +3182,7 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
         fast: false,
         agent: None,
         auto_compact: None,
+        ..Default::default()
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
