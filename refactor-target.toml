@@ -2011,7 +2011,8 @@ path = "crates/rimz/src/forge"
 # BranchRow shares demanded branch readings between sidebar publication and conditions (+1).
 # UNSUPPORTED_REPO_KEY names the forge-cache marker for both its producer and readers (+1).
 # PrReview shares draft-first review facts with condition readers (+1).
-surface-budget = 51
+# PrLink::current_mergeability shares the open-only current-head reading (+1).
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/harness"
