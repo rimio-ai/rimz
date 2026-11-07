@@ -5,7 +5,7 @@ use crate::store::workflow::{self as records, JournalEvent, Key, RunRecord, RunS
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-const SLEEP: &str = "[workflow]\nscope='worktree'\nstart='cooldown'\n[checks.cooldown]\nsleep='30m'\nthen='@done'\n";
+const SLEEP: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n[checks.cooldown]\nsleep='30m'\nthen='@done'\n";
 
 fn update(state: &StatePaths, record: &RunRecord) {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -256,8 +256,8 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
         [
             ("then", "poll", EdgeSource::Explicit),
             ("sleeping", "@wait", EdgeSource::Default),
-            ("invalid", "@failed", EdgeSource::Default),
-            ("deadline", "@failed", EdgeSource::Default),
+            ("invalid", "@failed", EdgeSource::OnBreak),
+            ("deadline", "@failed", EdgeSource::OnBreak),
         ]
     );
 }
@@ -338,7 +338,7 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
     .map(|term| {
         let sleep: WorkflowSpec = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
         let condition: WorkflowSpec = toml::from_str(&format!(
-            "[workflow]\nscope='worktree'\nstart='cooldown'\n\
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n\
              [checks.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
         ))
         .unwrap();

@@ -31,6 +31,7 @@ Three invariants sit underneath that style:
 These are the promises the product is built on. A change to one is a product decision, not an implementation detail.
 
 - **Durability first.** Correctness lives in durable records, CAS rules, nonces, and per-request sockets. Wakeups and pane reads are latency, never truth.
+- **Only agents ask.** Whatever reaches the user is an agent asking in its own pane: urgent through the agent's own question or failure (`?`, `!`), deferred as a living agent left idle. Automation never holds the user's attention itself: every workflow edge ends the run or leads to an agent, and `workflow validate` refuses one that reaches the user.
 - **Automation is accountable.** User-benefiting automation appends durable assist records and surfaces in `rimz stats`; internal repairs keep durable diagnostic records ([loops.md](./docs/internals/harness/loops.md#the-assist-log), [diagnostics.md](./docs/internals/diagnostics.md)).
 - **One interface language.** Every human-facing surface resolves color through the [shared theme core](./docs/internals/theme.md): provider identity for names and emblems, typed state roles, hierarchy tones, and quantity tones. Invariants enforce the renderer boundaries.
 - **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.

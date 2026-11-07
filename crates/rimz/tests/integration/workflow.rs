@@ -28,7 +28,7 @@ fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     (env, dir)
 }
 
-const HEADER: &str = "[workflow]\nscope = 'worktree'\nstart = 'pr'\n";
+const HEADER: &str = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n";
 const WAIT: &str = "[checks.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
@@ -316,7 +316,7 @@ fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
         &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@user'\n"),
         &evaluation_script("ok"),
     );
-    let id = start(&env);
+    let id = start_legacy(&env);
     settled(&env, &id, "parked");
     let stats = assists_once(&env, "workflow_parks", 1);
     assert_eq!(stats["rollup"]["workflow_routes"], 1);
@@ -909,7 +909,7 @@ fn cap_only_self_cycle_is_refused_before_launch() {
 #[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
-        "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
+        "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
     let (env, dir) = fixture(&spec, PENDING);
     let id = start(&env);
@@ -1048,7 +1048,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
     backdate_check(&env, &value);
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(show(&env, &id)["record"]["park"]["reason"], "timeout");
-    let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
     let (env, dir) = fixture(spec, "exec sleep 60");
     fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
     let id = start(&env);
@@ -1192,7 +1192,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     use std::io::Write;
     use std::os::unix::net::UnixListener;
 
-    let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
     let (env, _) = fixture(
         spec,
         "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ndd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/consumed.tmp\" 2>/dev/null\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
@@ -1481,7 +1481,7 @@ fn history_park_omits_text_only_after_a_routed_answer() {
         &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.review='@user'\n"),
         "printf '%s\\n' '{\"outcome\":\"review\",\"reason\":\"Choose the next move\"}'\n",
     );
-    let id = start(&env);
+    let id = start_legacy(&env);
     settled(&env, &id, "parked");
     let history = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(history.contains("pr said review → @user\n"), "{history}");
@@ -1618,7 +1618,7 @@ fn validate_json_shape_errors_and_exit_status() {
     let env = Env::new();
     let dir = env.rimz_home().join("workflows/review");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
     let output = env
         .rimz()
         .args(["workflow", "validate", "--json"])
@@ -1638,9 +1638,9 @@ fn validate_json_shape_errors_and_exit_status() {
             "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
-                {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
-                {"outcome":"invalid", "target":"@failed", "source":"default", "fires":"yes"},
-                {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
+                {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
+                {"outcome":"invalid", "target":"@failed", "source":"on-break", "fires":"yes"},
+                {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
             ]
         }])
     );
@@ -1652,7 +1652,7 @@ fn validate_json_shape_errors_and_exit_status() {
             .unwrap()
             .contains("pr")
     );
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
     assert!(
         env.rimz()
             .args(["workflow", "validate"])
@@ -1681,7 +1681,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert!(schema["properties"]["checks"].is_object());
     fs::write(
         dir.join("workflow.toml"),
-        format!("{HEADER}[checks.pr]\nshell='printf shell'\non={{pass='@done',fail='@user'}}\n"),
+        format!("{HEADER}[checks.pr]\nshell='printf shell'\non={{pass='@done',fail='@failed'}}\n"),
     )
     .unwrap();
     let report: Value =
@@ -1694,11 +1694,11 @@ fn validate_json_shape_errors_and_exit_status() {
                 "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
                 "run":null, "shell":"printf shell", "agent":null, "summary":null, "do_background":false,
                 "edges":[
-                    {"outcome":"fail", "target":"@user", "source":"explicit", "fires":"yes"},
+                    {"outcome":"fail", "target":"@failed", "source":"explicit", "fires":"yes"},
                     {"outcome":"pass", "target":"@done", "source":"explicit", "fires":"yes"},
-                    {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
-                    {"outcome":"invalid", "target":"@failed", "source":"default", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
+                    {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
+                    {"outcome":"invalid", "target":"@failed", "source":"on-break", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
                 ]
             }]
         })
@@ -1706,16 +1706,16 @@ fn validate_json_shape_errors_and_exit_status() {
     let text = success(command(&env, &["workflow", "validate"]));
     assert!(text.contains("printf shell"), "{text}");
     assert!(
-        text.contains("timeout → @failed (default, never: no timeout)"),
+        text.contains("timeout → @failed (on-break, never: no timeout)"),
         "{text}"
     );
     assert!(
-        text.contains("deadline → @failed (default, only with a deadline)"),
+        text.contains("deadline → @failed (on-break, only with a deadline)"),
         "{text}"
     );
     for runner in ["run", "shell"] {
         fs::write(dir.join("workflow.toml"), format!(
-            "{HEADER}[checks.pr]\nshell='true'\non={{pass='@done',fail='@user'}}\n[steps.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
+            "{HEADER}[checks.pr]\nshell='true'\non={{pass='@done',fail='@failed'}}\n[steps.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
         )).unwrap();
         let output = command(&env, &["workflow", "validate", "--json"]);
         assert!(
@@ -1736,8 +1736,8 @@ fn validate_json_shape_errors_and_exit_status() {
                 "agent":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"then", "target":"pr", "source":"explicit", "fires":"yes"},
-                    {"outcome":"cap", "target":"@failed", "source":"default", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
+                    {"outcome":"cap", "target":"@failed", "source":"on-break", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
                 ]
             })
         );

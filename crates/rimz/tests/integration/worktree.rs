@@ -581,31 +581,53 @@ fn parked_workflow(
     tree: &str,
     workflow: &str,
 ) -> (rimz::ids::WorkflowRunId, rimz::disk::paths::WorkflowPaths) {
+    use sha2::Digest as _;
+
     let dir = env.rimz_home().join("workflows").join(workflow);
     std::fs::create_dir_all(&dir).unwrap();
     let spec = "[workflow]\nscope='worktree'\nstart='check'\n\
         [checks.check]\nshell='true'\non={pass='@user',fail='@failed'}\n";
     std::fs::write(dir.join("workflow.toml"), spec).unwrap();
-    let output = env
-        .rimz()
-        .args(["workflow", "run", workflow, "-w", tree])
+    let checkout = rimz::worktree::discover_owned(&env.project_root)
+        .unwrap()
+        .into_iter()
+        .find(|checkout| checkout.marker.name == tree)
+        .unwrap()
+        .marker
+        .worktree_path
+        .canonicalize()
+        .unwrap();
+    let id = rimz::ids::WorkflowRunId::new();
+    let now = jiff::Timestamp::now();
+    let value = serde_json::json!({
+        "version":3, "id":id, "workflow":workflow, "spec_dir":dir,
+        "spec_digest":hex::encode(sha2::Sha256::digest(spec.as_bytes())),
+        "project_root":env.project_root, "scope":{"kind":"worktree", "path":checkout},
+        "created_at":now, "entered_at":now, "state":"active", "node":"check",
+        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+    });
+    let state = env.state_path_for(&env.project_root);
+    let paths = state.workflow(&id);
+    {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        rimz::store::workflow::initialize(
+            &state,
+            &serde_json::from_value(value.clone()).unwrap(),
+            spec.as_bytes(),
+            &guard,
+        )
+        .unwrap();
+        rimz::disk::atomic::write_temp_then_rename(&paths.record, &value).unwrap();
+    }
+    env.rimz()
+        .args(["workflow", "advance", id.as_str()])
         .assert()
         .success();
-    let text = std::str::from_utf8(&output.get_output().stdout).unwrap();
-    let id = rimz::ids::WorkflowRunId::parse(text.lines().next().unwrap()).unwrap();
-    let paths = env.state_path_for(&env.project_root).workflow(&id);
-    let started = std::time::Instant::now();
-    loop {
-        let run = rimz::store::workflow::load(&paths).unwrap();
-        if run.state == rimz::store::workflow::RunState::Parked {
-            return (id, paths);
-        }
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(15),
-            "run did not park: {run:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    assert_eq!(
+        rimz::store::workflow::load(&paths).unwrap().state,
+        rimz::store::workflow::RunState::Parked
+    );
+    (id, paths)
 }
 
 #[test]

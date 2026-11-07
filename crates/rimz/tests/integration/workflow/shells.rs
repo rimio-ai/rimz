@@ -3,7 +3,7 @@ use super::*;
 fn shell_fixture(shell: &str, fields: &str) -> (Env, PathBuf) {
     fixture(
         &format!(
-            "{HEADER}[checks.pr]\nshell={}\non.pass='@done'\non.fail='@user'\n{fields}",
+            "{HEADER}[checks.pr]\nshell={}\non.pass='@done'\non.fail='@failed'\n{fields}",
             toml::Value::String(shell.into())
         ),
         "",
@@ -105,7 +105,7 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
         &file,
         fs::read_to_string(&file)
             .unwrap()
-            .replace("on.fail='@user'", "on.fail='@wait'"),
+            .replace("on.fail='@failed'", "on.fail='@wait'"),
     )
     .unwrap();
     let id = start_legacy(&env);
@@ -141,7 +141,7 @@ fn shell_spawn_errors_are_invalid() {
         &file,
         fs::read_to_string(&file)
             .unwrap()
-            .replace("on.fail='@user'", "on.fail='@wait'"),
+            .replace("on.fail='@failed'", "on.fail='@wait'"),
     )
     .unwrap();
     let id = start_legacy(&env);
@@ -171,7 +171,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
         let (env, _) = shell_fixture(
             LIVE,
             &format!(
-                "timeout='1h'\n{edge}\n[checks.report]\nshell='true'\non={{pass='@done',fail='@user'}}\n"
+                "timeout='1h'\n{edge}\n[checks.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
             ),
         );
         let id = start_legacy(&env);

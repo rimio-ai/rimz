@@ -820,7 +820,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         );
     }
     let dir = room.env.rimz_home().join("workflows/review");
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
     fs::write(dir.join("checks/pr.sh"), "test -d \"$RIMZ_WORKFLOW_DIR/notes\" && test -d \"$RIMZ_WORKFLOW_DIR/signs\" || exit 1\nwhile read -r item; do\n if ! grep -qxF \"$item\" \"$RIMZ_WORKFLOW_DIR\"/notes/*.done 2>/dev/null; then printf '{\"outcome\":\"ready\",\"key\":\"%s\"}' \"$item\"; exit; fi\ndone < items.txt\nprintf '{\"outcome\":\"none\"}'\n").unwrap();
     let id = room.start();
     for item in ["one", "two"] {
@@ -931,7 +931,7 @@ fn loop_project_scope_skips_before_reading_an_edited_definition() {
     let dir = room.env.rimz_home().join("workflows/review");
     fs::write(
         dir.join("workflow.toml"),
-        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
@@ -976,7 +976,7 @@ fn condition_workflow(room: &Room, scope: &str, each: bool) {
     let dir = room.env.rimz_home().join("workflows/review");
     fs::write(
         dir.join("workflow.toml"),
-        format!("[workflow]\nscope='{scope}'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\non-break='@failed'\nscope='{scope}'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
@@ -1438,7 +1438,7 @@ fn condition_workflow_ledger_write_failure_keeps_the_launched_history_and_repair
 
 #[test]
 fn loop_workflow_creation_duplicate_and_finished_scopes() {
-    let room = Room::new("on.asked = '@user'");
+    let room = Room::new("");
     fs::write(
         room.env.rimz_home().join("loop.toml"),
         format!(
@@ -1458,6 +1458,15 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     let records = records::list(&paths).unwrap();
     assert_eq!(records.len(), 1);
     let id = records[0].id.to_string();
+    keep_legacy_routes(&room.env, &id);
+    let sealed = paths.workflow(&records[0].id).spec;
+    fs::write(
+        &sealed,
+        fs::read_to_string(&sealed)
+            .unwrap()
+            .replace("then = 'after'", "then = 'after'\non.asked = '@user'"),
+    )
+    .unwrap();
     assert_eq!(records[0].task.as_deref(), Some("review"));
     let manual = success(room.command(&["loop", "fire", "review"]).output().unwrap());
     assert!(
@@ -1648,7 +1657,7 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
     fs::write(&config, format!("{base}each-worktree=true\n")).unwrap();
     fs::write(
         room.env.rimz_home().join("workflows/review/workflow.toml"),
-        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     for checkout in &owned {

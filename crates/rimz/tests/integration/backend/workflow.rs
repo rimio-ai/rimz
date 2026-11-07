@@ -103,7 +103,7 @@ pub(super) fn check_layout(
         } else {
             "shell='true'\non={pass='@done',fail='@failed'}\n"
         };
-        fs::write(dir.join("workflow.toml"), format!("[workflow]\nscope='worktree'\nstart='before'\n[checks.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[steps.work]\nagent='claude,editor'\nlifecycle='{lifecycle}'\nprompt-file='prompt.md'\nthen='after'\n{bound}[checks.after]\n{after}")).unwrap();
+        fs::write(dir.join("workflow.toml"), format!("[workflow]\non-break='@failed'\nscope='worktree'\nstart='before'\n[checks.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[steps.work]\nagent='claude,editor'\nlifecycle='{lifecycle}'\nprompt-file='prompt.md'\nthen='after'\n{bound}[checks.after]\n{after}")).unwrap();
         let output = command()
             .env("PATH", path_with_front(&bin))
             .env("SHELL", &shell)

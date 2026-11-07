@@ -430,7 +430,7 @@ fn a_park_after_a_turn_end_omits_the_printed_reason() {
         ),
     )
     .unwrap();
-    let (id, run) = room.launch();
+    let (id, run) = room.launch_legacy();
     opened_turn(&room, &id, &run);
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = settled(&room.env, &id, "parked");

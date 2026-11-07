@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
     let (env, _) = fixture(
-        &format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
+        &format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
         PENDING,
     );
     for args in [

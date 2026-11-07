@@ -2,10 +2,9 @@ use super::*;
 use crate::store::workflow::RunRecord;
 use std::time::Duration;
 
-const SIMPLE: &str =
-    "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
-const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@user'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
-const DELAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok={to='@done',delay='30m'}\non.pending='build'\n";
+const SIMPLE: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
+const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
+const DELAY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok={to='@done',delay='30m'}\non.pending='build'\n";
 
 fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
     let (_home, dir) = fixture();
@@ -47,14 +46,200 @@ fn legacy_agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
 }
 
 #[test]
+fn only_agents_ask_requires_each_fireable_failure_route() {
+    let text = "[workflow]\nscope='worktree'\nstart='pick'\ndeadline='2099-01-01T00:00:00Z'\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok='work'\n[steps.work]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompts/build.md'\nthen='pick'\nmax-visits=2\n";
+    let (_home, dir) = fixture();
+    fs::write(dir.join("workflow.toml"), text).unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    for path in [
+        "checks.pick.on.timeout",
+        "checks.pick.on.invalid",
+        "steps.work.on.invalid",
+        "steps.work.on.cap",
+        "workflow.on.deadline",
+    ] {
+        assert!(
+            report.errors.iter().any(|issue| issue.path == path
+                && issue.message.contains("route")
+                && issue.message.contains("[workflow] on-break")),
+            "{path}: {report:?}"
+        );
+    }
+    let explicit = text
+        .replace("[workflow]", "[workflow]\non.deadline='@failed'")
+        .replace(
+            "[checks.pick]",
+            "[checks.pick]\non.invalid='@failed'\non.timeout='@failed'",
+        )
+        .replace(
+            "[steps.work]",
+            "[steps.work]\non.invalid='@failed'\non.cap='@failed'",
+        );
+    let unfireable = explicit
+        .replace("deadline='2099-01-01T00:00:00Z'\n", "")
+        .replace("on.deadline='@failed'\n", "")
+        .replace("timeout='1h'\n", "")
+        .replace("on.timeout='@failed'\n", "")
+        .replace("max-visits=2\n", "")
+        .replace("on.cap='@failed'\n", "")
+        .replace("on.ok='work'", "on.ok='@done'");
+    for text in [
+        explicit,
+        unfireable,
+        text.replace("[workflow]", "[workflow]\non-break='@failed'"),
+        text.replace("[workflow]", "[workflow]\non-break={agent='claude'}"),
+    ] {
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(report.errors.is_empty(), "{text}: {report:?}");
+    }
+}
+
+#[test]
+fn only_agents_ask_refuses_human_targets_even_on_dead_routes() {
+    for (path, text) in [
+        (
+            "checks.pick.on.ok",
+            SIMPLE.replace("on.ok='@done'", "on.ok='@user'"),
+        ),
+        (
+            "checks.pick.on.ok",
+            SIMPLE.replace("on.ok='@done'", "on.ok={to='@user'}"),
+        ),
+        (
+            "checks.pick.on.invalid",
+            format!("{SIMPLE}on.invalid='@user'\n"),
+        ),
+        (
+            "checks.pick.on.timeout",
+            format!("{SIMPLE}on.timeout='@user'\n"),
+        ),
+        (
+            "checks.pick.on.fail",
+            SIMPLE.replace(
+                "run='true'\non.ok='@done'",
+                "sleep='1m'\nthen='@done'\non.fail='@user'",
+            ),
+        ),
+        (
+            "checks.pick.then",
+            SIMPLE.replace("run='true'\non.ok='@done'", "sleep='1m'\nthen='@user'"),
+        ),
+        (
+            "steps.work.on.asked",
+            format!(
+                "{SIMPLE}[steps.work]\nagent='claude'\nprompt-file='prompts/build.md'\nthen='pick'\non.asked='@user'\n"
+            ),
+        ),
+        (
+            "steps.work.on.cap",
+            format!(
+                "{SIMPLE}[steps.work]\nshell='true'\ntimeout='1m'\nthen='pick'\non.cap='@user'\n"
+            ),
+        ),
+        (
+            "steps.work.on.capacity",
+            format!(
+                "{SIMPLE}[steps.work]\nshell='true'\ntimeout='1m'\nthen='pick'\non.capacity='@user'\n"
+            ),
+        ),
+        (
+            "steps.work.on.invalid",
+            format!(
+                "{SIMPLE}[steps.work]\nshell='true'\ntimeout='1m'\nthen='pick'\non.invalid='@user'\n"
+            ),
+        ),
+        (
+            "workflow.on.deadline",
+            SIMPLE.replace("[workflow]", "[workflow]\non.deadline='@user'"),
+        ),
+        (
+            "workflow.on-break",
+            SIMPLE.replace("on-break='@failed'", "on-break='@user'"),
+        ),
+    ] {
+        let (_home, dir) = fixture();
+        fs::write(dir.join("workflow.toml"), text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(
+            report.errors.iter().any(|issue| issue.path == path
+                && issue.message.contains("@user is not a route target")
+                && issue.message.contains("route to a node")
+                && issue.message.contains("[workflow] on-break")),
+            "{path}: {report:?}"
+        );
+    }
+}
+
+#[test]
+fn only_agents_ask_rejects_an_invalid_catchall_only_when_needed() {
+    let (_home, dir) = fixture();
+    for handler in ["42", "[]", "{}", "{agent=42}"] {
+        let text = SIMPLE.replace("on-break='@failed'", &format!("on-break={handler}"));
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|issue| issue.path.starts_with("workflow.on-break")),
+            "{report:?}"
+        );
+        fs::write(dir.join("workflow.toml"), text + "on.invalid='@failed'\n").unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(report.errors.is_empty(), "{report:?}");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|issue| issue.path.starts_with("workflow.on-break")),
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn only_agents_ask_reserves_break_for_the_handler() {
+    let base = SIMPLE.replace("on-break='@failed'", "on-break={agent='claude'}");
+    for (path, text) in [
+        (
+            "checks.pick.on.ok",
+            base.replace("on.ok='@done'", "on.ok='@break'"),
+        ),
+        (
+            "workflow.start",
+            base.replace("start='pick'", "start='@break'"),
+        ),
+        (
+            "steps.@break",
+            format!("{base}[steps.'@break']\nshell='true'\nthen='pick'\n"),
+        ),
+        (
+            "checks.@break",
+            format!("{base}[checks.'@break']\nrun='true'\non.ok='@done'\n"),
+        ),
+    ] {
+        let (_home, dir) = fixture();
+        fs::write(dir.join("workflow.toml"), text).unwrap();
+        let report = validate(&dir, &LoadedDefinitions::default(), None);
+        assert!(
+            report.errors.iter().any(|issue| issue.path == path
+                && issue.message.contains("@break")
+                && issue.message.contains("on-break")),
+            "{path}: {report:?}"
+        );
+    }
+}
+
+#[test]
 fn on_break_handler_fields_warn_individually() {
     for (field, path) in [
         ("future=true", "workflow.on-break.future"),
         ("prompt-file=42", "workflow.on-break.prompt-file"),
     ] {
         let text = SIMPLE.replace(
-            "start='pick'",
-            &format!("start='pick'\non-break={{agent='claude',{field}}}"),
+            "on-break='@failed'",
+            &format!("on-break={{agent='claude',{field}}}"),
         );
         let spec = loaded(&text).unwrap();
         assert!(spec.steps.contains_key("@break"), "{spec:?}");
@@ -91,7 +276,7 @@ fn judge_summary_is_required_after_invalid_optional_summaries_are_ignored() {
         }
     }
     assert_eq!(actual, [true, true, true, false]);
-    let land = "[workflow]\nscope='worktree'\nstart='collect'\n[steps.collect]\nshell='true'\ntimeout='1m'\nthen='notes'\n[checks.notes]\nrun='true'\non={unsure='notes-read',settled='@done'}\n[checks.notes-read]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Decide whether the notes need work'\non.settled='@done'\n";
+    let land = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='collect'\n[steps.collect]\nshell='true'\ntimeout='1m'\nthen='notes'\n[checks.notes]\nrun='true'\non={unsure='notes-read',settled='@done'}\n[checks.notes-read]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Decide whether the notes need work'\non.settled='@done'\n";
     fs::write(dir.join("workflow.toml"), land).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
@@ -722,7 +907,7 @@ fn workflow_duration_limit_is_one_year_inclusive() {
 
 #[test]
 fn overlong_optional_durations_warn_and_are_dropped() {
-    let sleep = "[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='365d'\n\
+    let sleep = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='365d'\n\
                  when=['pr=merged']\nfor='VALUE'\nthen='@done'\n";
     let cases = [
         (
@@ -935,7 +1120,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         (
             SIMPLE.replace(
                 "run='true'\non.ok='@done'",
-                "shell='true'\non={pass='@done',fail='@user',other='missing'}",
+                "shell='true'\non={pass='@done',fail='@failed',other='missing'}",
             ),
             "checks.pick.on.other",
         ),
@@ -962,10 +1147,10 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         ("takeover", "false"),
         ("throttle", "'on'"),
         ("capacity-wait", "'1h'"),
-        ("on.capacity", "'@user'"),
+        ("on.capacity", "'@done'"),
         ("lifecycle", "'stay'"),
         ("window", "'5h.left>=40'"),
-        ("on.asked", "'@user'"),
+        ("on.asked", "'@done'"),
         ("prompt-file", "'missing.md'"),
     ] {
         cases.push((
@@ -985,7 +1170,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
     for lifecycle in ["stay", "until"] {
         for (field, value, path) in [
             ("timeout", "'1h'", "steps.build.timeout"),
-            ("on.asked", "'@user'", "steps.build.on.asked"),
+            ("on.asked", "'@done'", "steps.build.on.asked"),
         ] {
             cases.push((
                 acyclic
@@ -1148,6 +1333,8 @@ fn create_and_validate_agree_on_ignored_fields_and_required_rules() {
         format!("{SIMPLE}future=true\n"),
         SIMPLE.replace("on.ok='@done'", "on.ok='missing'"),
         SIMPLE.replace("run='true'", "agent='claude'\nprompt-file=5"),
+        SIMPLE.replace("on-break='@failed'\n", ""),
+        SIMPLE.replace("on.ok='@done'", "on.ok='@user'"),
     ] {
         let (_home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), text).unwrap();
@@ -1182,7 +1369,13 @@ fn create_and_validate_agree_on_ignored_fields_and_required_rules() {
             .iter()
             .map(|(valid, created, _)| (*valid, *created))
             .collect::<Vec<_>>(),
-        [(true, true), (false, false), (false, false)],
+        [
+            (true, true),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false)
+        ],
         "{actual:#?}"
     );
 }

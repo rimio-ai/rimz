@@ -1,4 +1,5 @@
 [workflow]
+on-break = '@failed'
 scope = 'worktree'
 start = 'build'
 

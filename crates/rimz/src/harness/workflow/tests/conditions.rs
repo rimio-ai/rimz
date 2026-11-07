@@ -1,11 +1,11 @@
 use super::*;
 
-const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
 
 #[test]
 fn inline_cases_match_table_blocks_in_order() {
     let (_home, dir) = fixture();
-    let header = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@user',pending='@wait'}\n";
+    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
     { when = ["pr=merged"], outcome = "merged" },
@@ -53,7 +53,7 @@ for = "2m"
 #[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
@@ -74,7 +74,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         (
             CONDITION
                 .replace("timeout='1h'\n", "")
-                .replace("pending='@wait'", "pending='@done', unknown='@user'"),
+                .replace("pending='@wait'", "pending='@done', unknown='@failed'"),
             true,
             "",
         ),
@@ -86,7 +86,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         (
             CONDITION.replace(
                 "ready='@done', pending='@wait'",
-                "ready='pr', pending='pr', unknown='@user'",
+                "ready='pr', pending='pr', unknown='@failed'",
             ),
             false,
             "cycle",
@@ -110,7 +110,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
             assert_eq!(report.rows[0].runner, "condition");
             assert!(report.rows[0].edges.iter().any(|e| e.outcome == "invalid"
                 && e.target == "@failed"
-                && e.source == EdgeSource::Default));
+                && e.source == EdgeSource::OnBreak));
         }
     }
     fs::write(
@@ -220,11 +220,11 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
     let (_home, dir) = fixture();
     for runner in [
         "run='true'\non.ok='@done'",
-        "shell='true'\non={pass='@done',fail='@user'}",
+        "shell='true'\non={pass='@done',fail='@failed'}",
         "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -274,7 +274,7 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
 fn forge_demand_includes_only_default_scoped_declared_wakes() {
     for runner in [
         "run='true'\non.ok='@done'",
-        "shell='true'\non={pass='@done',fail='@user'}",
+        "shell='true'\non={pass='@done',fail='@failed'}",
         "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         for (wake, demanded) in [
@@ -295,7 +295,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             ("", false),
         ] {
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='now'\n[checks.now]\nrun='true'\non.ok='@done'\n[checks.later]\n{runner}\n{wake}\n"
+                "[workflow]\non-break='@failed'\nscope='worktree'\nstart='now'\n[checks.now]\nrun='true'\non.ok='@done'\n[checks.later]\n{runner}\n{wake}\n"
             );
             let spec: WorkflowSpec = toml::from_str(&text).unwrap();
             let expected = demanded.then(std::collections::BTreeSet::new);

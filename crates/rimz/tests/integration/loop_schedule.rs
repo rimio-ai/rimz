@@ -5974,7 +5974,7 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(
                     dir.join("workflow.toml"),
-                    "[workflow]\nscope = 'worktree'\nstart = 'ready'\n\
+                    "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'ready'\n\
                      [checks.ready]\nrun = 'true'\non.ok = '@done'\n",
                 )
                 .unwrap();
