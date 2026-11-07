@@ -15,6 +15,9 @@ pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 /// Pipe message name for the sidebar-aware smart-zoom keybind.
 pub const ZOOM_PANE_PIPE: &str = "rimz:zoom_pane";
 
+/// Pipe message name for opening the host-side palette with this client's focus.
+pub const PALETTE_PIPE: &str = "rimz:palette";
+
 /// Host-to-plugin pipe carrying the already-selected pane id for a mechanical
 /// fullscreen toggle.
 pub const TOGGLE_FULLSCREEN_PIPE: &str = "rimz:toggle_fullscreen";
@@ -473,6 +476,30 @@ pub fn zoom_pane_argv(ctx: &WakeContext<'_>) -> Vec<String> {
     }
     argv.push("--mux".to_owned());
     argv.push("zellij".to_owned());
+    argv
+}
+
+pub fn palette_argv(
+    ctx: &WakeContext<'_>,
+    mode: &str,
+    pane: Option<policy::ClientPaneId>,
+) -> Vec<String> {
+    let mut argv = vec![
+        ctx.rimz_bin.unwrap_or("rimz").to_owned(),
+        "palette".to_owned(),
+        "--popup".to_owned(),
+        "--mode".to_owned(),
+        mode.to_owned(),
+    ];
+    if let Some(pane) = pane {
+        let pane = match pane {
+            policy::ClientPaneId::Terminal(id) => format!("zellij:terminal_{id}"),
+            policy::ClientPaneId::Plugin(id) => format!("zellij:plugin_{id}"),
+        };
+        argv.extend(["--from-pane".to_owned(), pane]);
+    }
+    push_session(ctx, &mut argv);
+    argv.extend(["--mux".to_owned(), "zellij".to_owned()]);
     argv
 }
 

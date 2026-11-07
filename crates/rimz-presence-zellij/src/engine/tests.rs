@@ -179,6 +179,73 @@ fn zoom_pipe_runs_the_host_command_after_permission() {
 }
 
 #[test]
+fn palette_pipe_payloads_require_permission_and_default_to_cards() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    let focus = Some(ProjectedPaneId::Terminal(7));
+    assert!(engine.on_palette_pipe(Some("commands"), focus).is_empty());
+    grant(&mut engine, 1, &host);
+    for (payload, mode) in [
+        (Some("cards"), "cards"),
+        (Some("commands"), "commands"),
+        (Some("new"), "new"),
+        (None, "cards"),
+        (Some("unknown"), "cards"),
+        (Some("worktrees"), "cards"),
+    ] {
+        assert_eq!(
+            engine.on_palette_pipe(payload, focus),
+            vec![Effect::RunCommand {
+                argv: strings(&[
+                    "/bin/rimz",
+                    "palette",
+                    "--popup",
+                    "--mode",
+                    mode,
+                    "--from-pane",
+                    "zellij:terminal_7",
+                    "--session-name",
+                    "session-1",
+                    "--mux",
+                    "zellij",
+                ]),
+                topology_issued_at: None,
+            }],
+            "{payload:?}",
+        );
+    }
+    engine.on_permission_denied(2, &host);
+    assert!(engine.on_palette_pipe(Some("cards"), focus).is_empty());
+}
+
+#[test]
+fn palette_pipe_without_focus_still_opens_but_a_muted_copy_does_not() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    assert_eq!(
+        engine.on_palette_pipe(None, None),
+        vec![Effect::RunCommand {
+            argv: strings(&[
+                "/bin/rimz",
+                "palette",
+                "--popup",
+                "--mode",
+                "cards",
+                "--session-name",
+                "session-1",
+                "--mux",
+                "zellij",
+            ]),
+            topology_issued_at: None,
+        }],
+    );
+    engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    assert!(engine.muted);
+    assert!(engine.on_palette_pipe(Some("new"), None).is_empty());
+}
+
+#[test]
 fn fullscreen_pipe_only_projects_a_valid_host_selected_pane_after_permission() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());

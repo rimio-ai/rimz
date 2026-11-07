@@ -698,15 +698,18 @@ An announced topology with neither `clients` nor the `focused_pane` field of plu
 
 The first manifest after load names every pre-existing pane, so the host accepts it as a baseline, and an announced baseline emits only one topology nudge.
 
-Five named pipes reach the plugin from the host:
+Six named pipes reach the plugin from the host:
 
 | Pipe | Effect |
 | --- | --- |
 | `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives a muted same-id copy with its current manifest and clients withheld until a post-dump client query replies. |
 | `rimz:focus_sidebar` | Fork `rimz sidebar focus --toggle`; the focus keybind sends this. |
 | `rimz:zoom_pane` | Fork `rimz pane zoom`; the zoom keybind sends this. |
+| `rimz:palette` | Fork `rimz palette --popup --mode <mode>` with the pressing client's focused pane as `--from-pane` when known. Payloads `cards`, `commands`, and `new` select the mode; absent or unknown payloads select `cards`. |
 | `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
 | `rimz:retire` | Retire this instance if the payload's writer identity outranks it ([retirement](#retirement)). |
+
+The palette pipe reads `get_focused_pane_info` in the pressing client's plugin instance. The shell only projects that pane, the engine gates muting and permissions and selects the mode, and `wire::palette_argv` supplies the launcher argv with the session and `--mux zellij`. A failed focus query omits `--from-pane`; the launcher never receives `--client` on Zellij. The pipe adds no permission, subscribed event, or keybinding.
 
 ### Poke discipline
 
@@ -744,7 +747,7 @@ RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin before spawn
 | Permission | What it grants |
 | --- | --- |
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
-| `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` forks. |
+| `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, `rimz pane zoom`, and `rimz palette --popup` forks. |
 | `Reconfigure` | The resolved session option list and optional focus and zoom keybinds, applied without writing `config.kdl`. |
 | `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id. |
 | `InterceptInput` | `UserAction` observations for the per-client input clock; no action payload is stored or forwarded. Requested even with `typing_hold = "off"`. |
