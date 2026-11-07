@@ -285,6 +285,72 @@ fn bare_rimz_command_events_wait_for_pulled_argv_without_deferring_other_command
 }
 
 #[test]
+fn command_events_keep_bound_same_kind_agent_card() {
+    let mut snapshot = pulled(vec![pane("terminal_1", "claude")], 10);
+    snapshot.wired_kinds = vec!["claude".to_owned(), "codex".to_owned()];
+    let now = snapshot.now;
+    let row = snapshot.rows_mut().next().unwrap();
+    row.id = "session-plain".to_owned();
+    row.name = "claude".to_owned();
+    row.attention_at_ms = Some(2_000);
+    row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
+            handle: Some("plain".to_owned()),
+            registered_at: Some(now),
+            ..Default::default()
+        },
+    ));
+    let before = snapshot.rows().next().unwrap().clone();
+    let command = "rimz agents exec claude --worktree-path /repo/main";
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let mut events = EventStore::default();
+    append(
+        &mut events,
+        11,
+        SidebarEvent::CommandChanged {
+            pane_id: pane_id.clone(),
+            command: command.to_owned(),
+        },
+    );
+    let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    let row = fused.rows().next().unwrap();
+    assert_eq!(
+        row.as_agent()
+            .unwrap()
+            .handle
+            .as_deref()
+            .unwrap_or(&row.name),
+        "plain"
+    );
+    assert_eq!(
+        (&row.id, &row.name, &row.card),
+        (&before.id, &before.name, &before.card)
+    );
+    assert_eq!(row.attention_at_ms, before.attention_at_ms);
+    assert_eq!(row.pane.as_ref().unwrap().command.as_deref(), Some(command));
+
+    for (command, name, is_agent) in [("codex --quiet", "codex", true), ("zsh", "zsh", false)] {
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            12,
+            SidebarEvent::CommandChanged {
+                pane_id: pane_id.clone(),
+                command: command.to_owned(),
+            },
+        );
+        let (changed, _, _) = fuse_owned(fused.clone(), events, None, 12);
+        let row = changed.rows().next().unwrap();
+        assert_eq!(row.id, pane_id.as_str());
+        assert_eq!(
+            (row.name.as_str(), row.is_agent(), row.attention_at_ms),
+            (name, is_agent, Some(2_000)),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn command_events_keep_pane_slots_and_preserve_process_sinks() {
     for agent_before in [false, true] {
         let mut pane = pane("terminal_1", "zsh");
