@@ -189,7 +189,7 @@ An attempt can end as `died` when an agent fails to start or crashes, or when a 
 - `record.json`, the run's current position, which is the truth the engine reads.
 - `journal.jsonl`, the append-only history behind `show --history`'s folded rows; `show --json` includes every entry.
 - `workflow.toml`, a sealed copy of the definition. Editing the original changes later runs, never this one. Scripts and prompt files are not copied: each check and launch reads them fresh from `~/.rimz/workflows/<name>/`.
-- `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, `signs/`, script stderr and shell-check logs (`<seq>.check.log`), command-step logs (`<seq>.step.log`), and judge answers (`<seq>.check.json`). Your nodes keep their scratch here; the run record and journal sit outside it.
+- `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, `signs/`, script stderr and shell-check logs (`<seq>.check.log`), command-step logs (`<seq>.step.log`), and judge answers (`<seq>.check.json`). Your nodes keep temporary work here and kept memory through the `notes/` link; the run record and journal sit outside it.
 
 RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the `input`, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
 
@@ -494,7 +494,9 @@ The engine stays simple because nodes follow four rules.
 
 Use a sleep check, not a command that sleeps, for a pause between nodes. It does not count a visit or replace the previous attempt, input, or key.
 
-`notes/` is scratch for your nodes, and RimZ never reads it. A check that walks a list can record there the items it finished. Name each file after the item it records, so a repeat overwrites its own file and never adds a second one.
+`$RIMZ_WORKFLOW_DIR/notes/` links to the run's kept notes folder, under the room's `automation-notes/<yyyymmdd>/<HHMMSS>Z-workflow-<workflow>-<lane>/`. Each agent step's launch brief names `<step>-notes.md` there as its working memory across visits, restarts, and its subagents. Write it for someone arriving cold, including changes outside the repository: pushes, PR or issue comments, databases, and remote services. Only that step's agent and its subagents write its file. Set `notes = false` on an agent step to omit that instruction; command steps warn and ignore the field. Runs created before notes support keep their old scratch directory and receive no notes instruction.
+
+RimZ never reads the notes. A check that walks a list can record there the items it finished too. Name each file after the item it records, so a repeat overwrites its own file and never adds a second one. Notes survive run-home cleanup and default to permanent retention; `gc.automation_notes_retention` can expire closed runs' folders, and a hard reset removes them.
 
 ### The check answer
 

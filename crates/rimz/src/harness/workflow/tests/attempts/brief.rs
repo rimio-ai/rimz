@@ -1,9 +1,10 @@
 use super::*;
 
 mod checks;
+mod memory;
 
 const INTRO: &str = "You are one step of a RimZ workflow: a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
-const MORE: &str = "`$RIMZ_WORKFLOW_DIR/context.json` holds this run's input and the previous attempt in full. `rimz workflow show $RIMZ_WORKFLOW_RUN` draws the graph with this run's position and trail.";
+const MORE: &str = "`rimz workflow show` draws the graph with this run's position and trail, and `rimz workflow show --history` lists every step and check so far; a subagent of yours runs the same commands to find this run.";
 const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, RimZ closes your pane and runs the check `watch`. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires";
 const STOPS: &str =
     "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
@@ -511,6 +512,6 @@ fn judge_note_is_short_and_has_no_step_or_answer_contract_paragraphs() {
     let text = crate::harness::workflow::brief::judge(&spec, &record);
     assert_eq!(
         text,
-        "You are a check in a RimZ workflow: a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node. You are the check `judge` of the workflow `test` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\n[judge]\n\nThe user started this run by hand with `rimz workflow run`.\n\nYour answer decides where the run goes next.\n\n`$RIMZ_WORKFLOW_DIR/context.json` holds this run's input and the previous attempt in full."
+        "You are a check in a RimZ workflow: a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node. You are the check `judge` of the workflow `test` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\n[judge]\n\nThe user started this run by hand with `rimz workflow run`.\n\nYour answer decides where the run goes next.\n\n`rimz workflow show $RIMZ_WORKFLOW_RUN --history` lists every step and check so far."
     );
 }

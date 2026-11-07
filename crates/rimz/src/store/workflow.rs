@@ -524,6 +524,8 @@ pub struct RunRecord {
     pub scope: Scope,
     pub project_root: PathBuf,
     pub created_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<PathBuf>,
     pub state: RunState,
     pub park: Option<Park>,
     pub node: String,
@@ -783,9 +785,17 @@ pub fn initialize(
 ) -> Result<()> {
     let paths = state.workflow(&record.id);
     std::fs::create_dir_all(&paths.work).map_err(WorkflowStoreErr::io(&paths.work))?;
-    for dir in [paths.notes(), paths.signs(None)] {
-        std::fs::create_dir_all(&dir).map_err(WorkflowStoreErr::io(&dir))?;
+    match &record.notes {
+        Some(relative) => {
+            let run = state.notes_run(crate::disk::paths::Class::AutomationNotes, relative);
+            let run = run.canonicalize().map_err(WorkflowStoreErr::io(&run))?;
+            crate::disk::atomic::symlink_atomically(&run, &paths.notes())?;
+        }
+        None => {
+            std::fs::create_dir_all(paths.notes()).map_err(WorkflowStoreErr::io(&paths.notes()))?
+        }
     }
+    std::fs::create_dir_all(paths.signs(None)).map_err(WorkflowStoreErr::io(&paths.signs(None)))?;
     // Publish every new directory entry up to the already-existing room root.
     for dir in paths.work.ancestors().take_while(|dir| *dir != state.root) {
         crate::disk::atomic::sync_dir(dir)?;

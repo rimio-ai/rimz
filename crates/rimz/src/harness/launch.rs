@@ -1277,7 +1277,7 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
-    if let Some(run) = &reminders.team_notes_run {
+    for run in &reminders.notes_runs {
         adapter.allow_team_notes_args(
             run,
             (cwd, artifact_dir),

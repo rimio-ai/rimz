@@ -308,10 +308,12 @@ fn replacement_posture(
                 .settle_permission_mode(&mut cell.args, Some(mode), None);
     }
     cell.launch.isolation = agent.isolation;
-    cell.launch
+    let record = cell.launch.record.get_or_insert_with(Default::default);
+    record.agent = Some(alias.into());
+    record.notes = agent
         .record
-        .get_or_insert_with(Default::default)
-        .agent = Some(alias.into());
+        .as_ref()
+        .and_then(|record| record.notes.clone());
     Ok((
         cell.kind.clone(),
         ResumePosture {
@@ -452,12 +454,18 @@ mod tests {
             fast: true,
             agent: None,
             auto_compact: None,
+            notes: Some("20261107/002336Z-loop-review".into()),
         }));
         let (kind, posture) =
             replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
         assert_eq!(kind.as_str(), "codex");
         assert_eq!(posture.launch.model.as_deref(), Some("gpt-6.1-sol"));
         assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
+        assert_eq!(
+            posture.launch.record.as_ref().unwrap().notes,
+            agent.record.as_ref().unwrap().notes,
+            "changing the provider must keep this run's notes"
+        );
         assert!(!posture.launch.fast);
         assert_eq!(
             serde_json::to_value(posture.launch.record.as_ref().unwrap()).unwrap()["auto_compact"],

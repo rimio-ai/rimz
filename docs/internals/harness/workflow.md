@@ -173,14 +173,16 @@ journal.jsonl      append-only evidence: transitions, and a row per check evalua
 workflow.toml      sealed specification bytes
 work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
-  notes/           node-owned cross-node scratch, created with the run
+  notes/           link to kept automation notes (legacy runs: scratch directory)
   signs/           live step guidance, created with the run
   <seq>.check.log  run-check stderr or shell-check combined output
   <seq>.check.json judge's whole saved answer
   <seq>.step.log   command-step stdout and stderr
 ```
 
-The record, the sealed spec, and the journal sit outside the node-writable `work/`. Notes, signs, and step claims live under `work/`, and the engine reads only `signs/<step>.md`, never notes or claims. Every evaluation and attempt takes a fresh `seq`, a judge retry and a re-run after a dead host included. A node therefore keys a `notes/` write by the item it records, since keying it by `seq` would not make a repeat a no-op.
+The record, the sealed spec, and the journal sit outside the node-writable `work/`. Notes are reached through the link in `work/`; signs and step claims live under `work/`, and the engine reads only `signs/<step>.md`, never notes or claims. Every evaluation and attempt takes a fresh `seq`, a judge retry and a re-run after a dead host included. A node therefore keys a `notes/` write by the item it records, since keying it by `seq` would not make a repeat a no-op.
+
+Creation allocates `automation-notes/<yyyymmdd>/<HHMMSS>Z-workflow-<workflow>-<lane>/` from the record's `created_at` sample and stores its root-relative path in optional `RunRecord.notes`. Its v2 `run.json` names the workflow, run ID, and scope checkout. Every step cell carries that relative path in `LaunchRecord.notes`, and launched descendants inherit it from their parent's row. Relaunches preserve it; forks clear it. Claude's additional-directory grants include that run folder, rejecting paths outside the room's automation archive, and the checkout's valid team run when present. Team reminders and memory listings keep resolving through the checkout's `.rimz/team` link. Agent-step briefs name `<step>-notes.md` unless `notes = false`; command steps warn and ignore the field. Absent record fields preserve legacy runs' behavior. GC reads current workflow and agent ownership under the workspace lock and holds it through removal; non-terminal workflows and live agent rows protect their folders, and an unreadable rollup protects all automation notes.
 
 Soft reset keeps run homes, and hard reset removes them, unlike supervised-run records. Garbage collection removes a terminal run's whole home once `record.json` is older than the seven-day owned grace. A home without `record.json` is a crash during creation, which every reader skips, and it goes once the home directory itself passes the same grace.
 

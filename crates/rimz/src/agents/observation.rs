@@ -57,6 +57,9 @@ pub struct LaunchRecord {
     /// Configured native compaction count in tokens, before the provider's runtime cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<u64>,
+    /// Run memory, relative to the room's automation-notes root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<std::path::PathBuf>,
 }
 
 impl LaunchRecord {
@@ -72,6 +75,7 @@ impl LaunchRecord {
             agent: None,
             fast,
             auto_compact: None,
+            notes: None,
         }))
     }
 }

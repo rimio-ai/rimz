@@ -14,6 +14,7 @@ fn saved() -> AgentState {
             fast: false,
             agent: None,
             auto_compact: None,
+            ..Default::default()
         })),
         ..agent("claude", "saved", "/repo", 0)
     }

@@ -57,6 +57,54 @@ fn new_runs_seal_definitions_at_version_three() {
     assert_eq!(actual, [(3, true); 3]);
 }
 
+#[test]
+fn new_runs_keep_dated_notes_from_the_creation_instant() {
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    let value = until(&env, &id, |value| value["record"]["wait"].is_object());
+    let record = &value["record"];
+    assert!(
+        record["notes"].is_string(),
+        "new runs need kept notes: {record:#}"
+    );
+    let relative = Path::new(record["notes"].as_str().unwrap());
+    let state = env.state_path_for(&env.project_root);
+    let kept = state.notes_run(rimz::disk::paths::Class::AutomationNotes, relative);
+    let created: jiff::Timestamp = record["created_at"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        relative.parent().unwrap().to_str().unwrap(),
+        created.strftime("%Y%m%d").to_string()
+    );
+    assert!(
+        relative
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(&format!("{}-workflow-review-", created.strftime("%H%M%SZ")))
+    );
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(kept.join("run.json")).unwrap()).unwrap();
+    assert_eq!(
+        (
+            manifest["kind"].as_str(),
+            &manifest["run"],
+            &manifest["created_at"],
+            &manifest["checkout"]
+        ),
+        (
+            Some("workflow"),
+            &record["id"],
+            &record["created_at"],
+            &record["scope"]["path"]
+        )
+    );
+    assert_eq!(
+        fs::read_link(state.workflow(&id.parse().unwrap()).notes()).unwrap(),
+        kept.canonicalize().unwrap()
+    );
+}
+
 fn command(env: &Env, args: &[&str]) -> std::process::Output {
     env.rimz().args(args).output().unwrap()
 }

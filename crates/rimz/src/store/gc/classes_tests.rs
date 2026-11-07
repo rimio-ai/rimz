@@ -2,6 +2,9 @@ use super::*;
 use std::fs;
 use std::time::{Duration, SystemTime};
 
+#[path = "classes_notes_tests.rs"]
+mod notes;
+
 #[test]
 fn never_swept_tracks_state_classes_and_team_notes_retention() {
     let classes = Class::STATE.into_iter().chain(Class::RUNTIME);

@@ -214,6 +214,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
         fast: false,
         agent: None,
         auto_compact: None,
+        ..Default::default()
     };
     let stamp = tier_stamp("opus");
     for profile in [Some("planner"), None] {
@@ -503,6 +504,7 @@ fn recorded_model_override_keeps_the_stamped_family_render() {
         fast: false,
         agent: None,
         auto_compact: None,
+        ..Default::default()
     };
     let stamp = tier_stamp("astra");
     let posture = resolve_posture(
@@ -704,6 +706,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
         fast: false,
         agent: Some("reviewer".into()),
         auto_compact: None,
+        ..Default::default()
     };
     let resolve = |profiles: &ProfilesConfig| {
         resolve_posture(
