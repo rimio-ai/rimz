@@ -111,11 +111,11 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the parked-workflow notice, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, and the conflicted pull request marker and cockpit PR count |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
-| `accent` | data: the `◎` sessions glyph and the `↗` output marker |
+| `accent` | data: the `◎` sessions glyph, the `↗` output marker, and the card's `✎` typing pen |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
-| `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, and not-tracked fix text |
-| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, and the compacted-context meter's empty track while it has no size estimate |
+| `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, not-tracked fix text, and the card's due-message count |
+| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, the compacted-context meter's empty track while it has no size estimate, and the card's `↧` queued-message glyph |
 | `faint` | faintest chrome: measured bar tracks, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
@@ -151,7 +151,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed inactive group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the inactive chip; and the inactive chip's `inactive_closed` / `inactive_open` |
 | `pipeline` | a team's stage dots and workflow rails; `check_passed` (`◆`) and `check_future` (`◇`) distinguish reached and unreached checks |
-| `card` | the agent card body: subagents, waits, parked background |
+| `card` | the agent card body: subagents, waits, parked background, `message_queued` (`↧` / `󱃚`) and `typing` (`✎` / `󰏫`) |
 | `process` | the CPU, memory, and IO row |
 | `keys` | the help overlay's action leads |
 | `chrome` | framing, spines, tabs, badges, the search lead, and the help-box frame; `stall` is `⧗` (Nerd Font `󰾆`), and `stall_fading` is `↓` in both sets |

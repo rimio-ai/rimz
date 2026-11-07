@@ -155,6 +155,8 @@ These helpers round-trip a color through RGB (`color_to_rgb`) and quantize it ag
 
 `GLYPH_CATALOG` in `theme/glyphs.rs` is the home of every shipped glyph. It holds one row per `GlyphRole`, in the enum's discriminant order: a Unicode glyph and an optional Nerd Font icon. A `None` icon keeps the Unicode shape in both presets. The drawn gauges, box-drawing chrome, spines, spinner and clock heads, and the compacting wave all take that path, because the terminal grid draws them more precisely than an icon. Sidebar render code writes no shipped glyph by hand, with two exceptions. The spinner frame sequences live in `render/animation.rs`. The Nerd Font elapsed clock draws eighths from its own `NERD_AGE_SLICES` table in `sidebar_pane/render/labels/glyphs.rs` (`elapsed_glyph`), so `[theme.glyphs.nerd_font.clock]` quarter-face overrides do not reach those slices. Its `over` override supplies the ring on the cache-expired line or child quiet past the stall window; card and wait age faces never ring, using the hour scale and staying full past it.
 
+The `card.message_queued` and `card.typing` roles resolve to `↧` / `✎`, or Nerd Font v3 U+F10DA / U+F03EB. The renderer measures resolved glyph widths, including user overrides, before admitting the message cluster.
+
 `GlyphSet::resolve(&ThemeConfig)` runs one pass:
 
 1. `ThemeConfig::glyph_set_source` picks the preset: `[theme.glyphs] set` if present, else `nerd_font` under `style = "modern"`, else `unicode`.
@@ -211,6 +213,8 @@ One function per typed enum matches it with no wildcard: `agent` (`AgentStatus`)
 In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for fixed roles, and `Component::resolve` is its one mapping to a palette slot. `Component::CompactionPoint` maps the context meter's wall and the identity label's point to `meta`, both at `DIM` weight; the `/window` suffix uses `muted`. `Theme` has no `accent`, `cool`, or `meta` accessor, so sidebar render code reaches a categorical slot only by naming a component: the intent shows at the call site while the hue stays one central decision. The one other route is the animation defaults in `render/animation.rs`, which pick status-head colors through `Palette::animation_color` because those colors are user-configurable under `[theme.animations]`. There the paused and sleeping heads default to `cool`, and the compacting wave to `meta`.
 
 Two kinds of sidebar color stay off the component layer. Amount-driven tones come from `Theme::heat_tone`, `warm_heat_tone`, and `calm_tone`. Fixed positive, floor, and negative chrome (diff churn, gate notices) uses the flat `Theme::good`, `warn`, and `alarm`, where the tier name is the intent. Trunk markers resolve through component roles; the conflict marker and cockpit PR count share `Component::WorktreePrConflict` so a retune moves both.
+
+Message marks have their own component tokens: `MessageQueued` maps the glyph to `muted`, and `Typing` maps the pen to `accent`; the queued count uses `body`. Adding a mark includes its component in `Component::ALL` and its slot in the [theme guide](../guide/theme.md#color-slots).
 
 ## Shared value formats
 
