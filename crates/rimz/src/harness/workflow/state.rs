@@ -11,6 +11,21 @@ use crate::store::workflow::{
 };
 use crate::utils::time::TimeInputErr;
 
+/// What a failed judge evaluation does next, decided once in `Transition::finish_judge`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JudgeFailure {
+    /// The evaluation was canceled.
+    Canceled,
+    /// A provider limit held the judge; it rechecks after the reset.
+    Limited,
+    /// The first failure; the judge runs once more.
+    Retry,
+    /// A second failure on a run sealed before on-break, parked at `@user`.
+    Park,
+    /// A second failure on a new run, routed through the check's `invalid` edge.
+    Route,
+}
+
 pub(super) struct Transition<'a> {
     pub record: RunRecord,
     pub spec: &'a WorkflowSpec,
@@ -63,9 +78,16 @@ impl Transition<'_> {
         }
         // The successful case returned above.
         let reason = object.expect_err("failed judge evaluation");
-        let routed = self.record.check_retry > 0
-            && self.spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
-            && !matches!(failure, "canceled" | "limited");
+        let disposition = match failure {
+            "canceled" => JudgeFailure::Canceled,
+            "limited" => JudgeFailure::Limited,
+            _ if self.record.check_retry == 0 => JudgeFailure::Retry,
+            _ if self.spec.route_defaults == crate::store::workflow::RouteDefaults::Park => {
+                JudgeFailure::Park
+            }
+            _ => JudgeFailure::Route,
+        };
+        let routed = disposition == JudgeFailure::Route;
         let outcome = if routed { "invalid" } else { failure };
         let mut object = self.engine_object(json!({"outcome":outcome, "reason":reason}));
         if routed {
@@ -88,32 +110,32 @@ impl Transition<'_> {
         );
         self.record.attempt = None;
         self.record.recheck_at = None;
-        match failure {
-            "canceled" => Ok(true),
-            "limited" => {
+        match disposition {
+            JudgeFailure::Canceled => Ok(true),
+            JudgeFailure::Limited => {
                 self.record.recheck_at =
                     self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
                 Ok(false)
             }
-            _ if self.record.check_retry == 0 => {
+            JudgeFailure::Retry => {
                 self.record.check_retry = 1;
                 self.record.check_retry_context = Some(json!({"outcome":failure,"reason":reason}));
                 Ok(true)
             }
-            _ => {
-                if self.spec.route_defaults == crate::store::workflow::RouteDefaults::Park {
-                    self.route("@user", object, ParkReason::Check)?;
-                } else {
-                    let target = self.spec.engine_target(&self.record.node, "invalid");
-                    self.push(
-                        Some(seq),
-                        JournalEvent::Route {
-                            outcome: "invalid".into(),
-                            input: object.clone(),
-                        },
-                    );
-                    self.route(&target, object, ParkReason::Check)?;
-                }
+            JudgeFailure::Park => {
+                self.route("@user", object, ParkReason::Check)?;
+                Ok(false)
+            }
+            JudgeFailure::Route => {
+                let target = self.spec.engine_target(&self.record.node, "invalid");
+                self.push(
+                    Some(seq),
+                    JournalEvent::Route {
+                        outcome: "invalid".into(),
+                        input: object.clone(),
+                    },
+                );
+                self.route(&target, object, ParkReason::Check)?;
                 Ok(false)
             }
         }
