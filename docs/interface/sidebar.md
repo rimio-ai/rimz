@@ -563,7 +563,7 @@ Here the shell was first seen between the two agents' launches, so it sits betwe
    cargo build --release
 ```
 
-An idle row is `○` and the program's name. A working row spins, shows the running command on a second line, and shows CPU, memory, and I/O on the right once all three have values. A process stuck in uninterruptible sleep for ten seconds, or left as a zombie, shows `!`. The name is the program the pane really runs: RimZ reads past `env`, `sudo`, `timeout`, `sh -c`, and `node` or `npx` launchers, so `sudo npm install -g @openai/codex` reads as `npm`. Process rows are never counted in the cockpit. They are jump targets, and when a tracked agent starts in the pane the row becomes that agent's card.
+An idle row is `○` and the program's name. A working row spins, shows the running command on a second line, and shows CPU, memory, and I/O on the right once all three have values. A process stuck in uninterruptible sleep for ten seconds, or left as a zombie, shows `!`. The name is the program the pane really runs: RimZ reads past `env`, `sudo`, `timeout`, `sh -c`, and `node` or `npx` launchers, so `sudo npm install -g @openai/codex` reads as `npm`. Process rows are never counted in the cockpit. They are jump targets, and when a tracked agent starts in the pane the row becomes that agent's card. During an in-place launch, RimZ's launcher and supervised wrapper leave the shell's row idle and without a command detail until the card replaces it. Other RimZ commands, including `rimz agents logs -f`, keep their working row and detail.
 
 ### Not-tracked rows
 

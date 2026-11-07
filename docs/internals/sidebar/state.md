@@ -629,6 +629,8 @@ Each observation also carries event eligibility by pane role, which keeps each b
 | Sidebar | No open. Close, command, and direct focus. | Direct focus only |
 | Launch chrome | All events (an open carries no command) | None |
 
+Launch chrome is `rimz agents` followed by an implicit launch spec, the `launch` verb, or launch options before the spec. Every other agents subcommand and alias, hidden helpers included, and `-h` or `--help` remain ordinary commands. Zellij scrubs only launch chrome. A command overlay containing only the bare program name `rimz` leaves the pulled rows intact until the next pull supplies argv; it never guesses whether that command launches an agent. Other command overlays remain immediate. For ordinary tmux RimZ commands this postpones the busy row by one data tick while watched, or up to the five-second backstop while unwatched.
+
 View switches follow their own rule on both backends: landing on launch chrome emits `FocusChanged`, and landing on a sidebar with a working sibling emits `FocusStranded`.
 
 ### Push channels

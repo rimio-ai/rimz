@@ -34,6 +34,17 @@ pub(crate) fn pane_worktree_path(pane: &PaneRef) -> Option<&str> {
 
 pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     let command = display_command(pane);
+    let launch_plumbing = pane.pane_id.mux() == crate::MuxName::Tmux
+        && pane
+            .foreground_cmdline
+            .as_deref()
+            .or(command)
+            .is_some_and(|command| {
+                let program = crate::proc::command::effective_program_info(command);
+                crate::pane::command_is_launch_chrome(command)
+                    || (crate::proc::command::basename(program.root_program) == "rimz"
+                        && program.program != program.root_program)
+            });
     let elevated = pane.elevated_agent.as_ref();
     let program = elevated
         .map(|agent| agent.kind.as_str().to_owned())
@@ -45,7 +56,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         })
         .or_else(|| command.map(program_label))
         .unwrap_or_else(|| "process".to_owned());
-    let state = if elevated.is_some() {
+    let state = if elevated.is_some() || launch_plumbing {
         ProcessState::Idle
     } else if pane
         .foreground_cmdline
@@ -59,14 +70,20 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     };
     // An active pane anchors its primary line on the shell that owns it (its root
     // process), so the line stays put as commands come and go while the live
-    // command rides the second line. An idle pane keeps its foreground program as
-    // its one label. Where the process backend can't name the shell, fall back
-    // to the program.
+    // command rides the second line. Launch plumbing keeps that shell label idle;
+    // other idle panes keep their foreground program. Where the process backend
+    // can't name the shell, fall back to the program.
     let name = if elevated.is_some() {
         program.clone()
-    } else if state.is_busy() {
+    } else if state.is_busy() || launch_plumbing {
         pane.pane_pid
             .and_then(crate::proc::comm)
+            .or_else(|| {
+                pane.spawn_command
+                    .as_deref()
+                    .filter(|_| launch_plumbing)
+                    .map(program_label)
+            })
             .unwrap_or_else(|| program.clone())
     } else {
         program.clone()
@@ -189,6 +206,64 @@ mod tests {
     use super::*;
 
     use crate::store::snapshot::testkit::*;
+
+    #[test]
+    fn tmux_launch_plumbing_keeps_the_shell_row_idle_without_details() {
+        let cases = [
+            ("rimz agents plain", ProcessState::Idle, None),
+            ("rimz agents launch plain", ProcessState::Idle, None),
+            (
+                "rimz agents exec claude --request-file /request",
+                ProcessState::Idle,
+                None,
+            ),
+            (
+                "rimz agents exec claude --request-file /request --supervise /park",
+                ProcessState::Idle,
+                None,
+            ),
+            (
+                "rimz loop fire sync-repo-rimz",
+                ProcessState::Busy,
+                Some("rimz loop fire sync-repo-rimz"),
+            ),
+            (
+                "rimz agents logs -f @coder",
+                ProcessState::Busy,
+                Some("rimz agents logs -f @coder"),
+            ),
+            (
+                "rimz agents list",
+                ProcessState::Busy,
+                Some("rimz agents list"),
+            ),
+        ];
+        let actual = cases.map(|(command, _, _)| {
+            let mut pane = pane("%1", "rimz", "/repo");
+            pane.spawn_command = Some("bash".to_owned());
+            pane.foreground_cmdline = Some(command.to_owned());
+            let row = row_from_process(&pane, Timestamp::now());
+            assert_eq!(row.pane.as_ref().unwrap(), &pane);
+            (
+                row.name.clone(),
+                row.process_state().unwrap(),
+                row.as_process().unwrap().command_detail.clone(),
+            )
+        });
+        assert_eq!(
+            actual,
+            cases.map(|(_, state, detail)| (
+                (if state == ProcessState::Idle {
+                    "bash"
+                } else {
+                    "rimz"
+                })
+                .to_owned(),
+                state,
+                detail.map(ToOwned::to_owned)
+            ))
+        );
+    }
 
     #[test]
     fn process_activity_follows_the_real_program() {

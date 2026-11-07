@@ -155,10 +155,10 @@ pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {
     crate::proc::program_label(command) == SIDEBAR_CHROME_TITLE
 }
 
-/// Whether a pane command is the transient `rimz agents <spec>` launcher rather
-/// than a query subcommand. The launcher's argv is chrome, never a pane tenant,
-/// so every Zellij command source scrubs it before a consumer reads it.
-pub(crate) fn command_is_launch_chrome(command: &str) -> bool {
+/// Whether a pane command launches an agent, implicitly or through `launch`.
+/// Other agents subcommands, aliases, hidden helpers, and help are not chrome.
+/// Zellij scrubs launch argv; tmux keeps the shell row idle until binding.
+pub fn command_is_launch_chrome(command: &str) -> bool {
     let mut tokens = command.split_whitespace();
     let Some(program) = tokens.next() else {
         return false;
@@ -175,7 +175,55 @@ pub(crate) fn command_is_launch_chrome(command: &str) -> bool {
     };
     !matches!(
         spec_or_command,
-        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
+        "validate"
+            | "explain"
+            | "check"
+            | "register"
+            | "profiles"
+            | "list"
+            | "ls"
+            | "ps"
+            | "show"
+            | "inspect"
+            | "logs"
+            | "history"
+            | "attribution"
+            | "top"
+            | "focus"
+            | "fork"
+            | "molt"
+            | "wait"
+            | "stop"
+            | "restart"
+            | "compact"
+            | "resume"
+            | "refresh"
+            | "budget"
+            | "exec"
+            | "session-step"
+            | "run-command"
+            | "auto-continue"
+            | "idle-compact"
+            | "soft-compact"
+            | "idle-stop"
+            | "hibernate"
+            | "wake"
+            | "wake-refault"
+            | "cache-keepalive"
+            | "auto-redeem"
+            | "budget-park"
+            | "park-notice"
+            | "stall-notice"
+            | "stall-nudge"
+            | "run-timeout"
+            | "orphan-subagent"
+            | "subagent-digest"
+            | "supervise-duty"
+            | "refresh-usage"
+            | "refresh-context"
+            | "help"
+            | "-h"
+            | "--help"
     )
 }
 
@@ -411,24 +459,29 @@ mod tests {
 
     #[test]
     fn launch_chrome_is_agents_launch_not_agents_subcommand() {
-        assert!(command_is_launch_chrome(
-            "rimz agents claude,codex --worktree=quality-pass"
-        ));
-        assert!(command_is_launch_chrome(
-            "/home/me/.cargo/bin/rimz agents claude --worktree"
-        ));
-        for command in [
-            "cargo build",
-            "rimz agents exec codex",
-            "rimz agents wait swift-otter",
-            "rimz agents list",
-            "rimz agents ls",
-            "rimz agents show swift-otter",
-            "rimz agents focus swift-otter",
-            "rimz agents stop swift-otter",
-        ] {
-            assert!(!command_is_launch_chrome(command), "{command}");
-        }
+        let cases = [
+            ("rimz agents claude,codex --worktree=quality-pass", true),
+            ("/bin/rimz agents claude --worktree", true),
+            ("rimz agents launch plain", true),
+            ("rimz agents --new-pane plain", true),
+            ("cargo build", false),
+            ("rimz agents exec codex", false),
+            ("rimz agents wait swift-otter", false),
+            ("rimz agents list", false),
+            ("rimz agents ls", false),
+            ("rimz agents show swift-otter", false),
+            ("rimz agents focus swift-otter", false),
+            ("rimz agents stop swift-otter", false),
+            ("rimz agents logs -f @coder", false),
+            ("rimz agents history @coder", false),
+            ("rimz agents restart @coder", false),
+            ("rimz agents --help", false),
+            ("rimz agents -h", false),
+        ];
+        assert_eq!(
+            cases.map(|(command, _)| (command, command_is_launch_chrome(command))),
+            cases
+        );
     }
 
     #[test]
