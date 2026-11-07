@@ -14,7 +14,7 @@ const OLDER_THAN_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
-/// Forever-or-duration retention for histories and team archives.
+/// Forever-or-duration retention for histories and run-note archives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HistoryRetention {
     #[default]
@@ -62,6 +62,8 @@ pub struct GcConfig {
     pub transcript_retention: HistoryRetention,
     #[serde(deserialize_with = "deserialize_team_notes_retention")]
     pub team_notes_retention: HistoryRetention,
+    #[serde(deserialize_with = "deserialize_automation_notes_retention")]
+    pub automation_notes_retention: HistoryRetention,
     /// Grace after a temp unit's latest owner ends and its latest modification.
     #[serde(
         serialize_with = "older_than_serde::serialize",
@@ -81,6 +83,7 @@ impl Default for GcConfig {
             older_than: DEFAULT_OLDER_THAN,
             transcript_retention: HistoryRetention::Forever,
             team_notes_retention: HistoryRetention::Forever,
+            automation_notes_retention: HistoryRetention::Forever,
             tmp_grace: DEFAULT_TMP_GRACE,
             tmp_floor_percent: DEFAULT_TMP_FLOOR_PERCENT,
             tmp_floor_min: DEFAULT_TMP_FLOOR_MIN.to_owned(),
@@ -105,6 +108,12 @@ fn deserialize_team_notes_retention<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<HistoryRetention, D::Error> {
     deserialize_retention(deserializer, "gc.team_notes_retention")
+}
+
+fn deserialize_automation_notes_retention<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HistoryRetention, D::Error> {
+    deserialize_retention(deserializer, "gc.automation_notes_retention")
 }
 
 impl GcConfig {
@@ -187,7 +196,7 @@ mod tests {
         assert_eq!(config.older_than, Duration::from_secs(7 * 86_400));
         assert_eq!(
             toml::to_string(&config).expect("serialize"),
-            "auto = true\nolder_than = \"7d\"\ntranscript_retention = \"forever\"\nteam_notes_retention = \"forever\"\ntmp_grace = \"1d\"\ntmp_floor_percent = 10\ntmp_floor_min = \"10GiB\"\n"
+            "auto = true\nolder_than = \"7d\"\ntranscript_retention = \"forever\"\nteam_notes_retention = \"forever\"\nautomation_notes_retention = \"forever\"\ntmp_grace = \"1d\"\ntmp_floor_percent = 10\ntmp_floor_min = \"10GiB\"\n"
         );
     }
 
@@ -204,7 +213,11 @@ mod tests {
 
     #[test]
     fn transcript_retention_accepts_forever_and_durations() {
-        for key in ["transcript_retention", "team_notes_retention"] {
+        for key in [
+            "transcript_retention",
+            "team_notes_retention",
+            "automation_notes_retention",
+        ] {
             for raw in ["forever", "30d", "12h"] {
                 let config: GcConfig = toml::from_str(&format!("{key} = {raw:?}")).unwrap();
                 let serialized = serde_json::to_value(config).unwrap();
@@ -215,7 +228,11 @@ mod tests {
 
     #[test]
     fn transcript_retention_refuses_invalid_values_with_the_key() {
-        for key in ["transcript_retention", "team_notes_retention"] {
+        for key in [
+            "transcript_retention",
+            "team_notes_retention",
+            "automation_notes_retention",
+        ] {
             for raw in ["\"0d\"", "\"never\"", "30"] {
                 let result = toml::from_str::<GcConfig>(&format!("{key} = {raw}"));
                 assert!(result.is_err(), "accepted {raw}");

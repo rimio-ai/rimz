@@ -1500,7 +1500,8 @@ allowed-dependencies = [
 # RuntimePaths::zellij_client_input_paths owns per-session/client cache and lock paths (+1).
 # Versioned price-table and refresh-state paths and atomic::publish_staged_replace (+2).
 # paths::PRICING_CACHE_VERSION ties the table schema to its versioned paths (+1).
-surface-budget = 324
+# StatePaths::notes_run resolves relative run folders within their lifetime class (+1).
+surface-budget = 325
 
 [[verdict]]
 kind = "item"
@@ -4687,6 +4688,7 @@ allowed-dependencies = [
     "config",
     "disk",
     "ids",
+    "store::notes",
     "store::run",
     "store::runtime",
     "store::snapshot",
@@ -4747,7 +4749,8 @@ allowed-dependencies = [
 # Store::snapshot_with_context selects enrichment without narrowing membership (+1).
 # Store::agent_with_context copies one selected row for hook decisions (+1).
 # Store::audit_rows exposes the frame's shared durable fold (+1).
-surface-budget = 41
+# The store-owned notes manifest, allocator and archive reader module (+1).
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -12008,3 +12011,43 @@ reason = "Registration, board writers and launch grants share the read-only curr
 kind = "item"
 key = "agents::capabilities::LaunchCapability::allow_team_notes_args"
 reason = "The process compiler grants one archived run through a provider-neutral, default-noop capability."
+
+[[verdict]]
+kind = "item"
+key = "store::notes"
+reason = "Team and automation archives share store-owned manifest and layout mechanics below harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::Manifest"
+reason = "Registration, restoration and GC read one versioned run-note manifest schema."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::Kind"
+reason = "The recorded team, workflow or loop owner selects notes naming and open-run policy."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::Worktree"
+reason = "Team registration preserves the existing flattened worktree provenance in the store-owned manifest."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::RunFolders"
+reason = "Archive readers share run candidates; GC also receives the date directories it may remove when empty."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::allocate"
+reason = "Team and automation writers share dated allocation, sanitized components, collision suffixes and durable manifests."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::enumerate"
+reason = "Link validation, restoration, GC and migration share the only reader of archive layout depth."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_notes::is_open"
+reason = "GC receives the harness-owned protective board-stage policy without importing harness into store."

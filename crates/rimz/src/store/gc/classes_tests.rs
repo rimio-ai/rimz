@@ -28,6 +28,7 @@ fn never_swept_tracks_state_classes_and_team_notes_retention() {
             (Class::Tmp, false, false),
             (Class::Shared, true, true),
             (Class::TeamNotes, true, false),
+            (Class::AutomationNotes, true, false),
             (Class::Out, false, false),
             (Class::Locks, false, false),
             (Class::Sock, false, false),
@@ -51,7 +52,15 @@ fn never_swept_classes_keep_stale_entries_under_default_sweep() {
         .into_iter()
         .filter(|class| never_swept(*class, HistoryRetention::Forever))
         .collect();
-    assert_eq!(classes, [Class::Cache, Class::Shared, Class::TeamNotes]);
+    assert_eq!(
+        classes,
+        [
+            Class::Cache,
+            Class::Shared,
+            Class::TeamNotes,
+            Class::AutomationNotes
+        ]
+    );
     let old = SystemTime::now() - Duration::from_secs(365 * 86_400);
     let files: Vec<_> = classes
         .into_iter()
@@ -73,6 +82,8 @@ fn never_swept_classes_keep_stale_entries_under_default_sweep() {
             tmp_grace: retention::DEFAULT_TMP_GRACE,
             transcript_retention: HistoryRetention::Forever,
             team_notes_retention: HistoryRetention::Forever,
+            automation_notes_retention: HistoryRetention::Forever,
+            team_notes_open: |_| false,
         },
         false,
         &|_| Ok(false),
@@ -80,7 +91,53 @@ fn never_swept_classes_keep_stale_entries_under_default_sweep() {
     )
     .unwrap();
     let survivors: Vec<_> = files.iter().map(|file| file.exists()).collect();
-    assert_eq!(survivors, [true, true, true], "{files:?}");
+    assert_eq!(survivors, [true, true, true, true], "{files:?}");
+}
+
+#[test]
+fn notes_sweep_keeps_open_and_unreadable_runs_in_both_layouts_and_prunes_empty_dates() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    let old = SystemTime::now() - Duration::from_secs(60);
+    let mut runs = Vec::new();
+    for layout in ["", "20261107"] {
+        for name in ["open", "closed", "broken"] {
+            let run = paths.team_notes_dir.join(layout).join(name);
+            fs::create_dir_all(&run).unwrap();
+            let manifest = run.join("run.json");
+            let bytes = if name == "broken" {
+                b"not json".as_slice()
+            } else {
+                br#"{"version":1,"team":"forge","created_at":"2026-11-07T00:00:00Z","checkout":"/repo"}"#
+            };
+            fs::write(&manifest, bytes).unwrap();
+            for path in [&manifest, &run] {
+                fs::File::open(path).unwrap().set_modified(old).unwrap();
+            }
+            runs.push(run);
+        }
+    }
+    let empty = paths.team_notes_dir.join("20261108");
+    fs::create_dir(&empty).unwrap();
+    collect_team_notes(
+        &paths,
+        HistoryRetention::Duration(Duration::from_secs(1)),
+        &mut Sweep::new(false),
+        &mut GcReport::default(),
+        &mut newest_entry_modified,
+        &|run| run.file_name().unwrap() == "open",
+    )
+    .unwrap();
+    let actual: Vec<_> = runs
+        .iter()
+        .chain([&empty])
+        .map(|run| run.exists())
+        .collect();
+    assert_eq!(actual, [true, false, true, true, false, true, false]);
 }
 
 #[test]
@@ -90,6 +147,73 @@ fn team_notes_walk_ignores_disappeared_entries() {
         newest_entry_modified(&temp.path().join("renamed-away.tmp")).is_ok(),
         "a disappearing atomic temp sibling must not abort the sweep"
     );
+}
+
+#[test]
+fn forever_automation_notes_reports_bytes_without_opening_the_workspace_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    fs::create_dir_all(&paths.workspace_lock).unwrap();
+    fs::create_dir_all(&paths.automation_notes_dir).unwrap();
+    fs::write(paths.automation_notes_dir.join("kept.md"), "working memory").unwrap();
+    let bytes = collect_automation_notes(
+        &paths,
+        HistoryRetention::Forever,
+        &mut Sweep::new(false),
+        &mut GcReport::default(),
+    );
+    assert!(
+        bytes.is_ok_and(|bytes| bytes == "working memory".len() as u64),
+        "forever retention must measure notes without the workspace lock"
+    );
+}
+
+#[test]
+fn team_notes_checks_and_removal_hold_the_checkout_board_lock() {
+    use crate::{disk::lock::WorkspaceLock, store::notes};
+
+    let home = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let relative = notes::allocate(
+        &paths,
+        notes::Kind::Team {
+            team: "forge".into(),
+            worktree: None,
+        },
+        home.path(),
+        jiff::Timestamp::now(),
+    )
+    .unwrap();
+    let run = paths.notes_run(Class::TeamNotes, &relative);
+    let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+    for path in [&run, &run.join("run.json")] {
+        fs::File::open(path).unwrap().set_modified(old).unwrap();
+    }
+    let runtime = crate::RuntimePaths::for_state(&paths).unwrap();
+    let lock = runtime.board_lock(home.path());
+    let checks = std::cell::RefCell::new(Vec::new());
+    collect_team_notes(
+        &paths,
+        HistoryRetention::Duration(Duration::from_secs(1)),
+        &mut Sweep::new(false),
+        &mut GcReport::default(),
+        &mut newest_entry_modified,
+        &|_| {
+            checks
+                .borrow_mut()
+                .push(WorkspaceLock::try_acquire(&lock).unwrap().is_none());
+            false
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        *checks.borrow(),
+        [true, true],
+        "GC must exclude board writers at each closed check"
+    );
+    assert!(!run.exists());
+    assert!(WorkspaceLock::try_acquire(&lock).unwrap().is_some());
 }
 
 #[test]
@@ -105,8 +229,11 @@ fn team_notes_sweep_keeps_a_run_written_after_the_first_expiry_read() {
         fs::create_dir_all(&run).unwrap();
         let board = run.join("blackboard.md");
         fs::write(&board, "old").unwrap();
+        let manifest = run.join("run.json");
+        let record = br#"{"version":1,"team":"forge","created_at":"2026-11-07T00:00:00Z","checkout":"/repo"}"#;
+        fs::write(&manifest, record).unwrap();
         let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
-        for path in [&board, &run] {
+        for path in [&board, &manifest, &run] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
         let mut reads = 0;
@@ -125,6 +252,7 @@ fn team_notes_sweep_keeps_a_run_written_after_the_first_expiry_read() {
             &mut Sweep::new(dry_run),
             &mut report,
             &mut newest,
+            &|_| false,
         )
         .unwrap();
         assert!(
@@ -132,7 +260,7 @@ fn team_notes_sweep_keeps_a_run_written_after_the_first_expiry_read() {
             "a write after the expiry read must keep the run"
         );
         assert_eq!(report.sidecar_files_removed, 0);
-        assert_eq!(bytes, 3);
+        assert_eq!(bytes, 3 + record.len() as u64);
         assert_eq!(reads, 2, "expiry must be read again at removal");
     }
 }
@@ -270,6 +398,8 @@ fn output_sweep_does_not_hold_the_store_lock() {
             tmp_grace: retention::DEFAULT_TMP_GRACE,
             transcript_retention: HistoryRetention::Forever,
             team_notes_retention: HistoryRetention::Forever,
+            automation_notes_retention: HistoryRetention::Forever,
+            team_notes_open: |_| false,
         },
         false,
         &|_| {
@@ -770,6 +900,8 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
                 tmp_grace: retention::DEFAULT_TMP_GRACE,
                 transcript_retention: HistoryRetention::Forever,
                 team_notes_retention: HistoryRetention::Forever,
+                automation_notes_retention: HistoryRetention::Forever,
+                team_notes_open: |_| false,
             },
             dry_run,
             &|_| Ok(false),

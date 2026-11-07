@@ -45,6 +45,7 @@ pub mod idle_stop;
 pub mod ingress;
 pub mod live_roster;
 pub mod message;
+pub(crate) mod notes;
 pub(crate) mod pending_recovery;
 pub mod run;
 pub mod runtime;

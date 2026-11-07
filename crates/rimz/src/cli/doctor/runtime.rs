@@ -60,7 +60,7 @@ pub(super) fn collect_host() -> model::Host {
 pub(super) fn collect_storage(ws: Option<&rimz::ResolvedWorkspace>) -> model::Storage {
     let paths = ws.and_then(|ws| StatePaths::for_project_root(&ws.project_root).ok());
     let disk_usage = rimz::disk::usage::measure(paths.as_ref());
-    let retention = crate::cli::machine_config().gc.team_notes_retention;
+    let config = crate::cli::machine_config();
     model::Storage {
         total_bytes: disk_usage.total_bytes(),
         roots: disk_usage
@@ -81,7 +81,13 @@ pub(super) fn collect_storage(ws: Option<&rimz::ResolvedWorkspace>) -> model::St
             folders: room
                 .folders
                 .into_iter()
-                .map(|folder| storage_folder(folder, retention))
+                .map(|folder| {
+                    let retention = match folder.class {
+                        Class::AutomationNotes => config.gc.automation_notes_retention,
+                        _ => config.gc.team_notes_retention,
+                    };
+                    storage_folder(folder, retention)
+                })
                 .collect(),
         }),
     }
@@ -101,7 +107,11 @@ fn storage_folder(folder: FolderStorage, retention: HistoryRetention) -> model::
                 "set a duration with `rimz config set gc.team_notes_retention 30d`, \
                  or delete old runs by hand"
             }
-            // never_swept admits only these three state classes.
+            Class::AutomationNotes => {
+                "set a duration with `rimz config set gc.automation_notes_retention 30d`, \
+                 or delete old runs by hand"
+            }
+            // never_swept admits only these four state classes.
             _ => unreachable!("only unswept state classes need a remedy"),
         };
         let largest = folder.largest.as_ref().map_or_else(String::new, |largest| {

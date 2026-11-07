@@ -353,7 +353,7 @@ From: @rimz
 Content:
 Team forge#feat-rate-limits reached Done; its leader reports:
 - @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /home/me/.rimz/ws/myrepo-f89e/out/boss/planner.<run_id>.output (~1.2k tokens, 31 lines)
-Memory: /home/me/.rimz/ws/myrepo-f89e/team-notes/<run>/blackboard.md
+Memory: /home/me/.rimz/ws/myrepo-f89e/team-notes/<yyyymmdd>/<run>/blackboard.md
 ```
 
 | Part | Meaning |

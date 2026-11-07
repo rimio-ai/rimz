@@ -33,7 +33,7 @@ pub fn durable_board_path(checkout: &Path) -> PathBuf {
         .unwrap_or_else(|_| board_path(checkout))
 }
 
-/// Resolve only a link to an existing run directly inside this room's archive.
+/// Resolve only a link to an existing dated or legacy run in this room's archive.
 pub(super) fn run_dir(state: &crate::StatePaths, checkout: &Path) -> Option<PathBuf> {
     let link = checkout.join(TEAM_LINK);
     if !std::fs::symlink_metadata(&link).ok()?.is_symlink() {
@@ -41,18 +41,27 @@ pub(super) fn run_dir(state: &crate::StatePaths, checkout: &Path) -> Option<Path
     }
     let run = link.canonicalize().ok()?;
     let archive = state.team_notes_dir.canonicalize().ok()?;
-    (run.is_dir() && run.parent() == Some(archive.as_path())).then_some(run)
+    let parent = run.parent()?;
+    let is_date = |path: &Path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.len() == 8 && jiff::civil::Date::strptime("%Y%m%d", name).is_ok()
+            })
+    };
+    let in_archive = if parent == archive {
+        !is_date(&run)
+    } else {
+        parent.parent() == Some(archive.as_path()) && is_date(parent)
+    };
+    (in_archive && run.is_dir()).then_some(run)
 }
 
 pub(super) fn run_team(run: &Path) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct Owner {
-        team: String,
+    match crate::store::notes::Kind::read(run).ok()? {
+        crate::store::notes::Kind::Team { team, .. } => Some(team),
+        _ => None,
     }
-    let bytes = std::fs::read(run.join("run.json")).ok()?;
-    serde_json::from_slice::<Owner>(&bytes)
-        .ok()
-        .map(|owner| owner.team)
 }
 
 /// Reads an offset stamp by its own offset, and a legacy offset-less stamp in `zone`.
@@ -262,17 +271,21 @@ pub fn holding_team(checkout: &Path) -> Option<String> {
     if std::fs::symlink_metadata(checkout.join(".rimz")).is_ok_and(|meta| meta.is_symlink()) {
         return None;
     }
-    match std::fs::read_to_string(board_path(checkout)) {
-        Ok(board) => {
-            let stage = parse_board_stage(&board);
-            if !super::fleet::team_stage_pending(stage.as_ref().map(|stage| stage.name.as_str())) {
-                return None;
-            }
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(_) => {}
+    if !board_is_open(&board_path(checkout)) {
+        return None;
     }
     Some(run_team(&checkout.join(TEAM_LINK)).unwrap_or_else(|| "unknown".to_owned()))
+}
+
+pub(super) fn board_is_open(path: &Path) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(board) => {
+            let stage = parse_board_stage(&board);
+            super::fleet::team_stage_pending(stage.as_ref().map(|stage| stage.name.as_str()))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
@@ -342,6 +355,50 @@ pub(super) fn is_atx_heading(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_links_accept_both_layouts_but_not_dates_deeper_paths_or_foreign_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".rimz")).unwrap();
+        let candidates = [
+            state.team_notes_dir.join("20260101T000000Z-forge-lane"),
+            state.team_notes_dir.join("20261107/002336Z-forge-lane"),
+            state.team_notes_dir.join("20261107"),
+            state
+                .team_notes_dir
+                .join("20261107/002336Z-forge-lane/deeper"),
+            temp.path().join("foreign/20261107/run"),
+        ];
+        use std::os::unix::fs::PermissionsExt;
+        let unreadable = state.team_notes_dir.join("20261108");
+        std::fs::create_dir_all(&unreadable).unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let mut actual = Vec::new();
+        for run in &candidates {
+            std::fs::create_dir_all(run).unwrap();
+            let link = checkout.join(TEAM_LINK);
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(run, link).unwrap();
+            actual.push(run_dir(&state, &checkout));
+        }
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            actual,
+            [
+                Some(candidates[0].clone()),
+                Some(candidates[1].clone()),
+                None,
+                None,
+                None
+            ]
+        );
+    }
 
     #[test]
     fn holding_team_follows_the_link_and_releases_done_boards() {

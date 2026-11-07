@@ -8,11 +8,11 @@ use crate::config::HistoryRetention;
 use crate::disk::paths::Class;
 use crate::disk::retention;
 
-/// Whether a state class has no sweep under the supplied team-notes retention.
-pub fn never_swept(class: Class, team_notes_retention: HistoryRetention) -> bool {
+/// Whether a state class has no sweep under that notes archive's retention.
+pub fn never_swept(class: Class, notes_retention: HistoryRetention) -> bool {
     match class {
         Class::Cache | Class::Shared => true,
-        Class::TeamNotes => team_notes_retention == HistoryRetention::Forever,
+        Class::TeamNotes | Class::AutomationNotes => notes_retention == HistoryRetention::Forever,
         Class::Log
         | Class::Records
         | Class::Audit
@@ -65,6 +65,14 @@ pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<Stri
                 &mut sweep,
                 &mut report,
                 &mut newest_entry_modified,
+                &policy.team_notes_open,
+            )
+            .map(|bytes| bytes_retained = Some(bytes)),
+            Class::AutomationNotes => collect_automation_notes(
+                paths,
+                policy.automation_notes_retention,
+                &mut sweep,
+                &mut report,
             )
             .map(|bytes| bytes_retained = Some(bytes)),
             Class::Locks => {
@@ -213,15 +221,61 @@ fn collect_team_notes(
     sweep: &mut Sweep,
     report: &mut GcReport,
     newest: &mut impl FnMut(&Path) -> Result<Option<SystemTime>>,
+    is_open: &impl Fn(&Path) -> bool,
 ) -> Result<u64> {
-    let dir = &paths.team_notes_dir;
+    collect_notes(
+        &paths.team_notes_dir,
+        retention,
+        sweep,
+        report,
+        newest,
+        &|run| {
+            let Ok(manifest) = crate::store::notes::Manifest::read(run) else {
+                return Ok(None);
+            };
+            if !matches!(manifest.kind, crate::store::notes::Kind::Team { .. }) {
+                return Ok(None);
+            }
+            let runtime = crate::RuntimePaths::for_state(paths)?;
+            let guard =
+                crate::disk::lock::WorkspaceLock::acquire(&runtime.board_lock(&manifest.checkout))?;
+            Ok((!is_open(run)).then_some(guard))
+        },
+    )
+}
+
+fn collect_automation_notes(
+    paths: &crate::StatePaths,
+    retention: HistoryRetention,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<u64> {
+    // No automation writer exists yet; record-based ownership is added with those writers.
+    collect_notes(
+        &paths.automation_notes_dir,
+        retention,
+        sweep,
+        report,
+        &mut newest_entry_modified,
+        &|_| Ok(None),
+    )
+}
+
+fn collect_notes(
+    dir: &Path,
+    retention: HistoryRetention,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+    newest: &mut impl FnMut(&Path) -> Result<Option<SystemTime>>,
+    closed_guard: &impl Fn(&Path) -> Result<Option<crate::disk::lock::WorkspaceLock>>,
+) -> Result<u64> {
     match fs::symlink_metadata(dir) {
         Ok(metadata) if !metadata.is_dir() => return Ok(0),
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(source) => {
             return Err(GcErr::Io {
-                path: dir.clone(),
+                path: dir.to_owned(),
                 source,
             });
         }
@@ -231,27 +285,30 @@ fn collect_team_notes(
         return Ok(bytes);
     };
     let now = SystemTime::now();
-    for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
-        let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = entry.path();
-        match entry.file_type() {
-            Ok(kind) if kind.is_dir() => {}
-            Ok(_) => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(GcErr::Io { path, source }),
-        }
-        if newest(&path)?.is_none_or(|modified| !expired(modified, now, ttl)) {
+    let folders = crate::store::notes::enumerate(dir).map_err(|source| GcErr::ReadDir {
+        path: dir.to_owned(),
+        source,
+    })?;
+    for path in folders.runs {
+        if newest(&path)?.is_none_or(|modified| !expired(modified, now, ttl))
+            || closed_guard(&path)?.is_none()
+        {
             continue;
         }
         let files = sweep.files_under(&path)?;
-        if sweep.remove_tree_if(&path, files.len(), report, || {
-            Ok(newest(&path)?.is_some_and(|modified| expired(modified, SystemTime::now(), ttl)))
-        })? {
+        let mut guard = None;
+        let removed = sweep.remove_tree_if(&path, files.len(), report, || {
+            guard = closed_guard(&path)?;
+            Ok(guard.is_some()
+                && newest(&path)?.is_some_and(|modified| expired(modified, SystemTime::now(), ttl)))
+        })?;
+        drop(guard);
+        if removed {
             bytes = bytes.saturating_sub(files.iter().map(|(_, _, bytes)| bytes).sum());
         }
+    }
+    for date in folders.dates {
+        sweep.remove_dir_if_empty(&date, report)?;
     }
     Ok(bytes)
 }
