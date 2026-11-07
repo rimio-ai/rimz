@@ -358,7 +358,9 @@ upward-dependencies = ["address"]
 # AgentState::native_compaction shares model-matched display limits with CLI reports and doctor (+1).
 # Variant and its name/args, Runtime and its definition/variant/kind/name, find_runtime and runtime_names share named launch forms (+10).
 # LaunchCapability::disable_native_idle_compaction_args shares launch-local ownership (+1).
-surface-budget = 1268
+# AgentTune and TuneOverride carry session-scoped settings through the read model (+2).
+# TuneSetting and AgentTune::apply share the typed parse-and-apply boundary (+2).
+surface-budget = 1272
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4043,7 +4045,28 @@ path = "crates/rimz/src/store"
 # Store::retire_message cancels obsolete workflow prompts, including unconfirmed sends (+1).
 # notes::migrate_legacy shares collision-safe archive moves with room-birth policy (+1).
 # MessageRecord::is_open_and_due counts due queued messages for sidebar cards (+1).
-surface-budget = 563
+# AgentTunePayload and Store::tune_agent share the locked override/audit boundary (+2).
+surface-budget = 565
+
+[[verdict]]
+kind = "item"
+key = "agents::state::AgentTune"
+reason = "The fold, policy, and CLI share typed session overrides without importing a store writer."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::TuneOverride"
+reason = "A typed override carries its event timestamp and optional actor across read-side consumers."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::TuneSetting"
+reason = "The tuning wire and its parser share the setting vocabulary with the CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::event::AgentTunePayload"
+reason = "One optional-value wire shape is the session override and budget audit event."
 
 [[verdict]]
 kind = "item"

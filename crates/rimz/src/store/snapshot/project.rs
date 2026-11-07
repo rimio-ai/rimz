@@ -80,11 +80,11 @@ impl LaunchIdentityIndex {
         }
     }
 
-    fn predecessor<'a>(
+    fn predecessors<'a>(
         &self,
         map: &'a BTreeMap<AgentKey, Arc<AgentState>>,
         successor: &AgentState,
-    ) -> Option<&'a AgentState> {
+    ) -> Option<(&'a AgentState, &'a AgentState)> {
         let instance = launch_instance_key(successor)?;
         self.by_instance
             .get(&instance)?
@@ -101,14 +101,24 @@ impl LaunchIdentityIndex {
                     && !candidate.is_provider_subagent()
                     && crate::store::session_death::same_agent_instance(candidate, successor)
             })
-            .min_by_key(|candidate| {
-                (
-                    candidate.registered_at.is_none(),
-                    candidate.registered_at,
-                    candidate.agent_id.clone(),
-                )
-            })
             .map(Arc::as_ref)
+            .fold(None, |predecessors, candidate| {
+                let Some((first, latest)) = predecessors else {
+                    return Some((candidate, candidate));
+                };
+                Some((
+                    std::cmp::min_by(first, candidate, |a, b| {
+                        (a.registered_at.is_none(), a.registered_at, &a.agent_id).cmp(&(
+                            b.registered_at.is_none(),
+                            b.registered_at,
+                            &b.agent_id,
+                        ))
+                    }),
+                    std::cmp::max_by(latest, candidate, |a, b| {
+                        (a.registered_at, &a.agent_id).cmp(&(b.registered_at, &b.agent_id))
+                    }),
+                ))
+            })
     }
 }
 
@@ -238,6 +248,7 @@ pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, Agent
         EventKind::AgentAttach(payload) => payload.agent_id.clone(),
         EventKind::AgentLaunchWarnings(payload) => payload.agent_id.clone(),
         EventKind::AgentWorkflowCleared(payload) => payload.agent_id.clone(),
+        EventKind::AgentTune(payload) => payload.agent_id.clone(),
         _ => return None,
     };
     Some((
@@ -298,6 +309,21 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 let agent = agent_mut(agent);
                 agent.launch_warnings.clone_from(&payload.warnings);
                 state.launch_identity.replace(&key, agent);
+            }
+            EventKind::AgentTune(payload) => {
+                let key = (
+                    AgentKind::new_unchecked(envelope.source.clone()),
+                    payload.agent_id.clone(),
+                );
+                let Some(agent) = state.map.get_mut(&key) else {
+                    continue;
+                };
+                let _ = agent_mut(agent).tune.apply(
+                    payload.setting,
+                    payload.value.as_deref(),
+                    envelope.timestamp,
+                    payload.by.as_deref(),
+                );
             }
             EventKind::AgentLifecycle(payload) => {
                 state.reduce_lifecycle_event(envelope, payload);
@@ -812,6 +838,7 @@ fn carried_base(
         state.model = prior.model.clone();
         state.effort = prior.effort.clone();
         state.budget = prior.budget.clone();
+        state.tune.clone_from(&prior.tune);
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
         state.soft_compact = prior.soft_compact;
@@ -1115,7 +1142,7 @@ fn inherit_launch_identity(
     {
         return;
     }
-    let Some(predecessor) = launch_identity.predecessor(map, successor) else {
+    let Some((predecessor, latest)) = launch_identity.predecessors(map, successor) else {
         return;
     };
 
@@ -1141,6 +1168,7 @@ fn inherit_launch_identity(
     successor.team.clone_from(&predecessor.team);
     successor.loop_task.clone_from(&predecessor.loop_task);
     successor.workflow.clone_from(&predecessor.workflow);
+    successor.tune.clone_from(&latest.tune);
     successor.automation.clone_from(&predecessor.automation);
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;

@@ -778,6 +778,95 @@ pub struct SoftCompactMark {
     pub progress: SoftCompactProgress,
 }
 
+/// The session settings accepted by the tuning audit wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuneSetting {
+    KeepWarm,
+    IdleCompact,
+    SmartCompact,
+    Budget,
+}
+
+impl std::fmt::Display for TuneSetting {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(match self {
+            Self::KeepWarm => "keep-warm",
+            Self::IdleCompact => "idle-compact",
+            Self::SmartCompact => "smart-compact",
+            Self::Budget => "budget",
+        })
+    }
+}
+
+/// One session override and the action that established it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TuneOverride<T> {
+    pub value: T,
+    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
+
+/// Runtime seat settings; the budget ledger remains the budget's source of truth.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTune {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<TuneOverride<crate::config::KeepWarm>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_compact: Option<TuneOverride<crate::config::IdleCompact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart_compact: Option<TuneOverride<crate::config::FlipCompact>>,
+}
+
+impl AgentTune {
+    /// Parse and apply one setting, retaining budget as an audit-only action.
+    pub(crate) fn apply(
+        &mut self,
+        setting: TuneSetting,
+        value: Option<&str>,
+        at: Timestamp,
+        by: Option<&str>,
+    ) -> serde_json::Result<bool> {
+        match setting {
+            TuneSetting::KeepWarm => TuneOverride::apply(&mut self.keep_warm, value, at, by),
+            TuneSetting::IdleCompact => TuneOverride::apply(&mut self.idle_compact, value, at, by),
+            TuneSetting::SmartCompact => {
+                TuneOverride::apply(&mut self.smart_compact, value, at, by)
+            }
+            TuneSetting::Budget => Ok(false),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keep_warm.is_none() && self.idle_compact.is_none() && self.smart_compact.is_none()
+    }
+}
+
+impl<T: serde::de::DeserializeOwned + PartialEq> TuneOverride<T> {
+    fn apply(
+        setting: &mut Option<Self>,
+        raw: Option<&str>,
+        at: Timestamp,
+        by: Option<&str>,
+    ) -> serde_json::Result<bool> {
+        let next = raw
+            .map(|raw| {
+                serde_json::from_value(serde_json::json!(raw)).map(|value| Self {
+                    value,
+                    at,
+                    by: by.map(str::to_owned),
+                })
+            })
+            .transpose()?;
+        if *setting == next {
+            return Ok(false);
+        }
+        *setting = next;
+        Ok(true)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -980,6 +1069,8 @@ pub struct AgentState {
     /// Canonical launch-carried budget (`$5.00` or `$20.00/day`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
+    #[serde(default, skip_serializing_if = "AgentTune::is_empty")]
+    pub tune: AgentTune,
     /// Durable token and context enrichment. Flattening preserves the persisted
     /// state wire and sidebar JSON keys.
     #[serde(default, flatten)]
@@ -1372,6 +1463,7 @@ impl AgentState {
             model: None,
             effort: None,
             budget: None,
+            tune: AgentTune::default(),
             usage: AgentUsageSummary::default(),
             context: None,
             sign_in: None,

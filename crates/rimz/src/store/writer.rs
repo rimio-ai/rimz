@@ -593,6 +593,55 @@ impl Store {
         })
     }
 
+    /// Commit a session override and its audit record, refusing ineligible live settings.
+    #[must_use = "durability barrier; check the result"]
+    pub fn tune_agent(
+        &self,
+        kind: &AgentKind,
+        payload: &crate::store::event::AgentTunePayload,
+        session_name: &str,
+    ) -> Result<bool> {
+        self.commit(|txn| {
+            let (_, agents, _) = snapshot::catch_up_rollup(txn.paths)?;
+            let event = EventEnvelope::new(
+                self.inner.paths.workspace_id.clone(),
+                session_name,
+                kind.as_str(),
+                "agent",
+                "agent.tune",
+                serde_json::to_value(payload).expect("tune payload contains only JSON fields"),
+            );
+            if payload.setting != crate::agents::state::TuneSetting::Budget {
+                let agent = agents
+                    .find(kind.as_str(), &payload.agent_id)
+                    .ok_or_else(|| StoreErr::AgentTune("session is no longer known".into()))?;
+                if agent.ended_at.is_some() {
+                    return Err(StoreErr::AgentTune("session has ended".into()));
+                }
+                if agent.is_provider_subagent() {
+                    return Err(StoreErr::AgentTune("session is a provider subagent".into()));
+                }
+                let changed = agent
+                    .tune
+                    .clone()
+                    .apply(
+                        payload.setting,
+                        payload.value.as_deref(),
+                        event.timestamp,
+                        payload.by.as_deref(),
+                    )
+                    .map_err(|_| {
+                        StoreErr::AgentTune(format!("invalid {} value", payload.setting))
+                    })?;
+                if !changed {
+                    return Ok(false);
+                }
+            }
+            txn.append(&event)?;
+            Ok(true)
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn append_signal(
         &self,

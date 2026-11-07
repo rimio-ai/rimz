@@ -279,6 +279,16 @@ pub struct AgentWorkflowClearedPayload {
     pub workflow: crate::agents::WorkflowAttemptRef,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTunePayload {
+    pub agent_id: AgentSessionId,
+    pub setting: crate::agents::state::TuneSetting,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionDeathCause {
@@ -524,6 +534,7 @@ pub enum EventKind<'a> {
     AgentAttach(AgentAttachPayload),
     AgentLaunchWarnings(AgentLaunchWarningsPayload),
     AgentWorkflowCleared(AgentWorkflowClearedPayload),
+    AgentTune(AgentTunePayload),
     AgentLaunch(AgentLaunchPayload),
     Message {
         method: MessageEventMethod,
@@ -548,6 +559,7 @@ impl PartialEq for EventKind<'_> {
             (Self::AgentAttach(left), Self::AgentAttach(right)) => left == right,
             (Self::AgentLaunchWarnings(left), Self::AgentLaunchWarnings(right)) => left == right,
             (Self::AgentWorkflowCleared(left), Self::AgentWorkflowCleared(right)) => left == right,
+            (Self::AgentTune(left), Self::AgentTune(right)) => left == right,
             (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
             (
                 Self::Message {
@@ -771,6 +783,12 @@ impl EventEnvelope {
                 }),
             "agent.workflow_cleared" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentWorkflowCleared)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
+            "agent.tune" => serde_json::from_str(self.params.get())
+                .map(EventKind::AgentTune)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,

@@ -142,6 +142,8 @@ pub enum StoreErr {
     RoomLogin(#[from] Box<crate::agents::RoomLoginErr>),
     #[error("{0}")]
     AgentLaunchIdentity(String),
+    #[error("cannot tune agent: {0}")]
+    AgentTune(String),
     #[error(
         "molt refused: @{successor} already stands as successor; only one successor is allowed at a time. If it is stuck, `rimz agents stop @{successor}` frees the slot; do not retry this command"
     )]
