@@ -148,6 +148,10 @@ pub(crate) enum Component {
     CompactionPoint,
     /// Provider fast mode: a scheme-derived amber, independent of lifecycle state.
     FastMode,
+    /// Due-message glyph on an agent card.
+    MessageQueued,
+    /// Active per-pane typing hold on an agent card.
+    Typing,
     /// Starts needing a fix, above the footer.
     ThrottleNotice,
     /// Parked workflow runs needing the user, above the footer.
@@ -228,6 +232,8 @@ impl Component {
         Component::ContextCompacted,
         Component::CompactionPoint,
         Component::FastMode,
+        Component::MessageQueued,
+        Component::Typing,
         Component::ThrottleNotice,
         Component::ParkNotice,
         Component::StallLeadActive,
@@ -245,7 +251,7 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         tone_color(match self {
-            Sessions | Output | HelpKey | WindowHuge => palette.accent,
+            Sessions | Output | HelpKey | WindowHuge | Typing => palette.accent,
             LaneSpine | EntrySpine => palette.selection,
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
                 palette.body
@@ -268,7 +274,7 @@ impl Component {
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
             | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
-            | NotTrackedSuffix | NotTrackedTip => palette.muted,
+            | NotTrackedSuffix | NotTrackedTip | MessageQueued => palette.muted,
         })
     }
 }

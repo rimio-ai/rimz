@@ -208,10 +208,21 @@ fn stale_age_keeps_its_column_across_costs_and_widths() {
             row.last_activity = fixed_now() - Duration::from_secs(days * 86400);
             row.unread = false;
             row.as_agent_mut().unwrap().delegated_cost_usd = cost;
+            row.as_agent_mut().unwrap().due_messages = 3;
+            let pane = row.pane.as_ref().unwrap().pane_id.clone();
+            snapshot
+                .typing_until
+                .insert(pane, snapshot.now + Duration::from_secs(30));
             for width in [26, 36, 70] {
                 let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
                 assert_eq!(lines.len(), 2, "one header and one stale line");
                 let line = &lines[1];
+                if width >= 36 {
+                    assert!(
+                        line.to_string().contains("✎ ↧ 3"),
+                        "marks before the age: {line}"
+                    );
+                }
                 let spans = &line.spans[1..line.spans.len() - 1];
                 let age_index = spans
                     .iter()
@@ -247,6 +258,19 @@ fn stale_age_keeps_its_column_across_costs_and_widths() {
                 }
                 let used: usize = spans.iter().map(|span| span.width()).sum();
                 assert!(used <= content_width(width), "stale line fits: {line}");
+            }
+            if days == 2 && cost_label == Some("$0.89") {
+                assert_snapshot(
+                    "message_marks_stale",
+                    snapshot_to_screen_with_alert_and_ui(
+                        &snapshot,
+                        None,
+                        &ViewState::default(),
+                        &UiState::default(),
+                        46,
+                        22,
+                    ),
+                );
             }
         }
     }

@@ -1000,6 +1000,9 @@ pub struct AgentState {
     /// Loop-catalog projection rebuilt at enrichment, never reduced from events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_waits: Vec<PendingWait>,
+    /// Open messages due for this card, projected from the queue at enrichment.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub due_messages: usize,
     /// The pending `stop --when-idle` request, attached at enrichment from its
     /// durable record and never reduced from events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1374,6 +1377,7 @@ impl AgentState {
             sign_in: None,
             budget_park: None,
             pending_waits: Vec::new(),
+            due_messages: 0,
             hibernation: None,
             idle_stop: None,
             background_shells: Vec::new(),

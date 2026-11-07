@@ -819,6 +819,8 @@ fn hidden_reveal(
                 presence != crate::store::snapshot::SidebarPresence::Detached,
             ),
             last_input_ms: None,
+            client_input_ms: Default::default(),
+            client_views: Vec::new(),
             sampled_at_ms: 1,
         });
         crate::sidebar_pane::app::fixtures::publish_fold(&room.host.plane, snapshot.clone(), frame);

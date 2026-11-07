@@ -412,6 +412,9 @@ impl SidebarSnapshot {
                     self.now,
                 ) {
                     next.attention_at_ms = row.attention_at_ms;
+                    if let (Some(prior), Some(card)) = (row.as_agent(), next.as_agent_mut()) {
+                        card.due_messages = prior.due_messages;
+                    }
                     if next.is_process() {
                         next.inactive = row.inactive;
                         next.archived = row.archived;

@@ -544,6 +544,7 @@ pub fn project_local(
     let now_ms = snapshot.now.as_millisecond().max(0) as u64;
     snapshot.presence = frame
         .presence
+        .clone()
         .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
     snapshot.own_view = exclude.and_then(|own| SidebarOwnView::from_frame(own, frame));
     if let Some(excluded) = exclude {
@@ -664,6 +665,18 @@ fn project_workflow_and_throttle_state(
     records
 }
 
+fn project_due_messages(snapshot: &mut SidebarSnapshot, state: &StatePaths) {
+    let messages = crate::store::message::cached_messages(state, false);
+    for agent in Arc::make_mut(&mut snapshot.agents) {
+        agent.due_messages = messages
+            .iter()
+            .filter(|message| {
+                message.is_open_and_due(snapshot.now) && message.same_agent_card(agent)
+            })
+            .count();
+    }
+}
+
 fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
@@ -681,6 +694,7 @@ fn enrich_core(
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.apply_machine_config(&machine_config);
+    snapshot.typing_until = typing_deadlines(frame, machine_config.harness.typing_hold);
     fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
@@ -763,6 +777,7 @@ fn enrich_core(
             project_root.as_deref(),
             &machine_config,
         );
+        project_due_messages(&mut snapshot, state);
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
     }
     let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state, runtime);
@@ -975,6 +990,32 @@ fn enrich_core(
     // sort, so publish the spine once all presentation inputs are present.
     snapshot.sort_groups_for_presentation();
     snapshot
+}
+
+fn typing_deadlines(
+    frame: Option<&PaneFrame>,
+    hold: Option<std::time::Duration>,
+) -> HashMap<PaneId, jiff::Timestamp> {
+    let Some((frame, hold)) = frame.zip(hold) else {
+        return HashMap::new();
+    };
+    let Some(sample) = &frame.presence else {
+        return HashMap::new();
+    };
+    sample
+        .client_views
+        .iter()
+        .filter_map(|client| {
+            let until = crate::pane::attended_until(
+                &sample.client_views,
+                &sample.client_input_ms,
+                &client.pane_id,
+                hold,
+            )?;
+            let until = jiff::Timestamp::from_millisecond(i64::try_from(until).ok()?).ok()?;
+            Some((client.pane_id.clone(), until))
+        })
+        .collect()
 }
 
 fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<TruthNotice> {

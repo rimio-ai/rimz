@@ -23,6 +23,7 @@ mod git;
 mod held;
 mod labels;
 mod spend;
+mod typing;
 mod workflows;
 
 #[test]

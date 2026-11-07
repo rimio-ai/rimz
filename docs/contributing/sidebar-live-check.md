@@ -718,6 +718,27 @@ jq '.tabs[].panes[] | select(.pane_id == "tmux:%1") | .current | {pid, hosted_ag
 
 Kill the fake by its pid to leave the shell idle, or start another with a new id in the same shell to model an agent change.
 
+## Fake client input
+
+The typing pen (`✎`) and the typing hold read input from the attached client viewing the agent's pane, so a check of either needs keys that pass through that client. `send-keys -t <pane>` writes to the pane directly and moves no client's input clock.
+
+In a tmux room, name the client and send a key as its input with `-K -c`. Each key moves that client's `client_activity`:
+
+```sh
+tmux -S "$ROOT/runtime/rimz/tmux/server" list-clients -F '#{client_name} #{pane_id} #{client_activity}'
+tmux -S "$ROOT/runtime/rimz/tmux/server" send-keys -K -c <client name> a
+```
+
+The key reaches the viewed pane as typing; the card's pen appeared about 3 seconds after it, and a message sent to that agent held until the window passed.
+
+In a Zellij room, send keys through the outer client session (`room-client`), and send a keybound action such as `C-g` twice (lock, then unlock), which leaves the client back in normal mode:
+
+```sh
+target/debug/xtask sandbox in "$ROOT" -- tmux send-keys -t room-client C-g C-g
+```
+
+Zellij 0.45.1 never hands plain characters to the presence plugin: each one logs `Failed to convert Action to protobuf` and records no input, so neither the hold nor the pen reacts to ordinary typing there.
+
 ## Cache clock band
 
 A card's cache-age pin and its `cache expires in Nm` line move with the agent's own cache clock, pings included, against the agent's resolved prompt-cache lifetime, an hour for Claude before its first observed write. Scenario cards may carry explicit fixture clocks; use a held room to check live lifetime resolution. In a held room, shorten the lifetime so the warning band arrives within minutes. The room picks the setting up without a restart; use a stub with no observed write, since a real agent's split write overrides it. With the `rz` prefix from [Run a command as an agent](#run-a-command-as-an-agent):

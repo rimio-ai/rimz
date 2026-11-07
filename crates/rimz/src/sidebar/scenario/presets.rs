@@ -33,6 +33,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         focused_pane: None,
         viewed_panes: Vec::new(),
         client_views: Vec::new(),
+        typing_until: Default::default(),
         pane_session_name: None,
         presence: None,
         truth_degraded: None,

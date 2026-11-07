@@ -3304,6 +3304,11 @@ path = "crates/rimz/src/pane"
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
 surface-budget = 50
 
+[[verdict]]
+kind = "item"
+key = "pane::attended_until"
+reason = "Live message sends and sidebar pens share one per-pane attached-client input-hold rule."
+
 [[module]]
 path = "crates/rimz/src/proc"
 upward-dependencies = [
@@ -4036,7 +4041,8 @@ path = "crates/rimz/src/store"
 # workflow::Restart carries one manual launch's optional continued session (+1).
 # Store::retire_message cancels obsolete workflow prompts, including unconfirmed sends (+1).
 # notes::migrate_legacy shares collision-safe archive moves with room-birth policy (+1).
-surface-budget = 562
+# MessageRecord::is_open_and_due counts due queued messages for sidebar cards (+1).
+surface-budget = 563
 
 [[verdict]]
 kind = "item"

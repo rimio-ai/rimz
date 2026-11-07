@@ -4,6 +4,120 @@
 use super::*;
 
 #[test]
+fn due_messages_project_every_sender_to_its_card_and_clear_when_queue_is_missing() {
+    use crate::store::message::{
+        DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+    };
+    let (_dir, runtime, snapshot) = runtime();
+    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    state.ensure_dirs().unwrap();
+    std::fs::create_dir_all(&state.messages_dir).unwrap();
+    let mut first = root_agent("claude", "first", None);
+    first.name = Some("coder".to_owned());
+    let mut second = root_agent("codex", "second", None);
+    let panes = vec![
+        pane("terminal_1", "claude", "/repo/main"),
+        pane("terminal_2", "codex", "/repo/main"),
+    ];
+    first.pane = Some(panes[0].clone());
+    second.pane = Some(panes[1].clone());
+    let frame = crate::sidebar::frame::assemble_frame(panes, 1_000, "rimz-test");
+    let mut provisional = first.clone();
+    provisional.agent_id = "launch_1".into();
+    let senders = [
+        MessageSender::Human,
+        MessageSender::Agent {
+            kind: second.kind.clone(),
+            agent_id: None,
+            name: None,
+            profile: None,
+            role: None,
+            channel: None,
+        },
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        },
+        MessageSender::System,
+    ];
+    let mut records = Vec::new();
+    for (index, sender) in senders.into_iter().enumerate() {
+        let mut record = MessageRecord::new(
+            snapshot.workspace_id.clone(),
+            &provisional,
+            "queued".to_owned(),
+            DeliveryGate::Resume,
+        )
+        .with_sender(sender);
+        if index == 1 {
+            record.status = MessageStatus::Claimed;
+        }
+        records.push(record);
+    }
+    records.push(MessageRecord::new(
+        snapshot.workspace_id.clone(),
+        &second,
+        "other".to_owned(),
+        DeliveryGate::Any,
+    ));
+    let queue = records
+        .iter()
+        .map(|record| serde_json::to_string(record).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        state.messages_dir.join("messages.jsonl"),
+        format!("{queue}\n"),
+    )
+    .unwrap();
+    let snapshot = SidebarSnapshot::build_with_agents(
+        snapshot.workspace_id,
+        vec![first, second],
+        snapshot.now,
+    );
+    let counts = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.due_messages,
+                    snapshot
+                        .rows()
+                        .find(|row| {
+                            row.pane.as_ref().is_some_and(|pane| {
+                                pane.pane_id == agent.pane.as_ref().unwrap().pane_id
+                            })
+                        })
+                        .unwrap()
+                        .as_agent()
+                        .unwrap()
+                        .due_messages,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut actual = Vec::new();
+    for opts in [cached_opts(), producing_opts()] {
+        actual.push(counts(&fold(
+            snapshot.clone(),
+            Some(&frame),
+            &runtime,
+            opts,
+        )));
+    }
+    std::fs::remove_file(state.messages_dir.join("messages.jsonl")).unwrap();
+    actual.push(counts(&fold_cached(snapshot, Some(&frame), &runtime)));
+    assert_eq!(
+        actual,
+        vec![
+            vec![(4, 4), (1, 1)],
+            vec![(4, 4), (1, 1)],
+            vec![(0, 0), (0, 0)]
+        ]
+    );
+}
+
+#[test]
 fn cached_enrich_binds_reaped_codex_clear_session() {
     let (_dir, runtime, _) = runtime();
     let now = Timestamp::now();

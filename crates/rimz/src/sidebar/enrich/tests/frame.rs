@@ -93,6 +93,8 @@ fn frame_fold_carries_presence_onto_snapshot() {
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 0,
         last_input_ms: None,
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms: 1_000,
     });
 
@@ -120,6 +122,8 @@ fn enrich_workspace_rejects_sidebar_chrome_and_defers_presence() {
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(1_699_999_999_000),
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms: 1_700_000_000_000,
     });
 
@@ -184,6 +188,8 @@ fn presence_reads_idle_from_the_snapshot_clock_on_local_and_remote_rooms() {
         frame.presence = Some(crate::store::snapshot::PresenceSample {
             human_clients: 1,
             last_input_ms: Some(now_ms - 999_000),
+            client_input_ms: Default::default(),
+            client_views: Vec::new(),
             sampled_at_ms: now_ms - sampled_ago_ms,
         });
 

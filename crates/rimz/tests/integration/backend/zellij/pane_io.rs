@@ -1212,7 +1212,10 @@ fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
             .capture_pane(&shell, &here, None, false)
             .map_err(|err| err.to_string())
     };
-    let shows = |text: &str, mark: &str| text.lines().any(|line| line.trim() == mark);
+    // Each mark is printed from a command that spells it split, so the mark on
+    // screen is always output, even when a wrapped command row joins its output
+    // in the capture.
+    let shows = |text: &str, mark: &str| text.contains(mark);
     poll_until(
         Duration::from_secs(10),
         screen,
@@ -1252,7 +1255,7 @@ fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
                 .map(|pane| pane.is_suppressed)
         })
     };
-    send("echo BEFORE_MARK");
+    send("printf '%s_MARK\\n' BEFORE");
     poll_until(
         Duration::from_secs(10),
         screen,
@@ -1314,7 +1317,7 @@ fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
         |state| *state == Some(false),
         "the shell pane back on screen",
     );
-    send("echo AFTER_MARK");
+    send("printf '%s_MARK\\n' AFTER");
     let text = poll_until(
         Duration::from_secs(10),
         || {

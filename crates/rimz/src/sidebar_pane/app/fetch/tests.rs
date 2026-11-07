@@ -442,6 +442,27 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn typing_deadlines_are_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut right = left.clone();
+    let pane = PaneId::from_parts(MuxName::Tmux, "%1");
+    right.typing_until.insert(pane.clone(), left.now);
+    let mut changed = right.clone();
+    changed
+        .typing_until
+        .insert(pane, left.now + Duration::from_secs(1));
+    assert_eq!(
+        [
+            same_snapshot_content(&left, &right),
+            same_snapshot_content(&right, &changed),
+            same_snapshot_content(&right, &left),
+        ],
+        [false; 3],
+        "new input and cleared holds must reach the renderer"
+    );
+}
+
+#[test]
 fn untracked_kinds_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut right = left.clone();
@@ -1055,6 +1076,8 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(now_ms - 3_600_000),
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms: now_ms,
     });
     let mut cycles =
@@ -1278,6 +1301,8 @@ fn clock_thresholds_reach_every_consumer_as_content() {
         frame.presence = Some(crate::store::snapshot::PresenceSample {
             human_clients: 1,
             last_input_ms: Some(start.as_millisecond() as u64),
+            client_input_ms: Default::default(),
+            client_views: Vec::new(),
             sampled_at_ms: start.as_millisecond() as u64,
         });
         let frame = Arc::new(frame);

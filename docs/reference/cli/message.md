@@ -53,6 +53,8 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 
 Someone using the receiving pane holds message writes until 30 seconds after their last input: the same attached client must be viewing that pane and have recent input. The held record stays queued, prints a receipt with its id and local retry time, and the room's sweep retries it after the pause. A held steer or interrupt retries in its original mode, even while the agent is running. `--steer --force` still waits; only `--interrupt --force` bypasses the typing hold. `[harness] typing_hold` changes the duration, or `"off"` disables it. A draft left untouched longer than the hold can still be joined to the message; RimZ never reads the composer to detect drafts. `pane send` and `answer` are explicit input and do not wait. `--wait` keeps waiting through a hold.
 
+The receiving card's `✎` pen (`󰏫` with Nerd Font glyphs) shows the live typing-hold window; `↧ N` counts due messages, even while a different gate below still holds them.
+
 A parked message delivers once all of these hold, checked in this order:
 
 1. Any observed typing hold has expired. The live input check can extend it before writing.
