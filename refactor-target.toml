@@ -2552,7 +2552,8 @@ path = "crates/rimz/src/lib.rs"
 # The lowest-layer blocker vocabulary is shared with the CLI (+1).
 # The library launcher owns checkout creation (+1).
 # The packs module shares Git and linked sources below config and skill consumers (+1).
-surface-budget = 73
+# command_is_launch_chrome lets the CLI's clap inventory pin the shared classifier (+1).
+surface-budget = 74
 
 [[module]]
 path = "crates/rimz/src/launcher"
@@ -9752,6 +9753,11 @@ reason = "Pass 24a: cannot leave `effective`'s public surface — harness/schedu
 kind = "item"
 key = "config::effective::ProjectTasksErr"
 reason = "Pass 24a: carried by the kept public EffectiveConfigErr::Tasks::source, as the effective::Result alias is by the public load and project_tasks signatures."
+
+[[verdict]]
+kind = "item"
+key = "pane::command_is_launch_chrome"
+reason = "The binary's clap inventory test pins every agents subcommand and alias against the shared launch classifier; the library cannot import CLI definitions."
 
 [[verdict]]
 kind = "item"

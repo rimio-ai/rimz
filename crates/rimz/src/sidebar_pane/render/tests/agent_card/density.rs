@@ -6,7 +6,7 @@ use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::CacheClock;
 
 #[test]
-fn fresh_team_keeps_only_the_live_selection_open() {
+fn fresh_team_stays_thin_for_live_and_held_selection() {
     let snapshot = snapshot_with(
         ["first", "second", "third"]
             .into_iter()
@@ -22,7 +22,7 @@ fn fresh_team_keeps_only_the_live_selection_open() {
         let pane_ui = UiState::default();
         let screen =
             snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 24);
-        assert_eq!(screen.matches("0%").count(), 1, "{screen}");
+        assert_eq!(screen.matches("0%").count(), 0, "{screen}");
         assert_snapshot(&format!("fresh_team_{width}"), screen);
         ui.freeze = Some(LayoutFreeze {
             frozen: Default::default(),
@@ -33,7 +33,7 @@ fn fresh_team_keeps_only_the_live_selection_open() {
         ui.selected_index = Some(1);
         let screen =
             snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 24);
-        assert_eq!(screen.matches("0%").count(), 1, "{screen}");
+        assert_eq!(screen.matches("0%").count(), 0, "{screen}");
         assert_snapshot(&format!("fresh_team_held_{width}"), screen);
     }
 }

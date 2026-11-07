@@ -971,6 +971,20 @@ fn announced_snapshot_is_sanitized_before_diff_and_persist() {
             .pane_command,
         None,
     );
+
+    let mut incoming = existing;
+    incoming.produced_at_ms += 2;
+    incoming.panes[0].pane_command = Some("rimz agents logs -f @coder".to_owned());
+    announced.topology = Some(incoming);
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    assert_eq!(
+        read_pane_topology_cache(&runtime, "rimz-test")
+            .unwrap()
+            .panes[0]
+            .pane_command
+            .as_deref(),
+        Some("rimz agents logs -f @coder")
+    );
 }
 
 #[test]

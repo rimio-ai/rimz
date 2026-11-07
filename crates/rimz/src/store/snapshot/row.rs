@@ -52,8 +52,8 @@ pub struct SidebarRow {
     /// presentation sort after the fold.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attention_score: u32,
-    /// Birth or the last displayed top/calm crossing for an agent; the pane's
-    /// retained order stamp for a process row.
+    /// Birth, an inherited shell slot, or the last displayed top/calm crossing
+    /// for an agent; the pane's retained order stamp for a process row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_at_ms: Option<i64>,
     pub last_activity: Timestamp,
@@ -570,7 +570,7 @@ pub struct AgentCard {
     pub context_severity: Option<ContextSeverity>,
     /// The session's registration instant, copied from
     /// `AgentState.registered_at`. Dates first cost and newest-first groups,
-    /// and seeds row ordering until an attention-zone crossing is observed.
+    /// and seeds row ordering without an inherited shell slot, until a zone crossing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
     /// Latest launch or non-keepalive prompt, the group's quiet-clock input.

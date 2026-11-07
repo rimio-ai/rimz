@@ -509,6 +509,97 @@ fn a_fresh_shell_keeps_its_painted_index_through_launch_release_and_expiry() {
 }
 
 #[test]
+fn reconciled_shell_slot_survives_launch_focus_release_and_freeze_expiry() {
+    for first_fetch in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = crate::RuntimePaths::under(workspace(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let mut previous = hold_snapshot(vec![group(
+            "a",
+            vec![
+                agent_row("newer", "terminal_1", AgentStatus::Idle),
+                row("shell", "terminal_2"),
+                agent_row("older", "terminal_3", AgentStatus::Idle),
+            ],
+        )]);
+        let now = previous.now;
+        for row in previous.rows_mut() {
+            let age = match row.id.as_str() {
+                "newer" => 1,
+                "shell" => 2,
+                "older" => 3,
+                _ => unreachable!("the fixture has only these three rows"),
+            };
+            let birth = now - jiff::SignedDuration::from_secs(age);
+            row.last_activity = birth;
+            if let Some(agent) = row.as_agent_mut() {
+                agent.registered_at = Some(birth);
+            }
+            row.pane.as_mut().unwrap().first_seen_at_ms =
+                Some(row.last_activity.as_millisecond() as u64);
+        }
+        crate::sidebar::attention::reconcile_snapshot(&runtime, &mut previous);
+        assert_eq!(row_ids(&previous, "a"), ["newer", "shell", "older"]);
+        let focused = previous
+            .rows()
+            .find(|row| row.id == "shell")
+            .unwrap()
+            .pane
+            .clone()
+            .unwrap();
+        let mut rig = HoldRig::new(
+            if first_fetch {
+                hold_snapshot(Vec::new())
+            } else {
+                previous.clone()
+            },
+            if first_fetch {
+                None
+            } else {
+                Some(focused.pane_id.clone())
+            },
+        );
+        rig.present(
+            previous.clone(),
+            std::slice::from_ref(&focused.pane_id),
+            false,
+        );
+        let painted_index = |rig: &HoldRig| {
+            rig.ui
+                .visible_roster(&rig.context.current)
+                .rows()
+                .iter()
+                .position(|row| {
+                    row.pane
+                        .as_ref()
+                        .is_some_and(|pane| pane.pane_id == focused.pane_id)
+                })
+        };
+        let mut positions = vec![painted_index(&rig)];
+        let mut launched = agent_row("launched", "terminal_2", AgentStatus::Idle);
+        launched.pane = Some(focused.clone());
+        launched.last_activity = now;
+        launched.as_agent_mut().unwrap().registered_at = Some(now);
+        *previous.rows_mut().find(|row| row.id == "shell").unwrap() = launched;
+        crate::sidebar::attention::reconcile_snapshot(&runtime, &mut previous);
+        rig.present(
+            previous.clone(),
+            std::slice::from_ref(&focused.pane_id),
+            false,
+        );
+        positions.push(painted_index(&rig));
+        rig.present(previous.clone(), &[], false);
+        positions.push(painted_index(&rig));
+        assert!(rig.ui.freeze.is_some());
+        rig.clock.advance(LAYOUT_FREEZE);
+        rig.present(previous, &[], false);
+        positions.push(painted_index(&rig));
+        assert!(rig.ui.freeze.is_none());
+        assert_eq!(positions, [Some(1); 4], "first fetch={first_fetch}");
+    }
+}
+
+#[test]
 fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping() {
     let mut previous = inactivity_boundary();
     let focused = pane("terminal_3", "tab_0", false).pane_id;

@@ -382,6 +382,10 @@ impl SidebarSnapshot {
     }
 
     pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) -> bool {
+        if command.split_whitespace().count() == 1 && crate::proc::program_label(command) == "rimz"
+        {
+            return false;
+        }
         let mut changed = false;
         for index in 0..self.worktree_groups.len() {
             let group = &self.worktree_groups[index];
@@ -402,6 +406,7 @@ impl SidebarSnapshot {
                 }
                 pane.command = Some(command.to_owned());
                 pane.pane_process_start = None;
+                changed = true;
                 if let Some(mut next) = row_from_frame_pane(
                     pane,
                     &PaneWiring {
@@ -411,6 +416,13 @@ impl SidebarSnapshot {
                     },
                     self.now,
                 ) {
+                    if row.is_agent()
+                        && next.is_agent()
+                        && row.name == next.name
+                        && row.id != next.id
+                    {
+                        continue;
+                    }
                     next.attention_at_ms = row.attention_at_ms;
                     if next.is_process() {
                         next.inactive = row.inactive;
@@ -423,7 +435,6 @@ impl SidebarSnapshot {
                     *row = next;
                     row.worktree_path = row.worktree_path.clone().or(worktree_path);
                 }
-                changed = true;
             }
             refresh_overlay_group(
                 group,

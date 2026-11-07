@@ -80,10 +80,17 @@ impl AttentionStamps {
         let mut present_panes = BTreeSet::new();
         let mut changed = false;
         for row in snapshot.rows() {
-            let card_at_ms = if row.is_agent() {
+            let pane_id = row.pane.as_ref().map(|pane| pane.pane_id.as_str());
+            let stored = pane_id.and_then(|key| self.panes.get(key));
+            present_panes.extend(pane_id);
+            let card = if row.is_agent() {
                 let key = card_key(row, &launches);
+                if pane_id == Some(key) && holds_process(stored, row) {
+                    changed |= self.cards.remove(key).is_some();
+                    continue;
+                }
                 present_cards.insert(key);
-                let next = next_stamp(self.cards.get(key), row, now_ms);
+                let next = next_stamp(self.cards.get(key), stored, row, now_ms);
                 let at_ms = next.at_ms;
                 if self.cards.get(key) != Some(&next) {
                     self.cards.insert(key.to_owned(), next);
@@ -97,9 +104,7 @@ impl AttentionStamps {
                 continue;
             };
             let key = pane.pane_id.as_str();
-            present_panes.insert(key);
-            let stored = self.panes.get(key);
-            let next = if let Some(at_ms) = card_at_ms {
+            let next = if let Some(at_ms) = card {
                 PaneStamp {
                     at_ms,
                     seen_ms: pane.first_seen_at_ms,
@@ -142,8 +147,12 @@ impl AttentionStamps {
                 let row = &snapshot.worktree_groups[group_index].rows[row_index];
                 let (at_ms, facts) = if row.is_agent() {
                     let stored = self.cards.get(card_key(row, &launches));
+                    let pane = row
+                        .pane
+                        .as_ref()
+                        .and_then(|pane| self.panes.get(pane.pane_id.as_str()));
                     (
-                        next_stamp(stored, row, now_ms).at_ms,
+                        next_stamp(stored, pane, row, now_ms).at_ms,
                         (row.inactive, row.archived, row.attention_score),
                     )
                 } else {
@@ -169,8 +178,13 @@ impl AttentionStamps {
     }
 }
 
-/// Birth on first sighting, the fold's clock on a top/calm crossing.
-fn next_stamp(stored: Option<&CardStamp>, row: &SidebarRow, now_ms: i64) -> CardStamp {
+/// A calm first sighting inherits a shell slot, else births; a zone crossing takes the fold clock.
+fn next_stamp(
+    stored: Option<&CardStamp>,
+    pane: Option<&PaneStamp>,
+    row: &SidebarRow,
+    now_ms: i64,
+) -> CardStamp {
     let zone = if row
         .attention_status()
         .is_some_and(AgentStatus::is_actionable)
@@ -182,25 +196,26 @@ fn next_stamp(stored: Option<&CardStamp>, row: &SidebarRow, now_ms: i64) -> Card
     let at_ms = match stored {
         Some(stamp) if stamp.zone == zone => return stamp.clone(),
         Some(_) => now_ms,
-        None => row
-            .as_agent()
-            .and_then(|agent| agent.registered_at)
-            .map_or(now_ms, |birth| birth.as_millisecond()),
+        None => pane
+            .filter(|_| zone == Zone::Calm && holds_process(pane, row))
+            .map(|stamp| stamp.at_ms)
+            .or_else(|| {
+                row.as_agent()
+                    .and_then(|agent| agent.registered_at)
+                    .map(|birth| birth.as_millisecond())
+            })
+            .unwrap_or(now_ms),
     };
     CardStamp { zone, at_ms }
 }
 
 fn process_stamp(stored: Option<&PaneStamp>, row: &SidebarRow, now_ms: i64) -> (i64, i64) {
-    let seen_ms = row.pane.as_ref().and_then(|pane| pane.first_seen_at_ms);
     let birth_ms = row
         .pane
         .as_ref()
         .filter(|pane| pane.pane_process_start.is_some() || pane.first_seen_at_ms.is_some())
         .map(|_| row.last_activity.as_millisecond());
-    match stored.filter(|stamp| match (stamp.seen_ms, seen_ms) {
-        (Some(stored), Some(current)) => stored == current,
-        _ => true,
-    }) {
+    match matching_pane_stamp(stored, row) {
         Some(PaneStamp {
             at_ms,
             tenant: PaneTenant::Process { active_ms },
@@ -216,6 +231,24 @@ fn process_stamp(stored: Option<&PaneStamp>, row: &SidebarRow, now_ms: i64) -> (
             (birth_ms, birth_ms)
         }
     }
+}
+
+/// Whether the pane's slot still belongs to its process. An unbound agent row keyed by its pane
+/// records nothing over such a slot, so the card that binds next inherits the shell's place.
+fn holds_process(stored: Option<&PaneStamp>, row: &SidebarRow) -> bool {
+    matching_pane_stamp(stored, row)
+        .is_some_and(|stamp| matches!(stamp.tenant, PaneTenant::Process { .. }))
+}
+
+fn matching_pane_stamp<'a>(
+    stored: Option<&'a PaneStamp>,
+    row: &SidebarRow,
+) -> Option<&'a PaneStamp> {
+    let seen_ms = row.pane.as_ref().and_then(|pane| pane.first_seen_at_ms);
+    stored.filter(|stamp| match (stamp.seen_ms, seen_ms) {
+        (Some(stored), Some(current)) => stored == current,
+        _ => true,
+    })
 }
 
 fn launch_keys(agents: &[AgentState]) -> BTreeMap<(&str, &str), &str> {
