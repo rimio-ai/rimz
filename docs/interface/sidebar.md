@@ -123,7 +123,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `→` (`worktree.pr_stack`) | the next level of a PR stack |
 | `⇡3 ⇣1` | commits ahead of and behind the trunk |
 | `+127 -43` | lines added and removed against the trunk |
-| `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
+| `⟳` `✓` `✕` `⇉` `↯` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
 | `▸` | a collapsed inactive group |
 | `▸` / `▾` (`worktree.inactive_closed` / `worktree.inactive_open`) | the inactive chip, closed / open; both glyph sets use these shapes |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
@@ -229,7 +229,9 @@ Before any spend arrives the token breakdown shows zeroes and the spend shows `$
 
 The spend scope uses the project root, listed worktree roots, and the configured worktree home, so cleaned-up checkouts still count. Grouping instead uses the deepest known place and follows no symlinks: a shell whose cwd resolves outside those places goes to `external`.
 
-The `⑃ N` colour reads each worktree's own pull request, since stacked pull requests carry no CI: red when any fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
+The `⑃ N` colour reads each worktree's own open pull request, since stacked pull requests without their own group carry no facts. The first matching rule wins: red when any CI fails or the merge queue removed a pull request, amber-orange when any conflicts with its base at its current head, yellow while any CI runs, green when every open pull request's CI passes, and blue otherwise.
+
+With `NO_COLOR` the count has no hue, but a conflict still has its own header glyph. On a 16-colour terminal, amber-orange may share yellow's colour; the header glyph still distinguishes a conflict from running CI.
 
 ### The make-up line
 
@@ -595,7 +597,8 @@ On the right: commits ahead of and behind the trunk with zero counts left out, t
 | `⟳ main` | a local rebase, merge, or cherry-pick is in progress |
 | `✓ main`, with `#N` on the left | the pull request merged; muted, and the commit and line figures are dropped |
 | `✕ main` | the pull request closed unmerged; red, and the figures stay |
-| `⇉ main` (` main` with Nerd Fonts, `worktree.pr_queue`) | the open pull request is in the merge queue; red when the queue removed it without merging it and it has not been re-armed |
+| `⇉ main` (` main` with Nerd Fonts, `worktree.pr_queue`) | the open pull request is in the merge queue; red when the queue removed it without merging it and it has not been re-armed; a removal outranks a conflict, while queued yields to it |
+| `↯ main` (` main` with Nerd Fonts, `worktree.pr_conflict`) | the open pull request conflicts with its base at its current head; amber-orange |
 | `⑃ main` | the pull request is open |
 | `✓ main`, no `#N` | no pull request, and the trunk already contains the work: safe to remove |
 | `≡ main` | pristine: a clean tree with no commits of its own, at the trunk's tip |

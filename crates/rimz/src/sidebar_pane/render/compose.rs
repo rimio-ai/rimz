@@ -20,7 +20,7 @@ use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
     cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
-    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
+    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_attention, open_pr_total,
     worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
@@ -1076,7 +1076,7 @@ pub(super) fn top_lines(
     // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let open_prs = open_pr_total(&snapshot.worktree_groups);
-    let open_pr_ci = open_pr_worst_ci(&snapshot.worktree_groups);
+    let open_pr_attention = open_pr_attention(&snapshot.worktree_groups);
     let tripped = snapshot
         .fleet_budget
         .as_ref()
@@ -1089,7 +1089,7 @@ pub(super) fn top_lines(
         live_agents,
         CockpitBadges {
             open_prs,
-            open_pr_ci,
+            open_pr_attention,
             pr_picked: view.make_up_filter.filter == Some(BodyFilter::OpenPr),
         },
         (today_usd, tripped),

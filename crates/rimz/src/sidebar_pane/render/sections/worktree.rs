@@ -771,9 +771,9 @@ fn group_header(
     // The CI marker follows the name — the trunk's branch CI, or the branch's
     // open or merged pull request CI — then any linked PR
     // number in a steady link tone. Its git story pins right: live local
-    // reconciling leads, then a PR verdict, then
-    // the local trunk verdict; diverged/reconciling keeps the `⇡/⇣` commit delta
-    // and `+/-` churn before the marker.
+    // reconciling leads, then a PR verdict (open PRs rank dequeued, conflicting,
+    // queued, plain open), then the local trunk verdict; diverged/reconciling
+    // keeps the `⇡/⇣` commit delta and `+/-` churn before the marker.
     // A marker-backed channel leads with the same fork/merge glyph as a
     // worktree pod and carries this same right-pinned story; only plain lanes
     // keep the `#` label.
@@ -1044,8 +1044,8 @@ fn ci_marker(ci: WorktreeCi) -> (GlyphRole, Component) {
 
 /// The trunk marker glyph and tone, by descending priority: a live local
 /// rebase/merge (`⟳`), then the forge PR verdict (merged `✓` / closed `✕` /
-/// open `⑃`, or `⇉` while the open PR carries a merge-queue fact: open tone
-/// when queued, failing-CI tone when dequeued), then the local trunk
+/// open). Open PRs rank dequeued `⇉` in red, current-head conflict `↯` in
+/// caution, queued `⇉` in blue, then plain open `⑃`. Last is the local trunk
 /// relationship (merged `✓` / pristine `≡` / diverged branch `⑂`). `None` for
 /// the trunk worktree itself (`trunk_sync` `None`), whose header keeps the
 /// plain cluster.
@@ -1059,11 +1059,14 @@ fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> 
     }
     if let Some(state) = group.pr_state {
         return Some(match (state, group.pr_queue) {
-            (WorktreePrState::Open, Some(WorktreePrQueue::Queued)) => {
-                (GlyphRole::WorktreePrQueue, Component::WorktreePrOpen)
-            }
             (WorktreePrState::Open, Some(WorktreePrQueue::Dequeued)) => {
                 (GlyphRole::WorktreePrQueue, Component::WorktreeCiFailing)
+            }
+            (WorktreePrState::Open, _) if group.pr_conflicting => {
+                (GlyphRole::WorktreePrConflict, Component::WorktreePrConflict)
+            }
+            (WorktreePrState::Open, Some(WorktreePrQueue::Queued)) => {
+                (GlyphRole::WorktreePrQueue, Component::WorktreePrOpen)
             }
             _ => pr_state_marker(state),
         });

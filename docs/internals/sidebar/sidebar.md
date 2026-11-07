@@ -148,7 +148,7 @@ Git stats live on the header and never on a row, so changes in a shared worktree
 The trunk glyph takes the first of three sources that has a verdict:
 
 1. Reconciling: a local rebase or merge in flight.
-2. The forge PR verdict: merged, closed, or open. An open PR with a merge-queue fact swaps its glyph for the queue glyph, in the open tone while queued and in the failing-CI tone once dequeued.
+2. The forge PR verdict: merged, closed, or open. For an open PR, dequeued uses the queue glyph in the failing-CI tone first, then a current-head conflict uses `↯` in caution, then queued uses the queue glyph in the open tone, then plain open uses `⑃`. Conflict never supplies the left CI glyph.
 3. The local trunk relationship: merged, pristine, or a plain branch.
 
 A pristine fork reads `≡ <trunk>`, and a merged PR shows the merge marker alone even when squash-merge ancestry leaves the local branch diverged. The trunk checkout keeps the plain branch glyph and carries no PR verdict. Trunk resolves per repo: `[sidebar] trunk` ([configuration.md](../../guide/configuration.md#sidebar-rendering)), then `main`, `master`, and the remote's advertised default. The facts come from [`refresh/git_stats.rs`](../../../crates/rimz/src/sidebar/refresh/git_stats.rs) and [`refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs). The landed verdict is in [worktrees.md](../harness/worktrees.md#what-the-sidebar-asks), and the look is in [the interface reference](../../interface/sidebar.md#worktree-headers).
