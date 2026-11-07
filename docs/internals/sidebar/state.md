@@ -554,7 +554,7 @@ Unless marked, these live in the workspace runtime directory.
 | `lanes/loop-fire.json` | The host's loop-task arm and fire stamps for this room. |
 | `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
 | `lanes/sidebar-width.json` | The room-runtime sidebar width the renderers settled on. |
-| `lanes/sidebar-filter.json` | The room-runtime body lens: independent status, unread, or PR pick and the committed text query, adopted by every renderer. |
+| `lanes/sidebar-filter.json` | The room-runtime body lens: independent status, unread, needs-you, or PR pick and the committed text query, adopted by every renderer. |
 | `audit/binding.log.jsonl` (state directory) | Append-only pane-bind decisions ([sidebar.md](./sidebar.md#the-binding-ladder)). |
 | `records/live-roster.json` (state directory) | The producer's pane-backed live root-agent set, read by rebirth recovery and written best-effort after each produced final fold ([sidebar.md → Resume-on-rebirth](./sidebar.md#resume-on-rebirth), [store.md → session death](../store.md#session-death)). |
 | `audit/diag.log.jsonl` (state directory) | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |

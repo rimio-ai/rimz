@@ -1,6 +1,44 @@
 use super::*;
 use std::time::Duration;
 
+#[test]
+fn needs_you_toggle_and_empty_auto_clear_keep_the_query() {
+    let mut snapshot = filtered_team_snapshot();
+    let mut ui = ViewState::default();
+    ui.make_up_filter.query = Some("team".into());
+    assert!(toggle_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyFilter::NeedsYou
+    ));
+    assert_eq!(ui.make_up_filter.filter, Some(BodyFilter::NeedsYou));
+    assert_eq!(ui.visible_roster(&snapshot).len(), 2);
+    assert!(toggle_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyFilter::NeedsYou
+    ));
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert!(toggle_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyFilter::NeedsYou
+    ));
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Paused;
+        }
+    }
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("team"));
+    assert!(!toggle_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyFilter::NeedsYou
+    ));
+}
+
 fn filtered_team_snapshot() -> SidebarSnapshot {
     use crate::agents::AgentStatus;
     let mut snapshot = filterable_snapshot(&workspace());

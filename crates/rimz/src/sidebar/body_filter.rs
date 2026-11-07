@@ -28,6 +28,7 @@ pub(crate) enum BodyFilter {
     Status(AgentStatus),
     Unread,
     OpenPr,
+    NeedsYou,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -83,7 +84,7 @@ impl BodyFilter {
     pub(crate) fn shows_group(self, group: &SidebarWorktreeGroup) -> bool {
         match self {
             Self::OpenPr => group.pr_state == Some(WorktreePrState::Open),
-            Self::Status(_) | Self::Unread => false,
+            Self::Status(_) | Self::Unread | Self::NeedsYou => false,
         }
     }
 
@@ -98,6 +99,9 @@ impl BodyFilter {
                         .is_some_and(|unit| unit.buckets().contains(&status))
             }
             Self::Unread => row.unread,
+            Self::NeedsYou => row
+                .attention_status()
+                .is_some_and(AgentStatus::is_actionable),
             Self::OpenPr => self.shows_group(facts.group),
         }
     }
@@ -110,13 +114,21 @@ impl BodyFilter {
                     .units
                     .get(&facts.group.unit_key(row))
                     .is_some_and(|unit| unit.carries(row, status)),
-                Self::Unread | Self::OpenPr => true,
+                Self::Unread | Self::OpenPr | Self::NeedsYou => true,
             }
     }
 
     /// Matching units for status lenses; otherwise rows, with rowless runs counting once.
     pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
         match self {
+            Self::NeedsYou => groups
+                .iter()
+                .flat_map(|group| group.rows.iter())
+                .filter(|row| {
+                    row.attention_status()
+                        .is_some_and(AgentStatus::is_actionable)
+                })
+                .count(),
             Self::Status(_) => groups
                 .iter()
                 .map(|group| {
@@ -181,6 +193,49 @@ pub(crate) fn write(runtime: &RuntimePaths, lens: &BodyLens) -> atomic::Result<(
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    #[test]
+    fn needs_you_matches_rows_not_units_and_includes_lifted_children() {
+        use crate::sidebar::test_support::activity_row;
+        use AgentStatus::*;
+        let mut group = team_group(&[Waiting, Failed, Paused, Running, Idle, Sleeping, Success]);
+        for (status, native) in [(Waiting, false), (Failed, true), (Failed, false)] {
+            let mut parent = group.rows[3].clone();
+            parent.id = format!("parent-{status:?}-{native}");
+            parent.as_agent_mut().unwrap().sub_agents = vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "child", "kind": "claude", "name": "child", "status": status,
+                    "last_activity": parent.last_activity, "provider_native": native,
+                }))
+                .unwrap(),
+            ];
+            std::sync::Arc::make_mut(&mut group.rows).push(parent);
+        }
+        let process = activity_row(
+            false,
+            None,
+            group.rows[0].last_activity,
+            "/repo/lane".as_ref(),
+        );
+        std::sync::Arc::make_mut(&mut group.rows).push(process);
+        let facts = GroupFacts::new(&group);
+        let filter = BodyFilter::NeedsYou;
+        let actual: Vec<_> = group
+            .rows
+            .iter()
+            .map(|row| (filter.matches(row, &facts), filter.shown(row, &facts)))
+            .collect();
+        let expected = [
+            true, true, false, false, false, false, false, true, true, false, false,
+        ]
+        .map(|matched| (matched, matched));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            filter.total(&[group]),
+            4,
+            "count rows, not their shared team"
+        );
+    }
 
     #[test]
     fn team_units_follow_the_stage_owner_or_ownerless_priority() {
@@ -491,6 +546,7 @@ mod tests {
             BodyFilter::Status(AgentStatus::Waiting),
             BodyFilter::Unread,
             BodyFilter::OpenPr,
+            BodyFilter::NeedsYou,
         ] {
             let lens = BodyLens::from(filter);
             write(&runtime, &lens).expect("write filter");

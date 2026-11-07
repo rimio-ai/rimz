@@ -2,6 +2,19 @@ use super::*;
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
+fn needs_you_header_names_asks_and_failures_together() {
+    let snapshot = make_up_snapshot();
+    let view = ViewState {
+        make_up_filter: BodyFilter::NeedsYou.into(),
+        ..Default::default()
+    };
+    let screen =
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &view, &UiState::default(), 38, 20);
+    assert!(screen.contains("needs-you"), "{screen}");
+    assert_snapshot("needs_you_header", screen);
+}
+
+#[test]
 fn make_up_counts_a_working_team_once_without_its_rest_buckets() {
     let mut members = vec![
         agent(

@@ -20,9 +20,9 @@ use crate::sidebar_pane::view::BodyLens;
 use super::{pin_right, trim_spans_to_width};
 
 /// The fixed fleet header — the cockpit's make-up line, below the repo
-/// dashboard's identity and `¤`/`◎`/spend lines. One line when the room has
-/// agents, nothing when it does not (the `¤ 0` count lives on the summary above),
-/// so the body below never shifts vertically as agents change *state*:
+/// dashboard's identity and `¤`/`◎`/spend lines. One make-up line when the room
+/// has agents; the active needs-you lens adds its count below. An empty room
+/// draws neither (the `¤ 0` count lives on the summary above):
 ///
 /// ```text
 /// ? 2   ! 1   ⏸ 0   ✓ 4                        ⢿ 3   ○ 2   make-up: left · right
@@ -62,7 +62,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let status_filter = match lens.filter {
         Some(BodyFilter::Status(status)) => Some(status),
-        Some(BodyFilter::Unread | BodyFilter::OpenPr) | None => None,
+        Some(BodyFilter::Unread | BodyFilter::OpenPr | BodyFilter::NeedsYou) | None => None,
     };
     let buckets = [
         (AgentStatus::Waiting, BucketCluster::Left),
@@ -135,7 +135,14 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // a target pointing past the visible edge, the rail's drop-whole-tab rule.
     hits.retain(|hit| usize::from(hit.columns.end) <= width);
 
-    (vec![buckets], hits)
+    let mut lines = vec![buckets];
+    if lens.filter == Some(BodyFilter::NeedsYou) {
+        lines.push(Line::styled(
+            format!("needs-you: {}", BodyFilter::NeedsYou.total(groups)),
+            theme.styled(Component::NeedsYouFilter, Modifier::empty()),
+        ));
+    }
+    (lines, hits)
 }
 
 /// Append a right-cluster hit run onto the absolute hit list, shifted by the
