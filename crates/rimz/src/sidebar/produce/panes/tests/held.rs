@@ -49,6 +49,7 @@ fn assert_held_start_census(starts: &[i64], carried_due: Option<i64>, expected: 
         &HashSet::new(),
         &mut SettledResumes::new(),
         &readers,
+        &mut |_| {},
     );
     assert_eq!(first(&fresh).current, first(&prior).current);
     assert_eq!(
@@ -143,6 +144,7 @@ fn rejected_candidates_do_not_hold_the_next_tenant_to_the_prior_process() {
                     accept(candidate, prior.cloned(), Some(&own_id), &diag)
                 },
                 &|_, _| None,
+                &|_| None,
             )
             .unwrap();
         assert_eq!(
@@ -269,6 +271,7 @@ fn production_repair_reads_only_due_pane_trees_at_each_fleet_size() {
                 &HashSet::new(),
                 &mut SettledResumes::new(),
                 &readers,
+                &mut |_| {},
             );
             let reads = reads.borrow();
             let unheld_reads = reads.iter().filter(|pid| **pid == unheld_pid).count();
@@ -365,6 +368,7 @@ fn due_held_panes_do_not_reopen_retained_topology() {
                     Ok(Accepted::Fresh(prior.unwrap().clone()))
                 },
                 &|_, _| None,
+                &|_| None,
             )
             .unwrap();
     }

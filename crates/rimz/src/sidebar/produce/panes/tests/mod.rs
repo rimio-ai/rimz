@@ -298,6 +298,7 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
         hibernated_panes: HashSet::new(),
         agent_panes: HashSet::new(),
         native_tenants: HashMap::new(),
+        tty_paths: PaneTtyPaths::default(),
         settled_resumes: SettledResumes::new(),
         held_checks: HashMap::new(),
     };
@@ -316,6 +317,7 @@ fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
                     calls.set(calls.get() + 1);
                     None
                 },
+                &|_| None,
             )
             .unwrap();
     }
@@ -404,6 +406,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
             &|_, _| Some(presence_sample(1, Some(1_000), 2_000)),
+            &|_| None,
         )
         .unwrap();
     assert_eq!(
@@ -423,6 +426,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
             &|_, _| Some(presence_sample(2, Some(1_000), 3_000)),
+            &|_| None,
         )
         .unwrap();
     let published: PaneFrame =

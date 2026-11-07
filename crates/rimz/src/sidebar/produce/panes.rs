@@ -11,12 +11,13 @@ use crate::diag::record::{
 };
 use crate::disk::atomic;
 use crate::ids::{AgentKind, MuxName, PaneId};
+use crate::mux::typing::{InputSource, TypingRecord, TypingView};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing, PaneReadConsistency};
 use crate::sidebar::cache::{
     effective_pane_ttl, hibernated_check_due, presence_stamp_age_ms, read_snapshot_cache,
     snapshot_cache_is_fresh,
 };
-use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics, PaneProcess};
+use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics, PaneProcess, PaneState};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::store::snapshot::PresenceSample;
 use crate::utils::time::unix_now_ms;
@@ -38,6 +39,31 @@ use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metric
 
 type SettledResumes = HashMap<PaneId, (u32, jiff::Timestamp, String)>;
 
+#[derive(Clone, Default)]
+struct PaneTtyPaths(HashMap<PaneId, (Option<u32>, Option<PathBuf>)>);
+
+impl PaneTtyPaths {
+    fn resolve(&mut self, frame: &PaneFrame, tty_path: &dyn Fn(&PaneState) -> Option<PathBuf>) {
+        if !InputSource::uses_tty() {
+            return;
+        }
+        for pane in frame.pane_states() {
+            if self
+                .0
+                .get(&pane.pane_id)
+                .is_none_or(|(pid, _)| *pid != pane.current.pid)
+            {
+                self.0
+                    .insert(pane.pane_id.clone(), (pane.current.pid, tty_path(pane)));
+            }
+        }
+    }
+
+    fn path(&self, pane: &PaneId) -> Option<&PathBuf> {
+        self.0.get(pane)?.1.as_ref()
+    }
+}
+
 /// The published pane frame a producer starts from, or none while a pane-list fixture stands in
 /// for the mux.
 pub(super) fn published_prior(
@@ -55,6 +81,7 @@ pub(crate) struct PaneProducer {
     pub(super) hibernated_panes: HashSet<PaneId>,
     pub(super) agent_panes: HashSet<PaneId>,
     native_tenants: HashMap<PaneId, (u32, Option<String>)>,
+    tty_paths: PaneTtyPaths,
     // Pruned to live pane ids on each repaired candidate.
     settled_resumes: SettledResumes,
     held_checks: HashMap<PaneId, Instant>,
@@ -80,6 +107,7 @@ impl PaneProducer {
             hibernated_panes: HashSet::new(),
             agent_panes: HashSet::new(),
             native_tenants: HashMap::new(),
+            tty_paths: PaneTtyPaths::default(),
             settled_resumes: SettledResumes::new(),
             held_checks: HashMap::new(),
         }
@@ -103,6 +131,7 @@ impl PaneProducer {
             diag,
             &mut |ctx, prior| ctx.produce(prior),
             &sample_client_presence,
+            &|pane| pane.current.pid.and_then(crate::proc::input_tty_path),
         )
     }
 
@@ -117,6 +146,7 @@ impl PaneProducer {
         diag: &crate::diag::DiagSink,
         produce: &mut dyn FnMut(&mut FrameContext<'_>, Option<&PaneFrame>) -> Result<Accepted>,
         sample_presence: &dyn Fn(MuxName, &str) -> Option<PresenceSample>,
+        tty_path: &dyn Fn(&PaneState) -> Option<PathBuf>,
     ) -> Result<Arc<PaneFrame>> {
         if let Some(panes) = super::pane_list_fixture()? {
             let frame = Arc::new(crate::sidebar::frame::assemble_frame(
@@ -158,28 +188,29 @@ impl PaneProducer {
                     PublishVerdict::Publish
                 )
         });
-        let frame = if let Some(prior) = fresh {
+        let mut frame = if let Some(prior) = fresh {
             let mut frame = Arc::clone(prior);
             let sampled = crate::proc::with_read_memo(|| {
-                if !super::metrics::pane_metrics_due(
+                let sampled = super::metrics::pane_metrics_due(
                     &frame,
                     &self.metrics,
                     &hibernated,
                     &hibernated,
-                ) || !super::metrics::enrich_pane_metrics(
+                ) && super::metrics::enrich_pane_metrics(
                     Arc::make_mut(&mut frame),
                     session,
                     &mut self.metrics,
                     &hibernated,
                     &hibernated,
                     &self.agent_panes,
-                ) {
-                    return false;
+                );
+                if sampled {
+                    with_due_panes(Arc::make_mut(&mut frame), Some(prior), &hibernated, |due| {
+                        annotate_elevated_agents(due, RepairReaders::system().elevated_agent);
+                    });
                 }
-                with_due_panes(Arc::make_mut(&mut frame), Some(prior), &hibernated, |due| {
-                    annotate_elevated_agents(due, RepairReaders::system().elevated_agent);
-                });
-                true
+                self.tty_paths.resolve(&frame, tty_path);
+                sampled
             });
             if sampled {
                 write_metrics_sample_cache(runtime, &self.metrics);
@@ -208,6 +239,7 @@ impl PaneProducer {
             frame
         } else {
             let mut native_tenants = self.native_tenants.clone();
+            let mut tty_paths = self.tty_paths.clone();
             let mut settled_resumes = self.settled_resumes.clone();
             let mut held_checks = self.held_checks.clone();
             let mut ctx = FrameContext {
@@ -224,6 +256,7 @@ impl PaneProducer {
                 settled_resumes: &mut settled_resumes,
                 held_checks: &mut held_checks,
                 checked_panes: HashSet::new(),
+                resolve_ttys: &mut |frame| tty_paths.resolve(frame, tty_path),
             };
             let accepted = produce(&mut ctx, self.prior.as_deref());
             if ctx.sampled {
@@ -232,6 +265,7 @@ impl PaneProducer {
             match accepted? {
                 Accepted::Fresh(mut frame) => {
                     self.native_tenants = native_tenants;
+                    self.tty_paths = tty_paths;
                     self.settled_resumes = settled_resumes;
                     self.held_checks = held_checks;
                     publish_frame(
@@ -246,9 +280,116 @@ impl PaneProducer {
                 Accepted::Held(frame) => Arc::new(frame),
             }
         };
+        self.tty_paths.resolve(&frame, tty_path);
+        let listed: HashSet<_> = frame
+            .pane_states()
+            .map(|pane| pane.pane_id.clone())
+            .collect();
+        self.tty_paths.0.retain(|pane, _| listed.contains(pane));
+        if let Some(sample) = observe_typing(
+            runtime,
+            &frame,
+            mux,
+            session,
+            sample_presence,
+            &self.tty_paths,
+        ) && apply_presence_sample(Arc::make_mut(&mut frame), sample)
+        {
+            publish_frame(
+                &runtime.pane_frame_path(),
+                Arc::make_mut(&mut frame),
+                PaneFramePublicationKind::Presence,
+                own_pane,
+                diag,
+            );
+        }
         self.prior = Some(Arc::clone(&frame));
         Ok(frame)
     }
+}
+
+fn observe_typing(
+    runtime: &crate::RuntimePaths,
+    frame: &PaneFrame,
+    mux: MuxName,
+    session: &str,
+    sample_presence: &dyn Fn(MuxName, &str) -> Option<PresenceSample>,
+    tty_paths: &PaneTtyPaths,
+) -> Option<PresenceSample> {
+    if !InputSource::uses_tty() {
+        return None;
+    }
+    let hold = crate::config::MachineConfig::load_lenient()
+        .harness
+        .typing_hold;
+    let listed = frame
+        .pane_states()
+        .map(|pane| pane.pane_id.clone())
+        .collect();
+    let (samples, pending) = match TypingRecord::update(runtime, |record| {
+        let clients = frame
+            .presence
+            .as_ref()
+            .map_or(frame.client_views.as_slice(), |sample| {
+                sample.client_views.as_slice()
+            });
+        let mut samples = Vec::new();
+        let mut pending = false;
+        let unknown_clocks = std::collections::BTreeMap::new();
+        let input_ms = frame
+            .presence
+            .as_ref()
+            .map_or(&unknown_clocks, |sample| &sample.client_input_ms);
+        let view = TypingView::for_mux(mux, clients, input_ms);
+        for pane in frame.pane_states() {
+            let Some(tty) = tty_paths.path(&pane.pane_id) else {
+                tracing::debug!(pane = %pane.pane_id, "cannot resolve typing tty");
+                continue;
+            };
+            record.set_tty(&pane.pane_id, tty.clone());
+            let sample = match record.sample(&pane.pane_id) {
+                Ok(sample) => sample,
+                Err(error) => {
+                    tracing::debug!(%error, pane = %pane.pane_id, "cannot stat typing tty");
+                    continue;
+                }
+            };
+            pending |= record.observe(&pane.pane_id, &sample, &view, None, unix_now_ms());
+            samples.push((pane.pane_id.clone(), sample));
+        }
+        record.prune(&listed, hold, unix_now_ms());
+        (samples, pending)
+    }) {
+        Ok(observation) => observation,
+        Err(error) => {
+            tracing::debug!(%error, "cannot observe room typing input");
+            return None;
+        }
+    };
+    if !pending {
+        return None;
+    }
+    let started_at = Instant::now();
+    let Some(view) = sample_presence(mux, session) else {
+        tracing::debug!("cannot read clients for pending typing advances");
+        return None;
+    };
+    let typing_view = TypingView::for_mux(mux, &view.client_views, &view.client_input_ms);
+    if let Err(error) = TypingRecord::update(runtime, |record| {
+        for (pane, sample) in samples {
+            record.observe(
+                &pane,
+                &sample,
+                &typing_view,
+                Some(started_at),
+                unix_now_ms(),
+            );
+        }
+        record.prune(&listed, hold, unix_now_ms());
+    }) {
+        tracing::debug!(%error, "cannot observe room typing input");
+    }
+    Some(view)
 }
 
 pub(crate) fn read_pane_frame(
@@ -281,6 +422,7 @@ pub(crate) fn read_pane_frame(
         settled_resumes: &mut SettledResumes::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
+        resolve_ttys: &mut |_| {},
     })
     .produce(prior.as_deref())?
     {
@@ -302,6 +444,7 @@ struct FrameContext<'a> {
     settled_resumes: &'a mut SettledResumes,
     held_checks: &'a mut HashMap<PaneId, Instant>,
     checked_panes: HashSet<PaneId>,
+    resolve_ttys: &'a mut dyn FnMut(&PaneFrame),
 }
 
 /// Enumerate only the session's panes; the store rollup is read separately. The host amortizes this read across the fleet, while private CLI calls always invoke it.
@@ -342,7 +485,7 @@ fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> PresenceSa
         human_clients: view.presence.human_clients,
         last_input_ms: view.presence.last_input_ms(),
         client_input_ms: view.presence.client_input_ms.clone(),
-        client_views: view.clients.clone(),
+        client_views: view.typing_clients(),
         sampled_at_ms: unix_now_ms(),
     }
 }
@@ -527,6 +670,7 @@ fn repair_pane_frame(
     agent_panes: &HashSet<PaneId>,
     settled_resumes: &mut SettledResumes,
     readers: &RepairReaders<'_>,
+    resolve_ttys: &mut dyn FnMut(&PaneFrame),
 ) -> (Vec<HostedCarryDrop>, bool) {
     crate::proc::with_read_memo(|| {
         let mut unstamped = natively_unstamped(frame);
@@ -546,6 +690,7 @@ fn repair_pane_frame(
             false
         };
         let drops = repair_processes(frame, prior, &unstamped, skipped, settled_resumes, readers);
+        resolve_ttys(frame);
         (drops, sampled)
     })
 }
@@ -791,6 +936,7 @@ pub fn repaired_pane_frame_for_binding(
         &HashSet::new(),
         &mut SettledResumes::new(),
         &RepairReaders::system(),
+        &mut |_| {},
     );
     emit_hosted_carry_dropped(&diag, hosted_carry_drops);
     Ok(frame)
@@ -1099,6 +1245,7 @@ impl FrameContext<'_> {
             self.agent_panes,
             self.settled_resumes,
             &RepairReaders::system(),
+            self.resolve_ttys,
         );
         self.sampled |= sampled;
         emit_hosted_carry_dropped(self.diag, hosted_carry_drops);

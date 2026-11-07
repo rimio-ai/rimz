@@ -1,10 +1,32 @@
 use super::*;
 use crate::ids::{MuxClientId, MuxName};
+use crate::mux::typing::{InputSource, TypingRecord};
 use crate::mux::{ClientPresence, ClientView};
 use crate::pane::ClientPaneView;
 use crate::store::snapshot::PresenceSample;
 use std::collections::HashMap;
 use std::time::Duration;
+
+fn write_inputs(runtime: &RuntimePaths, inputs: &[(&PaneId, u64)]) -> TypingRecord {
+    let panes: serde_json::Map<_, _> = inputs
+        .iter()
+        .map(|(pane, input)| {
+            (
+                pane.to_string(),
+                serde_json::json!({
+                    "tty": null, "atime_s": null, "viewers": [],
+                    "quiet_until_ms": 0, "input_ms": input
+                }),
+            )
+        })
+        .collect();
+    atomic::write_temp_then_rename_cache(
+        &runtime.typing_path(),
+        &serde_json::json!({"panes": panes}),
+    )
+    .unwrap();
+    TypingRecord::load(runtime)
+}
 
 #[test]
 fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
@@ -37,10 +59,8 @@ fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
         },
     };
     let hold = Duration::from_secs(30);
-    let source = crate::mux::typing::InputSource::ClientClocks {
-        clients: &view.clients,
-        input_ms: &view.presence.client_input_ms,
-    };
+    let record = write_inputs(&runtime, &[(&panes[0], 100_000), (&panes[1], 150_000)]);
+    let source = InputSource::for_platform(&record, &view.clients, &view.presence.client_input_ms);
     let expected: HashMap<_, _> = panes
         .iter()
         .filter_map(|pane| {
@@ -50,6 +70,29 @@ fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
             ))
         })
         .collect();
+    assert_eq!(
+        expected,
+        HashMap::from([
+            (
+                panes[0].clone(),
+                Timestamp::from_millisecond(if InputSource::uses_tty() {
+                    130_000
+                } else {
+                    140_000
+                })
+                .unwrap()
+            ),
+            (
+                panes[1].clone(),
+                Timestamp::from_millisecond(if InputSource::uses_tty() {
+                    180_000
+                } else {
+                    230_000
+                })
+                .unwrap()
+            ),
+        ])
+    );
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 115_000, "rimz-test");
     frame.client_views = view.clients.clone();
     frame.presence = Some(PresenceSample {
@@ -93,16 +136,21 @@ fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
             expected.clone(),
             expected.clone(),
             expected.clone(),
-            expected,
+            expected.clone(),
             HashMap::new(),
             HashMap::new(),
-            HashMap::new()
+            if InputSource::uses_tty() {
+                expected
+            } else {
+                HashMap::new()
+            }
         ]
     );
 }
 
 #[test]
-fn typing_deadlines_follow_presence_pairs_without_moving_topology_focus() {
+fn typing_deadlines_reread_pane_input_without_moving_topology_focus() {
+    let (_dir, runtime, _) = runtime();
     let panes = ["%1", "%2"].map(|raw| PaneId::from_parts(MuxName::Tmux, raw));
     let client = MuxClientId::Tmux("a".to_owned());
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1, "rimz-test");
@@ -121,13 +169,31 @@ fn typing_deadlines_follow_presence_pairs_without_moving_topology_focus() {
         }],
         sampled_at_ms: 101_000,
     });
-    assert_eq!(
-        typing_deadlines(Some(&frame), Some(Duration::from_secs(30))),
-        HashMap::from([(
-            panes[1].clone(),
-            Timestamp::from_millisecond(130_000).unwrap()
-        )])
-    );
+    let mut actual = Vec::new();
+    for input in [200_000, 300_000] {
+        write_inputs(&runtime, &[(&panes[0], input)]);
+        actual.push(typing_deadlines(
+            &runtime,
+            Some(&frame),
+            Some(Duration::from_secs(30)),
+        ));
+    }
+    let expected = if InputSource::uses_tty() {
+        [230_000, 330_000].map(|until| {
+            HashMap::from([(
+                panes[0].clone(),
+                Timestamp::from_millisecond(until).unwrap(),
+            )])
+        })
+    } else {
+        [130_000, 130_000].map(|until| {
+            HashMap::from([(
+                panes[1].clone(),
+                Timestamp::from_millisecond(until).unwrap(),
+            )])
+        })
+    };
+    assert_eq!(actual, expected);
     assert_eq!(frame.client_views[0].pane_id, panes[0]);
     assert_eq!(frame.focused_pane, Some(panes[0].clone()));
 }

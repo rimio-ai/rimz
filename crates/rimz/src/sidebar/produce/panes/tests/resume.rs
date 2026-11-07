@@ -128,6 +128,7 @@ impl ResumeFixture {
             &HashSet::new(),
             memo,
             &readers,
+            &mut |_| {},
         );
     }
 }

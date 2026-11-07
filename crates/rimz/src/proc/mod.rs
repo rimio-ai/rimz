@@ -907,7 +907,7 @@ pub(crate) fn input_tty(provider_pid: u32) -> Option<std::fs::File> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        let tty = memo::text(Some(provider_pid), "stat", input_tty_path)?;
+        let tty = input_tty_path(provider_pid)?;
         let flags = nix::fcntl::OFlag::O_NOCTTY
             | nix::fcntl::OFlag::O_NONBLOCK
             | nix::fcntl::OFlag::O_CLOEXEC;
@@ -924,8 +924,21 @@ pub(crate) fn input_tty(provider_pid: u32) -> Option<std::fs::File> {
     }
 }
 
+/// Resolve a process's controlling pty without opening it; absent off Linux.
+pub(crate) fn input_tty_path(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        memo::text(Some(pid), "stat", parse_input_tty_path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 #[cfg(target_os = "linux")]
-fn input_tty_path(stat: &str) -> Option<PathBuf> {
+fn parse_input_tty_path(stat: &str) -> Option<PathBuf> {
     let tty: i32 = stat
         .rsplit_once(')')?
         .1
