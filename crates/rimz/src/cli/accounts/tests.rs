@@ -403,7 +403,7 @@ fn rows_at(
         agents,
         readings,
         &BTreeMap::new(),
-        false,
+        &|| false,
     )
     .into_iter()
     .filter(|row| matches!(row.kind.as_str(), "claude" | "codex"))
