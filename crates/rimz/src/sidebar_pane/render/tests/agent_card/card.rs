@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn card_slot_yields_before_the_handle_at_exact_widths() {
+    let state = agent(
+        "slot",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("task"),
+    );
+    let mut snapshot = snapshot_with(vec![state]);
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .delegated_cost_usd = Some(1.0);
+    let mut plain = snapshot.clone();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut plain.worktree_groups)[0].rows)
+        [0]
+    .pane = None;
+    for width in [17, 18, 19] {
+        let theme = Theme::fixed(false);
+        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+        let head = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "claude"))
+            .unwrap();
+        let slot = head.spans.iter().find(|span| span.content == " 1");
+        assert_eq!(slot.is_some(), width >= 18, "width={width}: {head:?}");
+        if let Some(slot) = slot {
+            assert!(slot.style.add_modifier.contains(Modifier::DIM));
+        }
+        let plain_lines = group_lines_at_width(&plain, &theme, usize::MAX, width);
+        let plain_head = plain_lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "claude"))
+            .unwrap();
+        let handles = |line: &Line<'_>| {
+            line.spans
+                .iter()
+                .filter(|span| span.content.contains("claude"))
+                .map(|span| span.content.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(handles(head), handles(plain_head));
+    }
+}
+
+#[test]
+fn stale_card_head_keeps_its_slot() {
+    let mut state = agent(
+        "stale",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    );
+    state.last_activity = fixed_now() - Duration::from_secs(24 * 60 * 60);
+    let mut snapshot = snapshot_with(vec![state]);
+    let row = snapshot.rows_mut().next().unwrap();
+    row.unread = false;
+    row.last_activity = fixed_now() - Duration::from_secs(24 * 60 * 60);
+    let lines = group_lines(&snapshot, &Theme::fixed(false), usize::MAX);
+    let head = lines
+        .iter()
+        .find(|line| line.spans.iter().any(|span| span.content == "claude"))
+        .unwrap();
+    assert!(
+        head.spans.iter().any(|span| span.content == " 1"),
+        "{head:?}"
+    );
+}
+
+#[test]
 fn tier_move_marker_follows_the_model_at_exact_width_boundaries() {
     let mut codex = agent(
         "codex-1",

@@ -30,15 +30,8 @@ pub(super) fn identity_line(
     cost_usd: Option<f64>,
     show_marks: bool,
 ) -> Line<'static> {
-    let width = content_width(row_ctx.width);
     if row.is_process() {
-        return process_row_line(
-            row_ctx.theme,
-            row,
-            width,
-            row_ctx.animation_phase,
-            row_ctx.head_step,
-        );
+        return process_row_line(row_ctx, row);
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
@@ -83,9 +76,10 @@ pub(super) fn agent_lead_cell(
 
 /// Line 1 for an agent: the leading cell (the working fill or thinking head
 /// while active; attention rows use the card emphasis), the agent
-/// name, then the dim capability tokens (`· model · reasoning · window`) with the
-/// bold `$cost` (dollar green) pinned right — counting up through the row's
-/// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
+/// name, then the dim capability tokens (`· model · reasoning · window`) and
+/// optional room-birth digit, with bold `$cost` (dollar green) pinned right —
+/// counting up through the row's stepped [`CostRolls`] roll as a turn lands,
+/// with the shared settle brighten.
 /// The fast-mode bolt follows the model in bold amber, still at rest and
 /// crackling only while running.
 /// The context label pairs the compaction point and model capacity (`372k/1M`)
@@ -214,6 +208,7 @@ pub(super) fn agent_identity_line(
             }
         }
     }
+    row_ctx.append_card_slot(row, &mut left, &right);
     pin_right(left, right, width)
 }
 
@@ -317,6 +312,7 @@ pub(super) fn stale_line(
         marks.extend(right);
         right = marks;
     }
+    ctx.append_card_slot(row, &mut left, &right);
     left.push(Span::styled(value_seam(theme), theme.muted()));
     let mut remaining = width.saturating_sub(spans_width(&left) + spans_width(&right) + 1);
     for mut span in description_spans(ctx, row, attention) {

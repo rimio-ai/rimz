@@ -370,8 +370,8 @@ fn key_outcome(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = view.visible_roster(snapshot).pane_at_ordinal(index) {
-                return InputOutcome::focus(pane);
+            if let Some(pane) = crate::sidebar_pane::view::card_slots(snapshot).get(index) {
+                return InputOutcome::focus((*pane).clone());
             }
             InputOutcome::default()
         }

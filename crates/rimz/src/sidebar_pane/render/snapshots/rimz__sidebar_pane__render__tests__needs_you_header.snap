@@ -11,7 +11,7 @@ expression: screen
  needs-you: 1
 
  ⑂ main
- ! claude
+ ! claude 1
    db migrate
    ▢ ──────────────────────────  0.0%
 

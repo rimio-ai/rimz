@@ -2078,16 +2078,19 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
 fn focus_keys_fire_without_mutating_selection() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
+    let mut snapshot = snapshot_with_panes(
         &ws,
         vec![
-            pane("terminal_1", "tab_0", false),
             pane("terminal_2", "tab_0", false),
+            pane("terminal_1", "tab_0", false),
         ],
     );
 
-    // A digit ordinal jumps to the second pane without moving the selection.
+    // Birth slot 2 is the first visible row, even when a lens hides it.
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    std::sync::Arc::make_mut(&mut groups[0].rows).reverse();
     let mut ui = ViewState::default();
+    ui.make_up_filter.query = Some("no matches".into());
     let mut pane_ui = UiState::default();
     let outcome = handle_key(KeyAction::Digit(2), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));

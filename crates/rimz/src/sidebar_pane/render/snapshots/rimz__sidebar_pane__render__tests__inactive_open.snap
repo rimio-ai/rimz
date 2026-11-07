@@ -10,17 +10,17 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 3                ⢿ 0   ☾ 0   ○ 1
 
  ⑂ open-a
- ✓ open-a
+ ✓ open-a 1
    task-open-a
    ▢ ────────────────────────────────────  0.0%
 
  ⑂ open-b
- ✓ open-b
+ ✓ open-b 2
    task-open-b
    ▢ ────────────────────────────────────  0.0%
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ✓ external
+ ✓ external 6
    task-external
    ▢ ────────────────────────────────────  0.0%
 

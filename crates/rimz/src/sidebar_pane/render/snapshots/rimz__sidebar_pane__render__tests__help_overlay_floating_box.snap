@@ -10,25 +10,25 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 0                                          ⢿ 6   ☾ 0   ○ 0
 
 ▎⑂ alpha ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌⣾ codex                                                                       ▐
+▌⣾ codex 1                                                                     ▐
 ▌  task-0                                                                      ▐
 ▌  ▢ ──────────────────────────────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                                         ▐
-▎⣾ codex                                                                       🮇
+▎⣾ codex 2                                                                     🮇
 ▎  task-1                                                                      🮇
 ▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
-▎⣾ codex                                                                       🮇
+▎⣾ codex 3                                                                     🮇
 ▎  task-2                                                                      🮇
 ▎  ▢ ────────────────────────────────╭ help ───────────────────────────────────╮
                                      │ keys                                    │
  ⑂ beta                              │   /   search           esc   clear      │
- ⣾ codex                             │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
+ ⣾ codex 4                           │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
    task-3                            │ ↕ g/G ends           ↕ ^f/^b page       │
    ▢ ────────────────────────────────│ ↕ H/L screen         ⏎ l     focus/open │
- ⣾ codex                             │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
+ ⣾ codex 5                           │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
    task-4                            │ ✉ m   read/unread    ✉ M     read all   │
    ▢ ────────────────────────────────│ ↔ ←/→ account tabs   ⟳ r     reload     │
- ⣾ codex                             │ ✕ x   dismiss        ↕ a/d   width      │
+ ⣾ codex 6                           │ ✕ x   dismiss        ↕ a/d   width      │
    task-5                            │   i   inactive fold                     │
    ▢ ────────────────────────────────│                                         │
                                      │ filter                                  │

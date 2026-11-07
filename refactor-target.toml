@@ -3943,7 +3943,13 @@ reason = "Shared enrichment projects idle unfinished stages after attaching pipe
 path = "crates/rimz/src/sidebar_pane"
 # render_section_line_ansi exposes the CLI's full-frame section filter.
 # ViewState separates portable presentation from pane-bound render resources.
-surface-budget = 61
+# card_slots shares room-birth numbering between render and input (+1).
+surface-budget = 62
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::view::card_slots"
+reason = "Renderer digits and card jumps share one room-wide pane-birth numbering."
 
 [[verdict]]
 kind = "item"

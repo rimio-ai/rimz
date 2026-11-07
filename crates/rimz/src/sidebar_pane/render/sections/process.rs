@@ -14,19 +14,15 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{RowCtx, Tier, content_width, pin_right, trim_spans_to_width};
 
-pub(super) fn process_row_line(
-    theme: &Theme,
-    row: &SidebarRow,
-    width: usize,
-    animation_phase: u64,
-    head_step: u64,
-) -> Line<'static> {
+pub(super) fn process_row_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'static> {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
     let state = row.process_state().unwrap_or(ProcessState::Idle);
     let foreign_user = row
         .as_process()
         .and_then(|process| process.foreign_user.as_deref());
     let mut left = vec![
-        process_lead(theme, row, animation_phase, head_step),
+        process_lead(theme, row, ctx.animation_phase, ctx.head_step),
         Span::raw(" "),
         Span::styled(row.name.clone(), theme.body()),
     ];
@@ -37,12 +33,14 @@ pub(super) fn process_row_line(
     // At L2 width, active process rows pin resource stats right:
     // `C  11%  M 1.1G  ⇅   3M/s`. Idle shells and editors stay bare; the
     // whole cluster also drops at L0/L1, or until every metric has reported.
-    if Tier::for_width(width) == Tier::L2 && !state.is_idle() {
+    if ctx.tier == Tier::L2 && !state.is_idle() {
         let right = proc_stats_spans(theme, row);
         if !right.is_empty() {
+            ctx.append_card_slot(row, &mut left, &right);
             return pin_right(left, right, width);
         }
     }
+    ctx.append_card_slot(row, &mut left, &[]);
     Line::from(trim_spans_to_width(left, width))
 }
 
@@ -97,7 +95,7 @@ pub(super) fn not_tracked_lines(
     let lead = process_lead(theme, row, ctx.animation_phase, ctx.head_step);
     let suffix = format!(" {} not tracked", theme.glyph(GlyphRole::Seam));
     let label_width = width.saturating_sub(lead.width() + 1 + text_width(&suffix));
-    let title = Line::from(vec![
+    let mut title = Line::from(vec![
         lead,
         Span::raw(" "),
         Span::styled(ellipsize(&row.name, label_width), theme.body()),
@@ -106,6 +104,7 @@ pub(super) fn not_tracked_lines(
             theme.styled(Component::NotTrackedSuffix, theme.muted().add_modifier),
         ),
     ]);
+    ctx.append_card_slot(row, &mut title.spans, &[]);
     let mut tip = vec![Span::raw("  ")];
     let label = if ctx.tier == Tier::L0 { "" } else { "tip: " };
     if !label.is_empty() {
