@@ -246,8 +246,8 @@ Each agent is a small stacked card, drawn in [the interface reference](../../int
 
 A card's slot skeleton is fixed before any content fills it, and optional slots render only when their content applies. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
-- Stage (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge. `labeled` means it carries a RimZ-authored description instead of the compose affordance. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables), unless reach, an open delegation section, or `expanded` density keeps it open. Only idle and success rows use the stale template. `CardStage::resolve` is that one decision, and both `template` callers (`row_lines` and the frame-rate check `delegation_motion`) read it.
-- Expansion (`CardExpansion`). `reach` (`SelectionReach`) is `Selected` for the live selected row, `Held` for previous selections the freeze holds, and `Unreached` otherwise. Selected and held rows open their own engaged cards with stats, and teammates stay unreached. A fresh card opens its meter and compose dots only for the live selection. `delegation` (the sticky per-row override, else an opened card or `expanded` density) decides whether the delegation entries show.
+- Stage (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge. `labeled` means it carries a usable launch description or task. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables), unless reach, an open delegation section, or `expanded` density keeps it open. Only idle and success rows use the stale template. `CardStage::resolve` is that one decision, and both `template` callers (`row_lines` and the frame-rate check `delegation_motion`) read it.
+- Expansion (`CardExpansion`). `reach` (`SelectionReach`) is `Selected` for the live selected row, `Held` for previous selections the freeze holds, and `Unreached` otherwise. Selected and held rows open their own engaged cards with stats, and teammates stay unreached. Fresh cards ignore reach: identity plus any launch description in Auto or Expanded, identity alone in Compact. `delegation` (the sticky per-row override, else an opened card or `expanded` density) decides whether the delegation entries show.
 - Density: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
 - Status, read by the stale, resting compact, and resting engaged arms.
 
@@ -257,10 +257,9 @@ A card's slot skeleton is fixed before any content fills it, and optional slots 
 | `compact`, unreached, `idle` | identity |
 | `compact`, unreached, `running` or `waiting` | identity, description, question, gauge |
 | `compact`, unreached, `paused`, `success`, `failed`, or `sleeping` | identity, description |
-| Fresh unlabeled, not live selected | identity |
-| Fresh labeled, not live selected | identity, description |
-| Fresh unlabeled, live selected | identity, awaiting dots, question, gauge |
-| Fresh labeled, live selected | identity, description, question, gauge |
+| Fresh, `compact`, any reach | identity |
+| Fresh unlabeled, `auto` or `expanded`, any reach | identity |
+| Fresh labeled, `auto` or `expanded`, any reach | identity, description |
 | Engaged, unreached `idle` or `success`, delegation closed, density not `expanded` | identity, description, question, gauge |
 | Engaged, otherwise unreached, density not `expanded` | identity, description, question, gauge, delegation |
 | Engaged, selected or held, or `expanded` density | identity, description, question, gauge, tokens, cache, delegation |
@@ -294,7 +293,7 @@ Two presentation states in the portable `ViewState` steer the entries. They trav
 
 Both clicks pin manual scroll, then select and focus the parent's own live pane, not a child's. Without a parent pane they only toggle.
 
-Two frame-rate rules follow from the slots. The serve loop holds the breath cadence while a visible selected card shows the unlabeled compose affordance. It holds the fast grid while a visible card's open delegation entries hold motion: a running child's working or thinking head, or a running shell job's working lead. An idle or sleeping child's status head holds nothing, and timer and signal leads are static. The parent's own status does not matter here.
+The serve loop holds the fast grid while a visible card's open delegation entries hold motion: a running child's working or thinking head, or a running shell job's working lead. An idle or sleeping child's status head holds nothing, and timer and signal leads are static. The parent's own status does not matter here. Fresh cards add no breath-cadence request.
 
 ### What fills the slots
 

@@ -162,7 +162,7 @@ fn render_cursor_normalized_model_metadata_once() {
 }
 
 #[test]
-fn cursor_idle_session_name_yields_to_first_prompt_affordance() {
+fn cursor_idle_session_name_keeps_the_fresh_card_thin() {
     let mut cursor = agent(
         "cursor-1",
         "cursor",
@@ -186,9 +186,10 @@ fn cursor_idle_session_name_yields_to_first_prompt_affordance() {
         &theme,
         0,
     ));
-    assert!(
-        before_prompt.iter().any(|line| line.contains(".  ")),
-        "a provider-owned session title cannot displace the compose affordance:\n{}",
+    assert_eq!(
+        before_prompt.len(),
+        2,
+        "a provider-owned session title cannot expand a fresh card:\n{}",
         before_prompt.join("\n")
     );
     assert!(
@@ -363,7 +364,7 @@ fn blank_idle_agent_renders_single_line() {
 }
 
 #[test]
-fn selected_blank_idle_agent_opens_compose_affordance() {
+fn selected_blank_idle_agent_stays_single_line() {
     let idle = agent(
         "idle-1",
         "claude",
@@ -376,19 +377,8 @@ fn selected_blank_idle_agent_opens_compose_affordance() {
     let theme = Theme::fixed(true);
 
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
-
-    assert!(
-        selected.iter().any(|line| line.contains(".  ")),
-        "phase-0 compose placeholder renders on the selected blank idle card:\n{}",
-        selected.join("\n")
-    );
-    assert!(
-        selected
-            .iter()
-            .any(|line| line.contains('▢') && line.contains("0%")),
-        "selected blank idle card renders the empty context bar:\n{}",
-        selected.join("\n")
-    );
+    assert_eq!(selected.len(), 2, "{}", selected.join("\n"));
+    assert!(selected[1].contains("claude"), "{selected:?}");
 }
 
 #[test]
@@ -418,7 +408,7 @@ fn unselected_blank_idle_agent_stays_single_line() {
 }
 
 #[test]
-fn described_unprompted_idle_agent_opens_a_meter_only_when_selected() {
+fn described_unprompted_idle_agent_keeps_two_lines_at_every_reach() {
     let mut idle = agent(
         "idle-1",
         "claude",
@@ -431,22 +421,16 @@ fn described_unprompted_idle_agent_opens_a_meter_only_when_selected() {
     let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
 
-    for (selected_index, expected_lines) in [(0, 3), (usize::MAX, 2)] {
+    for selected_index in [0, usize::MAX] {
         let card_lines = line_texts(&group_lines(&snapshot, &theme, selected_index))
             .into_iter()
             .skip(1)
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            card_lines.len(),
-            expected_lines,
-            "{}",
-            card_lines.join("\n")
-        );
+        assert_eq!(card_lines.len(), 2, "{}", card_lines.join("\n"));
         assert!(card_lines[1].contains("review the API"), "{card_lines:?}");
-        assert_eq!(
-            card_lines.iter().any(|line| line.contains('▢')),
-            selected_index == 0,
+        assert!(
+            !card_lines.iter().any(|line| line.contains('▢')),
             "{card_lines:?}"
         );
         assert!(

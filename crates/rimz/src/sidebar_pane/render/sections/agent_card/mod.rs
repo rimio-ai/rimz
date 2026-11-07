@@ -85,10 +85,6 @@ pub(in crate::sidebar_pane) fn agent_card_cost_usd(
     }
 }
 
-pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
-    matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
-}
-
 /// Whether this card's delegation entries are on screen with something in
 /// motion on the fast grid: a running child's head or a running shell job.
 pub(in crate::sidebar_pane::render) fn delegation_motion(
@@ -296,9 +292,6 @@ pub(super) fn row_lines(
                             .into(),
                         );
                     }
-                }
-                CardSlot::AwaitingDots => {
-                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw).into());
                 }
                 CardSlot::Gauge => {
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
