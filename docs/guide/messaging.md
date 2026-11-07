@@ -105,6 +105,8 @@ A durable record is not a delivery guarantee, and the record is where a failure 
 
 ## Why a parked message is still waiting
 
+The agent card's `↧ N` counts open messages that are due, from every sender, not messages guaranteed to send now. Future schedules and conditions not yet recorded as met do not count; other delivery gates can still hold counted messages. A `✎` on the same card means a message sent here now would wait for recent input to stop. These appear as `󱃚 N` and `󰏫` with Nerd Font glyphs.
+
 A parked message delivers the moment the agent can take it, which means all of these hold:
 
 - Nobody viewing its pane has input recent enough to keep the typing hold active.
