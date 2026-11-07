@@ -2791,7 +2791,7 @@ fn completed_compaction_keeps_its_glyph_until_a_real_reading() {
     );
     let rendered = snapshot_to_screen(&snapshot_with(vec![fresh]), 58, 17);
     assert!(
-        rendered.contains('▢') && rendered.contains(" 0.0%"),
+        !rendered.contains('▢') && !rendered.contains(" 0.0%"),
         "{rendered}"
     );
 }

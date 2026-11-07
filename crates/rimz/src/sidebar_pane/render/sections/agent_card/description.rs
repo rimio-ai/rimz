@@ -2,14 +2,6 @@ use super::*;
 use crate::sidebar_pane::render::layout::wrap_words;
 use crate::store::snapshot::CardDescription;
 
-/// The compose-affordance frames for a selected, awaiting-first-prompt card:
-/// a fixed-width ellipsis that grows `.  ` -> `.. ` -> `...`.
-const AWAITING_DOTS: [&str; 3] = [".  ", ".. ", "..."];
-
-/// Hold each dot frame across ten base animation phases (~1 s at the default
-/// 100 ms grid, ~3 s per cycle) so the placeholder reads as a resting pulse.
-const AWAITING_DOT_STEP: u64 = 10;
-
 fn question_sentence(text: &str) -> &str {
     let mut start = 0;
     let mut chars = text.char_indices().peekable();
@@ -25,25 +17,6 @@ fn question_sentence(text: &str) -> &str {
         }
     }
     text
-}
-
-pub(super) fn awaiting_dots_frame(animation_phase: u64) -> &'static str {
-    AWAITING_DOTS[((animation_phase / AWAITING_DOT_STEP) as usize) % AWAITING_DOTS.len()]
-}
-
-/// The compose-affordance line shown where the description will land once a
-/// prompt arrives.
-pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'static> {
-    Line::from(trim_spans_to_width(
-        vec![
-            Span::raw("  "),
-            Span::styled(
-                awaiting_dots_frame(animation_phase).to_owned(),
-                Style::default(),
-            ),
-        ],
-        width,
-    ))
 }
 
 /// The open ask while waiting, led by its first question and word-wrapped over
@@ -206,21 +179,5 @@ mod tests {
         ] {
             assert_eq!(question_sentence(text), expected);
         }
-    }
-
-    #[test]
-    fn awaiting_dots_frame_steps_and_wraps() {
-        assert_eq!(awaiting_dots_frame(0), ".  ");
-        assert_eq!(awaiting_dots_frame(AWAITING_DOT_STEP), ".. ");
-        assert_eq!(awaiting_dots_frame(2 * AWAITING_DOT_STEP), "...");
-        assert_eq!(awaiting_dots_frame(3 * AWAITING_DOT_STEP), ".  ");
-    }
-
-    #[test]
-    fn awaiting_prompt_line_uses_default_style_for_placeholder() {
-        let line = awaiting_prompt_line(0, 8);
-
-        assert_eq!(line.spans[1].content.as_ref(), ".  ");
-        assert_eq!(line.spans[1].style, Style::default());
     }
 }

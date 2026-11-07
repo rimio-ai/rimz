@@ -380,10 +380,18 @@ fn held_fresh_teammate_does_not_keep_the_breath_grid() {
     teammate.team = Some("forge".into());
     let snapshot = snapshot_with(vec![parent, teammate]);
     let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    pane_ui.theme(&snapshot.theme);
     ui.held_expansions.insert("parent".into());
-    assert!(!expanded_row_awaiting_first_prompt(&snapshot, &ui));
+    assert_ne!(
+        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
+    );
     ui.held_expansions.insert("teammate".into());
-    assert!(!expanded_row_awaiting_first_prompt(&snapshot, &ui));
+    assert_ne!(
+        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
+    );
 }
 
 /// Shell jobs and live children animate inside an open delegation section
@@ -574,7 +582,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
 }
 
 #[test]
-fn selected_blank_idle_agent_keeps_breath_grid_awake() {
+fn selected_blank_idle_agent_does_not_request_the_breath_grid() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let agent = std::sync::Arc::make_mut(
@@ -589,17 +597,9 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     let selected = selected_ui();
     let mut pane_selected = UiState::default();
     pane_selected.theme(&snapshot.theme);
-    assert!(animation_interval(&snapshot, &selected, &pane_selected, 0, false).is_some());
     assert_eq!(
-        animation_interval(
-            &snapshot,
-            &selected,
-            &pane_selected,
-            selected.animation_phase,
-            false
-        )
-        .expect("animated"),
-        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+        animation_interval(&snapshot, &selected, &pane_selected, 0, false),
+        None
     );
 
     let off_selection = ViewState {
@@ -924,7 +924,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 }
 
 #[test]
-fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
+fn fresh_cards_never_request_the_breath_grid() {
     let bare_idle = snapshot_with(vec![agent(
         "claude-1",
         "claude",
@@ -934,18 +934,6 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         None,
     )]);
 
-    assert!(expanded_row_awaiting_first_prompt(
-        &bare_idle,
-        &selected_ui()
-    ));
-    assert!(!expanded_row_awaiting_first_prompt(
-        &bare_idle,
-        &ViewState {
-            selected_index: Some(99),
-            ..Default::default()
-        }
-    ));
-
     let described = snapshot_with(vec![agent(
         "claude-1",
         "claude",
@@ -954,11 +942,6 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         Some("main"),
         Some("warm up"),
     )]);
-    assert!(!expanded_row_awaiting_first_prompt(
-        &described,
-        &selected_ui()
-    ));
-
     let mut used = snapshot_with(vec![agent(
         "claude-1",
         "claude",
@@ -972,8 +955,6 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         .expect("agent row")
         .usage
         .total_tokens = Some(1);
-    assert!(!expanded_row_awaiting_first_prompt(&used, &selected_ui()));
-
     let running = snapshot_with(vec![agent(
         "claude-1",
         "claude",
@@ -982,10 +963,28 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         Some("main"),
         None,
     )]);
-    assert!(!expanded_row_awaiting_first_prompt(
-        &running,
-        &selected_ui()
-    ));
+    let mut held = ViewState {
+        selected_index: Some(99),
+        ..Default::default()
+    };
+    held.held_expansions.insert("claude-1".into());
+    let actual = [&bare_idle, &described, &used, &running].map(|snapshot| {
+        let mut pane_ui = UiState::default();
+        pane_ui.theme(&snapshot.theme);
+        [
+            selected_ui(),
+            ViewState {
+                selected_index: Some(99),
+                ..Default::default()
+            },
+            held.clone(),
+        ]
+        .map(|ui| {
+            animation_interval(snapshot, &ui, &pane_ui, 0, false)
+                == Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
+        })
+    });
+    assert_eq!(actual, [[false; 3]; 4]);
 }
 
 #[test]
