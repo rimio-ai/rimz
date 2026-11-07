@@ -239,6 +239,7 @@ fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
 
 const VALID: &str = r#"
 [workflow]
+on-break = "@failed"
 scope = "worktree"
 start = "pick"
 [checks.pick]
@@ -369,7 +370,7 @@ fn delays_between_listed_checks_are_ignored_but_closing_delays_remain() {
         "{:?}",
         spec.ignored
     );
-    let land = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen=['ruled','ruled-read']\n[checks.ruled]\nrun='true'\non={read='ruled-read',settled={to='@done',delay='30m'}}\n[checks.ruled-read]\nrun='true'\non.settled={to='@done',delay='30m'}\n";
+    let land = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen=['ruled','ruled-read']\n[checks.ruled]\nrun='true'\non={read='ruled-read',settled={to='@done',delay='30m'}}\n[checks.ruled-read]\nrun='true'\non.settled={to='@done',delay='30m'}\n";
     fs::write(dir.join("workflow.toml"), land).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
@@ -678,7 +679,7 @@ fn until_warns_about_unreported_background_work_and_auto_continue() {
 fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() {
     let results = ["@done", "pick"].map(|target| {
         let spec: WorkflowSpec = toml::from_str(&format!(
-            "[workflow]\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
+            "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
              [checks.pick]\nrun='true'\non.ready='{target}'\n"
         ))
         .unwrap();
@@ -731,6 +732,11 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
         .map(|start| {
             if matches!(start, "pick" | "build") {
                 Vec::new()
+            } else if start == "@user" {
+                vec![(
+                    "workflow.start".into(),
+                    "workflow.start: example: workflow.start: @user is not a route target; route to a node, @done, or @failed, or set [workflow] on-break".into(),
+                )]
             } else {
                 vec![(
                     "workflow.start".into(),
@@ -743,7 +749,7 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
 
 #[test]
 fn validation_rejects_each_invalid_spec() {
-    let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@user'}\n";
+    let shell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let cases = [
         (
             "shell requires pass",
@@ -752,7 +758,7 @@ fn validation_rejects_each_invalid_spec() {
         ),
         (
             "shell requires fail",
-            shell.replace(",fail='@user'", ""),
+            shell.replace(",fail='@failed'", ""),
             "checks.pick.on.fail",
         ),
         (
@@ -1001,14 +1007,14 @@ fn validation_rejects_each_invalid_spec() {
 #[test]
 fn validation_warns_only_for_bounded_command_cycles_that_never_wait() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\non.fail='build'\n";
+    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\non.fail='build'\n";
     let two = base.replace("on.fail='build'", "on.fail='pack'")
         + "[steps.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[checks.back]\nrun='true'\non.fail='build'\n";
     let route = "run='true'\non.fail='build'";
     let condition = "cases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
                      on={yes='@done',no='build'}\ntimeout='1m'";
     let held_condition = "cases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
-                          on={yes='build',no='@done',unknown='@user'}";
+                          on={yes='build',no='@done',unknown='@failed'}";
     let helper = "[steps.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\
                   then='back'\nmax-visits=4\n[checks.back]\nrun='true'\non.fail='build'\n";
     let judge = "agent='claude'\nprompt-file='prompts/build.md'\n\
@@ -1114,7 +1120,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@user',invalid='@done',timeout='@user'}\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',invalid='@done',timeout='@failed'}\n",
     ).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
@@ -1178,7 +1184,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "invalid"
         && edge.target == "@failed"
-        && edge.source == EdgeSource::Default));
+        && edge.source == EdgeSource::OnBreak));
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
         && edge.source == EdgeSource::Explicit));

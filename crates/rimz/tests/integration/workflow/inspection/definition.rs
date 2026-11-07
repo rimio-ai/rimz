@@ -2,13 +2,14 @@ use super::*;
 
 const GRAPH: &str = r#"
 [workflow]
+on-break = '@failed'
 summary = 'carry the change to green'
 scope = 'worktree'
 start = 'begin'
 [checks.begin]
 shell = 'true'
 on.pass = 'sweep'
-on.fail = '@user'
+on.fail = '@failed'
 [steps.sweep]
 shell = 'echo sweep'
 timeout = '1h'
@@ -65,8 +66,6 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "only when a loop task starts the run",
         "asked ↑ watch",
         "A turn step goes on to its next check when its turn ends cleanly or its provider exits.",
-        "An unrouted failure ends the run as failed.",
-        "No deadline is set; an unrouted deadline granted to a run ends it as failed.",
         "one node in full: rimz workflow show review begin",
         "source ~/",
         "unreachable from begin",
@@ -80,7 +79,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         .map(|name| text.find(name).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("never:"), "{text}");
-    assert!(!text.contains("invalid →"), "{text}");
+    assert!(text.contains("invalid @failed"), "{text}");
     assert!(!text.contains("waits ≤1h"), "{text}");
     let caps = [
         (
@@ -157,7 +156,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
 #[test]
 fn the_by_hand_hint_starts_in_the_selected_room() {
     let (env, _) = super::super::fixture(
-        "[workflow]\nscope='project'\nstart='gate'\n\
+        "[workflow]\non-break='@failed'\nscope='project'\nstart='gate'\n\
          [checks.gate]\nshell='true'\non={pass='@done',fail='@failed'}\n",
         "",
     );
@@ -266,6 +265,7 @@ fn missing_or_broken_definition_keeps_the_runs_visible_and_json_unchanged() {
 
 const NODE_GRAPH: &str = r#"
 [workflow]
+on-break = '@failed'
 scope = 'project'
 start = 'judge'
 [checks.judge]
@@ -306,7 +306,7 @@ max-visits = 4
 max-visits-per-outcome = { limit = 2, reset-on = ['green', 'ok'] }
 timeout = '2h'
 on.asked = 'watch'
-on.cap = '@user'
+on.cap = '@failed'
 on.capacity = '@failed'
 "#;
 
@@ -336,7 +336,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "8h",
                 "ok → fix (explicit)",
                 "invalid → @failed (explicit)",
-                "deadline → @failed (default, only with a deadline)",
+                "deadline → @failed (on-break, only with a deadline)",
             ],
         ),
         (
@@ -368,7 +368,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "2h",
                 "then → judge (explicit)",
                 "asked → watch (explicit)",
-                "cap → @user (explicit)",
+                "cap → @failed (explicit)",
                 "capacity → @failed (explicit, only when a loop task starts the run)",
             ],
         ),
@@ -392,7 +392,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "green → @done",
                 "none true",
                 "waiting → @wait",
-                "timeout → @failed (default, never: no timeout)",
+                "timeout → @failed (on-break, never: no timeout)",
                 "unknown → @wait (default)",
             ],
         ),
@@ -418,7 +418,6 @@ fn condition_case_note_agrees_in_definition_and_node_views() {
     let results = [
         (None, "waits"),
         (Some("@wait"), "waits"),
-        (Some("@user"), "goes @user"),
         (Some("@done"), "goes @done"),
         (Some("@failed"), "goes @failed"),
         (Some("begin"), "goes ↑ begin"),

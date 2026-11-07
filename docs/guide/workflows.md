@@ -18,6 +18,7 @@ The smallest useful workflow runs the test suite, sends an agent to fix it when 
 
 ```toml
 [workflow]
+on-break = "@failed"
 scope = "worktree"
 start = "tests"
 
@@ -34,7 +35,7 @@ max-visits = 3
 timeout = "1h"
 ```
 
-For failures, set `[workflow] on-break = { agent = "debugger" }` to open your chosen agent profile with a debug trace, or `on-break = "@failed"` to end silently (`"@done"` is also supported). Explicit failure routes override this catch-all. The agent is a staying step named `@break`: it may fix the cause and run `rimz workflow resume <run> [--at <node>]`, cancel, ask urgently through its native UI, or end its turn and wait for you. Resume defaults to the node that failed and leaves the debugger's pane open; cancel also leaves it open. Closing its pane ends the run as failed. Its deadline cannot interrupt it. See [on-break](../reference/cli/workflow.md#failure-handling-with-on-break) for custom prompts, failure input, and legacy runs.
+Every fireable failure edge needs an explicit route or on-break; validation and launch refuse `@user` targets. For failures, set `[workflow] on-break = { agent = "debugger" }` to open your chosen agent profile with a debug trace, or `on-break = "@failed"` to end silently (`"@done"` is also supported). Explicit failure routes override this catch-all. The agent is a staying step named `@break`: it may fix the cause and run `rimz workflow resume <run> [--at <node>]`, cancel, ask urgently through its native UI, or end its turn and wait for you. Resume defaults to the node that failed and leaves the debugger's pane open; cancel also leaves it open. Closing its pane ends the run as failed. Its deadline cannot interrupt it. See [on-break](../reference/cli/workflow.md#failure-handling-with-on-break) for custom prompts, failure input, and legacy runs.
 
 `shell` runs the command in the checkout through `sh -c`. Exit 0 answers `pass`; any other exit or signal answers `fail`. RimZ saves both output streams in a per-evaluation log and gives its absolute path to the next node as `input.log`. Replace `cargo test` with your suite's command. A shell check requires both `on.pass` and `on.fail`; its only other routes are `on.timeout` and `on.invalid`. Use `run` instead when a script needs to answer more than pass or fail.
 
@@ -71,8 +72,8 @@ Validate the definition first. The command prints every node with the edges it r
 ```console
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
-fix-tests  tests  check  cargo test  —           fail → fix (explicit), pass → @done (explicit), timeout → @failed (default, never: no timeout), invalid → @failed (default), deadline → @failed (default, only with a deadline)
-fix-tests  fix    step   claude      yes         then → tests (explicit), cap → @failed (default), capacity → @failed (default, never: capacity-wait is forever), deadline → @failed (default, only with a deadline)
+fix-tests  tests  check  cargo test  —           fail → fix (explicit), pass → @done (explicit), timeout → @failed (on-break, never: no timeout), invalid → @failed (on-break), deadline → @failed (on-break, only with a deadline)
+fix-tests  fix    step   claude      yes         then → tests (explicit), invalid → @failed (on-break), cap → @failed (on-break), capacity → @failed (default, never: capacity-wait is forever), deadline → @failed (on-break, only with a deadline)
 warning: fix-tests: steps.fix: auto-continue is off; a step paused on a provider limit waits for you
 ```
 
@@ -120,9 +121,7 @@ one run per worktree · no loop task starts it; by hand: rimz workflow run fix-t
 ├─○ fix  step  claude · 1 turn ≤1h · ↑ tests · 3 visits, then @failed
 │
 
-A step goes on to its next check however its turn ends.
-An unrouted failure ends the run as failed.
-No deadline is set; an unrouted deadline granted to a run ends it as failed.
+A turn step goes on to its next check when its turn ends cleanly or its provider exits.
 one node in full: rimz workflow show fix-tests tests · source ~/.rimz/workflows/fix-tests/workflow.toml
 
 no active or parked runs of fix-tests
@@ -138,9 +137,9 @@ reached from: tests by fail
 
 edges:
   then → tests (explicit)
-  cap → @failed (default)
+  cap → @failed (on-break)
   capacity → @failed (default, never: capacity-wait is forever)
-  deadline → @failed (default, only with a deadline)
+  deadline → @failed (on-break, only with a deadline)
 
 agent:       claude
 prompt-file: prompts/fix.md
@@ -217,7 +216,7 @@ To leave time for another turn before an `until` session closes, give the closin
 ```toml
 [checks.ruled]
 run = "uv run --script checks/notes.py after"
-on = { open = "@wait", settled = { to = "@done", delay = "30m" }, left = "@user" }
+on = { open = "@wait", settled = { to = "@done", delay = "30m" }, left = "@failed" }
 timeout = "5m"
 ```
 
@@ -284,6 +283,7 @@ Some checks can only say "not yet". A PR whose CI still runs is one. Route that 
 ```toml
 # ~/.rimz/workflows/babysit-pr/workflow.toml
 [workflow]
+on-break = "@failed"
 scope = "worktree"
 start = "pr"
 
@@ -374,7 +374,7 @@ then = "next"
 
 The first pauses for 30 minutes. The second waits at most 30 minutes, waking early once CI has stayed passed for two minutes. The third sleeps while the PR is queued, for at most six hours. `when` uses the same ANDed term array and unread rules as condition cases: missing data never wakes it, including under `!`, and forge readings must be probed at or after this sleep's entry. It derives the same signal subscriptions; otherwise conditions are sampled about once a minute. The full duration wins even if a `for` hold is still running, and a conditional sleep can end about a minute late.
 
-`sleep` is a nonzero duration in `s`, `m`, `h`, or `d`, at most `365d`. `for` needs `when` and must be nonzero and shorter than `sleep`; otherwise it warns and is ignored. `then` may name a node, `@done`, `@failed`, or `@user`, never `@wait`. The example's `fix` and `next` are nodes you define. An until step cannot use a sleep as its turn-end `then` check; use a route delay to postpone closing that session instead. A sleep accepts `on.invalid` for evaluation errors; `wake`, other `on` keys, `timeout`, `else`, `window`, and `prompt-file` warn and are ignored. Window terms use `provider` and optional `account` just as conditions do.
+`sleep` is a nonzero duration in `s`, `m`, `h`, or `d`, at most `365d`. `for` needs `when` and must be nonzero and shorter than `sleep`; otherwise it warns and is ignored. `then` may name a node, `@done`, or `@failed`, never `@wait` or `@user`. The example's `fix` and `next` are nodes you define. An until step cannot use a sleep as its turn-end `then` check; use a route delay to postpone closing that session instead. A sleep accepts `on.invalid` for evaluation errors; `wake`, other `on` keys, `timeout`, `else`, `window`, and `prompt-file` warn and are ignored. Window terms use `provider` and optional `account` just as conditions do.
 
 A sleep forwards the input and key it received, so the next step still reads the preceding check's answer and counts visits under that outcome. The exception is a failure routed to `@break`: the debugger receives the failure object with its source and edge. Re-entering or resuming a parked sleep starts its clock again. A plain sleep has no signal subscription and does not re-evaluate between entry and its end. `workflow list` and `show` read `sleeping 12m/30m → fix`, adding `when ci=passed` before the arrow when configured. A cycle such as `poll → cooldown → poll` needs no extra timeout: the sleep supplies its wait.
 
@@ -505,6 +505,7 @@ A hand-written retry loop often leaves only its last error when it gives up. Add
 
 ```toml
 [workflow]
+on-break = "@failed"
 scope = "worktree"
 start = "result"
 deadline = "2026-11-08T18:00:00Z"
@@ -565,11 +566,11 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
-| `reason` | no | Text for the history, and the park text when the outcome routes to `@user`. |
+| `reason` | no | Text for the history, and for legacy parks when the outcome routes to `@user`. |
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a subscribed signal arrives. |
 | `key` | no | A string or integer naming the item or failure the run now works on, such as an issue number or `"lint"`. Later context files carry it. |
 
-Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check or a nonempty list of checks. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
+Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, or `@failed`; `@user` is refused. Set `[workflow] on-break` or explicitly route every fireable failure edge (check timeout/invalid, agent launch invalid, visit cap, and workflow deadline). A step's `then` must name a check or a nonempty list of checks. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
 A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
 

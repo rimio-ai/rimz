@@ -4,12 +4,13 @@ use std::collections::BTreeMap;
 
 const LAND: &str = r#"
 [workflow]
+on-break = '@failed'
 scope = 'worktree'
 start = 'begin'
 [checks.begin]
 shell = 'true'
 on.pass = 'sweep'
-on.fail = '@user'
+on.fail = '@failed'
 [steps.sweep]
 shell = 'echo sweep'
 timeout = '1h'
@@ -1096,7 +1097,6 @@ fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
     assert!(text.contains("├─○ fix"), "{text}");
     assert!(!text.contains("├─○ sweep"), "{text}");
     assert!(!text.contains("├─○ triage"), "{text}");
-    let footer = defaults(&spec).join("\n");
     let walk = spec.walk();
     for (index, row) in report.rows.iter().enumerate() {
         let mut out = anstream::StripStream::new(Vec::new());
@@ -1115,8 +1115,8 @@ fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
         assert!(text.contains(&format!("{glyph} {}", row.node)), "{text}");
         for edge in &row.edges {
             match edge.outcome.as_str() {
-                "deadline" => assert!(footer.contains("deadline")),
-                "invalid" => assert!(footer.contains("unrouted failure")),
+                "deadline" => assert_eq!(edge.source, EdgeSource::OnBreak),
+                "invalid" => assert!(text.contains("invalid @failed"), "{text}"),
                 "unknown" => assert!(text.contains("an unread term above it waits")),
                 "timeout" if edge.fires != Fireability::Never => {
                     assert!(text.contains(&format!("waits ≤3d, then {}", edge.target)));

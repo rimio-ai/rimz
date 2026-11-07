@@ -52,7 +52,9 @@ pub fn validate(
         Ok(spec) => spec,
         Err(err) => {
             let path = match &err {
-                super::SpecErr::Toml { path, .. } => path.as_str(),
+                super::SpecErr::Toml { path, .. }
+                | super::SpecErr::ReservedTarget { path, .. }
+                | super::SpecErr::ReservedNode { path } => path.as_str(),
                 _ => "workflow",
             };
             report.error(path, format!("{name}: {err}"));
@@ -233,8 +235,12 @@ pub(super) fn validate_spec(
         .filter(|outcome| !RESERVED_OUTCOMES.contains(&outcome.as_str()))
         .collect::<BTreeSet<_>>();
     for (node, step) in &spec.steps {
-        let path = format!("steps.{node}");
         let at_break = spec.is_break(node);
+        let path = if at_break {
+            "workflow.on-break".into()
+        } else {
+            format!("steps.{node}")
+        };
         if !at_break {
             report.node_name(&path, node);
         }
@@ -429,6 +435,47 @@ pub(super) fn validate_spec(
             edges: spec.edges(node),
         });
     }
+    if spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak {
+        let missing = report
+            .rows
+            .iter()
+            .flat_map(|row| {
+                row.edges
+                    .iter()
+                    .filter(|edge| {
+                        edge.fires == super::Fireability::Yes
+                            && edge.source == EdgeSource::Default
+                            && matches!(
+                                edge.outcome.as_str(),
+                                "timeout" | "invalid" | "cap" | "deadline"
+                            )
+                    })
+                    .map(move |edge| {
+                        if edge.outcome == "deadline" {
+                            "workflow.on.deadline".into()
+                        } else {
+                            let kind = if row.kind == "check" {
+                                "checks"
+                            } else {
+                                "steps"
+                            };
+                            format!("{kind}.{}.on.{}", row.node, edge.outcome)
+                        }
+                    })
+            })
+            .collect::<BTreeSet<_>>();
+        if !missing.is_empty()
+            && let Some(issue) = spec
+                .ignored
+                .iter()
+                .find(|issue| issue.path.starts_with("workflow.on-break"))
+        {
+            report.error(&issue.path, "invalid on-break is needed by a failure edge; fix it or route every failure explicitly");
+        }
+        for path in missing {
+            report.error(&path, "a fireable failure edge needs a route; route it to a node, @done, or @failed, or set [workflow] on-break");
+        }
+    }
     if !crate::config::MachineConfig::load_lenient()
         .resume
         .auto_continue
@@ -463,9 +510,12 @@ pub(super) fn validate_spec(
                         "auto-continue is off; a provider limit mid-attempt ends the attempt as limited",
                     )
                 };
-                report
-                    .warnings
-                    .push(issue(&format!("{kind}.{}", row.node), message));
+                let path = if spec.is_break(&row.node) {
+                    "workflow.on-break".into()
+                } else {
+                    format!("{kind}.{}", row.node)
+                };
+                report.warnings.push(issue(&path, message));
             }
         }
     }
@@ -656,7 +706,9 @@ impl Validation {
     }
 
     fn target(&mut self, spec: &WorkflowSpec, path: &str, target: &str) {
-        if !matches!(target, "@wait" | "@done" | "@failed" | "@user")
+        if !matches!(target, "@wait" | "@done" | "@failed")
+            && !(target == "@user"
+                && spec.route_defaults == crate::store::workflow::RouteDefaults::Park)
             && !spec.checks.contains_key(target)
             && !spec.steps.contains_key(target)
         {

@@ -619,6 +619,11 @@ impl Step {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SpecErr {
+    #[error(
+        "{path}: {target} is not a route target; route to a node, @done, or @failed, \
+         or set [workflow] on-break"
+    )]
+    ReservedTarget { path: String, target: String },
     #[error("{path}: @break is reserved for workflow.on-break; choose another node name")]
     ReservedNode { path: String },
     #[error("cannot read {path}: {source}")]
@@ -680,6 +685,9 @@ fn parse_with_defaults(
         path: "workflow".into(),
         source,
     })?;
+    if routes == RouteDefaults::OnBreak {
+        reject_reserved_targets(&value)?;
+    }
     let mut spec = tolerant::parse(value, default, routes)?;
     if routes == RouteDefaults::Park {
         return Ok(spec);
@@ -723,6 +731,67 @@ fn parse_with_defaults(
         );
     }
     Ok(spec)
+}
+
+fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
+    if let Some(header) = value.get("workflow") {
+        for key in ["start", "on-break"] {
+            reject_reserved_target(
+                &format!("workflow.{key}"),
+                header.get(key).and_then(toml::Value::as_str),
+            )?;
+        }
+        reject_reserved_target(
+            "workflow.on.deadline",
+            header
+                .get("on")
+                .and_then(|on| on.get("deadline"))
+                .and_then(toml::Value::as_str),
+        )?;
+    }
+    for kind in ["checks", "steps"] {
+        let Some(nodes) = value.get(kind).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (name, node) in nodes {
+            let path = format!("{kind}.{name}");
+            if let Some(then) = node.get("then") {
+                reject_reserved_target(&format!("{path}.then"), then.as_str())?;
+                if kind == "steps" {
+                    for target in then.as_array().into_iter().flatten() {
+                        reject_reserved_target(&format!("{path}.then"), target.as_str())?;
+                    }
+                }
+            }
+            let Some(on) = node.get("on").and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (outcome, route) in on {
+                if kind == "steps"
+                    && !matches!(outcome.as_str(), "asked" | "cap" | "capacity" | "invalid")
+                {
+                    continue;
+                }
+                reject_reserved_target(
+                    &format!("{path}.on.{outcome}"),
+                    route
+                        .as_str()
+                        .or_else(|| route.get("to").and_then(toml::Value::as_str)),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_reserved_target(path: &str, target: Option<&str>) -> Result<(), SpecErr> {
+    if let Some(target) = target.filter(|target| matches!(*target, "@user" | "@break")) {
+        return Err(SpecErr::ReservedTarget {
+            path: path.into(),
+            target: target.into(),
+        });
+    }
+    Ok(())
 }
 
 pub fn schema() -> schemars::Schema {
