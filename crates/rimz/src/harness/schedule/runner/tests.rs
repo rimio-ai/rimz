@@ -1065,13 +1065,14 @@ fn spawn_requests_share_loop_cleanup_and_force_a_tab_only_when_scheduled() {
                 root: dir.path().to_owned(),
                 ..TaskEntry::default()
             };
+            let at = Timestamp::now();
             let fire = TaskFire::new(
                 "nightly",
                 LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
                 &catalog,
                 mode,
                 keep,
-                Timestamp::now(),
+                at,
                 Arc::new(MachineConfig::default()),
                 None,
                 CheckEcho::Capture,
@@ -1086,6 +1087,7 @@ fn spawn_requests_share_loop_cleanup_and_force_a_tab_only_when_scheduled() {
                 )
                 .unwrap();
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
+            assert_eq!(request.loop_notes_at, Some(at), "keep the fire's instant");
             assert_eq!(request.self_cleanup_on_completion, !keep);
             // A scheduled fire inherits the firing pane's identity; only the flag keeps it off that tab.
             assert_eq!(request.force_new_tab, mode == LoopRunMode::Scheduled);

@@ -402,6 +402,12 @@ impl ResumeLaunchPosture {
         mut action: crate::harness::launch::ExecAction,
     ) -> crate::harness::launch::ExecRequest {
         *action.extra_args_mut() = self.args.clone();
+        let reminder_section = self
+            .record
+            .as_ref()
+            .filter(|_| !matches!(&action, crate::harness::launch::ExecAction::Fork { .. }))
+            .and_then(|record| record.loop_section.clone())
+            .map(crate::harness::launch::ReminderSection::Loop);
         crate::harness::launch::ExecRequest {
             action,
             system_prompt_file: self.system_prompt_file.clone(),
@@ -411,6 +417,7 @@ impl ResumeLaunchPosture {
             no_skill_tool: self.no_skill_tool,
             allowed_tools: self.allowed_tools.clone(),
             isolation_default: self.isolation_default,
+            reminder_section,
             ..crate::harness::launch::ExecRequest::bare_launch(kind, Vec::new())
         }
     }
@@ -1632,6 +1639,11 @@ pub(super) fn finalize_agent_cell(
             .record
             .as_ref()
             .and_then(|record| record.notes.clone()),
+        loop_section: cell
+            .launch
+            .record
+            .as_ref()
+            .and_then(|record| record.loop_section.clone()),
     }));
     if let Some(policy) = options.smart_compact {
         policy.append_warnings(cell, warnings);

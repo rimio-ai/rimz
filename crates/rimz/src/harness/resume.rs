@@ -406,10 +406,23 @@ impl ResumePosture {
                 launch,
                 degraded: None,
             },
-            Err(reason) => Self {
-                launch: bare_posture(request.stamped_mode, request.kind),
-                degraded: Some(reason),
-            },
+            Err(reason) => {
+                let mut launch = bare_posture(request.stamped_mode, request.kind);
+                launch.record = request
+                    .record
+                    .filter(|record| record.notes.is_some() || record.loop_section.is_some())
+                    .map(|record| {
+                        Box::new(crate::agents::LaunchRecord {
+                            notes: record.notes.clone(),
+                            loop_section: record.loop_section.clone(),
+                            ..Default::default()
+                        })
+                    });
+                Self {
+                    launch,
+                    degraded: Some(reason),
+                }
+            }
         }
     }
 }
@@ -3172,6 +3185,9 @@ fn restore_resume_cell(
                 fast: rebased.launch.fast,
                 auto_compact: None,
                 notes: request.record.and_then(|record| record.notes.clone()),
+                loop_section: request
+                    .record
+                    .and_then(|record| record.loop_section.clone()),
             })),
             ..ResumeLaunchPosture::from(&rebased)
         }

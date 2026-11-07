@@ -314,6 +314,10 @@ fn replacement_posture(
         .record
         .as_ref()
         .and_then(|record| record.notes.clone());
+    record.loop_section = agent
+        .record
+        .as_ref()
+        .and_then(|record| record.loop_section.clone());
     Ok((
         cell.kind.clone(),
         ResumePosture {
@@ -455,7 +459,11 @@ mod tests {
             agent: None,
             auto_compact: None,
             notes: Some("20261107/002336Z-loop-review".into()),
+            loop_section: None,
         }));
+        let mut record = serde_json::to_value(&agent.record).unwrap();
+        record["loop_section"] = "The original loop fire".into();
+        agent.record = serde_json::from_value(record).unwrap();
         let (kind, posture) =
             replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
         assert_eq!(kind.as_str(), "codex");
@@ -467,6 +475,11 @@ mod tests {
             "changing the provider must keep this run's notes"
         );
         assert!(!posture.launch.fast);
+        assert_eq!(
+            serde_json::to_value(&posture.launch.record).unwrap()["loop_section"],
+            "The original loop fire",
+            "replacement molt keeps the original loop context"
+        );
         assert_eq!(
             serde_json::to_value(posture.launch.record.as_ref().unwrap()).unwrap()["auto_compact"],
             200_000

@@ -694,6 +694,7 @@ fn prepare(
             report_to: request.report_to,
             managed_launches,
             loop_task: None,
+            loop_notes_at: request.loop_notes_at,
             cleanup_worktree: request.retries == 0,
             inherit_cwd: request.worktree.is_none()
                 && request.from_pr.is_none()

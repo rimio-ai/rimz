@@ -917,6 +917,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         verify: None,
         max_attempts: None,
         loop_task: None,
+        loop_notes_at: None,
         workflow: None,
         reminder_section: None,
         passthrough: Vec::new(),

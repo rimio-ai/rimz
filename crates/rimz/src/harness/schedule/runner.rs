@@ -160,10 +160,6 @@ pub struct PreparedDelivery {
 }
 
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "terminal evidence stays inline without an allocation or a public variant change"
-)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
@@ -178,6 +174,7 @@ pub enum TaskFirePlan {
         permission_override: Option<PermissionMode>,
         /// The `### Loop` reminder body for the prompt leader.
         reminder_body: String,
+        loop_notes_at: Option<Timestamp>,
     },
     Spawn(PreparedSpawn),
     Deliver(PreparedDelivery),
@@ -1336,6 +1333,7 @@ impl<'a> TaskFire<'a> {
             prompt,
             permission_override,
             reminder_body: self.reminder_body(None),
+            loop_notes_at: (self.entry.notes != Some(false)).then_some(self.now),
         })
     }
 
@@ -2081,6 +2079,7 @@ impl<'a> TaskFire<'a> {
         request.reminder_section = Some(crate::harness::launch::ReminderSection::Loop(
             self.reminder_body(request.timeout),
         ));
+        request.loop_notes_at = (self.entry.notes != Some(false)).then_some(self.now);
         Ok(request)
     }
 

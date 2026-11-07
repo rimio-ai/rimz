@@ -221,11 +221,11 @@ fn restart_requests_preserve_automation_for_resumed_and_fresh_sessions() {
 }
 
 #[test]
-fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
+fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
     let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
     agent.name = Some("otter".to_owned());
     agent.role = Some("coder".to_owned());
-    // A restart replays the session, not the fire that launched it.
+    // A restart replays the session's context, not the fire's supervision.
     agent.loop_task = Some("fixer".to_owned());
     agent.workflow = Some(rimz::agents::WorkflowAttemptRef {
         run: rimz::ids::WorkflowRunId::new(),
@@ -245,6 +245,13 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
             allowed_tools: Some(vec!["Read".parse().unwrap()]),
             isolation_default: Some(rimz::config::Isolation::Scoped),
             model: Some("opus".to_owned()),
+            record: Some(Box::new(
+                serde_json::from_value(serde_json::json!({
+                    "model": null, "effort": null, "agent": null,
+                    "loop_section": "The original loop fire"
+                }))
+                .unwrap(),
+            )),
             ..Default::default()
         },
         degraded: None,
@@ -255,6 +262,23 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
     };
 
     let request = relaunch_request(&agent, &posture, action, None, None);
+    let expected = Some(rimz::harness::launch::ReminderSection::Loop(
+        "The original loop fire".into(),
+    ));
+    let fresh = relaunch_request(
+        &agent,
+        &posture,
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        None,
+        None,
+    );
+    assert_eq!(
+        fresh.reminder_section, expected,
+        "fresh fallback keeps the loop context"
+    );
 
     let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
         panic!("agent cell")
@@ -283,7 +307,7 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
-            reminder_section: None,
+            reminder_section: expected,
             headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 resume_model_override: false,
@@ -294,6 +318,7 @@ fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
                     role: Some("coder".to_owned()),
                     model: Some("opus".to_owned()),
                     loop_task: Some("fixer".to_owned()),
+                    record: posture.launch.record.clone(),
                     ..Default::default()
                 },
             },

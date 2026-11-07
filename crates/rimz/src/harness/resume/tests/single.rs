@@ -28,6 +28,41 @@ fn single(
     plan_recorded_resume(saved, ctx(1, None, profiles), &options, |_| true, |_| true)
 }
 
+#[test]
+fn recorded_resume_keeps_the_original_loop_section_through_overrides() {
+    let mut saved = saved();
+    let mut record = serde_json::to_value(&saved.record).unwrap();
+    record["loop_section"] = "The original loop fire".into();
+    saved.record = serde_json::from_value(record).unwrap();
+    let mut actual = Vec::new();
+    for model in [None, Some("sonnet")] {
+        let (plan, _) = single(
+            &saved,
+            &profiles("planner", profile("claude")),
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    preset: LaunchPreset {
+                        model: model.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        actual.push(decode_exec_request(&single_pane_argv(&plan)).reminder_section);
+    }
+    assert_eq!(
+        actual,
+        vec![
+            Some(crate::harness::launch::ReminderSection::Loop(
+                "The original loop fire".into()
+            ));
+            2
+        ]
+    );
+}
+
 fn request(overrides: ResumeOverrides<'_>) -> ExecRequest {
     let mut saved = saved();
     saved.tier = Some(tier_stamp("opus"));

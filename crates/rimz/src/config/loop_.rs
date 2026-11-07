@@ -316,6 +316,8 @@ pub struct TaskEntry {
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub check: Option<TaskCheck>,
     #[serde(
         rename = "check-timeout",

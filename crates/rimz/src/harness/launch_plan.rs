@@ -653,6 +653,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     if matches!(request.action, launch::ExecAction::Fork { .. }) {
         if let Some(record) = &mut request.identity.params.record {
             record.notes = None;
+            record.loop_section = None;
         }
     } else {
         let params = &request.identity.params;
