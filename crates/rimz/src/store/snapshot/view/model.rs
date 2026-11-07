@@ -99,14 +99,6 @@ pub struct ThrottleNotice {
     pub count: usize,
 }
 
-/// One parked workflow run contributing to the dismissable bottom notice.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ParkedWorkflow {
-    pub run: crate::ids::WorkflowRunId,
-    pub address: String,
-    pub since: jiff::Timestamp,
-}
-
 /// One configured time-windowed dollar cap and its current metered state.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DailyBudgetView {

@@ -108,7 +108,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | slot | what it paints |
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
-| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the parked-workflow notice, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
+| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, and the conflicted pull request marker and cockpit PR count |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker, and the card's `✎` typing pen |

@@ -610,40 +610,6 @@ fn both_publication_phases_stamp_the_cycle_stall_before_projection() {
 }
 
 #[test]
-fn parked_workflows_are_content_not_a_clock_only_change() {
-    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
-    let mut value = serde_json::to_value(&left).unwrap();
-    value["parked_workflows"] = serde_json::json!([{
-        "run":"wf_0190b8172c0070008000000000000001", "address":"review#repo",
-        "since":"2026-01-01T00:00:00Z"
-    }]);
-    let right = serde_json::from_value(value.clone()).unwrap();
-    assert!(
-        !same_snapshot_content(&left, &right),
-        "a newly parked run must reach the renderer as content"
-    );
-    for (field, changed) in [
-        ("address", serde_json::json!("review#other")),
-        ("since", serde_json::json!("2026-01-01T00:01:00Z")),
-        (
-            "run",
-            serde_json::json!("wf_0190b8172c0070008000000000000002"),
-        ),
-    ] {
-        let mut updated = value.clone();
-        updated["parked_workflows"][0][field] = changed;
-        assert!(
-            !same_snapshot_content(&right, &serde_json::from_value(updated).unwrap()),
-            "a changed parked {field} must reach the renderer as content"
-        );
-    }
-    assert!(
-        !same_snapshot_content(&right, &left),
-        "resumed or canceled parks must disappear"
-    );
-}
-
-#[test]
 fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views() {
     let fixture = FetchFixture::new();
     let mut panes = Vec::new();

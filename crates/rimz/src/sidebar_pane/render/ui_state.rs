@@ -25,8 +25,6 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
     /// Row identity per roster ordinal in the last painted hit map.
     pub(in crate::sidebar_pane) painted_roster: Vec<String>,
-    /// Parks shown by the notice in this pane's last painted frame.
-    pub(in crate::sidebar_pane) painted_parks: BTreeMap<crate::ids::WorkflowRunId, Timestamp>,
     /// Maximum offset in the last drawn frame, absent before the first draw.
     pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
     /// Visible cards' own first lines in absolute pane rows, signed when clipped above the zone.
@@ -64,7 +62,6 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) layout_sequence: u64,
     pub(in crate::sidebar_pane) layout_key: Option<LayoutKey>,
     pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
-    pub(in crate::sidebar_pane) dismissed_parks: BTreeMap<crate::ids::WorkflowRunId, Timestamp>,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
     /// Last agreed working-pane focus, finer-grained than the owning card baseline.

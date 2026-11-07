@@ -664,7 +664,7 @@ fn bottom_chrome_texts_with_ui(
     pane_ui: &UiState,
 ) -> (Vec<String>, Vec<HitRegion>) {
     let theme = Theme::fixed(true);
-    let (block, _) = build_bottom_chrome(
+    let block = build_bottom_chrome(
         snapshot,
         alert,
         &theme,

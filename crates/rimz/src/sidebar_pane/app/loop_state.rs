@@ -2968,9 +2968,6 @@ impl PaneState {
                 v.state.scroll_ease.cancel();
             }
             if applied.effects.contains(&InputEffect::DismissAlert) {
-                if !self.ui.painted_parks.is_empty() {
-                    v.state.dismissed_parks.clone_from(&self.ui.painted_parks);
-                }
                 v.context.health.alert = None;
                 if v.state
                     .hook_drainer_alert

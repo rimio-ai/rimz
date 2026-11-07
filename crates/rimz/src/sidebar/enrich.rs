@@ -635,7 +635,7 @@ fn throttle_notices(
     notices.into_iter().map(|(_, notice)| notice).collect()
 }
 
-/// Read runs once for group seeds, parked notices and starts needing a fix.
+/// Read runs once for group seeds and starts needing a fix.
 fn project_workflow_and_throttle_state(
     snapshot: &mut SidebarSnapshot,
     state: &StatePaths,
@@ -647,21 +647,6 @@ fn project_workflow_and_throttle_state(
     });
     snapshot.throttle_notices =
         throttle_notices(state, runtime, &records, snapshot.project_root.as_deref());
-    let mut parked: Vec<_> = records
-        .iter()
-        .filter(|record| record.state == crate::store::workflow::RunState::Parked)
-        .filter_map(|record| {
-            let park = record.park.as_ref()?;
-            let address = record.address().to_string();
-            Some(crate::store::snapshot::ParkedWorkflow {
-                run: record.id.clone(),
-                address,
-                since: park.at,
-            })
-        })
-        .collect();
-    parked.sort_by_key(|run| run.since);
-    snapshot.parked_workflows = parked;
     records
 }
 

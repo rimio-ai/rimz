@@ -345,7 +345,6 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         reflects_log,
         fenced_sessions,
         resume_outcomes,
-        parked_workflows,
         throttle_notices,
     } = left;
     shared_eq(worktree_groups, &right.worktree_groups)
@@ -401,7 +400,6 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && link == &right.link
         && stall == &right.stall
         && reflects_log == &right.reflects_log
-        && parked_workflows == &right.parked_workflows
         && throttle_notices == &right.throttle_notices
 }
 

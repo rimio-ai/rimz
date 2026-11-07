@@ -154,8 +154,6 @@ pub(crate) enum Component {
     Typing,
     /// Starts needing a fix, above the footer.
     ThrottleNotice,
-    /// Parked workflow runs needing the user, above the footer.
-    ParkNotice,
     /// The stall glyph and word while any resource is active.
     StallLeadActive,
     /// The stall glyph and word once every resource is fading.
@@ -235,7 +233,6 @@ impl Component {
         Component::MessageQueued,
         Component::Typing,
         Component::ThrottleNotice,
-        Component::ParkNotice,
         Component::StallLeadActive,
         Component::StallLeadFading,
         Component::StallWord,
@@ -262,7 +259,7 @@ impl Component {
                 palette.good
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
-            | ThrottleNotice | ParkNotice | WorkflowVisitsCapped | WorkflowParked => palette.warn,
+            | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }

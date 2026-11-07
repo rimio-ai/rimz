@@ -141,7 +141,6 @@ fn draw_into(
         .map(|row| row.id.clone())
         .collect();
     ui.interactions = composed.interactions;
-    ui.painted_parks = composed.painted_parks;
     view.scrollbar.shift(composed.correction);
     view.scrollbar
         .observe(composed.visible_scroll_offset, view.animation_phase);
