@@ -1460,6 +1460,7 @@ fn is_named_account_kind(segment: &str) -> bool {
 
 fn is_disallowed_set_container(path: &[String]) -> bool {
     matches!(path, [root] if root == "loop")
+        || matches!(path, [root, child, ..] if root == "keys" && child == "bind")
         || matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child] if root == "accounts" && child == "budget")
@@ -1548,6 +1549,21 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if matches!(path, [root, leaf] if root == "keys" && leaf == "keymap")
+        && value.as_str() != Some("rimz")
+    {
+        invalid_value!("keys.keymap must be rimz");
+    }
+    if matches!(path, [root, leaf] if root == "keys" && leaf == "prefix")
+        && value
+            .as_str()
+            .and_then(super::keys::KeyChord::parse_prefix)
+            .is_none()
+    {
+        invalid_value!(
+            "keys.prefix must be a modified chord such as Alt+p, not a terminal key alias"
+        );
+    }
     if matches!(path, [root, kind, _, field] if root == "accounts" && is_named_account_kind(kind) && field == "label")
     {
         let Some(label) = value.as_str() else {

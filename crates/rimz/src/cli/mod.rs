@@ -21,6 +21,7 @@ mod folder_trust;
 mod gc;
 mod help;
 mod hooks;
+mod keys;
 mod launch_interaction;
 mod list;
 mod list_pets;
@@ -266,6 +267,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
+        Some(Subcmd::Keys(args)) => keys::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Uninstall(args)) => uninstall::run(args, &globals),
         Some(Subcmd::Update(args)) => update::run(args, &globals),
@@ -714,6 +716,8 @@ enum Subcmd {
     ListPets(list_pets::ListPetsArgs),
     /// List the bundled sidebar theme names.
     ListThemes(list_themes::ListThemesArgs),
+    /// Show the resolved room keymap by mode.
+    Keys(keys::KeysArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
     /// Remove RimZ from this machine.
@@ -1069,8 +1073,10 @@ fn require_worktree_config(config: &rimz::config::MachineConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -> Result<()> {
-    let mut stderr = std::io::stderr().lock();
+fn write_config_notices(
+    config: &rimz::config::MachineConfig,
+    stderr: &mut impl Write,
+) -> std::io::Result<()> {
     for (path, error) in &config.notices.unreadable_files {
         writeln!(
             stderr,
@@ -1081,12 +1087,20 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
     for notice in &config.notices.unknown_keys {
         writeln!(stderr, "rimz: {notice}")?;
     }
+    for notice in config.notices.key_bindings.values() {
+        writeln!(stderr, "rimz: {notice}")?;
+    }
     for warning in &config.notices.definition_warnings {
         writeln!(stderr, "rimz: warning: {warning}")?;
     }
     for warning in config.notices.skipped_loop_tasks.values() {
         writeln!(stderr, "rimz: {warning}")?;
     }
+    Ok(())
+}
+
+pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -> Result<()> {
+    write_config_notices(config, &mut std::io::stderr().lock())?;
     Ok(())
 }
 

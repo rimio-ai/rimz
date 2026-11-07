@@ -1,12 +1,12 @@
 use super::*;
 
 #[test]
-fn judgment_warns_and_ignores_project_throttle() {
+fn judgment_warns_and_ignores_project_machine_only_tables() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join(".rimz")).unwrap();
     std::fs::write(
         root.path().join(".rimz/config.toml"),
-        "[throttle]\nmax-parallel-agents=1\n",
+        "[throttle]\nmax-parallel-agents=1\n[keys.bind.normal]\n'Alt+x'={run='rimz pane zoom'}\n",
     )
     .unwrap();
     let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
@@ -19,6 +19,36 @@ fn judgment_warns_and_ignores_project_throttle() {
         .find(|entry| entry.setting == "throttle");
     assert!(warning.is_some(), "{:?}", judgment.skipped);
     assert!(warning.unwrap().message.contains("machine-only"));
+    assert!(
+        judgment.skipped.iter().any(
+            |entry| entry.setting == "keys" && entry.message.contains("[keys] is machine-only")
+        ),
+        "{:?}",
+        judgment.skipped
+    );
+}
+
+#[test]
+fn judgment_retains_each_ignored_key_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let mut machine = MachineConfig::default();
+    let setting = "keys.bind.normal.\"x\"";
+    let message = "keys.bind.normal.\"x\": expected a modifier; binding ignored";
+    machine
+        .notices
+        .key_bindings
+        .insert(setting.into(), message.into());
+    let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+    let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+    assert!(
+        judgment.skipped.contains(&SkippedSetting {
+            setting: setting.into(),
+            message: message.into()
+        }),
+        "{:?}",
+        judgment.skipped
+    );
 }
 
 #[test]

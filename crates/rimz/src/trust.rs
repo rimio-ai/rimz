@@ -636,6 +636,11 @@ pub(crate) fn project_throttle(project_root: &Path) -> Result<bool> {
         .is_some_and(|config| config.throttle.is_some()))
 }
 
+pub(crate) fn project_keys(project_root: &Path) -> Result<bool> {
+    Ok(read_project_config_at(project_root, &rimz_home())?
+        .is_some_and(|config| config.keys.is_some()))
+}
+
 fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
@@ -779,6 +784,7 @@ struct BirthPromptDismissal {
 #[serde(default)]
 pub struct ProjectConfig {
     throttle: Option<toml::Value>,
+    keys: Option<toml::Value>,
     lsp: ProjectLsp,
     packs: Option<toml::Value>,
     pub agents: ProjectAgents,

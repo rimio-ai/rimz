@@ -78,6 +78,9 @@ pub(super) fn judge(
     for key in &machine.notices.unknown_keys {
         warn(key.key.clone(), key.to_string());
     }
+    for (setting, message) in &machine.notices.key_bindings {
+        warn(setting.clone(), message.clone());
+    }
     for warning in &machine.notices.definition_warnings {
         warn(warning.path.display().to_string(), warning.to_string());
     }
@@ -85,6 +88,13 @@ pub(super) fn judge(
         warn(
             "throttle".into(),
             "[throttle] is machine-only; the project table is ignored; set it in ~/.rimz/config.toml"
+                .into(),
+        );
+    }
+    if crate::trust::project_keys(&workspace.project_root).unwrap_or(false) {
+        warn(
+            "keys".into(),
+            "[keys] is machine-only; the project table is ignored; set it in ~/.rimz/config.toml"
                 .into(),
         );
     }

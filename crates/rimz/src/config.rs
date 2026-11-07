@@ -43,6 +43,7 @@ pub mod effective;
 mod gc;
 mod glyphs;
 mod harness;
+pub mod keys;
 mod loop_;
 mod lsp;
 mod mux;
@@ -419,6 +420,7 @@ pub struct ConfigNotices {
     /// Load errors, including TOML diagnoses, retained when a file falls back to defaults.
     pub unreadable_files: BTreeMap<PathBuf, String>,
     pub unknown_keys: Vec<UnknownConfigKey>,
+    pub key_bindings: BTreeMap<String, String>,
     pub definition_errors: Vec<definitions::DefinitionErr>,
     pub definition_warnings: Vec<crate::packs::Problem>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
@@ -553,6 +555,14 @@ impl ConfigNotices {
                     .map(|warning| (name.clone(), warning))
             }));
     }
+
+    fn add_key_bindings(&mut self, config: &MachineConfig) {
+        if config.room.style == mux::RoomStyle::Native {
+            self.unknown_keys
+                .retain(|notice| notice.key != "keys" && !notice.key.starts_with("keys."));
+        }
+        config.resolve_room_keymap(&mut self.key_bindings);
+    }
 }
 
 /// Per-machine configuration. Unknown keys normally warn rather than refusing
@@ -573,6 +583,7 @@ pub struct MachineConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
     pub room: RoomConfig,
+    pub keys: keys::KeysConfig,
     pub mux: MuxConfig,
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
@@ -710,6 +721,7 @@ impl MachineConfig {
         validate_notifications_config(&config.notifications, files.core_path())?;
         validate_worktree_config(&config.agents.worktree, files.core_path())?;
         let sources = config.load_definitions(agents_home, config_path, env, &mut notices);
+        notices.add_key_bindings(&config);
         config.notices = notices;
         Ok((config, sources))
     }
@@ -755,6 +767,7 @@ impl MachineConfig {
             config.notifications = NotificationsPrefs::default();
         }
         config.load_definitions(agents_home, config_path, env, &mut notices);
+        notices.add_key_bindings(&config);
         config.notices = notices;
         config
     }
@@ -816,6 +829,7 @@ impl MachineConfig {
                     };
                     validate_agents_file(&own_keys, &SubagentProfilesConfig::default(), path)?;
                 }
+                notices.add_key_bindings(&config);
                 config.notices = notices;
                 Ok(config)
             }
@@ -840,6 +854,7 @@ impl MachineConfig {
             lsp: core.lsp,
             timezone: core.timezone,
             room: core.room,
+            keys: core.keys,
             mux: core.mux,
             accounts: core.accounts,
             remote_control: core.remote_control,
@@ -1269,6 +1284,7 @@ struct CoreConfig {
     subagents: SubagentProfilesConfig,
     timezone: Option<String>,
     room: RoomConfig,
+    keys: keys::KeysConfig,
     mux: MuxConfig,
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,

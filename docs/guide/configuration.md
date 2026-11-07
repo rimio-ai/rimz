@@ -388,7 +388,7 @@ spend_window = "session"
 
 `timezone` is an IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff. Unset or unknown, RimZ uses the system local zone. It is a top-level key, not part of `[sidebar]`.
 
-`focus_key` is the multiplexer chord that focuses the sidebar from any pane and toggles back to the pane you left. Both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `zoom_key` toggles fullscreen for the focused work pane; with the sidebar focused it picks a working sibling in that view first, so the sidebar is never zoomed. Its default is `Alt+g`, and `""` or `off` disables it.
+With `[room] style = "native"`, `focus_key` is the multiplexer chord that focuses the sidebar from any pane and toggles back to the pane you left. Both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `zoom_key` toggles fullscreen for the focused work pane; with the sidebar focused it picks a working sibling in that view first, so the sidebar is never zoomed. Its default is `Alt+g`, and `""` or `off` disables it. Under `style = "rimz"`, use the [room keymap](#room-keymap) instead.
 
 `afk_after_secs` defaults to 900 seconds. On both backends it bounds how long a departed client's sidebar view is retained for reattach and sets the input-idle window before the footer shows `zᶻ idle`, adding `· Nm` after the first minute. Zellij uses the presence plugin's human-input timestamps, so an attached Zellij room can become idle too. CLI actions and buttonless mouse motion do not reset input idle; with no known input timestamp, an attached room stays active until input supplies one. Both backends show `zᶻ away` on a full detach. The [sidebar guide](./sidebar.md#how-the-column-is-ordered) explains how views follow clients. `trunk` names the branch the worktree header compares against, falling back to `main`, then `master`, then the remote's default when it does not resolve.
 
@@ -438,6 +438,37 @@ archive_after_secs = 86400
 Keep `archive_after_secs` above `inactive_after_secs`: a lower value is lifted to the first second after the inactive window.
 
 The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge](#stalled-team-nudge).
+
+### Room keymap
+
+`[keys]` applies only with `[room] style = "rimz"`. The bundled `rimz` keymap has normal, prefix, sticky resize, and sticky move bindings. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal.
+
+```toml
+[room]
+style = "rimz"
+
+[keys]
+keymap = "rimz"
+prefix = "Alt+p"
+
+[keys.bind.normal]
+"Alt+x" = "card.close"
+"Alt+y" = { run = "rimz message @coder 'ready for review'" }
+"Alt+t" = "none"
+
+[keys.bind.prefix]
+z = "pane.zoom"
+```
+
+Only `rimz` is bundled. The prefix defaults to `Alt+p`; changing it moves both normal mode's prefix entry and prefix mode's command-palette chord. User tables under `keys.bind` override the bundled keys; `"none"` removes a binding. The configured prefix is applied last, so it wins even over an override on the same chord. `p` in prefix mode still opens the command palette.
+
+A key is one ASCII graphic character, optionally modified with `Alt` or `Ctrl`, or the bare named key `Esc` or `Enter`. Case matters: `Alt+J` and `Alt+j` are different. `meta`/`m` alias `Alt`, `control`/`c` alias `Ctrl`, and `-` can replace `+`. `Space` and combined modifiers are not supported. Every normal-mode key, including the prefix, needs a modifier so it cannot swallow ordinary typing in an agent's pane.
+
+Ctrl chords that alias Enter, Esc, Tab, or Backspace are refused in normal and prefix modes, including the configured prefix. `rimz config set` refuses an invalid prefix or an unknown keymap rather than saving it.
+
+A value is a named action, `"none"`, or `{ run = "rimz ..." }`. Commands use shell-style quoting to split arguments, not shell evaluation: pipes, substitutions, and redirects are literal arguments. The first word must be `rimz`; RimZ uses its own binary when running the binding. Invalid bindings warn with their dotted path and are ignored individually, leaving the rest of the file and keymap intact. An invalid prefix warns and uses `Alt+p`; an invalid keymap name warns and uses `rimz`.
+
+Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind` and its mode tables in `~/.rimz/config.toml`, not with `rimz config set`.
 
 ### Multiplexer room options
 
