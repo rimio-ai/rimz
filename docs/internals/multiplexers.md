@@ -284,6 +284,7 @@ Each backend has one authoritative roster and, optionally, one push channel that
 | Push channel | The presence plugin, publishing `pane-topology.json` | A control-mode client holding `refresh-client -B` |
 | Client presence | Attached client count from `list_clients()`, joined to per-client input records | Attached client count plus per-client input from `#{client_activity}` |
 | Idle clock | `UserAction` timestamps, excluding CLI actions and buttonless motion | `client_activity`, with one-second resolution |
+| Typing-hold clock | Linux: pane tty atime corroborated by a viewing client's input record; off Linux: viewing clients' input records | Linux: pane tty atime with a terminal-focused viewer; off Linux: viewing clients' `client_activity` |
 
 `PaneListOptions.consistency` says how far a caller trusts the push channel:
 
@@ -310,6 +311,8 @@ Three questions hide behind the word: who is looking at which pane, how RimZ mov
 On Zellij, `list-clients` replies without the `CLIENT_ID` header are foreign, not evidence of detachment ([upstream format](../externals/mux-adapter/zellij-reference.md#cli-action-reply-association)). The backend retries them within the caller's command budget, then returns an error so callers take their existing error path. A header-only listing is a genuine zero-client view.
 
 `ClientView::unique_live_focus` resolves a single focus: fresh attached-client evidence counts only when every observation names the same live pane. Detailed client rows outrank summarized pane ids, and dead summarized panes do not invalidate one distinct live pane.
+
+Typing viewers are a separate Linux projection: tmux's `client_flags` must include `focused`, without dropping native clients or their AFK clocks. Zellij exposes no outer-terminal focus state, and its focus reports bypass `UserAction`; the [typing observation rule](./harness/messaging.md#four-modes-on-one-timing-axis) therefore requires a viewing client's input clock to corroborate a tty advance. A floating Zellij palette changes the client's pane, while a tmux popup does not; RimZ stamps the pane under its tmux palette before and after the popup job.
 
 `PaneFrame.focused_pane` is the session's focus register:
 
@@ -684,7 +687,7 @@ Everything it publishes goes one way, as a fire-and-forget `run_command` fork of
 
 Input publication is independent of topology writer election: even a muted losing writer keeps publishing its own client's input. `UserAction` is broadcast to all instances, so each filters to its load-time client id, rejects actions tagged with a CLI client, and ignores buttonless mouse motion. Clicks, drags, wheel, keys, and pastes count. `InputReceived` is not used: Zellij also emits it for RimZ's own polling and writes.
 
-The first action after quiet publishes immediately. Further actions publish at most once per second, with one trailing wake carrying the newest action's timestamp, taken on the plugin's clock at the action rather than when the host ingests it. Keepalives, topology dumps, and retained-state publications never manufacture input. The host keeps the maximum stamp under a per-session/client lock, outside the topology writer lock, and emits no `SidebarEvent`. Records live in rename-atomic, non-fsynced runtime lane files named by `RuntimePaths::zellij_client_input_paths`; a mismatched session or client reads as absent. Both `list-clients` parsing and pushed topology client views join only their attached clients' records. The resulting clocks drive message typing holds and the AFK badge on Zellij as on tmux.
+The first action after quiet publishes immediately. Further actions publish at most once per second, with one trailing wake carrying the newest action's timestamp, taken on the plugin's clock at the action rather than when the host ingests it. Keepalives, topology dumps, and retained-state publications never manufacture input. The host keeps the maximum stamp under a per-session/client lock, outside the topology writer lock, and emits no `SidebarEvent`. Records live in rename-atomic, non-fsynced runtime lane files named by `RuntimePaths::zellij_client_input_paths`; a mismatched session or client reads as absent. Both `list-clients` parsing and pushed topology client views join only their attached clients' records. The resulting clocks drive the AFK badge on every platform and message typing holds off Linux. On Linux they corroborate advances in the mux-owned per-pane terminal-input record shared by holds and pens, rather than supplying its input time themselves ([messaging](./harness/messaging.md#four-modes-on-one-timing-axis)).
 
 On Zellij 0.45.1, subscribing to `UserAction` also makes Zellij log `Failed to convert Action to protobuf` for some CLI actions it cannot encode, including polling. This accepted upstream noise is bounded by Zellij's 16 MiB rotating log; it does not count as human input.
 

@@ -423,7 +423,8 @@ impl<'de> Deserialize<'de> for KeepWarmPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HarnessConfig {
-    /// Hold message writes while a viewing client has recent input; `off` disables it.
+    /// Hold writes after counted pane input on Linux, or viewing-client input elsewhere.
+    /// `off` disables it.
     #[serde(with = "typing_hold_serde")]
     pub typing_hold: Option<Duration>,
     /// Keep waiting agents' provider prompt caches warm.
