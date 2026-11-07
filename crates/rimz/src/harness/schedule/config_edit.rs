@@ -293,6 +293,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             wait_meta: None,
             prompt: Some("wait".to_owned()),
             prompt_file: Some(PathBuf::from("prompts/wait.md")),
+            notes: None,
             check: Some("cargo check".into()),
             check_timeout: None,
             judge: Vec::new(),

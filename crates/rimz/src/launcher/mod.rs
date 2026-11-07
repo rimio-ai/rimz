@@ -119,6 +119,7 @@ pub enum Starter {
 pub struct ResidentLoop {
     pub task: String,
     pub reminder: String,
+    pub loop_notes_at: Option<jiff::Timestamp>,
 }
 
 pub enum Preparation {
@@ -1044,6 +1045,10 @@ fn settle_layout(
         report_to: args.launch.report_to,
         managed_launches: Vec::new(),
         loop_task: loop_task.map(str::to_owned),
+        loop_notes_at: args
+            .resident_loop
+            .as_ref()
+            .and_then(|fire| fire.loop_notes_at),
         cleanup_worktree: true,
         inherit_cwd: !worktree_launch && loop_task.is_none(),
         force_new_tab: false,

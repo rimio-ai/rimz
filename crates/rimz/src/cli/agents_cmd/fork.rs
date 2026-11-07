@@ -408,6 +408,7 @@ fn validate_fork_source(
     let mut record = agent.record.clone();
     if let Some(record) = &mut record {
         record.notes = None;
+        record.loop_section = None;
     }
     Ok(ForkSeed {
         kind: agent.kind.clone(),
@@ -804,6 +805,13 @@ mod tests {
         agent.checkout = Some("/target".into());
         agent.add_dirs = vec!["/target".into()];
         agent.untrusted_checkout = true;
+        agent.record = Some(Box::new(
+            serde_json::from_value(serde_json::json!({
+                "model": null, "effort": null, "agent": null,
+                "notes": "20261107/002336Z-loop-review", "loop_section": "The original loop fire"
+            }))
+            .unwrap(),
+        ));
         agent.profile = Some("planner".to_owned());
         agent.channel = Some("auth".to_owned());
         agent.team = Some("forge".to_owned());
@@ -842,6 +850,8 @@ mod tests {
         assert_eq!(seed.launch.role, None);
         assert_eq!(seed.launch.model, None);
         assert_eq!(seed.launch.effort, None);
+        let record = serde_json::to_value(&seed.launch.record).unwrap();
+        assert!(record["notes"].is_null() && record["loop_section"].is_null());
         assert_eq!(seed.launch.launch_depth, None);
     }
 

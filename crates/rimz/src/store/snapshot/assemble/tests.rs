@@ -642,6 +642,18 @@ fn pre_question_count_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
+fn pre_loop_section_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(83);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(read_fresh_latest_cold(&paths).is_none());
+}
+
+#[test]
 fn pre_capacity_snapshot_is_not_a_fresh_view() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

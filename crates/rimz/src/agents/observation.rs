@@ -60,6 +60,9 @@ pub struct LaunchRecord {
     /// Run memory, relative to the room's automation-notes root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<std::path::PathBuf>,
+    /// The original loop launch section, replayed without rereading its task definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_section: Option<String>,
 }
 
 impl LaunchRecord {
@@ -76,6 +79,7 @@ impl LaunchRecord {
             fast,
             auto_compact: None,
             notes: None,
+            loop_section: None,
         }))
     }
 }

@@ -774,7 +774,7 @@ pub struct ExecRequest {
     pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_message: Option<MessageId>,
-    /// The non-durable reminder section composed for this launch.
+    /// The reminder section composed or replayed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder_section: Option<ReminderSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

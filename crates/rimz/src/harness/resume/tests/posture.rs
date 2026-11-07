@@ -706,7 +706,8 @@ fn recorded_base_replays_and_missing_base_degrades() {
         fast: false,
         agent: Some("reviewer".into()),
         auto_compact: None,
-        ..Default::default()
+        notes: Some("20261107/002336Z-loop-review".into()),
+        loop_section: Some("Keep the loop brief across relaunches.".into()),
     };
     let resolve = |profiles: &ProfilesConfig| {
         resolve_posture(
@@ -726,13 +727,27 @@ fn recorded_base_replays_and_missing_base_degrades() {
     assert_eq!(posture.launch.model, record.model);
     assert_eq!(posture.launch.effort, record.effort);
     profiles.0.remove("reviewer");
-    assert!(
-        resolve(&profiles)
-            .degraded
-            .unwrap()
-            .to_string()
-            .contains("reviewer")
+    let bare = resolve(&profiles);
+    let expected = crate::agents::LaunchRecord {
+        notes: record.notes.clone(),
+        loop_section: record.loop_section.clone(),
+        ..Default::default()
+    };
+    assert_eq!(bare.launch.record.as_deref(), Some(&expected));
+    let request = bare.launch.exec_request(
+        AgentKind::new_unchecked("claude"),
+        crate::harness::launch::ExecAction::Resume {
+            session_id: "loop-session".into(),
+            extra_args: Vec::new(),
+        },
     );
+    assert!(matches!(request.reminder_section,
+        Some(crate::harness::launch::ReminderSection::Loop(body))
+        if Some(body.as_str()) == record.loop_section.as_deref()));
+    assert!(bare.launch.model.is_none());
+    assert!(bare.launch.effort.is_none());
+    assert!(!bare.launch.fast);
+    assert!(bare.degraded.unwrap().to_string().contains("reviewer"));
 }
 
 #[test]

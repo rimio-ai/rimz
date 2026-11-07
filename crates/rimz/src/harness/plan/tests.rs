@@ -1056,6 +1056,10 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
         isolation_default: Some(crate::config::Isolation::Scoped),
         mode: Some(PermissionMode::Auto),
         model: Some("opus".to_owned()),
+        record: Some(Box::new(crate::agents::LaunchRecord {
+            loop_section: Some("The original loop fire".into()),
+            ..Default::default()
+        })),
         ..Default::default()
     };
     let kind = AgentKind::new_unchecked("claude");
@@ -4250,17 +4254,33 @@ fn resume_command_can_return_to_the_existing_shell() {
     let runtime =
         RuntimePaths::under(crate::WorkspaceId::from_project_root(root), dir.path()).unwrap();
     let agent = crate::testkit::agent_state("codex", "saved", Timestamp::UNIX_EPOCH);
+    let posture = ResumeLaunchPosture {
+        record: Some(Box::new(
+            serde_json::from_value(serde_json::json!({
+                "model": null, "effort": null, "agent": null,
+                "loop_section": "The original loop fire"
+            }))
+            .unwrap(),
+        )),
+        ..Default::default()
+    };
     let argv = resume_command(
         Path::new("/bin/rimz"),
         &runtime,
         &ResumeLaunchIdentity::from(&agent),
         None,
-        &ResumeLaunchPosture::default(),
+        &posture,
         false,
         None,
     )
     .unwrap();
     assert!(!exec_request(&argv).close_pane_on_exit);
+    assert_eq!(
+        exec_request(&argv).reminder_section,
+        Some(crate::harness::launch::ReminderSection::Loop(
+            "The original loop fire".into()
+        ))
+    );
 }
 
 #[test]

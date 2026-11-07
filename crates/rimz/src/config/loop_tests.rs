@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn task_notes_toggle_round_trips_without_changing_the_default() {
+    let actual: Vec<_> = ["", "notes = false", "notes = true"]
+        .into_iter()
+        .map(|text| {
+            let task: TaskEntry = toml::from_str(text).unwrap();
+            serde_json::to_value(task).unwrap()["notes"].clone()
+        })
+        .collect();
+    assert_eq!(actual, [serde_json::Value::Null, false.into(), true.into()]);
+}
+
+#[test]
 fn task_capacity_wait_accepts_positive_durations_or_forever() {
     let actual: Vec<_> = ["1s", "2m", "3h", "4d", "forever", "0s", "1ms", "2", "never"]
         .into_iter()

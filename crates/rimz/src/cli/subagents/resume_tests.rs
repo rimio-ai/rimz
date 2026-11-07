@@ -34,9 +34,16 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
     child.parent_agent_kind = Some(child.kind.clone());
     child.launch_depth = Some(1);
     child.worktree_path = Some("/tmp/project".to_owned());
+    child.record = Some(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "model": null, "effort": null, "agent": null,
+            "loop_section": "The original loop fire"
+        }))
+        .unwrap(),
+    ));
     let mut posture = rimz::harness::resume::resolve_posture(
         PostureRequest {
-            record: None,
+            record: child.record.as_deref(),
             profile: None,
             kind: &child.kind,
             stamped_mode: None,
@@ -103,7 +110,9 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 exit_on_run_completion: !keep,
                 subagent: true,
                 follow_up_message: None,
-                reminder_section: None,
+                reminder_section: Some(rimz::harness::launch::ReminderSection::Loop(
+                    "The original loop fire".into()
+                )),
                 headless: None,
                 identity: ExecIdentity {
                     resume_model_override: false,
@@ -116,6 +125,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                         launch_depth: Some(1),
                         login: Some("work".parse().unwrap()),
                         mode: posture.launch.mode,
+                        record: posture.launch.record.clone(),
                         ..Default::default()
                     },
                 },

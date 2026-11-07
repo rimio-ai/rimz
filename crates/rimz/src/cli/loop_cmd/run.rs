@@ -251,6 +251,7 @@ pub(super) fn run_one(
             prompt,
             permission_override,
             reminder_body,
+            loop_notes_at,
         }) => {
             let effect = (|| {
                 let mut launch_globals = globals.clone();
@@ -295,6 +296,7 @@ pub(super) fn run_one(
                     resident_loop: Some(rimz::launcher::ResidentLoop {
                         task: name.to_owned(),
                         reminder: reminder_body,
+                        loop_notes_at,
                     }),
                     workflow: None,
                     automation: None,

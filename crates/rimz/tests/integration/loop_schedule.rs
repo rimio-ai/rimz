@@ -2827,6 +2827,26 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         expected_checkout.to_str()
     );
     assert_eq!(agents[0].channel.as_deref(), Some("lane"));
+    let launch = serde_json::to_value(&agents[0].record).unwrap();
+    assert!(
+        launch["notes"].is_string(),
+        "resident fires keep memory: {launch}"
+    );
+    let folder = store.paths().notes_run(
+        rimz::disk::paths::Class::AutomationNotes,
+        Path::new(launch["notes"].as_str().unwrap()),
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(folder.join("run.json")).unwrap()).unwrap();
+    assert_eq!(manifest["kind"], "loop");
+    assert_eq!(manifest["task"], "resident");
+    assert_eq!(manifest["checkout"], json!(expected_checkout));
+    assert!(
+        launch["loop_section"]
+            .as_str()
+            .unwrap()
+            .contains("resident-notes.md")
+    );
     assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
     let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 1);
@@ -5997,6 +6017,25 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             &std::fs::read(&path).unwrap_or_else(|error| panic!("{error}: {output:?}")),
         )
         .unwrap();
+        let archive = env.state_path_for(&env.project_root).automation_notes_dir;
+        let mut notes = Vec::new();
+        if archive.exists() {
+            for date in std::fs::read_dir(archive).unwrap() {
+                for run in std::fs::read_dir(date.unwrap().path()).unwrap() {
+                    let manifest: serde_json::Value = serde_json::from_slice(
+                        &std::fs::read(run.unwrap().path().join("run.json")).unwrap(),
+                    )
+                    .unwrap();
+                    notes.push(manifest["kind"].clone());
+                }
+            }
+        }
+        let expected_notes = match (kind, verb) {
+            ("agent" | "stay", "run" | "fire") => vec![json!("loop")],
+            ("workflow", _) => vec![json!("workflow")],
+            _ => Vec::new(),
+        };
+        assert_eq!(notes, expected_notes, "{kind}/{prior}/{verb}");
         actual.push((kind, prior, verb, record.get("agent_shell").cloned()));
         expected.push((
             kind,
@@ -10105,11 +10144,24 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
         .unwrap_or_else(|| panic!("pane request in {trace}"));
     let payload = std::fs::read_to_string(payload).unwrap();
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
+    let notes = paths.notes_run(
+        rimz::disk::paths::Class::AutomationNotes,
+        request
+            .identity
+            .params
+            .record
+            .as_ref()
+            .unwrap()
+            .notes
+            .as_ref()
+            .unwrap(),
+    );
     assert_eq!(
         request.reminder_section,
-        Some(rimz::harness::launch::ReminderSection::Loop(
-            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h.".into()
-        ))
+        Some(rimz::harness::launch::ReminderSection::Loop(format!(
+            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h.\n\n`{}/spawn-notes.md` is this run's working memory. Only this run's agent writes it, across restarts and its subagents. Write it for someone arriving cold. Note any change you made outside this repository: pushes, PR or issue comments, databases, remote services.",
+            notes.display()
+        )))
     );
     assert!(paths.workspace_record.is_file());
     assert!(
