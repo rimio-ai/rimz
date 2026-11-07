@@ -215,7 +215,7 @@ pub(super) fn glyph_role(record: &RunRecord) -> GlyphRole {
         RunState::Done => return GlyphRole::StatusDone,
         RunState::Failed => return GlyphRole::StatusAttention,
         RunState::Canceled => return GlyphRole::StatusIdle,
-        RunState::Parked => return GlyphRole::StatusWaiting,
+        RunState::Parked => return GlyphRole::WorkflowHeld,
         RunState::Active => {}
     }
     if asking(record).is_some() {
@@ -227,7 +227,7 @@ pub(super) fn glyph_role(record: &RunRecord) -> GlyphRole {
         .filter(|wait| wait.outcome == "capacity")
     {
         return if wait.hold.is_some_and(rimz::ids::HoldKind::needs_fix) {
-            GlyphRole::StatusWaiting
+            GlyphRole::WorkflowHeld
         } else {
             GlyphRole::PipelineCurrent
         };
@@ -447,10 +447,24 @@ mod tests {
                 false,
                 Some("capacity"),
                 Some("check_failed"),
-                GlyphRole::StatusWaiting,
+                GlyphRole::WorkflowHeld,
+            ),
+            (
+                "active",
+                false,
+                Some("capacity"),
+                Some("disk"),
+                GlyphRole::WorkflowHeld,
+            ),
+            (
+                "active",
+                false,
+                Some("capacity"),
+                Some("store"),
+                GlyphRole::WorkflowHeld,
             ),
             ("active", false, None, None, GlyphRole::StatusWorking),
-            ("parked", false, None, None, GlyphRole::StatusWaiting),
+            ("parked", false, None, None, GlyphRole::WorkflowHeld),
             ("done", false, None, None, GlyphRole::StatusDone),
             ("failed", false, None, None, GlyphRole::StatusAttention),
             ("canceled", false, None, None, GlyphRole::StatusIdle),
@@ -469,5 +483,22 @@ mod tests {
             glyph_role(&record)
         });
         assert_eq!(actual, cases.map(|(_, _, _, _, expected)| expected));
+        for held in [false, true] {
+            let mut record = record();
+            session(&mut record, held);
+            let attempt = if held {
+                &mut record.held.as_mut().unwrap().attempt
+            } else {
+                record.attempt.as_mut().unwrap()
+            };
+            attempt.asking = Some(
+                serde_json::from_value(json!({
+                    "since":Timestamp::UNIX_EPOCH, "text":"Which fix?",
+                    "kind":"question", "handle":"@fox",
+                }))
+                .unwrap(),
+            );
+            assert_eq!(glyph_role(&record), GlyphRole::StatusWaiting);
+        }
     }
 }

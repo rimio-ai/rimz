@@ -138,6 +138,9 @@ glyph_roles! {
         PipelineCheckPassed => "check_passed",
         PipelineCheckFuture => "check_future",
     }
+    "workflow" {
+        WorkflowHeld => "held",
+    }
     "card" {
         CardSubagents => "subagents",
         CardWaits => "waits",

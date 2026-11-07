@@ -1561,7 +1561,7 @@ fn parked_and_terminal_rails_are_horizontal_and_only_parked_has_a_current_node()
     record.visits = serde_json::from_value(json!({"build":{"total":1,"keys":[]}})).unwrap();
     save(&env, &record);
     let parked = human(&env, &record, false);
-    contains(&parked, &["◆ gate\n╰─ ? build ↑"]);
+    contains(&parked, &["◆ gate\n╰─ ⊘ build ↑"]);
     assert!(
         parked.find("you can\n").unwrap() < parked.find("◆ gate").unwrap(),
         "{parked}"

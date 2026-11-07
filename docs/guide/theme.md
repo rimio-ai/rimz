@@ -108,7 +108,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | slot | what it paints |
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
-| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
+| `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, workflow `parked` words, the `⊘` held mark on workflow rails and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
 | `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, and the conflicted pull request marker and cockpit PR count |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker, and the card's `✎` typing pen |
@@ -151,6 +151,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed inactive group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the inactive chip; and the inactive chip's `inactive_closed` / `inactive_open` |
 | `pipeline` | a team's stage dots and workflow rails; `check_passed` (`◆`) and `check_future` (`◇`) distinguish reached and unreached checks |
+| `workflow` | the run-level `held` mark (`⊘` in both sets) for legacy parks and capacity holds needing a fix; an agent's blocking ask keeps `status.waiting` (`?` in Unicode) |
 | `card` | the agent card body: subagents, waits, parked background, `message_queued` (`↧` / `󱃚`) and `typing` (`✎` / `󰏫`) |
 | `process` | the CPU, memory, and IO row |
 | `keys` | the help overlay's action leads |

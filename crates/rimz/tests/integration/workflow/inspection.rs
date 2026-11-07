@@ -939,13 +939,13 @@ fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
     let theme = rimz::config::ThemeConfig::default();
     let glyph = rimz::theme::theme_glyphs(&theme);
     for (lane, role, age) in [
-        ("z-park", rimz::config::GlyphRole::StatusWaiting, "3m"),
+        ("z-park", rimz::config::GlyphRole::WorkflowHeld, "3m"),
         ("a-ask", rimz::config::GlyphRole::StatusWaiting, "2m"),
         ("b-sleep", rimz::config::GlyphRole::StatusSleeping, "1m"),
         ("c-run", rimz::config::GlyphRole::StatusWorking, "0s"),
         ("d-held", rimz::config::GlyphRole::PipelineCurrent, "4m"),
         ("e-legacy", rimz::config::GlyphRole::PipelineCurrent, "2m"),
-        ("f-fix", rimz::config::GlyphRole::StatusWaiting, "1m"),
+        ("f-fix", rimz::config::GlyphRole::WorkflowHeld, "1m"),
         ("g-window", rimz::config::GlyphRole::StatusSleeping, "0s"),
     ] {
         let line = text
