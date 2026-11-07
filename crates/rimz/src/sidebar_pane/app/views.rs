@@ -378,6 +378,35 @@ struct ClientRoute {
 }
 
 impl Views {
+    #[cfg(test)]
+    pub(super) fn selections_for_test(&self) -> Vec<(ViewId, Option<PaneId>)> {
+        self.entries
+            .iter()
+            .map(|(id, entry)| (*id, entry.state.selected_pane.clone()))
+            .collect()
+    }
+
+    pub(super) fn command_target(&self) -> Result<(ViewId, &PaneId), &'static str> {
+        let mut clients = self
+            .clients
+            .values()
+            .filter(|client| client.departed.is_none());
+        let first = clients.next().ok_or("no attached clients")?;
+        let pane = first.pane.as_ref().ok_or("client's tab has no sidebar")?;
+        for client in clients {
+            if client.pane.is_none() {
+                return Err("client's tab has no sidebar");
+            }
+            if client.view != first.view {
+                return Err("clients view different tabs; focus one client");
+            }
+        }
+        if self.panes.get(pane) != Some(&first.view) {
+            return Err("sidebar view is not ready; try again");
+        }
+        Ok((first.view, pane))
+    }
+
     pub(super) fn mapped(&self, pane: &PaneId) -> bool {
         self.panes.contains_key(pane)
     }
@@ -583,6 +612,26 @@ impl Views {
                 .is_some_and(|rollback| rollback.target == *target);
             dispatched.then_some((state, context))
         })
+    }
+
+    pub(super) fn supersede_focus_input(&mut self, input: crate::ids::FocusNonce) {
+        for entry in self.entries.values_mut() {
+            if let Some(context) = &mut entry.context {
+                context.supersede_focus_input(&mut entry.state, input);
+            }
+        }
+    }
+
+    pub(super) fn acknowledge_focus_input(
+        &mut self,
+        input: crate::ids::FocusNonce,
+        nonce: crate::ids::FocusNonce,
+    ) {
+        for entry in self.entries.values_mut() {
+            if let Some(context) = &mut entry.context {
+                context.acknowledge_focus_input(input, nonce);
+            }
+        }
     }
 
     pub(super) fn retained(&mut self, id: ViewId) -> Option<&mut ViewContext> {
@@ -800,6 +849,9 @@ impl Views {
                 })
                 .map(|(_, view)| view)
                 .or(most_recent);
+            let source_shared = old_clients.iter().any(|(id, client)| {
+                Some(client.view) == source && client.departed.is_none() && !clients.contains(id)
+            });
             let source = self
                 .panes
                 .get(pane)
@@ -807,6 +859,8 @@ impl Views {
                 .filter(|id| {
                     !old_clients.values().any(|client| client.view == *id)
                         && activity[id] > self.sample_activity
+                        && (source_shared
+                            || source.is_none_or(|source| activity[id] >= activity[&source]))
                 })
                 .or(source);
             let view = match source {

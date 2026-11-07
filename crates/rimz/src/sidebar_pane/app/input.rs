@@ -10,6 +10,7 @@ use super::NavKeymap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum Wakeup {
     Tick,
+    Card(std::sync::Arc<super::card_commands::CardInput>),
     /// A typed sidebar event posted by the store, presence CLI, reload path,
     /// or the host's own notification delivery.
     Event(SidebarEventEnvelope),
@@ -18,6 +19,13 @@ pub(in crate::sidebar_pane) enum Wakeup {
     FocusFailed {
         pane: crate::ids::PaneId,
         error: String,
+    },
+    FocusSuperseded {
+        input: crate::ids::FocusNonce,
+    },
+    FocusDispatched {
+        input: crate::ids::FocusNonce,
+        nonce: crate::ids::FocusNonce,
     },
     Resize,
     Press {

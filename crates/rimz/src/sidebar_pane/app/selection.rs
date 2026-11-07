@@ -41,6 +41,10 @@ pub(super) enum InputEffect {
     /// Persist and broadcast the shared cockpit lens from the loop, which owns
     /// the room runtime paths.
     SyncFilter(BodyLens),
+    CardReply(
+        std::sync::Arc<super::card_commands::CardInput>,
+        crate::sidebar_pane::CardReply,
+    ),
 }
 
 impl InputOutcome {
@@ -770,7 +774,7 @@ fn select_adjacent_worktree(
 /// motion and click browse; focus keys resolve their target through the active
 /// roster instead. A changed pick reveals on the
 /// next draw only if no line of its card is visible.
-fn select_row_in(ui: &mut ViewState, roster: &VisibleRoster<'_>, index: usize) {
+pub(super) fn select_row_in(ui: &mut ViewState, roster: &VisibleRoster<'_>, index: usize) {
     ui.entry_cursor = None;
     ui.selected_pane = roster.pane_at_ordinal(index);
     ui.selected_index = (ui.selected_pane.is_some()
@@ -802,7 +806,7 @@ fn agent_row_mark_target_at(
 /// browse captures the card baseline it began from, and a later arrow only moves
 /// the pick. A card-baseline or agreed working-pane focus change ends it.
 /// Roams matching rows, other tabs' rows included.
-fn begin_or_continue_browse(ui: &mut ViewState) {
+pub(super) fn begin_or_continue_browse(ui: &mut ViewState) {
     if let Some(pane) = ui.selected_pane.clone() {
         let baseline_at_start = match ui.browse.take() {
             Some(browse) => browse.baseline_at_start,
@@ -948,6 +952,13 @@ fn reconcile_filter_and_baseline(
         }
     }
     if let Some(pane) = derived {
+        if ui
+            .baseline_pane
+            .as_ref()
+            .is_some_and(|baseline| *baseline != pane)
+        {
+            ui.previous_card.clone_from(&ui.baseline_pane);
+        }
         ui.baseline_pane = Some(pane);
     }
 }

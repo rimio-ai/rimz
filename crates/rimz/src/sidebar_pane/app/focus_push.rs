@@ -119,9 +119,15 @@ pub(in crate::sidebar_pane) struct FocusPeers {
     diag: DiagSink,
     jumps: Arc<JumpHost>,
     lease: Option<Arc<JumpLease>>,
+    push_layout: bool,
 }
 
 impl FocusPeers {
+    pub(super) fn without_push(mut self) -> Self {
+        self.push_layout = false;
+        self
+    }
+
     pub(super) fn with_source_view(mut self, view: Option<super::views::ViewId>) -> Self {
         self.source_view = view;
         self
@@ -148,6 +154,9 @@ impl FocusPeers {
     }
 
     pub(super) fn arm(&self, target: PaneId, clicked: Instant) -> Self {
+        if !self.push_layout {
+            self.supersede();
+        }
         let mut peers = self.clone();
         peers.lease = Some(self.jumps.arm(
             self.subscribers.clone(),
@@ -197,6 +206,7 @@ impl FocusPeers {
             diag,
             jumps,
             lease: None,
+            push_layout: true,
         }
     }
 
@@ -253,6 +263,11 @@ impl FocusPeers {
         if !self.is_current() {
             self.trace_stage("push_superseded");
             return None;
+        }
+        if !self.push_layout {
+            let result = self.request(dispatch);
+            self.release();
+            return result;
         }
         let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, clicked, &mut now)?;
         if !self.is_current() && traces.is_empty() {

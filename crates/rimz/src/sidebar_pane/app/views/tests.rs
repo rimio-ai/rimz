@@ -5,6 +5,43 @@ use crate::sidebar_pane::app::clock::LoopClock;
 const HOLD: Duration = Duration::from_secs(10);
 
 #[test]
+fn card_commands_require_one_view_shared_by_all_attached_clients() {
+    let clock = clock();
+    let mut views = Views::default();
+    assert!(views.command_target().is_err());
+    for clients in [&[(1, 11)][..], &[(1, 11), (2, 12)][..]] {
+        views.reconcile_frame(&frame(clients), clock.now(), HOLD);
+        let (id, target) = views.command_target().expect("one acting view");
+        assert_eq!(target, &pane(10));
+        assert!(views.clients.values().all(|client| client.view == id));
+    }
+    views.reconcile_frame(&frame(&[(1, 11), (2, 21)]), clock.now(), HOLD);
+    for (id, entry) in &mut views.entries {
+        entry.state.selected_pane = Some(pane(id.0 as u32 + 100));
+    }
+    let selections = || {
+        views
+            .entries
+            .iter()
+            .map(|(id, entry)| (*id, entry.state.selected_pane.clone()))
+            .collect::<Vec<_>>()
+    };
+    let before = selections();
+    assert!(views.command_target().is_err());
+    assert_eq!(selections(), before);
+    views.reconcile_frame(&frame(&[(1, 99)]), clock.now(), HOLD);
+    assert!(
+        views.command_target().is_err(),
+        "no sidebar in this client's tab"
+    );
+    views.reconcile_frame(&frame(&[]), clock.now(), HOLD);
+    assert!(
+        views.command_target().is_err(),
+        "departed clients cannot act"
+    );
+}
+
+#[test]
 fn record_release_does_not_wait_for_the_subscriber_registry() {
     let handle = Arc::new(ViewsHandle::default());
     let subscribers = handle.lock().subscribers.clone();
@@ -246,6 +283,23 @@ fn arrival_keeps_evidence_input_despite_newer_coviewer_input() {
     let (arrived, entry) = views.presentation(&pane(20), clock.now(), false);
     assert_eq!((arrived, entry.state.scroll_offset), (evidence, 22));
     assert_eq!(views.paint(&pane(10), clock.now()).scroll_offset, 33);
+}
+
+#[test]
+fn arrival_keeps_a_later_card_pick_over_an_earlier_landing() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10)]);
+    let (source, entry) = views.presentation(&pane(10), clock.now(), true);
+    entry.state.selected_pane = Some(pane(21));
+    views.land(source, &pane(20), clock.now());
+    views.input(&pane(10), clock.now()).selected_pane = Some(pane(11));
+    sample(&mut views, &clock, &[(1, 20)]);
+    assert_eq!(
+        views.paint(&pane(20), clock.now()).selected_pane,
+        Some(pane(11)),
+        "a late native arrival must not adopt the earlier pick's painted copy"
+    );
 }
 
 #[test]

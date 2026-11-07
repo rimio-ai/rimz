@@ -105,6 +105,26 @@ fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
 }
 
 impl DataPlane {
+    pub(in crate::sidebar_pane) fn card_input(
+        &self,
+        request: crate::sidebar_pane::CardRequest,
+        reply: SyncSender<crate::sidebar_pane::CardReply>,
+        expires: std::time::Instant,
+    ) -> Result<(crate::ids::PaneId, Arc<super::card_commands::CardInput>), &'static str> {
+        let views = self.views.lock();
+        let (view, pane) = views.command_target()?;
+        Ok((
+            pane.clone(),
+            Arc::new(super::card_commands::CardInput {
+                answer: std::sync::Mutex::new(None),
+                request,
+                reply,
+                expires,
+                view,
+            }),
+        ))
+    }
+
     pub(in crate::sidebar_pane) fn room_events(&self, runtime: &RuntimePaths) -> RoomEvents {
         RoomEvents::new(
             runtime,

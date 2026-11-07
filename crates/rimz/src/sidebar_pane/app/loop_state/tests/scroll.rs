@@ -618,6 +618,7 @@ fn external_focus_arrival(mux: MuxName, source_sample_fresh: bool) {
         pane_id: target.clone(),
         origin: FocusOrigin::User,
         repair_generation: None,
+        input_at_ms: None,
         issued_at_ms: pair.clock.now_ms(),
         applied_at_ms: None,
         state: FocusIntentState::Requested,
@@ -1627,8 +1628,13 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         );
         assert_eq!(source.view().ctx().pending_input_focus, Some(target));
         assert!(
-            source.state.pane.input_jump.is_none(),
-            "same-tab focus arms no push"
+            source
+                .state
+                .pane
+                .input_jump
+                .as_ref()
+                .is_some_and(FocusPeers::is_current),
+            "same-tab focus keeps an ordered lease without a push"
         );
         assert!(
             !first.is_current(),
@@ -1677,8 +1683,8 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
             .unwrap();
         let last: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
         assert_eq!(
-            last["event"]["sequence"], 3,
-            "same-tab focus advances click order"
+            last["event"]["sequence"], 4,
+            "same-tab focus cancels the old jump and arms its own ordered lease"
         );
     }
 }
@@ -1830,6 +1836,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
         pane_id: target,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
+        input_at_ms: None,
         issued_at_ms: destination.state.pane.clock.now_ms(),
         applied_at_ms: None,
         state: crate::mux::focus_anchor::FocusIntentState::Requested,
@@ -2142,6 +2149,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
         pane_id,
         origin: FocusOrigin::User,
         repair_generation: None,
+        input_at_ms: None,
         issued_at_ms: rig.state.pane.clock.now_ms(),
         applied_at_ms: None,
         state: FocusIntentState::Requested,
@@ -2893,6 +2901,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
                 pane_id: selected,
                 origin: FocusOrigin::User,
                 repair_generation: None,
+                input_at_ms: None,
                 issued_at_ms: stamp,
                 applied_at_ms: Some(stamp),
                 state: FocusIntentState::Applied,

@@ -30,6 +30,7 @@ use crate::sidebar_pane::attach::{
     self, Control, ControlLine, Hello, PROTOCOL, REJECT_BUILD, REJECT_CAPACITY, REJECT_PROTOCOL,
     Reply,
 };
+use crate::sidebar_pane::{CardReply, CardRequest};
 use crate::wakeup::events::{RELOAD_CONTROL_WORD, SidebarEvent};
 
 /// How long a host with no pane attached stays up for the next one.
@@ -39,6 +40,8 @@ const DRAIN_GRACE: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// A supervisor says hello in its first message; a silent peer is not one.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
+/// Leave time for a busy reply before the card client's deadline.
+const CARD_REPLY_WAIT: Duration = Duration::from_secs(1);
 /// How long a new hello waits for the pane's previous attachment to close.
 const EVICT_WAIT: Duration = Duration::from_secs(2);
 /// A starting host outwaits the one it replaces, which holds the session's
@@ -212,6 +215,7 @@ enum Event {
 /// One attached pane, as the rest of the host reaches it.
 struct Live {
     close: CloseHandle,
+    pane_id: crate::ids::PaneId,
     /// Set when the host closes the pane to leave, so its supervisor is told
     /// to attach again rather than left to read the close as a failure.
     leaving: Arc<AtomicBool>,
@@ -424,7 +428,15 @@ impl Host {
     fn serve_connection(&self, stream: UnixStream) {
         let _ = stream.set_read_timeout(Some(HELLO_TIMEOUT));
         let (hello, output) = match attach::recv_hello(&stream) {
-            Ok(Some(hello)) => hello,
+            Ok(Some(attach::Introduction::Pane(hello, output))) => (hello, output),
+            Ok(Some(attach::Introduction::Card(request))) => {
+                self.serve_card(
+                    &stream,
+                    request,
+                    super::commands::COMMAND_TIMEOUT - CARD_REPLY_WAIT,
+                );
+                return;
+            }
             // A socket liveness probe: connected, said nothing, left.
             Ok(None) => return,
             Err(err) => {
@@ -521,6 +533,52 @@ impl Host {
         let _ = stream.shutdown(std::net::Shutdown::Both);
     }
 
+    fn serve_card(&self, stream: &UnixStream, request: CardRequest, timeout: Duration) {
+        if self.draining.load(Ordering::SeqCst) {
+            return;
+        }
+        let reply = self.card_reply(&request, Instant::now() + timeout);
+        if let CardReply::Refused { reason } = &reply {
+            self.diag.trace_focus(
+                FocusTraceEvent::CardCommandRefused {
+                    reason: reason.clone(),
+                },
+                Default::default(),
+            );
+        }
+        let _ = stream.set_write_timeout(Some(CARD_REPLY_WAIT));
+        let _ = attach::write_line(stream, &reply);
+    }
+
+    fn card_reply(&self, request: &CardRequest, deadline: Instant) -> CardReply {
+        let (reply, receive) = std::sync::mpsc::sync_channel(1);
+        let (pane, input) = match self.plane.card_input(request.clone(), reply, deadline) {
+            Ok(destination) => destination,
+            Err(reason) => return request.refused(reason),
+        };
+        let destination = lock(&self.attachments)
+            .values()
+            .find(|live| live.pane_id == pane)
+            .map(|live| live.close.clone());
+        let Some(destination) = destination else {
+            return request.refused("sidebar view is not ready; try again");
+        };
+        if destination
+            .input
+            .try_send(Wakeup::Card(input.clone()))
+            .is_err()
+        {
+            return request.refused("sidebar busy; try again");
+        }
+        let _ = destination.wake.try_send(Wakeup::Tick);
+        match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(reply) => reply,
+            _ => lock(&input.answer)
+                .get_or_insert_with(|| request.refused("sidebar busy; try again"))
+                .clone(),
+        }
+    }
+
     /// Decide a hello and, on yes, open the pane's attachment and enter it in
     /// the host's set. The error is the reject reason.
     fn admit(&self, hello: &Hello) -> Result<(Attachment, Live), String> {
@@ -557,12 +615,14 @@ impl Host {
                     );
                     let live = Live {
                         close: attachment.close_handle(),
+                        pane_id: hello.pane_id.clone(),
                         leaving: Arc::new(AtomicBool::new(false)),
                     };
                     attachments.insert(
                         key.to_owned(),
                         Live {
                             close: live.close.clone(),
+                            pane_id: live.pane_id.clone(),
                             leaving: live.leaving.clone(),
                         },
                     );

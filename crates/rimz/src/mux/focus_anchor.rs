@@ -58,6 +58,8 @@ pub struct FocusAnchor {
     pub(crate) origin: FocusOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_at_ms: Option<u64>,
     pub issued_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_at_ms: Option<u64>,
@@ -106,6 +108,7 @@ impl FocusObservation {
 pub(crate) struct FocusActionRequest<'a> {
     pub pane_id: PaneId,
     pub origin: FocusOrigin,
+    pub input_at_ms: Option<u64>,
     pub repair_generation: Option<u64>,
     pub expected_pre_action: Option<&'a [ClientPaneView]>,
     pub placement: Option<FocusPlacement>,
@@ -238,15 +241,21 @@ pub(crate) fn request_action(
     session_name: &str,
     request: FocusActionRequest<'_>,
 ) -> Result<FocusNonce, FocusActionError> {
-    request_action_with_client_sample(runtime, session_name, request, || {
-        backend
-            .client_view(ClientFocusOptions {
-                session_name: Some(session_name.to_owned()),
-                command_timeout: None,
-            })
-            .map(|view| view.clients)
-            .map_err(FocusActionError::ClientSample)
-    })
+    request_action_with_client_sample(
+        runtime,
+        session_name,
+        request,
+        || {
+            backend
+                .client_view(ClientFocusOptions {
+                    session_name: Some(session_name.to_owned()),
+                    command_timeout: None,
+                })
+                .map(|view| view.clients)
+                .map_err(FocusActionError::ClientSample)
+        },
+        crate::utils::time::unix_now_ms,
+    )
 }
 
 #[cfg(test)]
@@ -255,8 +264,9 @@ pub(crate) fn request_action_with_test_sample(
     session_name: &str,
     request: FocusActionRequest<'_>,
     sample: impl FnOnce() -> Result<Vec<ClientPaneView>, FocusActionError>,
+    now_ms: impl FnOnce() -> u64,
 ) -> Result<FocusNonce, FocusActionError> {
-    request_action_with_client_sample(runtime, session_name, request, sample)
+    request_action_with_client_sample(runtime, session_name, request, sample, now_ms)
 }
 
 fn request_action_with_client_sample(
@@ -264,10 +274,12 @@ fn request_action_with_client_sample(
     session_name: &str,
     request: FocusActionRequest<'_>,
     sample: impl FnOnce() -> Result<Vec<ClientPaneView>, FocusActionError>,
+    now_ms: impl FnOnce() -> u64,
 ) -> Result<FocusNonce, FocusActionError> {
     let FocusActionRequest {
         pane_id,
         origin,
+        input_at_ms,
         repair_generation,
         expected_pre_action,
         placement,
@@ -293,7 +305,8 @@ fn request_action_with_client_sample(
         pane_id,
         origin,
         repair_generation,
-        issued_at_ms: crate::utils::time::unix_now_ms(),
+        input_at_ms,
+        issued_at_ms: now_ms(),
         applied_at_ms: None,
         state: FocusIntentState::Requested,
         pre_action,
@@ -392,6 +405,7 @@ pub fn execute_action(
         FocusActionRequest {
             pane_id: pane_id.clone(),
             origin: FocusOrigin::User,
+            input_at_ms: None,
             repair_generation: None,
             expected_pre_action: None,
             placement: None,
@@ -532,6 +546,7 @@ mod tests {
             pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
             origin: FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: stamp_ms,
             applied_at_ms: Some(stamp_ms),
             state: FocusIntentState::Applied,
@@ -608,6 +623,24 @@ mod tests {
             assert_eq!(file["v"], "rimz.focus-anchor.v4");
             assert!(file.get("offset").is_none());
             assert_eq!(file["placement"], placement);
+            assert_eq!(load(&runtime), Some(anchor));
+        }
+    }
+
+    #[test]
+    fn v4_round_trip_preserves_optional_input_stamp() {
+        let (_dir, runtime) = runtime();
+        for input_at_ms in [None, Some(900_u64)] {
+            let mut value = serde_json::to_value(anchor(1_000)).unwrap();
+            if let Some(stamp) = input_at_ms {
+                value["input_at_ms"] = stamp.into();
+            }
+            let anchor: FocusAnchor = serde_json::from_value(value.clone()).unwrap();
+            store(&runtime, &anchor).unwrap();
+            let file: serde_json::Value =
+                serde_json::from_slice(&fs::read(runtime.focus_anchor_path()).unwrap()).unwrap();
+            assert_eq!(file["v"], "rimz.focus-anchor.v4");
+            assert_eq!(file.get("input_at_ms"), value.get("input_at_ms"));
             assert_eq!(load(&runtime), Some(anchor));
         }
     }
@@ -754,12 +787,14 @@ mod tests {
             FocusActionRequest {
                 pane_id: pane_id.clone(),
                 origin: FocusOrigin::User,
+                input_at_ms: None,
                 repair_generation: None,
                 expected_pre_action: None,
                 placement: None,
                 order: None,
             },
             || Ok(Vec::new()),
+            crate::utils::time::unix_now_ms,
         )
         .expect("request focus");
 
@@ -792,12 +827,14 @@ mod tests {
             FocusActionRequest {
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
                 origin: FocusOrigin::AutomaticRepair,
+                input_at_ms: None,
                 repair_generation: Some(3),
                 expected_pre_action: Some(&expected),
                 placement: None,
                 order: None,
             },
             || Ok(observed.clone()),
+            crate::utils::time::unix_now_ms,
         );
         assert!(
             matches!(result, Err(FocusActionError::PreObservationChanged { observed: sample }) if sample == observed)

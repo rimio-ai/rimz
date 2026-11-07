@@ -5,6 +5,34 @@ use crate::sidebar_pane::app::plane::DataPlane;
 use std::cell::Cell;
 
 #[test]
+fn local_focus_dispatch_never_waits_for_a_peer_paint() {
+    let rig = TraceRig::new();
+    let clicked = Instant::now();
+    let anchor = rig.anchor();
+    let lease = rig
+        .peers
+        .clone()
+        .without_push()
+        .arm(anchor.pane_id.clone(), clicked);
+    let waited = Cell::new(false);
+    let result = lease.dispatch_with(
+        anchor,
+        clicked,
+        || 17,
+        || clicked,
+        |_, _| {
+            waited.set(true);
+            Err(RecvTimeoutError::Disconnected)
+        },
+    );
+    assert_eq!(result, Some(17));
+    assert!(
+        !waited.get(),
+        "same-tab focus must bypass the paint handshake"
+    );
+}
+
+#[test]
 fn lease_superseded_while_waiting_for_anchor_lock_never_dispatches() {
     let rig = TraceRig::new();
     let clicked = Instant::now();
@@ -76,6 +104,7 @@ fn pre_push_stops_keep_the_click_sequence_and_stage() {
             ),
         )),
         Some(&last),
+        None,
         |_| panic!("failed request cannot dispatch"),
     );
     assert_eq!(
@@ -146,12 +175,14 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
             crate::mux::focus_anchor::FocusActionRequest {
                 pane_id: a.clone(),
                 origin: crate::mux::focus_anchor::FocusOrigin::User,
+                input_at_ms: None,
                 repair_generation: None,
                 expected_pre_action: None,
                 placement: None,
                 order: None,
             },
             || Ok(Vec::new()),
+            crate::utils::time::unix_now_ms,
         )
         .unwrap();
         stored.lock().unwrap().push(label);
@@ -346,6 +377,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
             pane_id: crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
             origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: crate::utils::time::unix_now_ms(),
             applied_at_ms: None,
             state: crate::mux::focus_anchor::FocusIntentState::Requested,
@@ -615,6 +647,7 @@ impl TraceRig {
             pane_id: crate::PaneId::from_parts(crate::MuxName::Tmux, "%3"),
             origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: crate::utils::time::unix_now_ms(),
             applied_at_ms: None,
             state: crate::mux::focus_anchor::FocusIntentState::Requested,
@@ -1023,6 +1056,7 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
             pane_id: PaneId::from_parts(crate::MuxName::Tmux, "%1"),
             origin: FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: 1,
             applied_at_ms: None,
             state: FocusIntentState::Requested,

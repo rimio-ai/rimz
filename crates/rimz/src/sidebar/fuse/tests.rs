@@ -65,6 +65,7 @@ fn anchor(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
         pane_id,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
+        input_at_ms: None,
         issued_at_ms: stamp_ms,
         applied_at_ms: Some(stamp_ms),
         state: crate::mux::focus_anchor::FocusIntentState::Applied,
