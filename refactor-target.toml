@@ -4036,7 +4036,8 @@ path = "crates/rimz/src/store"
 # workflow::Restart carries one manual launch's optional continued session (+1).
 # Store::retire_message cancels obsolete workflow prompts, including unconfirmed sends (+1).
 # notes::migrate_legacy shares collision-safe archive moves with room-birth policy (+1).
-surface-budget = 562
+# MessageRecord::is_open_and_due counts due queued messages for sidebar cards (+1).
+surface-budget = 563
 
 [[verdict]]
 kind = "item"

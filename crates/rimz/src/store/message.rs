@@ -920,6 +920,10 @@ impl MessageRecord {
             && !self.expired(now)
     }
 
+    pub(crate) fn is_open_and_due(&self, now: Timestamp) -> bool {
+        self.status.is_open() && self.is_deliverable(now)
+    }
+
     pub fn perishable(&self) -> bool {
         self.body == MessageBody::Command && self.automated
     }

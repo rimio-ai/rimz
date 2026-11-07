@@ -664,6 +664,18 @@ fn project_workflow_and_throttle_state(
     records
 }
 
+fn project_due_messages(snapshot: &mut SidebarSnapshot, state: &StatePaths) {
+    let messages = crate::store::message::cached_messages(state, false);
+    for agent in Arc::make_mut(&mut snapshot.agents) {
+        agent.due_messages = messages
+            .iter()
+            .filter(|message| {
+                message.is_open_and_due(snapshot.now) && message.same_agent_card(agent)
+            })
+            .count();
+    }
+}
+
 fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
@@ -763,6 +775,7 @@ fn enrich_core(
             project_root.as_deref(),
             &machine_config,
         );
+        project_due_messages(&mut snapshot, state);
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
     }
     let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state, runtime);

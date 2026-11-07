@@ -199,6 +199,37 @@ fn carried_pane_close_older_than_pull_deletes_the_card() {
 }
 
 #[test]
+fn command_events_preserve_due_messages_on_rebuilt_agent_cards() {
+    use crate::store::snapshot::{AgentCard, RowCard};
+    let mut snapshot = pulled(vec![pane("terminal_1", "claude")], 10);
+    snapshot.wired_kinds = vec!["claude".to_owned()];
+    snapshot.rows_mut().next().unwrap().card = RowCard::Agent(std::sync::Arc::new(AgentCard {
+        due_messages: 3,
+        ..Default::default()
+    }));
+    let mut events = EventStore::default();
+    append(
+        &mut events,
+        11,
+        SidebarEvent::CommandChanged {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            command: "claude".to_owned(),
+        },
+    );
+    let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    assert_eq!(
+        fused
+            .rows()
+            .next()
+            .unwrap()
+            .as_agent()
+            .unwrap()
+            .due_messages,
+        3
+    );
+}
+
+#[test]
 fn command_events_keep_pane_slots_and_preserve_process_sinks() {
     for agent_before in [false, true] {
         let mut pane = pane("terminal_1", "zsh");
