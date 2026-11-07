@@ -79,6 +79,8 @@ pub(crate) enum Component {
     WorktreePrOpen,
     /// A closed, unmerged pull request for the worktree branch — alarm verdict.
     WorktreePrClosed,
+    /// A current-head PR conflict on the worktree header and cockpit PR count.
+    WorktreePrConflict,
     /// A passing CI verdict for the worktree — the trunk's branch CI, or the
     /// branch's open or merged pull request — success tone.
     WorktreeCiPassing,
@@ -195,6 +197,7 @@ impl Component {
         Component::WorktreeReconciling,
         Component::WorktreePrOpen,
         Component::WorktreePrClosed,
+        Component::WorktreePrConflict,
         Component::WorktreeCiPassing,
         Component::WorktreeCiPending,
         Component::WorktreeCiFailing,
@@ -248,7 +251,7 @@ impl Component {
                 palette.body
             }
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator => palette.faint,
-            StallLeadActive | StallFigure => palette.caution,
+            WorktreePrConflict | StallLeadActive | StallFigure => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }

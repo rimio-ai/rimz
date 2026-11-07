@@ -91,6 +91,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreePrOpen, "⑃", Some("\u{f407}")),
     glyph!(WorktreePrClosed, "✕", Some("\u{f4dc}")),
     glyph!(WorktreePrQueue, "⇉", Some("\u{f4db}")),
+    glyph!(WorktreePrConflict, "↯", Some("\u{ec6e}")),
     glyph!(WorktreePrStack, "→", Some("\u{f061}")),
     glyph!(WorktreeCiPassing, "✓", Some("\u{f058}")),
     glyph!(WorktreeCiFailing, "✕", Some("\u{f057}")),
@@ -339,6 +340,28 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 mod tests {
     use super::*;
     use crate::config::{ThemeGlyphsConfig, ThemeStyle};
+
+    #[test]
+    fn pr_conflict_has_configurable_presets() {
+        let role = GlyphRole::from_namespaced("worktree", "pr_conflict");
+        let mut readings = Vec::new();
+        for set in ["unicode", "nerd_font"] {
+            let mut theme = ThemeConfig {
+                glyphs: toml::from_str(&format!("set = '{set}'")).unwrap(),
+                ..Default::default()
+            };
+            readings.push(role.map(|role| GlyphSet::resolve(&theme).glyph(role).to_owned()));
+            theme.glyphs = toml::from_str(&format!(
+                "set = '{set}'\n[{set}.worktree]\npr_conflict = 'c'"
+            ))
+            .unwrap();
+            readings.push(role.map(|role| GlyphSet::resolve(&theme).glyph(role).to_owned()));
+        }
+        assert_eq!(
+            readings,
+            ["↯", "c", "\u{ec6e}", "c"].map(|glyph| Some(glyph.to_owned()))
+        );
+    }
 
     #[test]
     fn compacted_meter_has_independent_configurable_presets() {
