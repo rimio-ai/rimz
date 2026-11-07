@@ -3,6 +3,63 @@ use std::collections::HashSet;
 
 #[cfg(unix)]
 #[test]
+fn popup_argv_and_cached_floating_title_guard() {
+    let room = TestRoom::new();
+    room.publish_workspace();
+    let (temp, shim) =
+        support::zellij_shim("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/argv\"\n");
+    let backend = room.backend(&shim);
+    let request = crate::mux::PopupRequest {
+        session_name: "rimz-test".to_owned(),
+        program: "/bin/rimz with space".to_owned(),
+        args: vec!["palette".to_owned(), "literal $word;".to_owned()],
+        cwd: "/project with space".into(),
+        ..Default::default()
+    };
+    for (title, floating, opens) in [
+        ("work", false, true),
+        ("rimz palette", false, true),
+        ("rimz palette", true, false),
+    ] {
+        let mut pane = terminal_pane(3, 0, 80, 0, title);
+        pane.is_floating = floating;
+        room.write_cache(unix_now_ms(), None, None, vec![pane]);
+        let argv_path = temp.path().join("argv");
+        let _ = std::fs::remove_file(&argv_path);
+        let result = backend.open_popup(&request);
+        assert!(result.is_ok(), "popup opens or is already open: {result:?}");
+        assert_eq!(argv_path.exists(), opens);
+        if opens {
+            let argv = std::fs::read_to_string(&argv_path).unwrap();
+            assert_eq!(
+                argv.lines().collect::<Vec<_>>(),
+                [
+                    "--session",
+                    "rimz-test",
+                    "action",
+                    "new-pane",
+                    "--floating",
+                    "--close-on-exit",
+                    "--name",
+                    "rimz palette",
+                    "--width",
+                    "80%",
+                    "--height",
+                    "80%",
+                    "--cwd",
+                    "/project with space",
+                    "--",
+                    "/bin/rimz with space",
+                    "palette",
+                    "literal $word;",
+                ]
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn presence_probe_detects_only_proven_terminal_ghosts() {
     use session::PresenceProbe;
     let room = TestRoom::new();

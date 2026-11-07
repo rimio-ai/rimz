@@ -727,6 +727,17 @@ fn confirm_resume_tab_shapes(
         .collect()
 }
 
+/// An interactive palette job addressed to one room and its opening client.
+#[derive(Clone, Debug, Default)]
+pub struct PopupRequest {
+    pub session_name: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub client: Option<String>,
+    pub anchor_pane: Option<PaneId>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
     pub target: SplitTarget,
@@ -1063,6 +1074,14 @@ pub enum SessionLiveness {
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
+    /// Open an interactive palette, closing it when its command exits.
+    fn open_popup(&self, _request: &PopupRequest) -> Result<()> {
+        Err(MuxErr::Output {
+            program: self.name().to_string(),
+            reason: "popups are not supported".to_owned(),
+        })
+    }
+
     /// Read the anchor's tiled view. `None` means it is absent or not plain tiling
     /// (fullscreen, zoomed, suppressed, stacked, or missing geometry).
     fn view_geometry(

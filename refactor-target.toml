@@ -3118,7 +3118,18 @@ path = "crates/rimz/src/mux"
 # ClientPresence::last_input_ms and ClientView::attended_until share per-client input clocks (+2).
 # write_client_input and ClientInputWriteError share plugin input publication with the host (+2).
 # Room settings expose their record writers, diff and vocabulary; key registration is shared (+12).
-surface-budget = 317
+# PopupRequest and MuxBackend::open_popup share the interactive palette job (+2).
+surface-budget = 319
+
+[[verdict]]
+kind = "item"
+key = "mux::PopupRequest"
+reason = "The CLI hands either backend one explicit interactive palette job and opening context."
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::open_popup"
+reason = "Both backends open the same close-on-exit palette without exposing native popup argv."
 
 [[verdict]]
 kind = "item"
