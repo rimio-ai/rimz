@@ -638,6 +638,64 @@ This check proves caller resolution, not delivery of the wait's result to the ag
 
 The listing that follows `armed` can read `starting` before the detached watcher takes its lock. A watch without a live watcher reads `lost` only after the host's 30-second startup grace; `wait list` and `loop list` use the same grace.
 
+## Fake a pull request's state
+
+A header PR marker or cockpit `⑃ N` colour check needs an open GitHub pull request in a chosen state, with no network. The room host probes GitHub by running `gh api graphql -f query=...` in the worktree ([`crates/rimz/src/sidebar/refresh/pr.rs::probe_github_repo_group`](../../crates/rimz/src/sidebar/refresh/pr.rs)), and [`crates/rimz/src/forge.rs::parse_github_bulk_response`](../../crates/rimz/src/forge.rs) reads the answer. A `gh` shim that the host finds first on its `PATH` can answer with any state. The host inherits `PATH` from `cargo xtask sandbox room`, so put the shim there when you start the room. A joined `sandbox in` command builds its own `PATH` from yours, so `command -v gh` there still names the real `gh`, which is fine: only the host calls it.
+
+The shim below answers for PR #91 on the team's `probe` branch against `main`, with passing CI, at whatever head the worktree has. It reads `mergeable` from a mode file, so you can change the answer while the room runs. It refuses every other command with exit 97 and never calls the real `gh`:
+
+```sh
+SHIM="$TMPDIR/pr-shim"
+mkdir -p "$SHIM"
+printf 'CONFLICTING\n' > "$SHIM/mode"
+cat > "$SHIM/gh" <<'EOF'
+#!/bin/bash
+set -eu
+shim_dir=$(dirname "$0")
+printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$shim_dir/gh.calls"
+if [ "$#" -eq 2 ] && [ "$1 $2" = 'auth status' ]; then
+    exit 0
+fi
+if [ "$#" -ne 4 ] || [ "$1 $2 $3" != 'api graphql -f' ]; then
+    printf 'gh shim refused: %s\n' "$*" >&2
+    exit 97
+fi
+case "$4" in
+    'query=query { repository(owner: "rimz-live-check", name: "probe") {'*) ;;
+    *) printf 'gh shim refused query: %s\n' "$4" >&2; exit 97 ;;
+esac
+shim_head=$(git rev-parse HEAD)
+jq -nc --arg query "$4" --arg head "$shim_head" --rawfile mode "$shim_dir/mode" '
+  ($mode | rtrimstr("\n")) as $mode |
+  [ $query | capture("pr(?<i>[0-9]+): pullRequests\\(first: 10, headRefName: \"(?<branch>[^\"]+)\""; "g") ] as $branches |
+  [ $query | capture("sha(?<i>[0-9]+): object\\(oid: \"(?<oid>[^\"]+)\""; "g") ] as $oids |
+  {data: {repository:
+    (reduce $branches[] as $b
+      ({id:"local-only",open:{nodes:[{number:91,headRefName:"probe",baseRefName:"main",isCrossRepository:false}]}};
+       .["pr"+$b.i] = {nodes:(if $b.branch == "probe" then [{number:91,state:"OPEN",createdAt:"2026-01-01T00:00:00Z",isCrossRepository:false,statusCheckRollup:{state:"SUCCESS",commit:{oid:$head}},mergeCommit:null}] else [] end)} |
+       .["facts"+$b.i] = {nodes:(if $b.branch == "probe" then [{number:91,headRefOid:$head,mergeable:$mode,isCrossRepository:false,isDraft:false,reviewDecision:null,baseRef:{name:"main",compare:{behindBy:0}},mergeQueueEntry:null,autoMergeRequest:null,timelineItems:{nodes:[]}}] else [] end)} |
+       .["ref"+$b.i] = {target:{oid:$head,statusCheckRollup:{state:"SUCCESS"}}}) |
+     reduce $oids[] as $s (. ; .["sha"+$s.i] = {oid:$s.oid,statusCheckRollup:{state:"SUCCESS"}}))
+  }}'
+EOF
+chmod +x "$SHIM/gh"
+env -u NO_COLOR PATH="$SHIM:$PATH" cargo xtask sandbox room --mux tmux --for 45m
+```
+
+`env -u NO_COLOR` keeps the frame's colours when your shell exports `NO_COLOR`. With the room held, give the team's worktree an `origin` that names the fake repository, so the host treats it as a GitHub repo:
+
+```sh
+target/debug/xtask sandbox in "$ROOT" -- git remote add origin https://github.com/rimz-live-check/probe.git
+```
+
+Then run the Look command for an agent pane in that worktree (its pane id is on the card's Role line) and keep that pane focused. A viewed work pane puts the repository on the 20 second hot tier; focusing only the sidebar leaves it on the 5 minute idle tier. Every call the host made is in `"$SHIM/gh.calls"`. Capture the sidebar with escapes kept, so the tones show:
+
+```sh
+tmux -S "$ROOT/runtime/rimz/tmux/server" capture-pane -p -e -t %0
+```
+
+With `CONFLICTING`, the `#probe` header ends in `↯ main`. That marker and the cockpit `⑃` glyph both take the `caution` tone (`38;2;250;161;79` under the default theme), the count after the glyph keeps the body tone, and the group in `rimz sidebar snapshot --json --no-produce` ([Inspect the data behind a card](#inspect-the-data-behind-a-card)) carries `"pr_conflicting": true`. Write `MERGEABLE` to `"$SHIM/mode"` and the next probe returns the header to `⑃ main` in blue and the cockpit glyph to green, and the field leaves the group. In the run this recipe comes from, the change showed 12 seconds after the mode file changed.
+
 ## Fake an agent process in a shell pane
 
 A pane-binding check (which resume id a plain shell pane publishes, whether the pane reads as hosting an agent) needs a process under the room's shell whose command line names a provider. Perl's `$0` assignment rewrites the process's own `/proc/<pid>/cmdline`, so a sleeping Perl process reads as a resumed Codex to both the hosted-agent probe and the resume walk, with no provider installed. The Codex parse takes the token right after `codex resume` as the session id ([`crates/rimz/src/agents/adapters/codex/process.rs::codex_resumed_session_id_from_cmdline`](../../crates/rimz/src/agents/adapters/codex/process.rs)); a UUID keeps it realistic. Another provider's fake carries the resume syntax its own adapter parses.
