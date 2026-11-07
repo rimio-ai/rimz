@@ -431,15 +431,15 @@ Selecting an engaged card inserts its stats line below the meter and appends ent
 
 `[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the coarse age and cost on the stale line, clipping the description (and at the narrowest widths the handle) to leave at least two blank cells before the age. The age's right edge sits two cells left of a 6-cell cost slot at the right edge, held even with no cost; a wider cost shifts the age left on that row only. The age uses the same own cache clock and tone as the meter's age pin, without a clock face; on a no-cache card the number stays, always muted. A keepalive refreshes the number without reopening the card; child activity still postpones shrinking but never refreshes the displayed age.
 
-Message marks sit at the right of the description, pen first, then the queued-message glyph and count, separated by one space. No mark reserves space when it does not apply. Description text clips before the marks; on an ask's last line, the text shortens with `…` before its intact ` +N` and the marks. The marks never add a line or change an ask's wrapping height, and never appear on process rows.
+Message marks sit on the description's last line, right-aligned with the context meter's percentage: pen first, then the queued-message glyph and count, separated by one space. No mark reserves space when it does not apply. Description text clips before the marks; on an ask's last line, the text shortens with `…` before its intact ` +N` and the marks. The marks never add a line or change an ask's wrapping height, and never appear on process rows.
 
-On cards without a description slot (compact idle and fresh unlabeled cards, including selected fresh cards), the marks sit just before the cost. On stale one-line cards they sit left of the age, keeping its column and two-cell gap. Below 32 pane columns the queued count drops but both glyphs remain. On identity-only and stale cards, if even the glyphs cannot fit beside the full handle and cost, they drop rather than shortening the handle. The pen is accent-colored, the queued glyph muted, and the count body text; their shapes remain distinct under `NO_COLOR`.
+On cards without a description slot (compact idle and fresh unlabeled cards, including selected fresh cards), the marks use the same percentage column. If the right-pinned cost or a stale card's age takes that column, they yield left: one blank cell before the cost or two before the age. The cost and age keep their columns. Below 32 pane columns the queued count drops but both glyphs remain. On identity-only and stale cards, if even the glyphs cannot fit beside the full handle and cost, they drop rather than shortening the handle. The pen is accent-colored, the queued glyph muted, and the count body text; their shapes remain distinct under `NO_COLOR`.
 
 This [46-column frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__message_marks_unicode_false_both.snap) shows both marks, with the description yielding first:
 
 ```text
 ▌⣾ coder                                $1.27▐
-▌  store refactor with a very long desc ✎ ↧ 3▐
+▌  store refactor with a very lon ✎ ↧ 3      ▐
 ▌  ▢ ────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                       ▐
 ```
