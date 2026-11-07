@@ -231,6 +231,18 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
         let before = jiff::Timestamp::now().as_millisecond();
         let value = advance(&room, &record);
         assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        let skipped = "workflow review: 1 of 1 agents open (@codex)";
+        assert_eq!(
+            value["record"]["attempt"]["started_past_limit"], skipped,
+            "{value:#}"
+        );
+        let shown = success(
+            room.command(&["workflow", "show", record.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+        let notice = format!("{skipped}; started anyway: manual starts do not wait");
+        assert!(shown.contains(&notice), "{shown}");
         let stagger = room.env.rimz_home().join("loops/start-stamps.json");
         assert!(
             stagger.is_file(),
@@ -269,7 +281,58 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
                 .output()
                 .unwrap(),
         );
+        let value = show(&room.env, record.id.as_str());
+        assert!(
+            events(&value, "attempt")
+                .iter()
+                .any(|row| row["started_past_limit"] == skipped),
+            "{value:#}"
+        );
+        let history = success(
+            room.command(&["workflow", "show", record.id.as_str(), "--history"])
+                .output()
+                .unwrap(),
+        );
+        assert!(history.contains(&notice), "{history}");
     }
+}
+
+#[test]
+fn limited_manual_starts_under_a_clear_cap_store_and_print_no_skip() {
+    let room = Room::new("[steps.build.limit]\nmax-parallel=1\n");
+    let record = pending(&room, None);
+    let value = advance(&room, &record);
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+    assert!(
+        value["record"]["attempt"]
+            .get("started_past_limit")
+            .is_none(),
+        "{value:#}"
+    );
+    let shown = success(
+        room.command(&["workflow", "show", record.id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    assert!(!shown.contains("started anyway"), "{shown}");
+    success(
+        room.command(&["workflow", "cancel", record.id.as_str()])
+            .output()
+            .unwrap(),
+    );
+    let value = show(&room.env, record.id.as_str());
+    assert!(
+        events(&value, "attempt")
+            .iter()
+            .all(|row| row.get("started_past_limit").is_none()),
+        "{value:#}"
+    );
+    let history = success(
+        room.command(&["workflow", "show", record.id.as_str(), "--history"])
+            .output()
+            .unwrap(),
+    );
+    assert!(!history.contains("started anyway"), "{history}");
 }
 
 #[test]

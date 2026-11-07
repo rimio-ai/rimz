@@ -596,6 +596,63 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
 }
 
 #[test]
+fn manual_claims_carry_only_the_limit_they_skipped() {
+    let mut actual = Vec::new();
+    for scenario in ["full", "clear", "unreadable", "stagger", "unlimited"] {
+        let fake = FakeHost::new();
+        let mut manual = limited(None, Some("max-parallel=1\nstagger='10m'"));
+        manual.limits.as_mut().unwrap().may_wait = false;
+        if scenario == "full" {
+            let (record, leader) = attempt("/repo", "build", StepLifecycle::Turn);
+            install(&fake, record, vec![leader]);
+        }
+        if scenario == "unreadable" || scenario == "unlimited" {
+            let (record, _) = attempt("/repo", "build", StepLifecycle::Turn);
+            fake.workflows.lock().unwrap().push(record);
+            fake.rooms
+                .lock()
+                .unwrap()
+                .insert(workspace().to_string(), Err("broken room".into()));
+        }
+        if scenario == "unlimited" {
+            manual.limits.as_mut().unwrap().step_limit = None;
+        }
+        if scenario == "stagger" {
+            let first = turn(try_admit_in(&fake.host(), &config(""), &manual).unwrap());
+            assert!(first.started_past_limit().is_none());
+            first.report_launch(&workspace(), &"manual".into());
+            drop(first);
+            for path in ticket_paths(&fake.queue_dir()).unwrap() {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let admitted = turn(
+            try_admit_in(
+                &fake.host(),
+                &config("max-parallel-agents=1\ncheck='capacity'"),
+                &manual,
+            )
+            .unwrap(),
+        );
+        actual.push((scenario, admitted.started_past_limit().map(str::to_owned)));
+        assert!(fake.checked_groups().is_empty());
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                "full",
+                Some("step build: 1 of 1 agents open (@claude)".into())
+            ),
+            ("clear", None),
+            ("unreadable", None),
+            ("stagger", Some("step build: next start in 10m".into())),
+            ("unlimited", None),
+        ]
+    );
+}
+
+#[test]
 fn limits_manual_claims_never_wait_and_restart_workflow_stagger() {
     let fake = FakeHost::new();
     let (record, leader) = attempt("/repo", "build", StepLifecycle::Turn);

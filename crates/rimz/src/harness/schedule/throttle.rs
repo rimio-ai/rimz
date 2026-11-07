@@ -399,14 +399,15 @@ pub(super) fn try_admit_in(
     let turn = {
         let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
         let now = host.now_ms();
-        if let Some(hold) = pass(host.as_ref(), config, run, None, now, &mut None)? {
-            return Ok(Attempt::Held(hold));
-        }
+        let started_past_limit = match pass(host.as_ref(), config, run, None, now, &mut None)? {
+            Pass::Admitted(note) => note,
+            Pass::Held(hold) => return Ok(Attempt::Held(hold)),
+        };
         let path = paths::loop_throttle_ticket_in(&host.queue_dir(), now);
         let mut ticket = Ticket::new(host.as_ref(), run, now);
         ticket.state = TicketState::Admitted;
         write_ticket(&path, &ticket)?;
-        Turn::new(host, path)
+        Turn::new(host, path, started_past_limit)
     };
     match check_groups(host.as_ref(), config, run, false)? {
         Some(hold) => Ok(Attempt::Held(hold)),
@@ -430,7 +431,9 @@ pub(super) fn try_admit_in(
                     Some(&turn.0.ticket),
                     host.now_ms(),
                     &mut None,
-                )? {
+                )?
+                .hold()
+                {
                     return Ok(Attempt::Held(hold));
                 }
             }
@@ -451,7 +454,7 @@ pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Re
     }
     {
         let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-        if let Some(hold) = pass(host, config, run, None, host.now_ms(), &mut None)? {
+        if let Some(hold) = pass(host, config, run, None, host.now_ms(), &mut None)?.hold() {
             return Ok(Some(hold));
         }
     }
@@ -460,7 +463,7 @@ pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Re
         return Ok(hold);
     }
     let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-    pass(host, config, run, None, host.now_ms(), &mut None)
+    Ok(pass(host, config, run, None, host.now_ms(), &mut None)?.hold())
 }
 
 /// The latest capacity-check errors, read without running a check or taking a turn.
@@ -737,6 +740,7 @@ pub struct Turn(Arc<TurnInner>);
 struct TurnInner {
     host: Arc<dyn Host>,
     ticket: PathBuf,
+    started_past_limit: Option<String>,
     reported: AtomicBool,
 }
 
@@ -749,10 +753,15 @@ impl fmt::Debug for Turn {
 }
 
 impl Turn {
-    fn new(host: &Arc<dyn Host>, ticket: PathBuf) -> Self {
+    pub(in crate::harness) fn started_past_limit(&self) -> Option<&str> {
+        self.0.started_past_limit.as_deref()
+    }
+
+    fn new(host: &Arc<dyn Host>, ticket: PathBuf, started_past_limit: Option<String>) -> Self {
         Self(Arc::new(TurnInner {
             host: Arc::clone(host),
             ticket,
+            started_past_limit,
             reported: AtomicBool::new(false),
         }))
     }
@@ -877,7 +886,7 @@ pub(super) fn admit(
         enqueue(host.as_ref(), run, enqueued_ms)?
     };
     // From here an early return drops the turn, which removes the ticket.
-    let turn = Turn::new(host, path.clone());
+    let turn = Turn::new(host, path.clone(), None);
     let expired = |now| run.gives_up_ms.is_some_and(|until| now >= until);
     let skipped = |reason: &str| {
         Ok(Admission::Skipped {
@@ -926,7 +935,7 @@ pub(super) fn admit(
             if !run.machine_gated && !caps(&config) && run.limits.is_none() {
                 return Ok(Admission::Open);
             }
-            pass(host.as_ref(), &config, run, Some(&path), now, &mut blocked)?
+            pass(host.as_ref(), &config, run, Some(&path), now, &mut blocked)?.hold()
         };
         if hold.is_none() {
             hold = check_groups(
@@ -944,7 +953,8 @@ pub(super) fn admit(
                     Some(&path),
                     host.now_ms(),
                     &mut None,
-                )?;
+                )?
+                .hold();
             }
             if let Some(hold) = &hold {
                 let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
@@ -1031,9 +1041,22 @@ pub(in crate::harness) fn check_group_size(config: &ThrottleConfig, run: &Run) -
     Ok(())
 }
 
-/// One pass over the queue, under its lock: `None` admits the ticket at
-/// `mine`, and a hold is what it waits on. Without `mine`, inspect the tail
-/// without changing it.
+enum Pass {
+    Admitted(Option<String>),
+    Held(Hold),
+}
+
+impl Pass {
+    fn hold(self) -> Option<Hold> {
+        match self {
+            Self::Admitted(_) => None,
+            Self::Held(hold) => Some(hold),
+        }
+    }
+}
+
+/// One pass over the queue, under its lock. A manual admission carries the limit
+/// it skipped. Without `mine`, inspect the tail without changing it.
 fn pass(
     host: &dyn Host,
     config: &ThrottleConfig,
@@ -1041,17 +1064,29 @@ fn pass(
     mine: Option<&Path>,
     now: u64,
     blocked: &mut Option<(u64, Hold)>,
-) -> Result<Option<Hold>> {
-    if run.limits.as_ref().is_some_and(|start| !start.may_wait) {
-        return Ok(None);
+) -> Result<Pass> {
+    let manual = run.limits.as_ref().is_some_and(|start| !start.may_wait);
+    if manual
+        && run
+            .limits
+            .as_ref()
+            .is_some_and(|start| start.workflow_limit.is_none() && start.step_limit.is_none())
+    {
+        return Ok(Pass::Admitted(None));
     }
-    check_group_size(config, run)?;
+    if !manual {
+        check_group_size(config, run)?;
+    }
     let ceiling = if config.check.is_some() {
         CHECK_CEILING
     } else {
         TURN_CEILING
     };
-    let queue = sweep(host, Some(ceiling), now)?;
+    let queue = match sweep(host, Some(ceiling), now) {
+        Ok(queue) => queue,
+        Err(_) if manual => return Ok(Pass::Admitted(None)),
+        Err(error) => return Err(error),
+    };
     let position = match mine {
         Some(mine) => queue
             .iter()
@@ -1069,14 +1104,20 @@ fn pass(
         .limits
         .as_ref()
         .and_then(|start| match launching(&queue, &ticket, mine) {
-            0 => limits::evaluate(
+            0 => match limits::evaluate(
                 host,
                 start,
                 run.groups.iter().map(|group| group.agents).sum(),
-            )
-            .unwrap_or_else(|error| Some(store_hold(error))),
+            ) {
+                Ok(hold) => hold,
+                Err(_) if manual => None,
+                Err(error) => Some(store_hold(error)),
+            },
             count => Some(limits::launching(start, count)),
         });
+    if manual {
+        return Ok(Pass::Admitted(hold.map(|hold| hold.text)));
+    }
     if hold.is_none() && run.machine_gated {
         hold = queue_hold(&queue, position, &ticket);
     }
@@ -1124,7 +1165,10 @@ fn pass(
     {
         hold.kinds = run.kinds();
     }
-    Ok(hold)
+    Ok(match hold {
+        Some(hold) => Pass::Held(hold),
+        None => Pass::Admitted(None),
+    })
 }
 
 fn launching(queue: &[(PathBuf, Ticket)], mine: &Ticket, path: Option<&Path>) -> usize {

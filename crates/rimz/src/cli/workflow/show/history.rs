@@ -210,6 +210,7 @@ impl View<'_> {
                 JournalEvent::Attempt {
                     outcome,
                     visit,
+                    started_past_limit,
                     started_at,
                     ended_at,
                     handle,
@@ -261,6 +262,9 @@ impl View<'_> {
                     }
                     if let Some(log) = log {
                         writeln!(out, "    log: {}", log.display())?;
+                    }
+                    if let Some(text) = started_past_limit {
+                        writeln!(out, "    {text}; started anyway: manual starts do not wait")?;
                     }
                     if let Some(reason) = reason {
                         prose(out, &format!("reason: {reason}"), "    ")?;
@@ -765,6 +769,7 @@ mod tests {
             event: JournalEvent::Attempt {
                 outcome: records::AttemptOutcome::Ended,
                 visit: seq,
+                started_past_limit: None,
                 key: None,
                 routed_by: None,
                 digests: BTreeMap::from([("prompt.md".into(), format!("digest-{seq}"))]),

@@ -626,6 +626,7 @@ impl Transition<'_> {
                 JournalEvent::Attempt {
                     outcome: previous.outcome,
                     visit: previous.visit,
+                    started_past_limit: attempt.started_past_limit.clone(),
                     key: previous.key.clone(),
                     routed_by: previous.routed_by.clone(),
                     digests: attempt.digests.clone(),

@@ -290,6 +290,8 @@ pub struct LiveAttempt {
     pub node: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_past_limit: Option<String>,
     pub started_at: Timestamp,
     pub host: Host,
     #[serde(default)]
@@ -675,6 +677,8 @@ pub enum JournalEvent {
     Attempt {
         outcome: AttemptOutcome,
         visit: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_past_limit: Option<String>,
         key: Option<Key>,
         #[serde(default)]
         routed_by: Option<String>,

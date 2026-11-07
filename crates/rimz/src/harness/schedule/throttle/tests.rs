@@ -374,6 +374,7 @@ fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Admi
 fn step(fake: &FakeHost, config: &ThrottleConfig, run: &Run, ticket: &Path) -> Option<String> {
     pass(fake, config, run, Some(ticket), fake.now_ms(), &mut None)
         .expect("pass")
+        .hold()
         .map(|hold| hold.text)
 }
 
@@ -900,7 +901,8 @@ fn capacity_queued_same_kind_waiters_do_not_block_other_kinds() {
             fake.now_ms(),
             &mut None,
         )
-        .unwrap();
+        .unwrap()
+        .hold();
         assert!(hold.is_some(), "the second Claude start must wait");
         let mut codex = run("codex");
         codex.groups[0].kind = AgentKind::new_unchecked("codex");

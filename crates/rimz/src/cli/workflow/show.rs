@@ -73,6 +73,13 @@ pub(super) fn render(
     }
     view.now_line(&run.state, &mut out)?;
     view.origin(&mut out)?;
+    if let Some(text) = run
+        .record
+        .session_attempt()
+        .and_then(|attempt| attempt.started_past_limit.as_deref())
+    {
+        writeln!(out, "{text}; started anyway: manual starts do not wait")?;
+    }
     if run.record.state == RunState::Active {
         if let Some(asking) = workflow_view::asking(&run.record) {
             prose(&mut out, &asking.ask.text, "  ")?;
