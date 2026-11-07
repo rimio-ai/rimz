@@ -152,7 +152,7 @@ max-visits:  3
 ```sh
 rimz workflow list         # every active and parked run, with progress and what it waits on
 rimz workflow show "$RUN"  # one run: painted graph, next moves, and a short trail
-rimz workflow show "$RUN" --history  # every check and attempt, when you need the evidence
+rimz workflow show "$RUN" --history  # checks and attempts, repeats folded; --json keeps every entry
 rimz workflow show fix-tests  # definition rail, then live runs
 ```
 
@@ -209,7 +209,7 @@ Use `then = ["tests", "review"]` to put a cheap check before a costly judge with
 
 A child check's push-back names the check that actually answered, including a later listed check. Its `reason`, when present, comes before `output: <path> (<size label>)`: script stderr or shell output at `<seq>.check.log`, or the judge's whole saved answer at `<seq>.check.json`. An empty or missing file reads `no output`. The prompt never copies a tail or file content; condition explanations stay unchanged.
 
-Set `keep = true` on a `turn` or `until` agent step to leave its leader and companions open outside the run when the attempt finishes naturally. The workflow moves on and no longer owns those agents. With `turn`, a check that returns to the step leaves the old agent beside the next launch; normal occupancy still applies, and `takeover = true` may stop that old agent once idle. Cancel, restart, deadline, timeout, and a push-back cap that parks the run still stop the layout. A cap routed to another node detaches it instead. `keep` defaults to false; on `stay` steps and non-agent nodes it warns and is ignored.
+Set `keep = true` on a `turn` or `until` agent step to leave its leader and companions open outside the run when the attempt finishes naturally. The workflow moves on and no longer owns those agents. With `turn`, a check that returns to the step leaves the old agent beside the next launch; normal occupancy still applies, and `takeover = true` may stop that old agent once idle. Cancel, restart, deadline, a turn step's timeout, and a push-back cap that parks the run still stop the layout. A cap routed to another node detaches it instead. `keep` defaults to false; on `stay` steps and non-agent nodes it warns and is ignored.
 
 To leave time for another turn before an `until` session closes, give the closing route a delay:
 
@@ -454,7 +454,7 @@ A run started by a condition loop task stays finished, even while its condition 
 
 An active or parked workflow run holds its checkout even between steps with no agent there, so automatic cleanup and sweeping leave it in place. When you are done with the run and worktree, `rimz worktree remove feat-x` removes the tree. It refuses while an unfinished run holds it, while the tree has uncommitted changes, while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. For a run, the fix is `rimz workflow cancel <run-id>`, or `--force`, which also cancels unfinished runs after removing their checkout. Their history records `worktree removed`. A failed cancellation prints the fix and exits non-zero; the tree stays removed. A check runs in the checkout, so files your suite writes there (a `__pycache__/`, a coverage report) count as changes unless `.gitignore` covers them. `--force` removes it anyway and deletes those commits with the branch. `rimz worktree merge` can still land a run's work without removing its checkout. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
 
-A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A finished run leaves `rimz workflow list`, and `rimz workflow show` still reads it for seven days. After that, RimZ's garbage collection removes its run directory. `rimz reset` keeps run directories, and `rimz reset --hard` removes them.
+A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A finished run leaves `rimz workflow list`, and `rimz workflow show` still reads it for seven days. After that, its run directory becomes eligible for garbage collection and is removed at the next sweep, which runs about once a day per open room. `rimz reset` keeps run directories, and `rimz reset --hard` removes them.
 
 ## Start runs from a loop
 
