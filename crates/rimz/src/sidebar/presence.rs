@@ -38,9 +38,17 @@ const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
 /// consecutive publishes rejected with this code mute the losing writer.
 pub const STALE_WRITER_EXIT_CODE: i32 = 73;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZellijWakeReason {
-    Input { client_id: u32, last_input_ms: u64 },
+    Input {
+        client_id: u32,
+        last_input_ms: u64,
+    },
+    Mode {
+        client_id: u32,
+        mode: String,
+        at_ms: u64,
+    },
     Announced,
     Alive,
     FocusStranded,
@@ -92,6 +100,8 @@ pub enum ZellijWakeOutcome {
 pub enum ZellijWakeError {
     #[error("could not retain Zellij client input: {0}")]
     ClientInput(#[from] crate::mux::zellij::pane_topology::ClientInputWriteError),
+    #[error("could not retain Zellij client mode: {0}")]
+    ClientMode(#[from] crate::mux::zellij::pane_topology::ClientModeWriteError),
     #[error("could not serialize topology writer selection: {0}")]
     TopologyLock(#[from] crate::disk::lock::LockErr),
     #[error("could not publish accepted topology: {0}")]
@@ -125,6 +135,22 @@ pub fn ingest_zellij_wake(
                 session,
                 client_id,
                 last_input_ms,
+            )?;
+        }
+        return Ok(ZellijWakeOutcome::Accepted {
+            events: Vec::new(),
+            panes_observed_at_ms: None,
+        });
+    }
+    if let ZellijWakeReason::Mode {
+        client_id,
+        mode,
+        at_ms,
+    } = &wake.reason
+    {
+        if let Some(session) = wake.session_name.as_deref() {
+            crate::mux::zellij::pane_topology::write_client_mode(
+                runtime, session, *client_id, mode, *at_ms,
             )?;
         }
         return Ok(ZellijWakeOutcome::Accepted {

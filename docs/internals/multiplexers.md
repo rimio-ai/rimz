@@ -350,7 +350,11 @@ The backends bind the chords differently:
 
 Zellij runs one presence replica per `(plugin, client)`, not one wasm instance per session. Each replica installs its own client's runtime keymap, targets its own plugin id, and replays applied configuration on an observed increase in connected clients. Native style adds its two bindings to `locked` and `normal` without clearing. RimZ style clears `locked`, `tmux`, `resize`, `move`, `scroll`, `entersearch`, and `search`, removing both old RimZ keys and user keys in those modes. Prefix actions append a switch to locked; resize and move stay in their modes. Fixed vi-like scroll/search tables and a floating `rimz keys --wait` help pane complete the map. The user's `config.kdl` is unchanged. Switching back to native on an attached client restores the full stock/user map only at its next attach.
 
-Indexed command bindings use `rimz:key`; the plugin forks its configured binary plus the indexed argv only when granted and unmuted. Palette bindings reserve `rimz:palette` for the palette integration. The wire carries `report_modes`, currently false; installing keys emits no mode wakes.
+Indexed command bindings use `rimz:key`; the plugin forks its configured binary plus the indexed argv only when granted and unmuted. Palette bindings reserve `rimz:palette` for the palette integration. The wire requests `report_modes` only for RimZ style; native style never forks mode wakes.
+
+Per-client `RoomMode` observations travel with client presence, then into the pane frame and sidebar snapshot as `client_modes`. Only Prefix, Resize, Move and Scrollback have entries; absence means normal. tmux samples `client_key_table` and `pane_mode` in its existing `list-clients` call: `rimz-prefix`, `rimz-resize` and `rimz-move` name their modes, while `copy-mode` takes precedence as Scrollback. Zellij replicas subscribe to their own client's `ModeUpdate` and fork `sidebar wake --reason mode --session-name S --client-id N --mode WORD --at-ms T` on changes without throttling. The host maps `tmux` to Prefix, `resize` and `move` directly, and `scroll`, `search` and `entersearch` to Scrollback; other words mean normal. The first grant publishes normal, clearing a stale lane for a reused client id. Per-client stamps strictly increase across same-millisecond changes, and a locked lane CAS prevents reordered wake children from undoing a newer observation, including normal. Mode wakes emit no sidebar event and do not depend on topology-writer authority.
+
+Modes reach the frame on the next pane produce: one data tick while watched (a 1 s floor), or the 5 s backstop otherwise. A visit shorter than a tick can go unseen; a stuck mode stays published until it changes. This wave publishes observations only, without adding sidebar mode chrome.
 
 ### Palette popups
 
@@ -680,7 +684,7 @@ The engine returns effects instead of performing them: `RunCommand`, `HideSelf`,
 
 ### What it publishes
 
-The plugin subscribes to eleven Zellij events: `PaneUpdate`, `TabUpdate`, `CommandChanged`, `CwdChanged`, `PaneClosed`, `Timer`, `PermissionRequestResult`, `RunCommandResult`, `SessionUpdate`, `ListClients`, and `UserAction`.
+The plugin always subscribes to eleven Zellij events: `PaneUpdate`, `TabUpdate`, `CommandChanged`, `CwdChanged`, `PaneClosed`, `Timer`, `PermissionRequestResult`, `RunCommandResult`, `SessionUpdate`, `ListClients`, and `UserAction`. A keymap requesting `report_modes` adds `ModeUpdate`, covered by the existing `ReadApplicationState` grant.
 
 Everything it publishes goes one way, as a fire-and-forget `run_command` fork of `rimz sidebar wake --reason <reason>` (`wire::WakeRequest`):
 

@@ -205,6 +205,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         viewed_panes: Vec::new(),
         client_views: Vec::new(),
         typing_until: Default::default(),
+        client_modes: Vec::new(),
         pane_session_name: None,
         presence: None,
         truth_degraded: None,

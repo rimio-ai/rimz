@@ -487,6 +487,26 @@ fn untracked_kinds_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn client_modes_are_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut right = left.clone();
+    right.client_modes.push(crate::pane::ClientRoomMode {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        mode: crate::pane::RoomMode::Prefix,
+    });
+    let mut changed = right.clone();
+    changed.client_modes[0].mode = crate::pane::RoomMode::Resize;
+    assert_eq!(
+        [
+            same_snapshot_content(&left, &right),
+            same_snapshot_content(&right, &changed),
+            same_snapshot_content(&right, &left),
+        ],
+        [false; 3]
+    );
+}
+
+#[test]
 fn throttle_notices_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();

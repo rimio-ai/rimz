@@ -144,6 +144,25 @@ fn input_wakes_ignore_topology_authority_and_keep_the_newest_clock() {
     assert!(read_pane_topology_cache(&runtime, "rimz-test").is_none());
 }
 
+#[test]
+fn mode_wakes_ignore_topology_and_emit_no_sidebar_event() {
+    let (_dir, state, runtime) = paths();
+    let _held = crate::disk::lock::WorkspaceLock::acquire(&runtime.topology_writer_lock()).unwrap();
+    let incoming = wake(ZellijWakeReason::Mode {
+        client_id: 7,
+        mode: "tmux".into(),
+        at_ms: 1234,
+    });
+    let result = ingest_zellij_wake(&state, &runtime, &incoming);
+    let bytes =
+        std::fs::read(runtime.zellij_client_mode_paths("rimz-test", 7).0).unwrap_or_default();
+    let record: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    assert_eq!(record["mode"], "tmux");
+    assert!(
+        matches!(result, Ok(ZellijWakeOutcome::Accepted { ref events, panes_observed_at_ms: None }) if events.is_empty())
+    );
+}
+
 fn boundary_topology(produced_at_ms: u64) -> PaneTopologyCache {
     let mut cache = topology(produced_at_ms, Some(writer(1, 100)));
     cache.panes = vec![

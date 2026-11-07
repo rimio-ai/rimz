@@ -601,8 +601,8 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_place_and_row_stamp_contract_is_version_88() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 88);
+fn snapshot_place_and_row_stamp_contract_is_version_89() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 89);
 }
 
 #[test]
@@ -651,6 +651,18 @@ fn pre_raised_snapshot_is_not_a_fresh_view() {
     paths.ensure_dirs().unwrap();
     let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
     legacy["snapshot_version"] = serde_json::json!(87);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(read_fresh_latest_cold(&paths).is_none());
+}
+
+#[test]
+fn pre_89_client_modes_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(88);
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
     assert!(read_fresh_latest_cold(&paths).is_none());
 }

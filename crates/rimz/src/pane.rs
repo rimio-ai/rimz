@@ -41,6 +41,22 @@ pub(crate) fn attended_until(
         .max()
 }
 
+/// A non-normal room mode; normal is represented by an absent client entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMode {
+    Prefix,
+    Resize,
+    Scrollback,
+    Move,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientRoomMode {
+    pub client_id: MuxClientId,
+    pub mode: RoomMode,
+}
+
 impl Ord for ClientPaneView {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.client_id

@@ -1,7 +1,7 @@
 use super::*;
 use crate::ids::MuxClientId;
 use crate::mux::{ClientPresence, ClientView};
-use crate::pane::ClientPaneView;
+use crate::pane::{ClientPaneView, ClientRoomMode, RoomMode};
 use std::collections::BTreeMap;
 
 #[cfg(target_os = "linux")]
@@ -20,9 +20,10 @@ fn unfocused_terminals_keep_topology_and_afk_evidence_but_are_not_typing_viewers
             human_clients: 1,
             client_input_ms: clocks.clone(),
             unfocused_clients: [client].into(),
+            ..Default::default()
         },
     };
-    let (viewed, clients, presence, fresh) =
+    let (viewed, clients, _modes, presence, fresh) =
         frame_client_view(None, None, MuxName::Tmux, || Ok(view.clone()));
     let presence = presence.unwrap();
     assert_eq!(
@@ -54,19 +55,24 @@ fn frame_client_samples_carry_clocks_from_pushed_direct_and_prior_views() {
     let clocks = BTreeMap::from([(client.clone(), 1_000)]);
     let view = ClientView {
         clients: vec![ClientPaneView {
-            client_id: client,
+            client_id: client.clone(),
             pane_id: pane_id.clone(),
         }],
         viewed_panes: vec![pane_id],
         presence: ClientPresence {
             human_clients: 1,
             client_input_ms: clocks.clone(),
+            client_modes: BTreeMap::from([(client.clone(), RoomMode::Prefix)]),
             ..Default::default()
         },
     };
     let mut prior = frame(Vec::new());
     prior.client_views = view.clients.clone();
     prior.viewed_panes = view.viewed_panes.clone();
+    prior.client_modes = vec![ClientRoomMode {
+        client_id: client,
+        mode: RoomMode::Prefix,
+    }];
     prior.presence = Some(PresenceSample {
         client_input_ms: clocks.clone(),
         client_views: view.clients.clone(),
@@ -86,12 +92,13 @@ fn frame_client_samples_carry_clocks_from_pushed_direct_and_prior_views() {
         frame_client_view(None, Some(&prior), MuxName::Zellij, unavailable),
         frame_client_view(None, Some(&prior), MuxName::Tmux, unavailable),
     ];
-    let actual = samples.map(|(viewed, clients, presence, fresh)| {
+    let actual = samples.map(|(viewed, clients, modes, presence, fresh)| {
         (
             presence.map(|sample| (sample.client_input_ms, sample.client_views)),
             fresh,
             clients == view.clients,
             viewed == view.viewed_panes,
+            modes == prior.client_modes,
         )
     });
     let mut legacy = serde_json::to_value(&prior).unwrap();
@@ -111,16 +118,24 @@ fn frame_client_samples_carry_clocks_from_pushed_direct_and_prior_views() {
                     Some((clocks.clone(), view.clients.clone())),
                     true,
                     true,
+                    true,
                     true
                 ),
                 (
                     Some((clocks.clone(), view.clients.clone())),
                     true,
                     true,
+                    true,
                     true
                 ),
-                (Some((clocks, view.clients.clone())), false, true, true),
-                (None, false, false, false),
+                (
+                    Some((clocks, view.clients.clone())),
+                    false,
+                    true,
+                    true,
+                    true
+                ),
+                (None, false, false, false, false),
             ],
             true
         )
@@ -166,7 +181,7 @@ fn reprobe_publishes_a_non_latest_clients_clock_without_changing_pane_pairs() {
             None,
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
-            &|_, _| Some(sample.clone()),
+            &|_, _| Some((sample.clone(), Vec::new())),
             &|_| None,
         )
         .unwrap();
@@ -228,7 +243,7 @@ fn reprobe_publishes_pane_switches_without_changing_topology_or_input_clocks() {
             None,
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
-            &|_, _| Some(sample.clone()),
+            &|_, _| Some((sample.clone(), Vec::new())),
             &|_| None,
         )
         .unwrap();
@@ -239,6 +254,88 @@ fn reprobe_publishes_pane_switches_without_changing_topology_or_input_clocks() {
     assert_eq!(published.viewed_panes, prior.viewed_panes);
     assert_eq!(published.focused_pane, prior.focused_pane);
     assert_eq!(published.client_view_fresh, prior.client_view_fresh);
+}
+
+#[test]
+fn reprobe_publishes_client_modes_while_reusing_fresh_topology() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        for input_at in [Some(1_000), None] {
+            let dir = tempfile::tempdir().unwrap();
+            let runtime = crate::RuntimePaths::under(
+                crate::WorkspaceId::from_project_root(dir.path()),
+                dir.path(),
+            )
+            .unwrap();
+            runtime.ensure_dirs().unwrap();
+            let clients = match mux {
+                MuxName::Tmux => [MuxClientId::Tmux("a".into()), MuxClientId::Tmux("b".into())],
+                MuxName::Zellij => [MuxClientId::Zellij(1), MuxClientId::Zellij(2)],
+            };
+            let mut prior = frame(vec![pane("terminal_1", None, Some("/repo"))]);
+            prior.produced_at_ms = unix_now_ms() + 60_000;
+            prior.presence = Some(presence_sample(2, input_at, 1));
+            let produced_at = prior.produced_at_ms;
+            atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
+            let mut producer = PaneProducer::seeded(&runtime, &prior.session_name);
+            for mode in [Some(RoomMode::Prefix), None] {
+                producer.presence_probed_at_ms = None;
+                Arc::make_mut(producer.prior.as_mut().unwrap())
+                    .presence
+                    .as_mut()
+                    .unwrap()
+                    .sampled_at_ms = 1;
+                let modes: BTreeMap<_, _> = mode
+                    .into_iter()
+                    .map(|mode| (clients[0].clone(), mode))
+                    .chain([(clients[1].clone(), RoomMode::Resize)])
+                    .collect();
+                let view = ClientView {
+                    presence: ClientPresence {
+                        human_clients: 2,
+                        client_input_ms: input_at
+                            .map(|at| (clients[0].clone(), at))
+                            .into_iter()
+                            .collect(),
+                        client_modes: modes.clone(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let result = producer
+                    .tick_with(
+                        &runtime,
+                        mux,
+                        &prior.session_name,
+                        None,
+                        None,
+                        &crate::diag::DiagSink::disabled(),
+                        &mut |_, _| panic!("mode sampling must reuse the fresh pane roster"),
+                        &|_, _| Some(presence_sample_from_client_view(&view)),
+                        &|_| None,
+                    )
+                    .unwrap();
+                let expected: Vec<_> = modes
+                    .into_iter()
+                    .map(|(client_id, mode)| ClientRoomMode { client_id, mode })
+                    .collect();
+                let published: PaneFrame =
+                    serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap())
+                        .unwrap();
+                assert_eq!(
+                    result.client_modes, expected,
+                    "returned frame: {mux:?} {input_at:?}"
+                );
+                assert_eq!(
+                    published.client_modes, expected,
+                    "published frame: {mux:?} {input_at:?}"
+                );
+                assert_eq!(
+                    published.produced_at_ms, produced_at,
+                    "mode changes must not refresh topology age"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -334,7 +431,7 @@ mod terminal_typing {
                     &mut |_, _| panic!("fresh prior must not list panes"),
                     &|_, _| {
                         reads.set(reads.get() + 1);
-                        Some(sample.clone())
+                        Some((sample.clone(), Vec::new()))
                     },
                     &|pane| self.ttys.get(&pane.pane_id).cloned(),
                 )
@@ -470,7 +567,7 @@ mod terminal_typing {
                 &mut |_, _| panic!("fresh prior must not list panes"),
                 &|_, _| {
                     lock_available.set(TypingRecord::update(&fixture.runtime, |_| {}).is_ok());
-                    Some(sample.clone())
+                    Some((sample.clone(), Vec::new()))
                 },
                 &|pane| fixture.ttys.get(&pane.pane_id).cloned(),
             )
@@ -497,7 +594,7 @@ mod terminal_typing {
                     None,
                     &crate::diag::DiagSink::disabled(),
                     &mut |_, _| panic!("fresh prior must not list panes"),
-                    &|_, _| Some(sample.clone()),
+                    &|_, _| Some((sample.clone(), Vec::new())),
                     &|pane| {
                         resolutions.set(resolutions.get() + 1);
                         fixture.ttys.get(&pane.pane_id).cloned()
@@ -523,7 +620,7 @@ mod terminal_typing {
                 None,
                 &crate::diag::DiagSink::disabled(),
                 &mut |_, _| panic!("fresh prior must not list panes"),
-                &|_, _| Some(sample.clone()),
+                &|_, _| Some((sample.clone(), Vec::new())),
                 &|pane| {
                     resolutions.set(resolutions.get() + 1);
                     fixture.ttys.get(&pane.pane_id).cloned()

@@ -155,6 +155,7 @@ pub(super) fn parse_client_view(
         viewed_panes,
         presence: ClientPresence {
             human_clients: client_ids.len(),
+            client_modes: Default::default(),
             client_input_ms: client_ids
                 .into_iter()
                 .filter_map(|id| Some((MuxClientId::Zellij(id), input_ms(id)?)))

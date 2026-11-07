@@ -1816,7 +1816,10 @@ impl TmuxBackend {
     }
 
     pub(super) fn client_view_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{client_name}|#{pane_id}|#{client_activity}|#{client_flags}";
+        let format = concat!(
+            "#{client_name}|#{pane_id}|#{client_activity}|",
+            "#{client_key_table}|#{pane_mode}|#{client_flags}",
+        );
         let mut spec = self.cmd().args(["list-clients", "-F", format]);
         if let Some(session) = session_name {
             spec = spec.args(["-t", session]);

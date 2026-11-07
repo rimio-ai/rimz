@@ -1573,7 +1573,8 @@ allowed-dependencies = [
 # StatePaths::notes_run resolves relative run folders within their lifetime class (+1).
 # RuntimePaths::typing_path and typing_lock_path class the pane-input record and lock (+2).
 # RuntimePaths::sidebar_closed_cards_path owns the CLI's runtime undo stack (+1).
-surface-budget = 328
+# RuntimePaths::zellij_client_mode_paths owns stamped per-client mode lanes (+1).
+surface-budget = 329
 
 [[verdict]]
 kind = "item"
@@ -3209,7 +3210,8 @@ path = "crates/rimz/src/mux"
 # ClientView::typing_clients narrows only Linux typing viewers by terminal focus (+1).
 # TypingView and its backend selector distinguish focus evidence from corroborating clocks (+2).
 # exclude_pane_input shares pane-write exclusions with the palette (+1).
-surface-budget = 337
+# write_client_mode and ClientModeWriteError share mode publication with wake ingestion (+2).
+surface-budget = 339
 
 [[verdict]]
 kind = "item"
@@ -3394,7 +3396,18 @@ path = "crates/rimz/src/mux/zellij"
 # Stable tab identity, five ownership-cache operations, session runtime lookup and layout birth recording (+8).
 # write_client_input and ClientInputWriteError retain input independently of topology election (+2).
 # The settings record shares typed option values and the client option projection (+2).
-surface-budget = 64
+# write_client_mode and ClientModeWriteError publish stamped modes outside topology election (+2).
+surface-budget = 66
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::write_client_mode"
+reason = "Host mode wakes publish raw per-client observations under a stamped lane CAS, outside topology election."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::ClientModeWriteError"
+reason = "Public wake-ingestion errors preserve typed mode-lane lock and publication failures."
 
 [[verdict]]
 kind = "item"
@@ -3421,7 +3434,18 @@ path = "crates/rimz/src/pane"
 # Canonical named-key inventory is also shared with CLI help.
 # PaneTitle, PaneTitleOrigin and the title's text/lead accessors and builders carry origin metadata (+6).
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
-surface-budget = 50
+# RoomMode and ClientRoomMode carry non-normal client modes without changing pane-view identity (+2).
+surface-budget = 52
+
+[[verdict]]
+kind = "item"
+key = "pane::RoomMode"
+reason = "Backends and persisted sidebar projections share one non-normal room-mode vocabulary; absence means normal."
+
+[[verdict]]
+kind = "item"
+key = "pane::ClientRoomMode"
+reason = "Frames and snapshots serialize modes as client-tagged entries because native client ids cannot be JSON map keys."
 
 [[verdict]]
 kind = "item"

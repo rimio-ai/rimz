@@ -70,6 +70,10 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         carried_panes: Vec::new(),
         viewed_panes: vec![pane_id.clone()],
         client_views: Vec::new(),
+        client_modes: vec![crate::pane::ClientRoomMode {
+            client_id: crate::ids::MuxClientId::Zellij(1),
+            mode: crate::pane::RoomMode::Prefix,
+        }],
         focused_pane: Some(pane_id.clone()),
         focus_origin: Default::default(),
         client_view_fresh: false,
@@ -80,6 +84,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
     let snapshot = fold_cached(snapshot, Some(&frame), &runtime);
 
     assert_eq!(snapshot.viewed_panes, vec![pane_id]);
+    assert_eq!(snapshot.client_modes, frame.client_modes);
     assert_eq!(
         snapshot.focused_pane,
         snapshot.viewed_panes.first().cloned()

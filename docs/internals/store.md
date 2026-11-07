@@ -230,6 +230,7 @@ lanes/{sidebar-width,sidebar-filter,unread,attention}.json renderer state
 lanes/closed-cards.json                      CLI-owned sidebar close undo, newest last, at most 32 agents
 lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
 lanes/zellij-input-<session-hash>-<client>.json per-client input clocks
+lanes/zellij-mode-<session-hash>-<client>.json stamped per-client mode observations
 lanes/room-settings.json                     asserted Zellij session and client settings
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
 lanes/typing.json                            Linux terminal-input timing and non-typing exclusions
@@ -243,6 +244,8 @@ lanes/hook-drainer-outages/<pid>              wrapper-held hook-drainer outage l
 The CLI alone reads and writes `lanes/closed-cards.json` for sidebar close/reopen. Its JSON array holds at most 32 agent entries, newest last, with `kind`, `agent_id`, optional `team`, `role` and `worktree` name, and `closed_at` in Unix milliseconds. A missing, unreadable or corrupt file reads as empty. Publication is last-writer-wins cache-write, and room reset, teardown and reboot discard it; losing the list loses only this undo path, not the retained sessions.
 
 The sidebar host alone writes `lanes/attention.json` on final framed folds, tracking each card's displayed top/calm crossing by launch id (row id without one), plus pane-keyed order/activity slots. A process inherits the exiting card's order stamp and its recorded last activity when the card had cooled or archived; a hot card's shell ages from the exit sighting. Enrichment only reads the record, deriving pending crossings and exits as the next reconciliation would. Like the other `lanes/` records, reset, teardown and reboot drop it; rows then fall back to birth stamps. Its schema, retention and cold-start rules are [attention stamps](./sidebar/state.md#attention-stamps).
+
+Zellij mode lanes hold `{session_name, client_id, mode, at_ms}` through `RuntimePaths::zellij_client_mode_paths`. Each lane has its own lock; only a newer observation replaces the record, using rename-atomic publication without fsync. Normal is stored too, fencing out an older mode wake that arrives after its closer. Readers join only attached clients, validate the session and client, and project the raw mode word into the non-normal `client_modes` vector on the pane frame and sidebar snapshot (snapshot version 89). Missing, corrupt, mismatched and normal records contribute no entry. These are runtime observations, not durable store events.
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:
 

@@ -29,7 +29,7 @@ pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String 
     if rimz {
         modes.extend(scroll_modes());
     }
-    json!({"report_modes":false, "commands":commands, "modes":modes})
+    json!({"report_modes":rimz, "commands":commands, "modes":modes})
         .to_string()
         .replace('%', "%25")
         .replace(',', "%2C")
@@ -229,7 +229,7 @@ mod tests {
         let wire = wire(
             "[room]\nstyle='rimz'\n[keys.bind.normal]\n\"Alt+,\"={run=\"rimz message @coder -- 'a,%2C=word'\"}",
         );
-        assert_eq!(wire["report_modes"], false);
+        assert_eq!(wire["report_modes"], true);
         let modes = wire["modes"].as_array().expect("mode array");
         assert_eq!(modes.len(), 7);
         assert!(modes.iter().all(|mode| mode["clear"] == true));

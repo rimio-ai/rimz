@@ -38,6 +38,7 @@ use validate::{
 use super::metrics::{MetricsSampleCache, read_metrics_sample_cache, write_metrics_sample_cache};
 
 type SettledResumes = HashMap<PaneId, (u32, jiff::Timestamp, String)>;
+type ClientSample = (PresenceSample, Vec<crate::pane::ClientRoomMode>);
 
 #[derive(Clone, Default)]
 struct PaneTtyPaths(HashMap<PaneId, (Option<u32>, Option<PathBuf>)>);
@@ -145,7 +146,7 @@ impl PaneProducer {
         own_pane: Option<&PaneId>,
         diag: &crate::diag::DiagSink,
         produce: &mut dyn FnMut(&mut FrameContext<'_>, Option<&PaneFrame>) -> Result<Accepted>,
-        sample_presence: &dyn Fn(MuxName, &str) -> Option<PresenceSample>,
+        sample_presence: &dyn Fn(MuxName, &str) -> Option<ClientSample>,
         tty_path: &dyn Fn(&PaneState) -> Option<PathBuf>,
     ) -> Result<Arc<PaneFrame>> {
         if let Some(panes) = super::pane_list_fixture()? {
@@ -313,9 +314,9 @@ fn observe_typing(
     frame: &PaneFrame,
     mux: MuxName,
     session: &str,
-    sample_presence: &dyn Fn(MuxName, &str) -> Option<PresenceSample>,
+    sample_presence: &dyn Fn(MuxName, &str) -> Option<ClientSample>,
     tty_paths: &PaneTtyPaths,
-) -> Option<PresenceSample> {
+) -> Option<ClientSample> {
     if !InputSource::uses_tty() {
         return None;
     }
@@ -374,7 +375,8 @@ fn observe_typing(
         tracing::debug!("cannot read clients for pending typing advances");
         return None;
     };
-    let typing_view = TypingView::for_mux(mux, &view.client_views, &view.client_input_ms);
+    let presence = &view.0;
+    let typing_view = TypingView::for_mux(mux, &presence.client_views, &presence.client_input_ms);
     if let Err(error) = TypingRecord::update(runtime, |record| {
         for (pane, sample) in samples {
             record.observe(
@@ -480,17 +482,27 @@ fn client_view(mux: MuxName, session: &str) -> Result<crate::mux::ClientView> {
     Ok(view)
 }
 
-fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> PresenceSample {
-    PresenceSample {
-        human_clients: view.presence.human_clients,
-        last_input_ms: view.presence.last_input_ms(),
-        client_input_ms: view.presence.client_input_ms.clone(),
-        client_views: view.typing_clients(),
-        sampled_at_ms: unix_now_ms(),
-    }
+fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> ClientSample {
+    (
+        PresenceSample {
+            human_clients: view.presence.human_clients,
+            last_input_ms: view.presence.last_input_ms(),
+            client_input_ms: view.presence.client_input_ms.clone(),
+            client_views: view.typing_clients(),
+            sampled_at_ms: unix_now_ms(),
+        },
+        view.presence
+            .client_modes
+            .iter()
+            .map(|(client_id, &mode)| crate::pane::ClientRoomMode {
+                client_id: client_id.clone(),
+                mode,
+            })
+            .collect(),
+    )
 }
 
-fn sample_client_presence(mux: MuxName, session: &str) -> Option<PresenceSample> {
+fn sample_client_presence(mux: MuxName, session: &str) -> Option<ClientSample> {
     client_view(mux, session)
         .ok()
         .map(|view| presence_sample_from_client_view(&view))
@@ -504,19 +516,21 @@ fn frame_client_view(
 ) -> (
     Vec<PaneId>,
     Vec<crate::pane::ClientPaneView>,
+    Vec<crate::pane::ClientRoomMode>,
     Option<PresenceSample>,
     bool,
 ) {
     if let Ok(view) = pushed.map_or_else(read, Ok) {
-        let presence = presence_sample_from_client_view(&view);
-        return (view.viewed_panes, view.clients, Some(presence), true);
+        let (presence, modes) = presence_sample_from_client_view(&view);
+        return (view.viewed_panes, view.clients, modes, Some(presence), true);
     }
     let Some(prior) = prior.filter(|_| mux == MuxName::Zellij) else {
-        return (Vec::new(), Vec::new(), None, false);
+        return (Vec::new(), Vec::new(), Vec::new(), None, false);
     };
     (
         prior.viewed_panes.clone(),
         prior.client_views.clone(),
+        prior.client_modes.clone(),
         prior.presence.clone(),
         false,
     )
@@ -1194,7 +1208,7 @@ impl FrameContext<'_> {
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
         // to a direct client sample.
-        let (viewed_panes, client_views, presence, client_view_resolved) =
+        let (viewed_panes, client_views, client_modes, presence, client_view_resolved) =
             frame_client_view(pushed_client_view, prior, self.mux, || {
                 client_view(self.mux, self.session)
             });
@@ -1214,6 +1228,7 @@ impl FrameContext<'_> {
                 prior,
             });
         frame.presence = presence;
+        frame.client_modes = client_modes;
         emit_frame_diagnostics(self.diag, diagnostics);
         let hibernated = hibernated_panes_for(&frame, self.native_tenants, self.hibernated_panes);
         *self.native_tenants = frame
@@ -1686,8 +1701,7 @@ fn presence_sample_due(frame: &PaneFrame, probe_at_ms: Option<u64>, now_ms: u64)
     let sampled_or_probed_at_ms = probe_at_ms
         .map(|probe_at_ms| probe_at_ms.max(sample.sampled_at_ms))
         .unwrap_or(sample.sampled_at_ms);
-    sample.last_input_ms.is_some()
-        && sample.human_clients > 0
+    sample.human_clients > 0
         && now_ms.saturating_sub(sampled_or_probed_at_ms) >= PRESENCE_SAMPLE_TTL.as_millis() as u64
 }
 
@@ -1703,8 +1717,10 @@ fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &Presen
     }
 }
 
-fn apply_presence_sample(frame: &mut PaneFrame, sample: PresenceSample) -> bool {
-    let changed = presence_meaningfully_changed(frame.presence.as_ref(), &sample);
+fn apply_presence_sample(frame: &mut PaneFrame, (sample, modes): ClientSample) -> bool {
+    let changed = presence_meaningfully_changed(frame.presence.as_ref(), &sample)
+        || frame.client_modes != modes;
+    frame.client_modes = modes;
     frame.presence = Some(sample);
     changed
 }

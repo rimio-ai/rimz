@@ -77,6 +77,50 @@ fn config() -> EngineConfig {
 }
 
 #[test]
+fn mode_changes_publish_per_client_unthrottled_even_when_topology_is_muted() {
+    let host = FakeHost::default();
+    let mut config = config();
+    config.keymap.as_mut().unwrap().report_modes = true;
+    let mut engine = Engine::new(0, config);
+    let loaded = engine.on_load(0, &host);
+    assert!(!reasons(&loaded).contains(&"mode"));
+    assert!(engine.on_mode_update("tmux", 0).is_empty());
+    let granted = engine.on_permission_granted(1, &host);
+    assert!(
+        reasons(&granted).contains(&"mode"),
+        "grant clears a reused client's mode: {granted:?}"
+    );
+    let mut modes = Vec::new();
+    engine.muted = true;
+    for (mode, at) in [("tmux", 10), ("tmux", 10), ("resize", 10), ("locked", 10)] {
+        for argv in run_commands(&engine.on_mode_update(mode, at)) {
+            if let Some(index) = argv.iter().position(|arg| arg == "--mode") {
+                modes.push((argv[index + 1].clone(), argv[argv.len() - 1].clone()));
+                assert!(!argv.iter().any(|arg| arg == "--topology"));
+            }
+        }
+    }
+    assert_eq!(
+        modes,
+        [
+            ("tmux".into(), "10".into()),
+            ("resize".into(), "11".into()),
+            ("locked".into(), "12".into())
+        ]
+    );
+}
+
+#[test]
+fn native_keymaps_never_publish_modes() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    let granted = engine.on_permission_granted(1, &host);
+    let changed = engine.on_mode_update("tmux", 2);
+    assert!(!reasons(&granted).contains(&"mode"));
+    assert!(!reasons(&changed).contains(&"mode"));
+}
+
+#[test]
 fn input_filters_clients_cli_and_hover_and_publishes_the_leading_edge() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
