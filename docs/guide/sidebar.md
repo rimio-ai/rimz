@@ -16,7 +16,7 @@ You never work *in* the sidebar. It has no reply box and no approve button. It r
 
 **The column reads; it does not drive.** It is one pane in your room running a renderer over the durable store those hooks write. Everything it writes is display: which cards you have read, its own heartbeat, and the status suffix on the mux tab names. Jumping focuses a pane exactly as your mux prefix would. Close the pane and every agent keeps working, `rimz sidebar repair` puts the column back, and a card that still needs you is still unread and still ranked when it returns.
 
-RimZ does act on agents from behind the column, in one place for its configured hands-off automation: auto-continue resumes a parked agent, idle compaction condenses a resting agent's context, auto-redeem spends a reset credit, and a crossed budget cap parks the work ([keep the fleet moving](./loops.md#keep-the-fleet-moving), [budgets](./budget.md)). Nothing else in the column touches an agent.
+RimZ does act on agents from behind the column, in one place for its configured hands-off automation: auto-continue resumes a parked agent, idle compaction condenses a resting agent's context, auto-redeem spends a reset credit, and a crossed budget cap parks the work ([keep the fleet moving](./loops.md#keep-the-fleet-moving), [budgets](./budget.md)). [Card commands you invoke](#card-commands-from-any-pane) can also stop or reopen an agent; the renderer itself remains read-only on the store.
 
 A card exists because a pane runs right now, so when the agent exits its card goes with it. The history stays in the store, behind `rimz agents show`, `rimz agents logs`, and [`rimz transcript`](../reference/cli/agents.md).
 
@@ -231,6 +231,18 @@ A card you have read stays read when its sidebar pane closes. Read state is shar
 The tab bar carries the same glance when the sidebar is off-screen. RimZ appends the most urgent work-unit glyph represented by the tab's panes to its existing name: `#feat !` for a failure, `#feat ?` for an ask, `#feat ⏸` for a provider pause, `#feat ⢿` while work is running, and `#feat ✓` for a clean finish in the last five minutes. Every teammate's pane reflects the team's verdict, even across tabs. The finish window starts at the board's `Done` flip for a completed staged team, or the latest member activity without a completed board (the solo agent's own activity). Without a recorded `Done` time, a completed board gets no `✓` suffix. Idle and sleeping tabs keep their bare names, and every mark except `✓` stays until the underlying state changes. The exact shapes and the naming rules behind them are in [the interface reference](../interface/sidebar.md#status-glyphs).
 
 That loop is the product. When you are off-screen, desktop, bell, and command notifications carry the same cues, and handlers or loops you wire can clear routine prompts before they reach you ([notifications](./notifications.md), [loops and schedules](./loops.md)).
+
+### Card commands from any pane
+
+Run `rimz sidebar walk next` or `walk prev` to focus the next visible card, wrapping through the column's current order. Add `--worktree` to visit the first card of the next or previous group. The walk includes visible shell and editor rows but skips child entries and folded-away rows; filters and a committed search narrow it. Selection moves on each command, even while the last focus jump is still landing, and the layout freeze holds the order steady.
+
+`rimz sidebar slot 3` reaches the card bearing the dim `3`, even through a filter or fold. Slots cover the whole room in pane-birth order, not current rank; the sidebar's `1`–`9` keys use those same slots. Closing a card renumbers later ones. `rimz sidebar last` returns to the card before the latest jump, even before that jump lands; repeating it toggles the pair immediately. Visiting the sidebar or a popup does not replace that history, and a host restart forgets it.
+
+`rimz sidebar filter needs-you --toggle` shows only cards waiting for you or reporting failure, including a parent lifted by its children. Paused and process rows stay out. The room-shared header reads `needs-you: N`, and the lens clears when nothing matches. Omit `--toggle` to set it without turning an already-active lens off.
+
+`rimz sidebar close` closes the highlighted card immediately, without confirmation: bound sessions stop like `rimz agents stop`, children first; agents without a bound session and process rows lose whatever runs in the pane. `rimz sidebar reopen` resumes the latest closed agent in a new focused tab, not its old tab. Only resumable root sessions with a saved conversation enter this undo list, capped at 32; process rows cannot reopen, and reset, room teardown or reboot forgets the list. A failed resume drops that entry so the next `reopen` can reach an older card. Stored session history remains available through `rimz agents resume`.
+
+These commands act on the sidebar highlight, held while you visit a non-card pane. They require attached clients to share one view; ambiguity is a no-op rather than a guessed target. Each accepts `--session-name S` for an invocation outside the room's directory. They add no default keys and print nothing on stdout. Full syntax, no-op reasons and exit codes are in [Sidebar cards](../reference/cli/sidebar.md).
 
 ## How the column is ordered
 

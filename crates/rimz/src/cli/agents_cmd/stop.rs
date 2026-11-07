@@ -138,7 +138,7 @@ pub(super) fn normalize_stop(
 /// The `-w` name that `agents <team>.<role> --continue` maps back to this seat's
 /// recorded worktree; `None` for a project-root seat or a worktree whose path
 /// that name does not reproduce.
-fn resume_worktree_name<'a>(
+pub(in crate::cli) fn resume_worktree_name<'a>(
     workspace: &rimz::ResolvedWorkspace,
     agent: &'a AgentState,
 ) -> Option<&'a str> {
@@ -155,6 +155,48 @@ fn resume_worktree_name<'a>(
     (path != normalize_path_lexical(&workspace.project_root)
         && normalize_path_lexical(&mapped) == path)
         .then_some(name)
+}
+
+pub(in crate::cli) fn offers_resume(
+    workspace: &rimz::ResolvedWorkspace,
+    agent: &AgentState,
+    stop: &TreeStop,
+) -> bool {
+    !stop.root_still_running()
+        && !agent.is_provider_subagent()
+        && agent.parent_agent_id.is_none()
+        && !agent.launch_depth.is_some_and(|depth| depth > 0)
+        && agent_session_resumable(
+            &agent.kind,
+            &agent.agent_id,
+            agent
+                .worktree_path
+                .as_deref()
+                .map_or(workspace.project_root.as_path(), Path::new),
+        )
+}
+
+pub(in crate::cli) fn resume_command(
+    reference: &str,
+    team_role: Option<(&str, &str)>,
+    worktree: Option<&str>,
+) -> Vec<String> {
+    let Some((team, role)) = team_role else {
+        return vec![
+            "agents".to_owned(),
+            "resume".to_owned(),
+            reference.to_owned(),
+        ];
+    };
+    let mut args = vec![
+        "agents".to_owned(),
+        format!("{team}.{role}"),
+        "--continue".to_owned(),
+    ];
+    if let Some(worktree) = worktree {
+        args.extend(["-w".to_owned(), worktree.to_owned()]);
+    }
+    args
 }
 
 pub(super) fn stop_agent(
@@ -206,33 +248,18 @@ pub(super) fn stop_agent(
             return stop.into_result(&rimz::address::agent_handle(live_agent, &peers, true));
         }
         let mut receipt = format!("stopped {label} ({})", live_agent.kind);
-        if !stop.root_still_running()
-            && !live_agent.is_provider_subagent()
-            && live_agent.parent_agent_id.is_none()
-            && !live_agent.launch_depth.is_some_and(|depth| depth > 0)
-            && agent_session_resumable(
-                &live_agent.kind,
-                &live_agent.agent_id,
-                live_agent
-                    .worktree_path
-                    .as_deref()
-                    .map_or(workspace.project_root.as_path(), Path::new),
-            )
-        {
-            let command = if let (Some(team), Some(role)) = (&live_agent.team, &live_agent.role) {
-                let spec = format!("{team}.{role}");
-                let mut args = vec!["rimz", "agents", &spec, "--continue"];
-                if let Some(name) = resume_worktree_name(workspace, live_agent) {
-                    args.extend(["-w", name]);
-                }
-                shlex::try_join(args)?
-            } else {
-                let name = live_agent
-                    .name
-                    .as_deref()
-                    .unwrap_or(live_agent.agent_id.as_str());
-                shlex::try_join(["rimz", "agents", "resume", &format!("@{name}")])?
-            };
+        if offers_resume(workspace, live_agent, &stop) {
+            let name = live_agent
+                .name
+                .as_deref()
+                .unwrap_or(live_agent.agent_id.as_str());
+            let args = resume_command(
+                &format!("@{name}"),
+                live_agent.team.as_deref().zip(live_agent.role.as_deref()),
+                resume_worktree_name(workspace, live_agent),
+            );
+            let command =
+                shlex::try_join(std::iter::once("rimz").chain(args.iter().map(String::as_str)))?;
             receipt.push_str(&format!("; resume: {command}"));
         }
         writeln!(out, "{receipt}")?;

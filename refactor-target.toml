@@ -1513,7 +1513,8 @@ allowed-dependencies = [
 # paths::PRICING_CACHE_VERSION ties the table schema to its versioned paths (+1).
 # StatePaths::notes_run resolves relative run folders within their lifetime class (+1).
 # RuntimePaths::typing_path and typing_lock_path class the pane-input record and lock (+2).
-surface-budget = 327
+# RuntimePaths::sidebar_closed_cards_path owns the CLI's runtime undo stack (+1).
+surface-budget = 328
 
 [[verdict]]
 kind = "item"
@@ -3969,7 +3970,7 @@ reason = "The CLI distinguishes issued actions, no-op refusals and exact close t
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::commands::CardTarget"
-reason = "Close targets carry a session key or process pane, never a channel-scoped handle."
+reason = "Close targets carry the row pane and an optional session key, never a channel-scoped handle."
 
 [[verdict]]
 kind = "item"
@@ -4589,7 +4590,9 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # `AgentsArgs::launch_verb` lets `rimz teams <name>` launch through the explicit
 # verb, past the bare-word live-agent refusal, without a caller flag (+1).
 # The launch module and shared placement leave the published CLI surface (-2).
-surface-budget = 23
+# Sidebar close/reopen share resume_command and resume_worktree_name with stop receipts (+2).
+# Sidebar close shares offers_resume with the stop receipt's eligibility gate (+1).
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
