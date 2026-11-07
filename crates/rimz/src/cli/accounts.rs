@@ -581,17 +581,31 @@ fn add(
         (false, true) => return Ok(()),
     };
     writeln!(out, "\nFinish setup: {setup}.")?;
-    // Choosing a setup hint must not gate account creation on room runtime health.
-    let in_room =
-        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
-            .ok()
-            .is_some_and(|workspace| rimz::room::require_live_mux(globals.mux, &workspace).is_ok());
-    let command = if in_room {
-        format!("rimz agents {kind} --account {name}")
-    } else {
-        login_command(&login, &ambient)
-    };
+    let command = start_command(&login, &ambient, in_live_room(globals));
     render::finish(writeln!(out, "  {command}"))
+}
+
+/// Whether a `rimz agents` launch from here reaches a running room. Choosing a
+/// hint must not gate the command on room runtime health, so a failure is `false`.
+fn in_live_room(globals: &GlobalFlags) -> bool {
+    rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .ok()
+        .is_some_and(|workspace| rimz::room::require_live_mux(globals.mux, &workspace).is_ok())
+}
+
+/// The command that starts `login`'s provider for the user to finish its
+/// setup: `rimz agents --account` for a named account in a live room, else
+/// the provider under the account's home overrides.
+fn start_command(
+    login: &ProviderLogin,
+    ambient: &BTreeMap<String, String>,
+    in_room: bool,
+) -> String {
+    if in_room && !login.name().is_default() {
+        format!("rimz agents {} --account {}", login.kind(), login.name())
+    } else {
+        login_command(login, ambient)
+    }
 }
 
 /// The command that logs `login` in: its home overrides, then the kind. The
