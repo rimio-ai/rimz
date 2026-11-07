@@ -144,6 +144,7 @@ impl Store {
             EventKind::AgentAttach(_)
             | EventKind::AgentLaunchWarnings(_)
             | EventKind::AgentWorkflowCleared(_)
+            | EventKind::AgentTune(_)
             | EventKind::Signal(_)
             | EventKind::AgentLaunch(_)
             | EventKind::Message { .. }

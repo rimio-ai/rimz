@@ -390,6 +390,7 @@ mod soft_compact;
 mod subagents;
 mod timestamps;
 mod tool_stats;
+mod tune;
 
 #[test]
 fn attach_moves_only_pane_and_runtime_owner() {

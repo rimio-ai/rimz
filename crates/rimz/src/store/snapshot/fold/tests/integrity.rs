@@ -165,7 +165,20 @@ fn sequence_event(
     action: usize,
     timestamp: Timestamp,
 ) -> EventEnvelope {
-    let mut event = if matches!(action, 4 | 5) {
+    let mut event = if action >= 10 {
+        let mut params = serde_json::json!({"agent_id": agent_id, "setting": "keep-warm"});
+        if action == 10 {
+            params["value"] = serde_json::json!("2h");
+        }
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            kind,
+            "agent",
+            "agent.tune",
+            params,
+        )
+    } else if matches!(action, 4 | 5) {
         let (step, status, method) = if action == 4 {
             ("wrap_up", MessageStatus::Sent, MessageEventMethod::Sent)
         } else {
@@ -237,7 +250,7 @@ proptest::proptest! {
     /// the whole log cold — agents and extent alike.
     #[test]
     fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
-        seq in proptest::collection::vec((0usize..2, 0usize..10, 0usize..3), 1..12),
+        seq in proptest::collection::vec((0usize..2, 0usize..12, 0usize..3), 1..12),
         split in proptest::prelude::any::<proptest::sample::Index>(),
     ) {
         use proptest::prelude::prop_assert_eq;
