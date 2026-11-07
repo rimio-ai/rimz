@@ -60,6 +60,26 @@ fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
     WorkflowErr::Refused(error.to_string())
 }
 
+fn occupancy_snapshot(mut snapshot: SidebarSnapshot, excluded: &[String]) -> SidebarSnapshot {
+    if excluded.is_empty() {
+        return snapshot;
+    }
+    let peers = rimz::address::addressable_agents(&snapshot);
+    let context = rimz::address::AddressContext {
+        channel: None,
+        origin: rimz::address::ChannelOrigin::Explicit,
+    };
+    let excluded = excluded
+        .iter()
+        .filter_map(|handle| rimz::address::resolve_agent(handle, None, &context, &peers).ok())
+        .flat_map(|agent| std::iter::once(agent).chain(descendants(&snapshot.agents, agent)))
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect::<BTreeSet<_>>();
+    std::sync::Arc::make_mut(&mut snapshot.agents)
+        .retain(|agent| !excluded.contains(&(agent.kind.clone(), agent.agent_id.clone())));
+    snapshot
+}
+
 fn agent<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a AgentState> {
     run.agent_id
         .as_ref()
@@ -125,10 +145,15 @@ fn children(snapshot: &SidebarSnapshot, root: &AgentState, stopped: &[&AgentStat
 }
 
 impl workflow::AttemptHost for Host<'_> {
-    fn occupancy(&self, scope: &Path, root: &Path) -> Result<workflow::Occupancy, WorkflowErr> {
+    fn occupancy(
+        &self,
+        scope: &Path,
+        root: &Path,
+        excluded: &[String],
+    ) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
-            let snapshot = ctx.alive_snapshot()?;
+            let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, excluded);
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);
@@ -149,10 +174,15 @@ impl workflow::AttemptHost for Host<'_> {
         .map_err(host_error)
     }
 
-    fn evict(&self, scope: &Path, root: &Path) -> Result<Vec<String>, WorkflowErr> {
+    fn evict(
+        &self,
+        scope: &Path,
+        root: &Path,
+        excluded: &[String],
+    ) -> Result<Vec<String>, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
-            let snapshot = ctx.alive_snapshot()?;
+            let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, excluded);
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let Takeover::Stop(agents) = takeover::read(&snapshot, &card_status, scope, root)?
             else {

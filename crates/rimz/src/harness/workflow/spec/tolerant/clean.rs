@@ -160,7 +160,10 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                     && !outcomes.contains(outcome.as_str())
                     && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid")
             };
-            if sleep || engine || dead {
+            let sleep_dead = sleep
+                && (outcome != "invalid"
+                    || spec.route_defaults == crate::store::workflow::RouteDefaults::Park);
+            if sleep_dead || engine || dead {
                 ignored.push(ignored_issue(
                     &format!("{path}.on.{outcome}"),
                     "dead route: this check cannot answer that outcome",
@@ -327,6 +330,12 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 &format!("{path}.on.asked"),
                 ignored,
                 "a command cannot ask; its outcome goes to prev_attempt",
+            );
+            ignore(
+                &mut step.on.invalid,
+                &format!("{path}.on.invalid"),
+                ignored,
+                "launch failure routing is only for agent steps",
             );
             ignore(
                 &mut step.prompt_file,

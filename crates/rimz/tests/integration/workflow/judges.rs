@@ -53,7 +53,7 @@ fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
-    let value = settled(&env, id, "parked");
+    let value = settled(&env, id, "done");
     let history = success(command(&env, &["workflow", "show", id, "--history"]));
     (value, history)
 }
@@ -61,10 +61,10 @@ fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
 #[test]
 fn judge_exit_names_the_code_without_an_exit_status_label() {
     let (value, _) = failed_judge("exit 7", r#"{"structured_output":{"outcome":"done"}}"#);
-    assert_eq!(value["record"]["park"]["text"], "judge exited 7");
     assert!(
         events(&value, "evaluation")
             .iter()
+            .filter(|row| row["node"] == "pr")
             .all(|row| row["object"]["reason"] == "judge exited 7")
     );
 }
@@ -75,22 +75,21 @@ fn judge_signal_names_the_signal() {
         "kill -KILL \"$$\"",
         r#"{"structured_output":{"outcome":"done"}}"#,
     );
-    assert_eq!(value["record"]["park"]["text"], "judge killed by SIGKILL");
     assert!(
         events(&value, "evaluation")
             .iter()
+            .filter(|row| row["node"] == "pr")
             .all(|row| row["object"]["reason"] == "judge killed by SIGKILL")
     );
 }
 
 #[test]
-fn failed_judge_history_does_not_invent_an_invalid_route() {
+fn failed_judge_history_shows_the_invalid_route_after_retry() {
     let (value, history) = failed_judge("exit 0", r#"{"structured_output":{"outcome":"missing"}}"#);
-    assert_eq!(value["record"]["park"]["reason"], "check", "{value:#}");
-    assert_eq!(events(&value, "evaluation").len(), 2, "{value:#}");
+    assert_eq!(events(&value, "evaluation").len(), 3, "{value:#}");
     assert!(
-        !history.contains("said invalid → recover"),
-        "failed judges did not route: {history}"
+        history.contains("said invalid → recover"),
+        "failed judges must route after their retry: {history}"
     );
     assert!(
         !history
@@ -105,7 +104,8 @@ fn failed_judge_history_does_not_invent_an_invalid_route() {
         1,
         "{history}"
     );
-    assert!(history.ends_with("pr park check\n"), "{history}");
+    assert!(history.contains("recover said pass → @done\n"), "{history}");
+    assert!(history.ends_with("recover terminal done\n"), "{history}");
 }
 
 #[test]
@@ -280,8 +280,8 @@ done
         "{reason}"
     );
     assert!(reason.ends_with("upgrade Codex"), "{reason}");
-    let value = settled(&env, id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "check");
+    let value = settled(&env, id, "failed");
+    assert_eq!(events(&value, "route")[0]["outcome"], "invalid");
     let evaluations = events(&value, "evaluation");
     assert!(
         evaluations.iter().all(|row| row["digests"] == json!({})),
@@ -337,8 +337,14 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 .output()
                 .unwrap()
         };
-        let receipt = success(invoke(&["workflow", "run", "review"]));
-        let id = receipt.lines().next().unwrap();
+        let id = start_legacy_with(&env, || {
+            let mut command = env.rimz();
+            command
+                .env("SHELL", &shell)
+                .env("PATH", path_with_front(&bin));
+            command
+        });
+        let id = id.as_str();
         match mode {
             "object" | "file" => {
                 let value = settled(&env, id, "done");

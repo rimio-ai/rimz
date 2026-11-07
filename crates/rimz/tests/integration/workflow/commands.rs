@@ -64,7 +64,7 @@ fn ready_step(env: &Env, dir: &Path) -> String {
             .replace("on.go='build'", "on.go='@user'"),
     )
     .unwrap();
-    let id = start(env);
+    let id = start_legacy(env);
     settled(env, &id, "parked");
     edit_record(env, &id, |record| {
         record.state = RunState::Active;
@@ -254,7 +254,11 @@ fn command_bound(mode: &str) {
     let (env, _) = command_fixture("shell", LIVE);
     crate::common::git::init_repo(&env.project_root);
     let head = crate::common::git::git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
-    let id = start(&env);
+    let id = if mode.contains("deadline") {
+        start_legacy(&env)
+    } else {
+        start(&env)
+    };
     let (live, child, descendant) = live_group(&env, &id, "build");
     let attempt = &live["record"]["attempt"];
     assert_eq!(attempt["kind"], "script");

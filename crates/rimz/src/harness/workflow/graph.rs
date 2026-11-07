@@ -2,17 +2,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::spec::{Check, CheckKind, Step, StepKind, WorkflowSpec};
+use super::spec::{Check, CheckKind, OnBreak, Step, StepKind, WorkflowSpec};
 use crate::config::CapacityWait;
+use crate::store::workflow::RouteDefaults;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
-const STEP_TRIGGERS: [&str; 5] = ["then", "asked", "cap", "capacity", "deadline"];
+const STEP_TRIGGERS: [&str; 6] = ["then", "asked", "invalid", "cap", "capacity", "deadline"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeSource {
     Explicit,
     Default,
+    #[serde(rename = "on-break")]
+    OnBreak,
 }
 
 impl std::fmt::Display for EdgeSource {
@@ -20,6 +23,7 @@ impl std::fmt::Display for EdgeSource {
         f.write_str(match self {
             Self::Explicit => "explicit",
             Self::Default => "default",
+            Self::OnBreak => "on-break",
         })
     }
 }
@@ -94,7 +98,11 @@ impl WorkflowSpec {
     pub fn walk(&self) -> Walk {
         let mut seen = BTreeSet::new();
         let mut order = self.walk_component(&self.workflow.start, &mut seen);
-        if let Some(target) = &self.workflow.on.deadline {
+        if self.workflow.deadline.is_some()
+            && let Some(target) = self.target(&self.workflow.start, "deadline")
+        {
+            order.extend(self.walk_component(&target, &mut seen));
+        } else if let Some(target) = &self.workflow.on.deadline {
             order.extend(self.walk_component(target, &mut seen));
         }
         let parents = self.hanging_steps(&order);
@@ -220,7 +228,13 @@ impl WorkflowSpec {
             .into_iter()
             .find(|edge| edge.outcome == outcome)
             .map(|edge| edge.target)
-            .or_else(|| matches!(outcome, "then" | "asked").then(|| "@user".into()))
+            .or_else(|| {
+                if self.route_defaults == RouteDefaults::Park {
+                    matches!(outcome, "then" | "asked").then(|| "@user".into())
+                } else {
+                    (outcome == "then").then(|| "@failed".into())
+                }
+            })
     }
 
     pub(super) fn engine_target(&self, node: &str, outcome: &str) -> String {
@@ -267,13 +281,22 @@ impl WorkflowSpec {
                             .and_then(|check| check.on.get(&outcome))
                             .and_then(|route| route.delay())
                             .map(str::to_owned),
-                        outcome,
                         target,
                         source: if explicit {
                             EdgeSource::Explicit
+                        } else if !self.is_break(node)
+                            && self.route_defaults == RouteDefaults::OnBreak
+                            && self.workflow.on_break.is_some()
+                            && matches!(
+                                outcome.as_str(),
+                                "timeout" | "invalid" | "cap" | "deadline"
+                            )
+                        {
+                            EdgeSource::OnBreak
                         } else {
                             EdgeSource::Default
                         },
+                        outcome,
                         fires,
                         because,
                     })
@@ -296,7 +319,10 @@ impl WorkflowSpec {
         if let Some(check) = self.checks.get(node) {
             let because = match outcome {
                 "timeout" if check.timeout.is_none() => Some(NeverReason::NoTimeout),
-                "invalid" if matches!(check.kind(), Some(CheckKind::Agent(_))) => {
+                "invalid"
+                    if self.route_defaults == RouteDefaults::Park
+                        && matches!(check.kind(), Some(CheckKind::Agent(_))) =>
+                {
                     Some(NeverReason::JudgeRetries)
                 }
                 _ => None,
@@ -331,8 +357,13 @@ impl WorkflowSpec {
                 .edges()
                 .into_iter()
                 .map(|(outcome, target)| {
-                    let explicit =
-                        check.on.contains_key(&outcome) || (outcome == "then" && check.is_sleep());
+                    let route = check.on.get(&outcome).filter(|_| {
+                        !check.is_sleep()
+                            || (outcome == "invalid"
+                                && self.route_defaults == RouteDefaults::OnBreak)
+                    });
+                    let explicit = route.is_some() || (outcome == "then" && check.is_sleep());
+                    let target = route.map_or(target, |route| route.target().to_owned());
                     (outcome, (target, explicit))
                 })
                 .collect()
@@ -346,18 +377,47 @@ impl WorkflowSpec {
                 })
                 .collect::<BTreeMap<_, _>>()
         };
-        edges.insert(
-            "deadline".into(),
-            (
-                self.workflow
-                    .on
-                    .deadline
-                    .as_deref()
-                    .unwrap_or("@user")
-                    .into(),
-                self.workflow.on.deadline.is_some(),
-            ),
-        );
+        if self.route_defaults == RouteDefaults::OnBreak
+            && let Some(step) = self.steps.get(node)
+            && matches!(step.kind(), Some(StepKind::Agent(_)))
+        {
+            edges.insert(
+                "invalid".into(),
+                (
+                    step.on.invalid.clone().unwrap_or_default(),
+                    step.on.invalid.is_some(),
+                ),
+            );
+        }
+        if !self.is_break(node) {
+            edges.insert(
+                "deadline".into(),
+                (
+                    self.workflow
+                        .on
+                        .deadline
+                        .as_deref()
+                        .unwrap_or("@user")
+                        .into(),
+                    self.workflow.on.deadline.is_some(),
+                ),
+            );
+        }
+        if self.route_defaults == RouteDefaults::OnBreak {
+            let target = match &self.workflow.on_break {
+                _ if self.is_break(node) => "@failed",
+                Some(OnBreak::Target(target)) => target.as_str(),
+                Some(OnBreak::Agent { .. }) => "@break",
+                None => "@failed",
+            };
+            for (outcome, (route, explicit)) in &mut edges {
+                if !*explicit
+                    && matches!(outcome.as_str(), "timeout" | "invalid" | "cap" | "deadline")
+                {
+                    *route = target.into();
+                }
+            }
+        }
         Some(edges)
     }
 }

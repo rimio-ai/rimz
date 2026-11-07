@@ -58,15 +58,15 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "green @done",
         "none true",
         "red → fix",
-        "waits ≤3d, then @user",
-        "4 visits, then @user",
+        "waits ≤3d, then @failed",
+        "4 visits, then @failed",
         "takes over",
         "capacity-wait 6h",
         "only when a loop task starts the run",
         "asked ↑ watch",
         "A turn step goes on to its next check when its turn ends cleanly or its provider exits.",
-        "A check that cannot run parks at @user.",
-        "No deadline is set; a deadline granted to a run parks it at @user.",
+        "An unrouted failure ends the run as failed.",
+        "No deadline is set; an unrouted deadline granted to a run ends it as failed.",
         "one node in full: rimz workflow show review begin",
         "source ~/",
         "unreachable from begin",
@@ -85,13 +85,13 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     let caps = [
         (
             "{ limit = 2, reset-on = 'green' }",
-            "max-visits-per-outcome 2 (reset-on green), then @user",
+            "max-visits-per-outcome 2 (reset-on green), then @failed",
         ),
         (
             "{ limit = 2, reset-on = ['green', 'red'] }",
-            "max-visits-per-outcome 2 (reset-on green, red), then @user",
+            "max-visits-per-outcome 2 (reset-on green, red), then @failed",
         ),
-        ("2", "max-visits-per-outcome 2, then @user"),
+        ("2", "max-visits-per-outcome 2, then @failed"),
     ]
     .map(|(cap, expected)| {
         fs::write(
@@ -233,7 +233,7 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     .unwrap();
     let text = success(command(&env, &["workflow", "show", "review"]));
     assert!(
-        text.contains("deadline 2099-01-01T00:00:00Z → @user (a live attempt is canceled)"),
+        text.contains("deadline 2099-01-01T00:00:00Z → @failed (a live attempt is canceled)"),
         "{text}"
     );
     assert!(!text.contains("No deadline is set"), "{text}");
@@ -335,8 +335,8 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "timeout:",
                 "8h",
                 "ok → fix (explicit)",
-                "invalid → @failed (explicit, never: a judge retries once, then parks at @user)",
-                "deadline → @user (default, only with a deadline)",
+                "invalid → @failed (explicit)",
+                "deadline → @failed (default, only with a deadline)",
             ],
         ),
         (
@@ -392,7 +392,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "green → @done",
                 "none true",
                 "waiting → @wait",
-                "timeout → @user (default, never: no timeout)",
+                "timeout → @failed (default, never: no timeout)",
                 "unknown → @wait (default)",
             ],
         ),

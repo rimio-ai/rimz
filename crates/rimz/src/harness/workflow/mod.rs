@@ -93,8 +93,18 @@ pub fn cancel_args(id: &WorkflowRunId, reason: &str) -> Vec<std::ffi::OsString> 
 }
 
 pub trait AttemptHost {
-    fn occupancy(&self, scope: &Path, project_root: &Path) -> Result<Occupancy, WorkflowErr>;
-    fn evict(&self, scope: &Path, project_root: &Path) -> Result<Vec<String>, WorkflowErr>;
+    fn occupancy(
+        &self,
+        scope: &Path,
+        project_root: &Path,
+        excluded: &[String],
+    ) -> Result<Occupancy, WorkflowErr>;
+    fn evict(
+        &self,
+        scope: &Path,
+        project_root: &Path,
+        excluded: &[String],
+    ) -> Result<Vec<String>, WorkflowErr>;
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr>;
     fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
     fn push(

@@ -402,7 +402,7 @@ fn fresh_restart_from_a_cap_park_leaves_the_kept_previous_card_live_and_detached
             .replace("on.done = '@done'", "on.done = 'build'"),
     )
     .unwrap();
-    let (id, run) = room.launch();
+    let (id, run) = room.launch_legacy();
     // Another checkout keeps ordinary occupancy from gating the fresh launch.
     let kept_checkout = room
         .env
@@ -483,7 +483,7 @@ fn continued_restart_resumes_cap_and_asked_parks_and_stops_a_kept_previous_card(
             )
             .unwrap();
         }
-        let (id, run) = room.launch();
+        let (id, run) = room.launch_legacy();
         let transcript = room.env.project_root.join("session.jsonl");
         fs::write(&transcript, "{}\n").unwrap();
         let mut owner = dummy_agent_process();
@@ -658,7 +658,7 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         &[],
     )
     .unwrap();
-    let (id, run) = room.launch();
+    let (id, run) = room.launch_legacy();
     let transcript = room.env.project_root.join("session.jsonl");
     fs::write(&transcript, "{}\n").unwrap();
     let mut owner = dummy_agent_process();

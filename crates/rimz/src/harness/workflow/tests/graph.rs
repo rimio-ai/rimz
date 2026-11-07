@@ -18,6 +18,82 @@ fn edge(spec: &WorkflowSpec, node: &str, outcome: &str) -> (Value, Option<&'stat
 }
 
 #[test]
+fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
+    for check in [
+        "run='true'\non.ok='@done'\ntimeout='1m'",
+        "shell='false'\non.pass='@done'\non.fail='@failed'\ntimeout='1m'",
+        "agent='claude'\nprompt-file='judge.md'\non.ok='@done'\ntimeout='1m'",
+        "cases=[{when=['pr=merged'],outcome='ok'}]\non.ok='@done'\ntimeout='1m'",
+        "sleep='1m'\nthen='@done'",
+    ] {
+        for (on_break, target, source) in [
+            ("", "@failed", "default"),
+            ("on-break='@done'", "@done", "on-break"),
+            ("on-break={agent='claude'}", "@break", "on-break"),
+        ] {
+            let text = format!(
+                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[checks.gate]\n{check}\n[steps.work]\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
+            );
+            let spec = super::super::spec::parse(&text).unwrap();
+            for (node, outcome) in [
+                ("gate", "invalid"),
+                ("gate", "deadline"),
+                ("work", "invalid"),
+                ("work", "cap"),
+                ("work", "deadline"),
+            ] {
+                let (edge, _) = edge(&spec, node, outcome);
+                assert_eq!(edge["target"], target, "{text}: {node}.{outcome}");
+                assert_eq!(edge["source"], source);
+                assert_ne!(spec.target(node, outcome).as_deref(), Some("@user"));
+            }
+            if !check.starts_with("sleep") {
+                assert_eq!(spec.target("gate", "timeout").as_deref(), Some(target));
+            }
+            assert_eq!(spec.target("work", "asked"), None);
+            if target == "@break" {
+                assert_eq!(
+                    spec.steps["@break"].lifecycle(),
+                    crate::store::workflow::StepLifecycle::Stay
+                );
+                assert_eq!(spec.target("@break", "invalid").as_deref(), Some("@failed"));
+                assert!(
+                    spec.edges("@break")
+                        .iter()
+                        .all(|edge| edge.outcome != "deadline")
+                );
+            }
+            let explicit =
+                super::super::spec::parse(&(text + "on.invalid='@failed'\non.cap='@done'\n"))
+                    .unwrap();
+            assert_eq!(
+                explicit.target("work", "invalid").as_deref(),
+                Some("@failed")
+            );
+            assert_eq!(edge(&explicit, "work", "invalid").0["source"], "explicit");
+            assert_eq!(explicit.target("work", "cap").as_deref(), Some("@done"));
+        }
+    }
+}
+
+#[test]
+fn sleep_on_invalid_is_live_but_other_routes_still_warn() {
+    let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\non.timeout='@done'\n").unwrap();
+    assert_eq!(spec.target("nap", "invalid").as_deref(), Some("@failed"));
+    assert!(
+        !spec
+            .ignored
+            .iter()
+            .any(|issue| issue.path == "checks.nap.on.invalid")
+    );
+    assert!(
+        spec.ignored
+            .iter()
+            .any(|issue| issue.path == "checks.nap.on.timeout")
+    );
+}
+
+#[test]
 fn timeout_edges_name_the_missing_clock() {
     for (extra, fires, because, mark) in [
         ("", "never", Some("no-timeout"), Some("never: no timeout")),
@@ -146,12 +222,12 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
 }
 
 #[test]
-fn judge_invalid_never_fires_even_with_an_override() {
+fn judge_invalid_fires_after_retry_only_with_on_break_defaults() {
     for (settings, target, source) in [
         ("", "@user", "default"),
         ("on.invalid='work'", "work", "explicit"),
     ] {
-        let spec = spec(
+        let mut spec = spec(
             &format!("agent='claude'\non.ready='work'\n{settings}"),
             "agent='claude'\nthen='gate'",
         );
@@ -168,6 +244,18 @@ fn judge_invalid_never_fires_even_with_an_override() {
             Some("never: a judge retries once, then parks at @user")
         );
         assert_eq!(spec.target("gate", "invalid").as_deref(), Some(target));
+        spec.route_defaults = crate::store::workflow::RouteDefaults::OnBreak;
+        let (resolved, mark) = self::edge(&spec, "gate", "invalid");
+        assert_eq!(resolved["fires"], "yes");
+        assert_eq!(
+            resolved["target"],
+            if settings.is_empty() {
+                "@failed"
+            } else {
+                target
+            }
+        );
+        assert_eq!(mark, None);
     }
 }
 

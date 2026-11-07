@@ -462,7 +462,7 @@ fn visits(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> Option<String
             next
         };
         if used == max {
-            // Every step has a cap destination, defaulting to @user.
+            // Every step has a cap destination, including an unfireable cap.
             let target = spec.target(&record.node, "cap").expect("step cap target");
             let destination = match target.as_str() {
                 "@user" => "parks the run for the user".into(),
@@ -514,6 +514,12 @@ fn ordinal(count: u64) -> String {
 }
 
 fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, String) {
+    if spec.is_break(&record.node) {
+        return (
+            "You stay open across turns. Fix the cause and resume the run, cancel it, or wait for the user. RimZ detaches rather than stops you on resume or cancel. Closing your pane ends the run @failed.".into(),
+            "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
+        );
+    }
     // Validation requires a nonempty `then` list of checks.
     let check = span(step.then.first().expect("validated step then"));
     match step.lifecycle() {

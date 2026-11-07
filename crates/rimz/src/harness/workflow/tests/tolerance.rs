@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::workflow::RunRecord;
 use std::time::Duration;
 
 const SIMPLE: &str =
@@ -10,6 +11,56 @@ fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
     let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), text).unwrap();
     load(&dir)
+}
+
+#[test]
+fn legacy_agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
+    for value in ["5", "{to=5}"] {
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen='@done'\non.invalid={value}\n"
+        );
+        let (_home, dir) = fixture();
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":3,"id":crate::ids::WorkflowRunId::new(),"workflow":"test","spec_dir":dir,
+            "spec_digest":"test","scope":{"kind":"worktree","path":dir},"project_root":dir,
+            "created_at":"2026-01-01T00:00:00Z","entered_at":"2026-01-01T00:00:00Z",
+            "state":"active","node":"build","visits":{},"visit_grant":0,
+            "next_seq":1,"deadline_fired":false
+        }))
+        .unwrap();
+        let state = crate::StatePaths::for_project_root_under(&dir, &dir).unwrap();
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        crate::store::workflow::initialize(&state, &record, text.as_bytes(), &guard).unwrap();
+        let loaded = load_run(&state.workflow(&record.id).home, &record);
+        assert!(
+            loaded.is_ok(),
+            "an optional agent route must not strand a sealed run: {loaded:?}"
+        );
+        let spec = loaded.unwrap();
+        assert!(spec.steps["build"].on.invalid.is_none());
+        assert!(
+            spec.ignored
+                .iter()
+                .any(|issue| issue.path == "steps.build.on.invalid")
+        );
+    }
+}
+
+#[test]
+fn on_break_handler_fields_warn_individually() {
+    for (field, path) in [
+        ("future=true", "workflow.on-break.future"),
+        ("prompt-file=42", "workflow.on-break.prompt-file"),
+    ] {
+        let text = SIMPLE.replace(
+            "start='pick'",
+            &format!("start='pick'\non-break={{agent='claude',{field}}}"),
+        );
+        let spec = loaded(&text).unwrap();
+        assert!(spec.steps.contains_key("@break"), "{spec:?}");
+        assert_eq!(spec.ignored.len(), 1, "{spec:?}");
+        assert_eq!(spec.ignored[0].path, path);
+    }
 }
 
 #[test]

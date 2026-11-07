@@ -507,11 +507,23 @@ impl Wait {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteDefaults {
+    #[default]
+    Park,
+    OnBreak,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
     #[serde(default = "turn_lifecycle")]
     pub default_lifecycle: StepLifecycle,
+    #[serde(default)]
+    pub route_defaults: RouteDefaults,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub break_agents: Vec<String>,
     pub id: WorkflowRunId,
     pub workflow: String,
     #[serde(default)]

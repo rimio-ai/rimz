@@ -84,7 +84,7 @@ fn decisions(state: &StatePaths, record: &RunRecord) -> Vec<Value> {
         .collect()
 }
 
-fn held(record: &RunRecord, verdict: bool) -> RunRecord {
+pub(super) fn held(record: &RunRecord, verdict: bool) -> RunRecord {
     let mut record = record.clone();
     let mut attempt = record.attempt.take().unwrap();
     attempt.judged = Some(turn().end);

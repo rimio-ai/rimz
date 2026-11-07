@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
-use crate::store::workflow::{Key, RunRecord, StepLifecycle, StepVisits};
+use crate::store::workflow::{Key, RouteDefaults, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -33,6 +33,9 @@ pub(super) fn issue(path: &str, message: impl Display) -> Issue {
 pub struct WorkflowSpec {
     #[serde(skip)]
     #[schemars(skip)]
+    pub route_defaults: RouteDefaults,
+    #[serde(skip)]
+    #[schemars(skip)]
     pub ignored: Vec<Issue>,
     pub workflow: Header,
     #[serde(default)]
@@ -42,6 +45,10 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
+    pub(super) fn is_break(&self, node: &str) -> bool {
+        node == "@break" && self.route_defaults == RouteDefaults::OnBreak
+    }
+
     /// `Some(empty)` demands checkout facts; `None` means no condition or wake needs them.
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
@@ -77,8 +84,55 @@ pub struct Header {
     pub start: String,
     pub deadline: Option<String>,
     pub limit: Option<Limit>,
+    #[serde(rename = "on-break")]
+    pub(super) on_break: Option<OnBreak>,
     #[serde(default)]
     pub on: HeaderEdges,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(untagged, rename_all = "kebab-case")]
+#[schemars(deny_unknown_fields)]
+pub(super) enum OnBreak {
+    Target(String),
+    Agent {
+        agent: String,
+        #[serde(rename = "prompt-file")]
+        prompt_file: Option<String>,
+    },
+}
+
+impl<'de> Deserialize<'de> for OnBreak {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = OnBreak;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("@failed, @done, or a table with agent and optional prompt-file")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<OnBreak, E> {
+                Ok(OnBreak::Target(value.into()))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<OnBreak, M::Error> {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "kebab-case")]
+                struct Handler {
+                    agent: String,
+                    prompt_file: Option<String>,
+                }
+                let handler =
+                    Handler::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(OnBreak::Agent {
+                    agent: handler.agent,
+                    prompt_file: handler.prompt_file,
+                })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -133,6 +187,7 @@ pub struct StepEdges {
     pub asked: Option<String>,
     pub cap: Option<String>,
     pub capacity: Option<String>,
+    pub invalid: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -564,6 +619,8 @@ impl Step {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SpecErr {
+    #[error("{path}: @break is reserved for workflow.on-break; choose another node name")]
+    ReservedNode { path: String },
     #[error("cannot read {path}: {source}")]
     Io {
         path: PathBuf,
@@ -607,19 +664,65 @@ pub fn load_run(dir: &Path, record: &RunRecord) -> Result<WorkflowSpec, SpecErr>
 }
 
 pub(crate) fn parse_run(text: &str, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_lifecycle(text, record.default_lifecycle)
+    parse_with_defaults(text, record.default_lifecycle, record.route_defaults)
 }
 
 pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_lifecycle(text, StepLifecycle::Until)
+    parse_with_defaults(text, StepLifecycle::Until, RouteDefaults::OnBreak)
 }
 
-fn parse_with_lifecycle(text: &str, default: StepLifecycle) -> Result<WorkflowSpec, SpecErr> {
+fn parse_with_defaults(
+    text: &str,
+    default: StepLifecycle,
+    routes: RouteDefaults,
+) -> Result<WorkflowSpec, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,
     })?;
-    tolerant::parse(value, default)
+    let mut spec = tolerant::parse(value, default, routes)?;
+    if routes == RouteDefaults::Park {
+        return Ok(spec);
+    }
+    for (kind, exists) in [
+        ("checks", spec.checks.contains_key("@break")),
+        ("steps", spec.steps.contains_key("@break")),
+    ] {
+        if exists {
+            return Err(SpecErr::ReservedNode {
+                path: format!("{kind}.@break"),
+            });
+        }
+    }
+    if let Some(OnBreak::Agent { agent, prompt_file }) = &spec.workflow.on_break {
+        spec.steps.insert(
+            "@break".into(),
+            Step {
+                summary: Some("Investigate the workflow failure with the user".into()),
+                agent: Some(agent.clone()),
+                prompt_file: prompt_file.clone(),
+                lifecycle: Some(StepLifecycle::Stay),
+                then: vec!["@failed".into()],
+                on: StepEdges {
+                    invalid: Some("@failed".into()),
+                    ..Default::default()
+                },
+                run: None,
+                shell: None,
+                keep: None,
+                notes: None,
+                window: None,
+                takeover: None,
+                throttle: None,
+                capacity_wait: None,
+                limit: None,
+                max_visits: None,
+                max_visits_per_outcome: None,
+                timeout: None,
+            },
+        );
+    }
+    Ok(spec)
 }
 
 pub fn schema() -> schemars::Schema {

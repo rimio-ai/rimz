@@ -2,6 +2,48 @@ use super::*;
 use crate::store::workflow::{Park, ParkReason};
 
 #[test]
+fn continued_restart_failure_uses_the_sealed_failure_policy() {
+    for (legacy, explicit) in [(true, false), (false, false), (false, true)] {
+        let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
+            + if explicit {
+                "on.invalid='@failed'\n"
+            } else {
+                ""
+            };
+        let (_dir, state, record) = if legacy {
+            setup(&text)
+        } else {
+            on_break_setup(&text)
+        };
+        let host = FakeHost::new();
+        let live = advance_ok(&state, &record.id, &host);
+        let seq = live.attempt.as_ref().unwrap().seq;
+        restart(
+            &state,
+            &record.id,
+            Some((seq, "conversation".into())),
+            &host,
+        )
+        .unwrap();
+        *host.failure.borrow_mut() = Some(LaunchFailure {
+            outcome: AttemptOutcome::Died,
+            reason: "history pool changed".into(),
+        });
+        let failed = advance_ok(&state, &record.id, &host);
+        assert_eq!(failed.visits["build"].total, 1);
+        if legacy {
+            assert_eq!(failed.state, RunState::Parked);
+            assert_eq!(failed.park.unwrap().reason, ParkReason::Invalid);
+        } else if explicit {
+            assert_eq!(failed.state, RunState::Failed);
+        } else {
+            assert_eq!(failed.node, "@break");
+            assert_eq!(failed.input.unwrap()["edge"], "invalid");
+        }
+    }
+}
+
+#[test]
 fn restart_during_launch_keeps_manual_intent_until_the_replacement_launches() {
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();

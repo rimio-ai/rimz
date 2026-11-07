@@ -167,6 +167,16 @@ expression: value
         "on": {
           "$ref": "#/$defs/HeaderEdges"
         },
+        "on-break": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnBreak"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "scope": {
           "$ref": "#/$defs/ScopeKind"
         },
@@ -217,6 +227,31 @@ expression: value
         }
       },
       "type": "object"
+    },
+    "OnBreak": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "prompt-file": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "agent"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "OutcomeCap": {
       "anyOf": [
@@ -449,6 +484,12 @@ expression: value
           ]
         },
         "capacity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invalid": {
           "type": [
             "string",
             "null"

@@ -115,6 +115,8 @@ pub fn create(
     let mut record = RunRecord {
         version: workflow::VERSION,
         default_lifecycle: workflow::StepLifecycle::Until,
+        route_defaults: workflow::RouteDefaults::OnBreak,
+        break_agents: Vec::new(),
         id: WorkflowRunId::new(),
         workflow: name,
         task,
@@ -401,7 +403,13 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 continue;
             }
             Decision::Evict(record) => {
-                let error = host.evict(&record.scope.path, &record.project_root).err();
+                let error = host
+                    .evict(
+                        &record.scope.path,
+                        &record.project_root,
+                        &record.break_agents,
+                    )
+                    .err();
                 admission.eviction = Some((
                     record.next_seq,
                     record.node,
@@ -702,7 +710,11 @@ fn prepare(
                 // A confirmed stop admits only this launch; later visits read occupancy afresh.
                 launch_error = launch_error.or(error);
             } else if launch_error.is_none() {
-                match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
+                match host.occupancy(
+                    &t.record.scope.path,
+                    &t.record.project_root,
+                    &t.record.break_agents,
+                )? {
                     Occupancy::Free => {}
                     Occupancy::Blocked(_) => {
                         t.step_wait("takeover", None);
@@ -1295,15 +1307,30 @@ pub fn resume(
                 "terminal workflow runs cannot resume".into(),
             ));
         }
-        if let Some(node) = at
-            && !spec.checks.contains_key(node)
-            && !spec.steps.contains_key(node)
-        {
-            return Err(WorkflowErr::Refused(format!(
-                "unknown sealed workflow node {node}"
-            )));
+        if let Some(node) = at {
+            if spec.is_break(node) {
+                return Err(WorkflowErr::Refused(
+                    "@break is reserved; resume at the source or another sealed node".into(),
+                ));
+            }
+            if !spec.checks.contains_key(node) && !spec.steps.contains_key(node) {
+                return Err(WorkflowErr::Refused(format!(
+                    "unknown sealed workflow node {node}"
+                )));
+            }
         }
-        if record.state == RunState::Active && (at.is_some() || extend.is_empty()) {
+        let at_break = spec.is_break(&record.node);
+        if at_break
+            && record.attempt.as_ref().is_some_and(|attempt| {
+                (attempt.ending.is_some() || attempt.run.is_none())
+                    && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
+            })
+        {
+            return Err(WorkflowErr::Refused(
+                "the on-break attempt is settling; retry resume after it finishes".into(),
+            ));
+        }
+        if record.state == RunState::Active && !at_break && (at.is_some() || extend.is_empty()) {
             return Err(WorkflowErr::Refused(
                 "an active run accepts only --extend; park it before repositioning".into(),
             ));
@@ -1336,6 +1363,67 @@ pub fn resume(
                     "invalid extension {grant:?}; use visits=+N or deadline=<when>"
                 )));
             }
+        }
+        if at_break {
+            t.close_wait();
+            if let Some(input) = &t.record.input
+                && input["edge"] == "cap"
+                && let Some(step) = input["from"].as_str().map(str::to_owned)
+            {
+                t.reset_visits(&step, "cap");
+            }
+            let target = at
+                .map(str::to_owned)
+                .or_else(|| {
+                    t.record
+                        .input
+                        .as_ref()?
+                        .get("from")?
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .ok_or_else(|| {
+                    WorkflowErr::Refused("break context has no source node; use --at <node>".into())
+                })?;
+            if let Some(attempt) = &mut t.record.attempt {
+                attempt.ending = Some(Ending {
+                    outcome: AttemptOutcome::Canceled,
+                    cause: EndCause::Lifecycle,
+                    route: Some(workflow::Verdict {
+                        node: t.record.node.clone(),
+                        entered_at: t.record.entered_at,
+                        at: Some(t.now),
+                        target,
+                        object: t.record.input.clone().unwrap_or_else(|| json!({})),
+                        reason: ParkReason::User,
+                    }),
+                    reason: None,
+                });
+                if attempt.run.is_some() {
+                    // No off-lock owner is launching this published session.
+                    attempt.host = workflow::Host {
+                        pid: 0,
+                        start: None,
+                    };
+                }
+            } else {
+                t.record.node = target;
+                t.record.entered_at = t.now;
+                t.record.check_retry = 0;
+                t.record.check_retry_context = None;
+                t.push(
+                    None,
+                    JournalEvent::Resume {
+                        visit_grant: t.record.visit_grant,
+                        deadline: t.record.deadline,
+                    },
+                );
+            }
+            persist(&mut t, &guard)?;
+            let record = t.record;
+            drop(guard);
+            spawn(&record)?;
+            return Ok(record);
         }
         if t.record.state == RunState::Parked {
             if t.record
