@@ -6,6 +6,73 @@ fn ts(seconds: i64) -> Timestamp {
     Timestamp::from_second(seconds).unwrap()
 }
 
+fn tuned(mut agent: AgentState, value: &str) -> AgentState {
+    let mut row = serde_json::to_value(&agent).unwrap();
+    row["tune"] = serde_json::json!({
+        "keep_warm": {"value": value, "at": ts(0)},
+        "idle_compact": {"value": if value == "off" { "off" } else { "120k" }, "at": ts(0)},
+        "smart_compact": {"value": if value == "off" { "off" } else { "70%" }, "at": ts(0)},
+    });
+    agent = serde_json::from_value(row).unwrap();
+    agent
+}
+
+#[test]
+fn tune_overrides_roles_profiles_defaults_and_launched_children() {
+    let harness =
+        toml::from_str("keep_warm = '1h'\nidle_compact = '50k'\nsmart_compact = '40%'").unwrap();
+    let policy = SeatPolicy {
+        profiles: toml::from_str(
+            "[warm]\nagent = 'claude'\nkeep-warm = '4h'\n\
+             idle-compact = '60k'\nsmart-compact = '50%'",
+        )
+        .unwrap(),
+        teams: toml::from_str(
+            "[forge]\nroles = [{role = 'coder', profile = 'warm', keep-warm = '6h', \
+             idle-compact = '80k', smart-compact = '60%'}]",
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    for identity in 0..4 {
+        let mut agent = idle();
+        if identity >= 1 {
+            agent.profile = Some("warm".into());
+        }
+        if identity >= 2 {
+            agent.team = Some("forge".into());
+            agent.role = Some("coder".into());
+        }
+        if identity == 3 {
+            agent.parent_agent_id = Some("parent".into());
+            agent.launch_depth = Some(1);
+        }
+        let agent = tuned(agent, "3h");
+        assert_eq!(
+            policy.horizon(&agent, &harness),
+            Some(Duration::from_secs(10800))
+        );
+        assert_eq!(policy.idle_compact_floor(&agent, &harness), Some(120_000));
+        assert_eq!(
+            policy.smart_compact(&agent, &harness),
+            Some(crate::store::message::AutoCompact::Percent(70))
+        );
+        let off = tuned(agent, "off");
+        assert_eq!(policy.horizon(&off, &harness), None);
+        assert_eq!(policy.idle_compact_floor(&off, &harness), None);
+        assert_eq!(policy.smart_compact(&off, &harness), None);
+    }
+}
+
+#[test]
+fn tune_keep_warm_still_requires_the_cache_lifetime_floor() {
+    let harness = toml::from_str("[prompt_cache_ttl]\nclaude = '5m'").unwrap();
+    assert_eq!(
+        SeatPolicy::default().horizon(&tuned(idle(), "3h"), &harness),
+        None
+    );
+}
+
 fn sleeping() -> AgentState {
     let mut agent = AgentState::stub("claude", "session", AgentStatus::Idle);
     agent.turn_started_at = Some(ts(0));
@@ -637,6 +704,11 @@ roles = [
                 expected,
                 "consumer {role} at {stage}"
             );
+            assert_eq!(
+                held.horizon(&tuned(seat.clone(), "3h"), &harness),
+                Some(Duration::from_secs(10800)),
+                "a tune drops the while clause for {role} at {stage}"
+            );
         }
     }
 }
@@ -1139,6 +1211,14 @@ fn helper_rechecks_the_horizon_before_pinging() {
         .target(&snapshot, &config, &held, ts(3540))
         .expect("still due");
     assert_eq!(holding, Some(TWO_HOURS));
+    let mut retuned = snapshot.clone();
+    std::sync::Arc::make_mut(&mut retuned.agents)[0] = tuned(agent, "off");
+    assert!(
+        requests[0]
+            .target(&retuned, &config, &held, ts(3540))
+            .is_none(),
+        "keep-warm off landed after the producer claimed its ping"
+    );
     assert!(
         requests[0]
             .target(&snapshot, &config, &SeatPolicy::default(), ts(3540))

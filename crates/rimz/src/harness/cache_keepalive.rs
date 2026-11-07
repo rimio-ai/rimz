@@ -47,10 +47,16 @@ impl SeatPolicy {
     /// The role-over-team or solo profile maximum, falling back to the harness default and
     /// admitted by the TTL floor and current stage condition. Unknown board readings permit
     /// a hold; a while with no resolved maximum takes the ping cap. A `rimz subagents` child
-    /// never resolves one; an agent-launched peer resolves like any other seat.
+    /// has no configured horizon; an explicit session override also applies to a child.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
-        let (horizon, while_clause) = crate::config::effective::KeepWarmSeat::from(agent)
-            .declared_horizon(&self.teams, &self.profiles, harness)?;
+        let (horizon, while_clause) = match agent.tune.keep_warm() {
+            Some(horizon) => (horizon?, None),
+            None => crate::config::effective::KeepWarmSeat::from(agent).declared_horizon(
+                &self.teams,
+                &self.profiles,
+                harness,
+            )?,
+        };
         harness.ping_lifetime(agent)?;
         if let Some(clause) = while_clause
             && let Some(root) = agent.lane_path()
@@ -74,14 +80,15 @@ impl SeatPolicy {
     /// The token floor at which this seat is compacted while idle (`None` is off): a TOML team
     /// role's override, else the first value up the seat's profile chain (a Markdown role's
     /// value lives on its `<team>.<role>` profile), else `harness.idle_compact`. A
-    /// `rimz subagents` child never resolves one; an agent-launched peer resolves like any
-    /// other seat.
+    /// `rimz subagents` child has no configured floor, but honours an explicit session override.
     pub fn idle_compact_floor(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<u64> {
-        crate::config::effective::IdleCompactSeat::from(agent).resolve(
-            &self.teams,
-            &self.profiles,
-            harness,
-        )
+        agent.tune.idle_compact().unwrap_or_else(|| {
+            crate::config::effective::IdleCompactSeat::from(agent).resolve(
+                &self.teams,
+                &self.profiles,
+                harness,
+            )
+        })
     }
 
     /// The seat's smart-compaction line, including a pane-backed child's launch namespace.
@@ -90,12 +97,35 @@ impl SeatPolicy {
         agent: &AgentState,
         harness: &HarnessConfig,
     ) -> Option<crate::store::message::AutoCompact> {
-        crate::config::effective::SmartCompactSeat::from(agent).resolve(
-            &self.teams,
-            &self.profiles,
-            &self.subagent_profiles,
-            harness,
-        )
+        agent.tune.smart_compact().unwrap_or_else(|| {
+            crate::config::effective::SmartCompactSeat::from(agent).resolve(
+                &self.teams,
+                &self.profiles,
+                &self.subagent_profiles,
+                harness,
+            )
+        })
+    }
+
+    /// Declared configuration without session overrides, TTL admission, or board evaluation.
+    pub fn configured_values(
+        &self,
+        agent: &AgentState,
+        harness: &HarnessConfig,
+    ) -> ConfiguredValues {
+        let keep_warm = crate::config::effective::KeepWarmSeat::from(agent);
+        let idle_compact = crate::config::effective::IdleCompactSeat::from(agent);
+        let smart_compact = crate::config::effective::SmartCompactSeat::from(agent);
+        ConfiguredValues {
+            keep_warm: keep_warm.declared_horizon(&self.teams, &self.profiles, harness),
+            idle_compact: idle_compact.resolve(&self.teams, &self.profiles, harness),
+            smart_compact: smart_compact.resolve(
+                &self.teams,
+                &self.profiles,
+                &self.subagent_profiles,
+                harness,
+            ),
+        }
     }
 
     /// The declared horizon when `holds` says keep-warm is holding the agent at `now`.
@@ -107,6 +137,13 @@ impl SeatPolicy {
     ) -> Option<Duration> {
         holds(agent, self.horizon(agent, harness), harness, now)
     }
+}
+
+/// The configured values a session's runtime overrides replace.
+pub struct ConfiguredValues {
+    pub keep_warm: Option<(Duration, Option<String>)>,
+    pub idle_compact: Option<u64>,
+    pub smart_compact: Option<crate::store::message::AutoCompact>,
 }
 
 /// Whether keep-warm is holding `agent` at `now` under a declared `horizon`: the one answer the
