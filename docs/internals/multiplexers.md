@@ -341,7 +341,9 @@ The sidebar's in-pane keys fire only when its pane is focused, so a room-scoped 
 
 [`KeyChord`](../../crates/rimz/src/config/keys.rs) is the shared room-key parser. It preserves case and accepts a single ASCII graphic character, optionally modified with `Alt` or `Ctrl` (`M-`/`C-` aliases and `-`/`+` separators), or bare `Esc` and `Enter`. Normal-mode bindings and the prefix require a modifier. The native `[sidebar]` chords keep that same restriction; `off` or an empty value registers nothing. Registration is best-effort at session birth, attach, and reload, so a convenience key never blocks a room. Birth and tmux reload use the same `mux::register_room_keys` body; changed tmux chords remove the previous root bindings.
 
-`MachineConfig::room_keymap` resolves without mux state. Native style produces one normal-mode map from those two sidebar chords. RimZ style overlays the embedded [`rimz.toml`](../../crates/rimz/keymaps/rimz.toml), per-machine `[keys.bind.normal|prefix|resize|move]` tables, and finally the configured prefix. The embedded `<prefix>` entries move together. Entries contain parsed keys and either validated action names or `Run { args }` arguments after the RimZ binary. One table in `config/keys.rs` maps RimZ action names to argv and background/palette execution kinds. Raw binding values survive deserialization so one malformed value yields a `ConfigNotices` entry rather than losing the file. Native style never interprets `[keys]`. Room judgment retains these notices for the sidebar and doctor; CLI config notices print them too.
+`MachineConfig::room_keymap` resolves without mux state. Native style produces one normal-mode map from those two sidebar chords. RimZ style overlays the embedded [`rimz.toml`](../../crates/rimz/keymaps/rimz.toml), per-machine `[keys.bind.normal|prefix|resize|move]` tables, and finally the configured prefix. The embedded `<prefix>` entries move together. Entries contain parsed keys and either typed named actions or `Run { args }` arguments after the RimZ binary. Native actions carry typed directions, command actions carry their argv, and palettes carry a typed mode; both backend compilers match exhaustively. One table in `config/keys.rs` maps background RimZ action names to argv. Raw binding values survive deserialization so one malformed value yields a `ConfigNotices` entry rather than losing the file. Native style never interprets `[keys]`. Room judgment retains these notices for the sidebar and doctor; CLI config notices print them too.
+
+RimZ normal and prefix bindings, including the configured prefix, refuse Ctrl aliases for terminal Enter, Esc, Tab, and Backspace. `rimz config set` validates both `keys.prefix` and `keys.keymap` before saving. Both compilers put global backend and root flags before the command argv, preserving a user's `--` separator.
 
 The backends bind the chords differently:
 
@@ -350,9 +352,15 @@ The backends bind the chords differently:
 
 Zellij runs one presence replica per `(plugin, client)`, not one wasm instance per session. Each replica installs its own client's runtime keymap, targets its own plugin id, and replays applied configuration on an observed increase in connected clients. Native style adds its two bindings to `locked` and `normal` without clearing. RimZ style clears `locked`, `tmux`, `resize`, `move`, `scroll`, `entersearch`, and `search`, removing both old RimZ keys and user keys in those modes. Prefix actions append a switch to locked; resize and move stay in their modes. Fixed vi-like scroll/search tables and a floating `rimz keys --wait` help pane complete the map. The user's `config.kdl` is unchanged. Switching back to native on an attached client restores the full stock/user map only at its next attach.
 
-Indexed command bindings use `rimz:key`; the plugin forks its configured binary plus the indexed argv only when granted and unmuted. Palette bindings reserve `rimz:palette` for the palette integration. The wire requests `report_modes` only for RimZ style; native style never forks mode wakes.
+On Zellij, an unbound key after the prefix does nothing and stays in prefix mode until `Esc`. Zellij has no keyboard selection mode like tmux's vi copy mode.
+
+tmux also binds shifted extended-key aliases for unmodified uppercase letters and `Alt+?`: the former are needed on 3.5, and the latter on both 3.5 and 3.8 for shifted modifyOtherKeys input.
+
+Indexed command bindings use `rimz:key`; the plugin forks its configured binary plus the indexed argv only when granted, independently of topology-writer authority and muting. `MessagePluginId` addresses the pressing client's replica; topology retirement does not disable that client's commands. Palette bindings reserve `rimz:palette` for the palette integration. The wire requests `report_modes` only for RimZ style; native style never forks mode wakes.
 
 Per-client `RoomMode` observations travel with client presence, then into the pane frame and sidebar snapshot as `client_modes`. Only Prefix, Resize, Move and Scrollback have entries; absence means normal. tmux samples `client_key_table` and `pane_mode` in its existing `list-clients` call: `rimz-prefix`, `rimz-resize` and `rimz-move` name their modes, while `copy-mode` takes precedence as Scrollback. Zellij replicas subscribe to their own client's `ModeUpdate` and fork `sidebar wake --reason mode --session-name S --client-id N --mode WORD --at-ms T` on changes without throttling. The host maps `tmux` to Prefix, `resize` and `move` directly, and `scroll`, `search` and `entersearch` to Scrollback; other words mean normal. The first grant publishes normal, clearing a stale lane for a reused client id. Per-client stamps strictly increase across same-millisecond changes, and a locked lane CAS prevents reordered wake children from undoing a newer observation, including normal. Mode wakes emit no sidebar event and do not depend on topology-writer authority.
+
+Zellij has an upstream load-window exception in 0.44.2 and 0.45.1. Modes and live event delivery are client-local (`zellij-org/zellij@v0.44.2:zellij-server/src/screen.rs::Screen::change_mode`, `zellij-org/zellij@v0.44.2:zellij-server/src/plugins/wasm_bridge.rs::WasmBridge::message_is_directed_at_plugin`), but events cached while a plugin loads lose their target client and replay to every client instance (`zellij-org/zellij@v0.44.2:zellij-server/src/plugins/wasm_bridge.rs::WasmBridge::update_plugins`, `zellij-org/zellij@v0.44.2:zellij-server/src/plugins/wasm_bridge.rs::WasmBridge::apply_cached_events_and_resizes_for_plugin`). A mode change on one client while another client's replica is still loading can therefore make that replica report the wrong mode until its own next mode change. The window is wider on 0.44.2, whose `zellij-org/zellij@v0.44.2:zellij-server/src/plugins/wasm_bridge.rs::WasmBridge::add_client` lacks 0.45.1's existing-pair guard and reinitializes instances on attach. Live isolation tests wait for the second replica's load-time mode lane publication before changing modes; the runtime does not mask the upstream window.
 
 Modes reach the frame on the next pane produce: one data tick while watched (a 1 s floor), or the 5 s backstop otherwise. A visit shorter than a tick can go unseen; a stuck mode stays published until it changes. This wave publishes observations only, without adding sidebar mode chrome.
 
@@ -665,7 +673,7 @@ The plugin publishes Zellij facts, and the host derives every meaning.
 
 The split keeps product policy out of plugin releases: a change to what counts as chrome, when focus is stranded, or how an event maps ships in the `rimz` crate alone. Two rules follow. The plugin carries only facts that originate in Zellij's server state; a fact derivable from the OS goes through `pane_pid` on the host, which owns `/proc`. And a new wake shape is added only for a fact that an accepted snapshot diff cannot produce.
 
-One session holds one plugin. Splitting control features across plugins would multiply lifecycle, permission, and writer-coordination work.
+One session uses one presence-plugin identity, replicated per client. Splitting control features across plugins would multiply lifecycle, permission, and writer-coordination work.
 
 ### Crate shape
 
@@ -680,7 +688,7 @@ The crate splits along the wasm boundary, which makes it testable.
 
 `engine`, `policy`, and `wire` use no `zellij-tile` type, so they compile and unit-test on the host target in the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, because its shims call extern functions that exist only inside Zellij's plugin host.
 
-The engine returns effects instead of performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
+The engine returns effects instead of performing them: `RunCommand`, `RunKeyCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
 ### What it publishes
 
@@ -694,6 +702,7 @@ Everything it publishes goes one way, as a fire-and-forget `run_command` fork of
 | `alive` | A silent snapshot for keepalives and explicit dumps: refresh the cache without broadcasting. Carries plugin telemetry. |
 | `switch-settled` | The generation-bearing client observation after a tab switch settles, with the active tab. |
 | `input` | This instance's own client's latest human-action timestamp, with client id and session; no topology, telemetry, or action payload. |
+| `mode` | This instance's own client's mode word and observation timestamp; no topology or telemetry, independent of topology authority. |
 
 Input publication is independent of topology writer election: even a muted losing writer keeps publishing its own client's input. `UserAction` is broadcast to all instances, so each filters to its load-time client id, rejects actions tagged with a CLI client, and ignores buttonless mouse motion. Clicks, drags, wheel, keys, and pastes count. `InputReceived` is not used: Zellij also emits it for RimZ's own polling and writes.
 
@@ -716,7 +725,7 @@ Five named pipes reach the plugin from the host or its runtime keybindings:
 | Pipe | Effect |
 | --- | --- |
 | `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives a muted same-id copy with its current manifest and clients withheld until a post-dump client query replies. |
-| `rimz:key` | Fork the command selected by its validated keymap index, only when granted and unmuted. |
+| `rimz:key` | Fork the command selected by its validated keymap index when granted, independently of topology muting. |
 | `rimz:palette` | Fork `rimz palette --popup --mode <mode>` with the pressing client's focused pane as `--from-pane` when known. Payloads `cards`, `commands`, and `new` select the mode; absent or unknown payloads select `cards`. |
 | `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
 | `rimz:retire` | Retire this instance if the payload's writer identity outranks it ([retirement](#retirement)). |
@@ -827,7 +836,7 @@ The plugin subscribes to `RunCommandResult` and drains the reply to every comman
 
 Success does not clear the record because wakes run far more often than telemetry is sampled; clearing would drop an intermittent failure's cause before any sample carried it. The host instead takes the cause from the window its counters measure and drops a stamp older than the window's first sample. The stamp is optional on the wire, and a failure without one stays usable instead of being dated to the epoch.
 
-Three consecutive fork failures clear the configured `rimz_bin` and retry one `alive` wake through `rimz` on PATH; a successful fork resets the count.
+Three consecutive wake-fork failures clear the configured `rimz_bin` and retry one `alive` wake through `rimz` on PATH; a successful wake fork resets the count. Indexed key commands and palette commands carry a separate run context, so their results never advance or reset that count, and never reach the per-bucket command counts or the retained failure below, which `rimz doctor` reads as wake health. The key-help floating pane is a native Zellij `Run`, not a plugin command fork.
 
 The keepalive carries WASM memory pages, uptime, per-bucket command counts (completed, succeeded, stale-writer rejections, topology failures, other failures), the retained failure, and the Zellij version into the rotating `audit/plugin-presence.log.jsonl`. That file is the leak-investigation surface, because it separates plugin linear-memory growth from Zellij-native RSS growth.
 

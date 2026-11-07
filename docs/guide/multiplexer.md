@@ -67,6 +67,8 @@ With RimZ style on tmux, `Alt+p` enters prefix mode, `r` enters sticky resize, a
 
 On Zellij, RimZ style uses the same prefix flow and sticky resize; `P [` opens vi-like scrollback and `P ?` opens the key list in a floating pane. Prefix actions return to locked mode. Each attached client gets the map, replacing stock and user keys in locked, prefix, resize, move, scroll, enter-search, and search modes; `Ctrl+g` no longer leaves locked mode unless you bind it. Reload drops removed keys in those modes. After switching back to native, detach and attach again to restore the full stock and user bindings. Your `config.kdl` remains unchanged.
 
+On Zellij, an unbound key after the prefix does nothing and stays in prefix mode until `Esc`. Zellij has no keyboard selection mode like tmux's vi copy mode.
+
 ### Change what the room asserts
 
 The `[zellij]` and `[tmux]` tables in `~/.rimz/config.toml` set the values the room asserts:
