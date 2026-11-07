@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::agents::AgentStatus;
 use crate::sidebar::body_filter::GroupFacts;
-use crate::store::snapshot::{SidebarWorktreeGroup, WorktreeCi, WorktreePrState};
+use crate::store::snapshot::{SidebarWorktreeGroup, WorktreeCi, WorktreePrQueue, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -13,7 +13,7 @@ use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
     attention_cell_style, status_chip_color, status_glyph, status_rest_style, unread_anim,
 };
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{BodyFilter, HitRegion, HitTarget};
 use crate::sidebar_pane::view::BodyLens;
 
@@ -343,27 +343,39 @@ pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGr
     unnumbered + prs.len()
 }
 
-pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
+/// Open PR attention, worst first: failed CI or dequeue, conflict, pending CI,
+/// every CI passing, otherwise unknown. Stack-only members carry no facts.
+pub(in crate::sidebar_pane::render) fn open_pr_attention(
     groups: &[SidebarWorktreeGroup],
-) -> Option<WorktreeCi> {
-    let mut saw_open = false;
+) -> Component {
     let mut saw_unknown = false;
     let mut saw_pending = false;
     let mut saw_passing = false;
+    let mut saw_conflicting = false;
     for group in groups
         .iter()
         .filter(|group| group.pr_state == Some(WorktreePrState::Open))
     {
-        saw_open = true;
+        if group.pr_queue == Some(WorktreePrQueue::Dequeued) {
+            return Component::WorktreeCiFailing;
+        }
+        saw_conflicting |= group.pr_conflicting;
         match group.ci {
-            Some(WorktreeCi::Failing) => return Some(WorktreeCi::Failing),
+            Some(WorktreeCi::Failing) => return Component::WorktreeCiFailing,
             Some(WorktreeCi::Pending) => saw_pending = true,
             Some(WorktreeCi::Passing) => saw_passing = true,
             None => saw_unknown = true,
         }
     }
-    if saw_pending {
-        return Some(WorktreeCi::Pending);
+    if saw_conflicting {
+        return Component::WorktreePrConflict;
     }
-    (saw_open && saw_passing && !saw_unknown).then_some(WorktreeCi::Passing)
+    if saw_pending {
+        return Component::WorktreeCiPending;
+    }
+    if saw_passing && !saw_unknown {
+        Component::WorktreeCiPassing
+    } else {
+        Component::WorktreePrOpen
+    }
 }

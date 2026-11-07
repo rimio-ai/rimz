@@ -51,7 +51,8 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 
 pub(in crate::sidebar_pane::render) struct CockpitBadges {
     pub open_prs: usize,
-    pub open_pr_ci: Option<crate::store::snapshot::WorktreeCi>,
+    /// Worst open-PR tone: failed/dequeued, conflicting, pending, all passing, unknown.
+    pub open_pr_attention: Component,
     pub pr_picked: bool,
 }
 
@@ -59,9 +60,10 @@ pub(in crate::sidebar_pane::render) struct CockpitBadges {
 /// agents in the room right now, the glyph in the agents' own working clay —
 /// on the left, with headline fleet spend pinned to the right edge, counting up
 /// as a turn lands. The open-PR count is a click-to-filter target and paints as
-/// a picked chip while its lens is active. It uses the worst known lane CI tone — failing,
-/// pending, or all passing — and keeps the PR-open tone when CI is unknown. It
-/// appears only when an agent lane's branch has an open PR. The figure ticks toward the
+/// a picked chip while its lens is active. Its worst open-PR tone is red for
+/// failed CI or a dequeue, caution for a current-head conflict, yellow for
+/// pending CI, green only when every open PR passes CI, and blue otherwise.
+/// It appears only when a group's branch has an open PR. The figure ticks toward the
 /// workspace tally's headline total via the shared [`TallyAnim`] roll — big decaying steps, then
 /// penny by penny onto the exact figure — and brightens for a beat the instant
 /// it settles (the W/M store rows below stay static). Always present — an empty
@@ -103,18 +105,12 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     );
     let CockpitBadges {
         open_prs,
-        open_pr_ci,
+        open_pr_attention,
         pr_picked,
     } = badges;
     let mut open_pr_range = None;
     if open_prs > 0 {
-        let component = match open_pr_ci {
-            Some(crate::store::snapshot::WorktreeCi::Passing) => Component::WorktreeCiPassing,
-            Some(crate::store::snapshot::WorktreeCi::Pending) => Component::WorktreeCiPending,
-            Some(crate::store::snapshot::WorktreeCi::Failing) => Component::WorktreeCiFailing,
-            None => Component::WorktreePrOpen,
-        };
-        let tone = theme.component(component);
+        let tone = theme.component(open_pr_attention);
         left.push(Span::styled(" ".to_owned(), theme.body()));
         let start = spans_width(&left);
         let mut pr_spans = metric_spans(

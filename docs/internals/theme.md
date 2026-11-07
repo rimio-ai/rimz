@@ -210,7 +210,7 @@ One function per typed enum matches it with no wildcard: `agent` (`AgentStatus`)
 
 In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for fixed roles, and `Component::resolve` is its one mapping to a palette slot. `Component::CompactionPoint` maps the context meter's wall and the identity label's point to `meta`, both at `DIM` weight; the `/window` suffix uses `muted`. `Theme` has no `accent`, `cool`, or `meta` accessor, so sidebar render code reaches a categorical slot only by naming a component: the intent shows at the call site while the hue stays one central decision. The one other route is the animation defaults in `render/animation.rs`, which pick status-head colors through `Palette::animation_color` because those colors are user-configurable under `[theme.animations]`. There the paused and sleeping heads default to `cool`, and the compacting wave to `meta`.
 
-Two kinds of sidebar color stay off the component layer. Amount-driven tones come from `Theme::heat_tone`, `warm_heat_tone`, and `calm_tone`. Fixed positive, floor, and negative chrome (diff churn, trunk markers, gate notices) uses the flat `Theme::good`, `warn`, and `alarm`, where the tier name is the intent.
+Two kinds of sidebar color stay off the component layer. Amount-driven tones come from `Theme::heat_tone`, `warm_heat_tone`, and `calm_tone`. Fixed positive, floor, and negative chrome (diff churn, gate notices) uses the flat `Theme::good`, `warn`, and `alarm`, where the tier name is the intent. Trunk markers resolve through component roles; the conflict marker and cockpit PR count share `Component::WorktreePrConflict` so a retune moves both.
 
 ## Shared value formats
 

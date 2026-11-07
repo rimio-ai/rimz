@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use super::sections::{
     DashboardContext, RowCtx, Tier, WorktreeRenderContext, content_width, dashboard_block,
-    fleet_header_lines, fleet_store_lines, open_pr_total, open_pr_worst_ci,
+    fleet_header_lines, fleet_store_lines, open_pr_attention, open_pr_total,
     reset_expiry_heat_amount, worktree_group_lines_projected,
 };
 use crate::sidebar_pane::pixel::meter::MeterPixels;

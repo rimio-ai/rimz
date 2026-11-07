@@ -1651,6 +1651,83 @@ fn render_merge_queue_marker_replaces_the_open_pr_glyph() {
 }
 
 #[test]
+fn render_conflict_marker_ranks_below_dequeued_and_reconciling() {
+    use crate::store::snapshot::{WorktreePrQueue::*, WorktreePrState, WorktreeTrunkSync::*};
+    let mut snapshot = pristine_worktree_with_pr_state(Some(WorktreePrState::Open));
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for (set, conflict) in [("unicode", "↯"), ("nerd_font", "\u{ec6e}")] {
+        snapshot.theme.glyphs.set = Some(set.to_owned());
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        for (queue, sync, role, component) in [
+            (
+                None,
+                Pristine,
+                GlyphRole::WorktreePrConflict,
+                Component::WorktreePrConflict,
+            ),
+            (
+                Some(Dequeued),
+                Pristine,
+                GlyphRole::WorktreePrQueue,
+                Component::WorktreeCiFailing,
+            ),
+            (
+                Some(Queued),
+                Pristine,
+                GlyphRole::WorktreePrConflict,
+                Component::WorktreePrConflict,
+            ),
+            (
+                Some(Queued),
+                Reconciling,
+                GlyphRole::WorktreeReconciling,
+                Component::WorktreeReconciling,
+            ),
+        ] {
+            let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+            group.pr_conflicting = true;
+            group.pr_queue = queue;
+            group.trunk_sync = Some(sync);
+            group.ci = None;
+            let lines = group_lines(&snapshot, &theme, 0);
+            let marker = lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content.ends_with(" main"));
+            let ci = [
+                GlyphRole::WorktreeCiPassing,
+                GlyphRole::WorktreeCiFailing,
+                GlyphRole::WorktreeCiPending,
+            ];
+            let has_ci = lines[0].spans.iter().any(|span| {
+                ci.iter()
+                    .any(|role| span.content.as_ref() == format!(" {}", theme.glyph(*role)))
+            });
+            readings.push((
+                set,
+                marker.map(|span| (span.content.to_string(), span.style)),
+                has_ci,
+            ));
+            let glyph = if role == GlyphRole::WorktreePrConflict {
+                conflict
+            } else {
+                theme.glyph(role)
+            };
+            expected.push((
+                set,
+                Some((
+                    format!("{glyph} main"),
+                    theme.styled(component, Modifier::empty()),
+                )),
+                false,
+            ));
+        }
+    }
+    assert_eq!(readings, expected);
+}
+
+#[test]
 fn render_branch_ci_without_a_pr_badge() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);

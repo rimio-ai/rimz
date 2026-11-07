@@ -109,7 +109,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
 | `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the parked-workflow notice, workflow `parked` words and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
-| `caution` | the warm "hot or costly" amber: the gauge mid-band, the age-heat midpoint, and the active stall lead and figures |
+| `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, and the conflicted pull request marker and cockpit PR count |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph and the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
@@ -121,7 +121,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
-Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) and its age clock wear a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.
+Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot, costly, or blocked until you act" everywhere. The [expired context meter](./sidebar.md) and its age clock wear a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.
 
 The four health slots also form a ramp, `good → warn → caution → alarm`, green through gold and orange to red, and the live meters slide along it. The context meter, the remote link badge, and the draining provider budget bar ride the whole ramp. The card age clock stays neutral until its [cache warning band](../interface/sidebar.md#the-card), then warms from yellow through orange to red using the agent's resolved lifetime, fallback included. A card with tokens and an unresolved lifetime with the fallback or provider setting `off` keeps a muted pin. A [no-cache card](../interface/sidebar.md#the-card) has no pin, even during a hold, and its stale-line age stays muted. Its face never rings. The reset-countdown pace uses the warm tail, with a cool green tail of its own once spending runs well under pace.
 

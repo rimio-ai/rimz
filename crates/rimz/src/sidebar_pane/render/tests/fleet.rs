@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 
 #[test]
 fn make_up_counts_a_working_team_once_without_its_rest_buckets() {
@@ -993,36 +994,145 @@ fn open_pr_total_counts_distinct_open_prs() {
 }
 
 #[test]
-fn cockpit_pr_ci_uses_worst_known_open_verdict() {
+fn cockpit_pr_attention_uses_the_worst_open_verdict() {
+    use crate::store::snapshot::{WorktreeCi::*, WorktreePrQueue::Dequeued, WorktreePrState::*};
+    let snapshot = make_up_snapshot();
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for (first, second, queue, conflicting, state, component) in [
+        (
+            Some(Passing),
+            Some(Passing),
+            None,
+            false,
+            Open,
+            Component::WorktreeCiPassing,
+        ),
+        (
+            Some(Passing),
+            None,
+            None,
+            false,
+            Open,
+            Component::WorktreePrOpen,
+        ),
+        (
+            Some(Passing),
+            Some(Pending),
+            None,
+            false,
+            Open,
+            Component::WorktreeCiPending,
+        ),
+        (
+            Some(Failing),
+            Some(Pending),
+            None,
+            false,
+            Open,
+            Component::WorktreeCiFailing,
+        ),
+        (
+            Some(Failing),
+            None,
+            None,
+            true,
+            Open,
+            Component::WorktreeCiFailing,
+        ),
+        (
+            Some(Passing),
+            Some(Passing),
+            Some(Dequeued),
+            true,
+            Open,
+            Component::WorktreeCiFailing,
+        ),
+        (
+            Some(Passing),
+            Some(Pending),
+            None,
+            true,
+            Open,
+            Component::WorktreePrConflict,
+        ),
+        (
+            Some(Passing),
+            Some(Passing),
+            None,
+            true,
+            Open,
+            Component::WorktreePrConflict,
+        ),
+        (
+            Some(Passing),
+            None,
+            None,
+            true,
+            Open,
+            Component::WorktreePrConflict,
+        ),
+        (None, None, None, false, Closed, Component::WorktreePrOpen),
+        (
+            Some(Passing),
+            None,
+            None,
+            true,
+            Closed,
+            Component::WorktreeCiPassing,
+        ),
+    ] {
+        let mut groups = vec![
+            open_group(&snapshot, "first", Some(1)),
+            open_group(&snapshot, "second", Some(2)),
+        ];
+        groups[0].ci = first;
+        groups[0].pr_queue = queue;
+        groups[1].ci = second;
+        groups[1].pr_conflicting = conflicting;
+        groups[1].pr_state = Some(state);
+        readings.push(open_pr_attention(&groups));
+        expected.push(component);
+    }
+    assert_eq!(readings, expected);
+}
+
+#[test]
+fn render_cockpit_conflict_tone_and_picked_chip() {
     let mut snapshot = make_up_snapshot();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
-        Some(crate::store::snapshot::WorktreePrState::Open);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
-        Some(crate::store::snapshot::WorktreeCi::Passing);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state =
-        Some(crate::store::snapshot::WorktreePrState::Open);
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci =
-        Some(crate::store::snapshot::WorktreeCi::Passing);
-    assert_eq!(
-        open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::store::snapshot::WorktreeCi::Passing)
-    );
-
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci = None;
-    assert_eq!(open_pr_worst_ci(&snapshot.worktree_groups), None);
-
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci =
-        Some(crate::store::snapshot::WorktreeCi::Pending);
-    assert_eq!(
-        open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::store::snapshot::WorktreeCi::Pending)
-    );
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
-        Some(crate::store::snapshot::WorktreeCi::Failing);
-    assert_eq!(
-        open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::store::snapshot::WorktreeCi::Failing)
-    );
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    group.pr_conflicting = true;
+    group.ci = None;
+    let theme = Theme::fixed(false);
+    let tone = theme.component(Component::WorktreePrConflict);
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for picked in [false, true] {
+        let mut view = ViewState::default();
+        if picked {
+            view.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
+        }
+        let top = super::super::compose::top_lines(&snapshot, &view, 38, &theme);
+        let line = top
+            .lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "⑃"))
+            .unwrap();
+        let pr = line
+            .spans
+            .iter()
+            .position(|span| span.content.as_ref() == "⑃")
+            .unwrap();
+        readings.push((line.spans[pr].style, line.spans[pr + 1].style));
+        expected.push(if picked {
+            let style = theme.picked_chip(tone, Modifier::BOLD);
+            (style, style)
+        } else {
+            (theme.style(tone, Modifier::empty()), theme.body())
+        });
+    }
+    assert_eq!(readings, expected);
 }
 
 #[test]
