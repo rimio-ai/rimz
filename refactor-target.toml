@@ -3366,7 +3366,7 @@ surface-budget = 50
 [[verdict]]
 kind = "item"
 key = "pane::attended_until"
-reason = "Live message sends and sidebar pens share one per-pane attached-client input-hold rule."
+reason = "Off Linux, live message sends and sidebar pens share the attached-client input-hold rule."
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -3397,7 +3397,8 @@ upward-dependencies = [
 # launched_script_command lets the resume walk read a JS launcher's argv as its script's (+1).
 # socket_inodes and socket_inodes_for_env share Linux fd ownership with remote discovery (+2).
 # pressure shares the cgroup-first PSI reader, Resource and its name, Pressure and PressureErr (+6).
-surface-budget = 155
+# input_tty_path shares the controlling-pty resolution with the sidebar host (+1).
+surface-budget = 156
 
 [[verdict]]
 kind = "item"
@@ -3488,6 +3489,11 @@ reason = "List and doctor must reject gone or reused server process identities i
 kind = "item"
 key = "proc::input_tty"
 reason = "The detached focus helper opens the provider's pty for a non-consuming queue-length probe."
+
+[[verdict]]
+kind = "item"
+key = "proc::input_tty_path"
+reason = "The sidebar host resolves pane tty paths with the same decoder as hibernation's input probe."
 
 [[verdict]]
 kind = "item"

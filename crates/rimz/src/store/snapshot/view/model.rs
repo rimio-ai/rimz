@@ -867,7 +867,7 @@ pub struct PresenceSample {
         deserialize_with = "deserialize_client_clocks"
     )]
     pub client_input_ms: BTreeMap<crate::ids::MuxClientId, u64>,
-    /// Client-to-pane pairs from the same read as the input clocks.
+    /// Typing-viewer pairs from the same read as the input clocks; topology stays in the frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub client_views: Vec<crate::pane::ClientPaneView>,
     pub sampled_at_ms: u64,

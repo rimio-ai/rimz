@@ -16,6 +16,7 @@ use crate::agents::context::SignIn;
 use crate::agents::spending::SpendingCaches;
 use crate::forge::pr_state::{PrLink, PrQueueFact, SettledMergeability, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::mux::typing::{InputSource, TypingRecord};
 use crate::store::Store;
 use crate::store::snapshot::{
     HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
@@ -679,7 +680,7 @@ fn enrich_core(
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.apply_machine_config(&machine_config);
-    snapshot.typing_until = typing_deadlines(frame, machine_config.harness.typing_hold);
+    snapshot.typing_until = typing_deadlines(runtime, frame, machine_config.harness.typing_hold);
     fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
@@ -991,27 +992,35 @@ fn enrich_core(
 }
 
 fn typing_deadlines(
+    runtime: &RuntimePaths,
     frame: Option<&PaneFrame>,
     hold: Option<std::time::Duration>,
 ) -> HashMap<PaneId, jiff::Timestamp> {
     let Some((frame, hold)) = frame.zip(hold) else {
         return HashMap::new();
     };
-    let Some(sample) = &frame.presence else {
-        return HashMap::new();
+    let record = if InputSource::uses_tty() {
+        TypingRecord::load(runtime)
+    } else {
+        TypingRecord::default()
     };
-    sample
-        .client_views
-        .iter()
-        .filter_map(|client| {
-            let until = crate::pane::attended_until(
-                &sample.client_views,
-                &sample.client_input_ms,
-                &client.pane_id,
-                hold,
-            )?;
+    let clients = frame
+        .presence
+        .as_ref()
+        .map_or(&[][..], |sample| sample.client_views.as_slice());
+    let empty_clocks = BTreeMap::new();
+    let clocks = frame
+        .presence
+        .as_ref()
+        .map_or(&empty_clocks, |sample| &sample.client_input_ms);
+    let source = InputSource::for_platform(&record, clients, clocks);
+    record
+        .panes()
+        .chain(clients.iter().map(|client| &client.pane_id))
+        .filter_map(|pane| {
+            let until = source.deadline(pane, Some(hold))?;
             let until = jiff::Timestamp::from_millisecond(i64::try_from(until).ok()?).ok()?;
-            Some((client.pane_id.clone(), until))
+            Some((pane.clone(), until))
         })
         .collect()
 }

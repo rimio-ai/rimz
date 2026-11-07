@@ -22,6 +22,7 @@ fn candidate_repair_shares_root_reads_across_all_process_probes() {
         &agents,
         &mut SettledResumes::new(),
         &RepairReaders::system(),
+        &mut |_| {},
     );
     assert!(first(&candidate).current.command.is_some());
     assert!(first(&candidate).current.cwd.is_some());
@@ -55,6 +56,7 @@ fn candidate_repair_shares_root_reads_across_all_process_probes() {
                 &agents,
                 &mut SettledResumes::new(),
                 &RepairReaders::system(),
+                &mut |_| {},
             );
             Ok((confirmed, true))
         },
@@ -142,6 +144,7 @@ fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
         settled_resumes: &mut SettledResumes::new(),
         held_checks: &mut HashMap::new(),
         checked_panes: HashSet::new(),
+        resolve_ttys: &mut |_| {},
     };
     for _ in 0..2 {
         let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();
@@ -208,6 +211,7 @@ fn unwatched_prior_selects_event_ttl_and_absent_prior_stays_watched() {
                     )])))
                 },
                 &|_, _| None,
+                &|_| None,
             )
             .unwrap();
         assert_eq!(
@@ -490,6 +494,7 @@ fn carried_prior_expires_at_poll_ttl_in_event_mode() {
                     ctx.produce(prior)
                 },
                 &|_, _| None,
+                &|_| None,
             )
             .expect("event-mode produce uses pushed topology after a carried prior expires");
         assert_eq!(
@@ -631,7 +636,8 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
                 &mut |_, _| Err(crate::sidebar::produce::ProduceErr::FrameRejected(
                     FrameRejectReason::MissingOwnPane
                 )),
-                &|_, _| None
+                &|_, _| None,
+                &|_| None
             )
             .is_err(),
         "a cache missing the renderer's own pane must not short-circuit produce"
@@ -653,7 +659,8 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
                 Some(&own),
                 &diag,
                 &mut |_, _| panic!("valid fresh frame must not produce"),
-                &|_, _| None
+                &|_, _| None,
+                &|_| None
             )
             .is_ok()
     );
@@ -796,6 +803,7 @@ fn missing_own_pane_without_prior_publishes() {
                 )
             },
             &|_, _| None,
+            &|_| None,
         )
         .expect("missing-own frame without prior remains publishable");
 
@@ -885,6 +893,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
                     )
                 },
                 &|_, _| None,
+                &|_| None,
             )
             .expect("verified frame publishes");
         assert_eq!(pane_count(&published), expected_count, "{name}");

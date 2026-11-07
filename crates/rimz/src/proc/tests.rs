@@ -195,7 +195,7 @@ fn input_tty_path_decodes_pts_and_rejects_non_pts() {
         (136, 600_000, 600_000),
     ] {
         assert_eq!(
-            input_tty_path(&stat(major, minor)),
+            parse_input_tty_path(&stat(major, minor)),
             Some(PathBuf::from(format!("/dev/pts/{index}")))
         );
     }
@@ -207,7 +207,7 @@ fn input_tty_path_decodes_pts_and_rejects_non_pts() {
         "bad stat".into(),
         "1 (sh) S 1 2 3 nope".into(),
     ] {
-        assert_eq!(input_tty_path(&line), None);
+        assert_eq!(parse_input_tty_path(&line), None);
     }
 }
 

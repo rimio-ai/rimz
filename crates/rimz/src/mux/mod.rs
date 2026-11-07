@@ -19,10 +19,6 @@ pub mod room_settings;
 mod selection;
 pub mod tab_name;
 pub mod tmux;
-#[expect(
-    dead_code,
-    reason = "Connected by the following pane-write, delivery and host commits."
-)]
 pub(crate) mod typing;
 pub(crate) mod width;
 pub(crate) mod width_target;
