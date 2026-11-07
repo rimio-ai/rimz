@@ -155,6 +155,31 @@ fn message_marks_follow_the_compaction_gaps_percentage_below_l2() {
 }
 
 #[test]
+fn message_marks_shrink_the_column_padding_before_dropping_a_mark() {
+    let theme = Theme::fixed(false);
+    let actual = [true, false].map(|has_cache| {
+        let mut snapshot = message_card(AgentStatus::Idle, None);
+        snapshot.theme.display.card_density = CardDensityMode::Compact;
+        let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+        card.prompt = Some("history".to_owned());
+        card.delegated_cost_usd = None;
+        card.handle = Some("h".repeat(18));
+        card.compacted_unmeasured = true;
+        card.compacted_since_prompt = !has_cache;
+        card.cache = Some(CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: None,
+            warm_until: None,
+            rewarm_cost_usd: None,
+        });
+        set_message_marks(&mut snapshot, 3, true);
+        let lines = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, 32));
+        lines.iter().find_map(|line| end_column(line, "✎ ↧ 3"))
+    });
+    assert_eq!(actual, [Some(27), Some(31)]);
+}
+
+#[test]
 fn message_marks_pin_to_description_with_each_mark_both_sets_and_no_color() {
     let mut actual = Vec::new();
     let mut frames = Vec::new();
