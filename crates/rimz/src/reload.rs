@@ -718,7 +718,7 @@ fn upgrade_live(
         }
     };
     if *mux == MuxName::Tmux {
-        crate::mux::register_room_keys(backend.as_ref(), &machine_config.sidebar, &room_bin);
+        crate::mux::register_room_keys(backend.as_ref(), machine_config, &room_bin);
     }
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 

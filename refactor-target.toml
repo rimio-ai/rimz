@@ -3298,8 +3298,8 @@ reason = "Crate-internal reload reads the mux-owned record rather than duplicati
 
 [[verdict]]
 kind = "item"
-key = "mux::focus_key::register_room_keys"
-reason = "Birth and tmux reload bind configured chords through the same body."
+key = "mux::keymap::register_room_keys"
+reason = "Birth and tmux reload apply the resolved machine keymap through the same body."
 
 [[verdict]]
 kind = "item"
@@ -10270,11 +10270,6 @@ reason = "WidthPermille::from_percent is called by the integration crate's tmux 
 kind = "item"
 key = "mux::width::resolve"
 reason = "WidthPercent::resolve is called only by the separate integration crate, which sees only pub (integration::backend::tmux::support, integration::backend::zellij::width, integration::journey::deep); the binary no longer reads it (pass 24c)."
-
-[[verdict]]
-kind = "item"
-key = "mux::focus_key::RoomKeyBinding"
-reason = "Signature floor on the pub MuxBackend::register_room_key (mux/mod.rs:932) (pass 24c)."
 
 [[verdict]]
 kind = "item"

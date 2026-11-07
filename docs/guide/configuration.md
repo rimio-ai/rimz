@@ -468,6 +468,8 @@ Ctrl chords that alias Enter, Esc, Tab, or Backspace are refused in normal and p
 
 A value is a named action, `"none"`, or `{ run = "rimz ..." }`. Commands use shell-style quoting to split arguments, not shell evaluation: pipes, substitutions, and redirects are literal arguments. The first word must be `rimz`; RimZ uses its own binary when running the binding. Invalid bindings warn with their dotted path and are ignored individually, leaving the rest of the file and keymap intact. An invalid prefix warns and uses `Alt+p`; an invalid keymap name warns and uses `rimz`.
 
+On tmux, reload removes the previous keymap's bindings before installing the new one. RimZ style uses its own prefix, resize, and move tables and vi copy mode; switching back to native removes those tables and restores the prior copy-mode key style. Unrelated root bindings and your tmux prefix table remain, but a user binding overwritten by a RimZ chord needs a server restart to return. Keys are server-global, so the most recently applied keymap wins across rooms. User commands run from the pressing room's directory; RimZ supplies the backend, not a verb-specific `--session-name` flag.
+
 Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind` and its mode tables in `~/.rimz/config.toml`, not with `rimz config set`.
 
 ### Multiplexer room options
