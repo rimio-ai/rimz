@@ -13,6 +13,7 @@ macro_rules! require_tmux {
 }
 
 mod agent_lifecycle;
+mod card_commands;
 mod containment;
 mod hidden_geometry;
 mod large_paste;

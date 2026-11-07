@@ -2,6 +2,7 @@
 //! and the browser suite self-skips without ttyd, Chromium, and its selected
 //! mux; the shared `CommandSpec` engine suite needs only coreutils.
 
+mod card_commands;
 mod command;
 mod shared_view;
 mod single_backend_room;

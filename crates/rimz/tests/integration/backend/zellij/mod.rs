@@ -20,6 +20,7 @@ macro_rules! require_zellij {
     };
 }
 
+mod card_commands;
 mod containment;
 mod daemon;
 mod large_paste;
