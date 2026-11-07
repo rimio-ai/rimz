@@ -765,8 +765,7 @@ enum Subcmd {
     PricingRefresh(pricing_refresh::PricingRefreshArgs),
     #[command(visible_alias = "msg")]
     Message(Box<message::MessageArgs>),
-    /// Sidebar helper API. The sidebar calls these; humans usually do not.
-    #[command(hide = true)]
+    /// Navigate sidebar cards, filter the fleet, and recover the column.
     Sidebar(sidebar::SidebarArgs),
     /// Statusline datasource. The installed `statusLine` command calls this;
     /// humans do not.

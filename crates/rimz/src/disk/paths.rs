@@ -1179,6 +1179,11 @@ impl RuntimePaths {
         self.lane_path("sidebar-filter.json")
     }
 
+    /// Runtime undo stack for agent cards closed through `rimz sidebar close`.
+    pub fn sidebar_closed_cards_path(&self) -> PathBuf {
+        self.lane_path("closed-cards.json")
+    }
+
     /// The workspace-wide set of open unread episodes. The room host's fetch
     /// worker owns writes for status-derived opens and row-gone pruning, on every
     /// final fold that carries a pane frame, cached or produced; renderers and CLI

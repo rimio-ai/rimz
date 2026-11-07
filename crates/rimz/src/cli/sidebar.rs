@@ -1,4 +1,4 @@
-//! `rimz sidebar` — inspect, serve, and structurally repair the sidebar fleet.
+//! `rimz sidebar` — navigate cards, inspect, serve, and repair the sidebar fleet.
 //!
 //! Snapshot inspection and one-shot frame rendering are thin delegates over the
 //! library data plane. Snapshot resolves workspace/session/mux and calls
@@ -7,11 +7,14 @@
 //! back to the same producer path. The CLI owns argv, fallback intent, and
 //! stdout alone. The room host produces in process on its fetch worker, so
 //! these arms serve inspection and scripting.
+//!
+//! Card commands reduce navigation in the host's view. The CLI alone closes
+//! panes, resumes agents, and maintains the runtime closed-card undo list.
 
 use std::io::Write;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{ArgAction, Args, Subcommand};
+use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
@@ -27,6 +30,8 @@ use rimz::wakeup::events::SidebarEvent;
 use rimz::workspace::{WorkspaceResolver, record};
 use rimz::{RuntimePaths, StatePaths};
 
+mod cards;
+
 #[derive(Debug, Args)]
 pub struct SidebarArgs {
     #[command(subcommand)]
@@ -35,6 +40,47 @@ pub struct SidebarArgs {
 
 #[derive(Debug, Subcommand)]
 enum SidebarSubcmd {
+    /// Focus the next or previous visible card, wrapping at the ends.
+    Walk {
+        #[arg(value_enum)]
+        direction: WalkDirection,
+        /// Jump to the first card of the next or previous worktree group.
+        #[arg(long)]
+        worktree: bool,
+        #[arg(long)]
+        session_name: Option<String>,
+    },
+    /// Focus a room-wide card slot, numbered by pane birth.
+    Slot {
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        n: u8,
+        #[arg(long)]
+        session_name: Option<String>,
+    },
+    /// Return to this view's previous card.
+    Last {
+        #[arg(long)]
+        session_name: Option<String>,
+    },
+    /// Show cards waiting for you or reporting a failure.
+    Filter {
+        #[arg(value_enum)]
+        filter: CardFilter,
+        #[arg(long)]
+        toggle: bool,
+        #[arg(long)]
+        session_name: Option<String>,
+    },
+    /// Close the highlighted card's pane, stopping an agent's children first.
+    Close {
+        #[arg(long)]
+        session_name: Option<String>,
+    },
+    /// Reopen the most recently closed agent card in a new tab.
+    Reopen {
+        #[arg(long)]
+        session_name: Option<String>,
+    },
     /// Render a one-shot room snapshot.
     Snapshot {
         #[arg(long)]
@@ -182,6 +228,17 @@ enum SidebarSubcmd {
         #[arg(long)]
         no_command: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum WalkDirection {
+    Next,
+    Prev,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CardFilter {
+    NeedsYou,
 }
 
 #[derive(Debug, Args)]
@@ -356,6 +413,12 @@ impl SidebarArgs {
     /// The low-cardinality command label for the Sentry command scope.
     pub(crate) fn command_label(&self) -> &'static str {
         match &self.command {
+            SidebarSubcmd::Walk { .. } => "sidebar walk",
+            SidebarSubcmd::Slot { .. } => "sidebar slot",
+            SidebarSubcmd::Last { .. } => "sidebar last",
+            SidebarSubcmd::Filter { .. } => "sidebar filter",
+            SidebarSubcmd::Close { .. } => "sidebar close",
+            SidebarSubcmd::Reopen { .. } => "sidebar reopen",
             SidebarSubcmd::Snapshot { .. } => "sidebar snapshot",
             SidebarSubcmd::Frame { .. } => "sidebar frame",
             SidebarSubcmd::Serve { .. } => "sidebar serve",
@@ -376,7 +439,43 @@ impl SidebarArgs {
 }
 
 pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
+    use rimz::sidebar_pane::{CardDirection, CardRequest};
+
     match args.command {
+        SidebarSubcmd::Walk {
+            direction,
+            worktree,
+            session_name,
+        } => cards::request(
+            globals,
+            session_name,
+            CardRequest::Walk {
+                direction: match direction {
+                    WalkDirection::Next => CardDirection::Next,
+                    WalkDirection::Prev => CardDirection::Prev,
+                },
+                worktree,
+            },
+        ),
+        SidebarSubcmd::Slot { n, session_name } => {
+            cards::request(globals, session_name, CardRequest::Slot { n })
+        }
+        SidebarSubcmd::Last { session_name } => {
+            cards::request(globals, session_name, CardRequest::Last)
+        }
+        SidebarSubcmd::Filter {
+            filter: CardFilter::NeedsYou,
+            toggle,
+            session_name,
+        } => cards::request(
+            globals,
+            session_name,
+            CardRequest::FilterNeedsYou { toggle },
+        ),
+        SidebarSubcmd::Close { session_name } => {
+            cards::request(globals, session_name, CardRequest::CloseTarget)
+        }
+        SidebarSubcmd::Reopen { session_name } => cards::reopen(globals, session_name),
         SidebarSubcmd::Snapshot {
             workspace_id,
             mux,
@@ -1280,8 +1379,7 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     };
     let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
     let target = if toggle && on_sidebar {
-        // The toggle-back target: a working pane in the sidebar's own tab. This
-        // is stateless; the Zellij plugin path tracks the precise prior pane.
+        // The toggle-back target is a deterministic working sibling on both backends.
         let sidebar_view = listing
             .panes
             .iter()
