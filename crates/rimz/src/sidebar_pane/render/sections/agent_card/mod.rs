@@ -372,15 +372,18 @@ pub(super) fn row_lines(
 
 /// The marks, padded to end at the meter's percentage column. `trailing_width` is
 /// what the line pins after them, gap included; a cluster wider than the padding
-/// pushes the marks left of that column.
+/// pushes the marks left of that column. The padding shrinks before a mark drops,
+/// so a full line slides the marks right instead.
 fn message_marks(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
     width: usize,
     trailing_width: usize,
 ) -> Vec<Span<'static>> {
-    let padding = gauge_age_width(ctx, row).saturating_sub(trailing_width);
-    let mut marks = message_mark_spans(ctx, row, width.saturating_sub(padding));
+    let mut marks = message_mark_spans(ctx, row, width);
+    let padding = gauge_age_width(ctx, row)
+        .saturating_sub(trailing_width)
+        .min(width.saturating_sub(spans_width(&marks)));
     if !marks.is_empty() && padding > 0 {
         marks.push(Span::raw(" ".repeat(padding)));
     }
