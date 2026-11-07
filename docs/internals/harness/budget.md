@@ -34,7 +34,7 @@ Caps take finite, non-negative dollar amounts with an optional `$` prefix. A lea
 
 | Type | Accepts | Used by |
 | --- | --- | --- |
-| `BudgetSpec` | a bare amount (`BudgetWindow::Session`) or a `/day` amount (`BudgetWindow::Day`) | `--budget`, profile and role budgets, `rimz agents budget` |
+| `BudgetSpec` | a bare amount (`BudgetWindow::Session`) or a `/day` amount (`BudgetWindow::Day`) | `--budget`, profile and role budgets, `rimz agents tune … budget` |
 | `DayCap` | a `/day` amount only | `harness.budget`, absolute fleet `rimz budget` values |
 | `AccountCap` | a `/day` or `/month` amount | `[accounts.budget]`, standalone named-account `budget`, absolute `rimz budget --account` values |
 | `TurnCap` | a bare amount only | `harness.turn_budget` |
@@ -43,7 +43,7 @@ Caps take finite, non-negative dollar amounts with an optional `$` prefix. A lea
 
 ## Where a cap comes from
 
-An agent cap enters through launch identity and is then owned by its ledger. Each due agent check stats the ledger and reuses its parse while the full file stamp is unchanged, then copies the current launch spec onto it when it differs, so relaunching with a different `--budget` takes effect. A check that would write the ledger or interrupt the agent rereads fresh bytes and evaluates again first. A runtime change through `rimz agents budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next check does not undo a CLI adjustment.
+An agent cap enters through launch identity and is then owned by its ledger. Each due agent check stats the ledger and reuses its parse while the full file stamp is unchanged, then copies the current launch spec onto it when it differs, so relaunching with a different `--budget` takes effect. A check that would write the ledger or interrupt the agent rereads fresh bytes and evaluates again first. A runtime change through `rimz agents tune … budget` (an absolute cap, a raise, or `clear`) sets `raised_cap_usd` or `disabled`. Either one pins the ledger and stops that refresh, so the next check does not undo a CLI adjustment.
 
 The turn cap is read straight from machine config on every tick. It has no launch flag, profile field, runtime override, raise, clear, or waiver. Removing the key drops every turn entry on the next tick.
 
@@ -91,7 +91,7 @@ The month reader likewise accepts only an equal `month_cutoff_secs`, computed by
 
 | File | Location | Holds | Writers |
 | --- | --- | --- | --- |
-| `budget.<digest>.json` | room runtime `lanes/` | one agent: the spec, a runtime raise or disable, the day baseline, the park stamp, the interrupt throttle, the waiver | producer, `rimz agents budget` |
+| `budget.<digest>.json` | room runtime `lanes/` | one agent: the spec, a runtime raise or disable, the day baseline, the park stamp, the interrupt throttle, the waiver | producer, `rimz agents tune … budget` |
 | `budget.scopes.json` | room runtime `lanes/` | `BudgetScopeState`: per-agent turn entries (baseline, park, throttle), plus each agent's fleet and account waiver, park threshold, and interrupt throttle | producer |
 | `budget.fleet.json` | room state `records/` | the standing fleet override, raise, or disable | `rimz budget` |
 | `budget.fleet-park.json` | room runtime `lanes/` | the fleet park stamp | producer, cleared by `rimz budget` |
@@ -105,7 +105,7 @@ Each ledger has its own locking rule, set by who writes it:
 
 - The fleet's choices and its park live in separate files with separate steady writers, so no park merge needs a lock. `DailyBudgetScope::write_ledger` writes the record under `locks/budget.fleet.lock` and then clears the park lane. A CLI clear raced by a producer tick is corrected on the next `Under` or `Disabled` verdict.
 - The account ledger holds both choices and park in one file that the producer and `rimz budget` share, so every write takes its lock under the runtime `shared/` root (`RuntimePaths::shared_account_budget_lock`). The producer never writes the whole ledger: `ScopeLedgerFile::merge_park` re-reads the file under the lock and replaces only `parked`, so a tick cannot overwrite a cap change the CLI just made. The CLI reads without the lock and writes the whole ledger under it, and the park it might overwrite is one it clears anyway.
-- The agent ledger and `budget.scopes.json` take no lock. `budget.scopes.json` has one writer, the producer. The agent ledger has two, and the producer rewrites it whole before each helper spawn and on any tick that changed it, so a tick that read the ledger before a `rimz agents budget` write and writes after it can undo that change.
+- The agent ledger and `budget.scopes.json` take no lock. `budget.scopes.json` has one writer, the producer. The agent ledger has two, and the producer rewrites it whole before each helper spawn and on any tick that changed it, so a tick that read the ledger before a `rimz agents tune … budget` write and writes after it can undo that change.
 
 The account ledger is the only machine-shared ledger. Every room with an agent on the pool evaluates the same account spend against the same ledger, but each room interrupts only its own panes, and interrupt and waiver state stay in each room's `budget.scopes.json`. A raise from one room clears the shared park. Unless the pool's spend still meets the new cap, every room's next tick then stops projecting the account park onto its agents. Only the room that ran the command queues continue prompts, and only to the agents it interrupted. Agents another room interrupted stay at rest. With auto-continue enabled, a window turn instead fires the due continue for every room's interrupted agents, even if another room has already cleared the shared park.
 
@@ -189,12 +189,14 @@ A loop fire checks its task's own daily cap first, in `run_log::daily_budget_gat
 
 Two commands write the ledgers, and neither edits a config file. Every mutation clears the park and the budget auto-continue record of each agent it covers. When the park it lifted had interrupted an agent in this room, the command then queues the configured continue prompt (`[resume] auto_continue_text`) to that agent, as `MessageSender::System` at the `Done` gate. A raise therefore does not nudge agents that were resting for their own reasons. `--no-continue` lifts the park without the prompt, and an empty `auto_continue_text` sends none.
 
-[`rimz agents budget`](../../../crates/rimz/src/cli/agents_cmd/budget.rs) inspects or sets one agent's cap. An agent launched without a budget can be given one this way.
+[`rimz agents tune … budget`](../../../crates/rimz/src/cli/agents_cmd/tune/budget.rs) inspects or sets one agent's cap. An agent launched without a budget can be given one this way. A mutation, reset included, refuses ended sessions and provider-native subagents before reading the ledger; reports still work for those rows.
 
 - An absolute value is stored as `raised_cap_usd`, with its window written onto the spec. Switching into `/day` stamps a baseline at the current cost, and switching to a session window drops it.
 - `+AMOUNT` adds to the effective cap. It refuses a cleared cap, a `/day` delta, and a non-finite total.
 - `off` or `clear` disables the cap.
+- `reset` restores the launch spec through the same window transition, clears `raised_cap_usd` and `disabled`, or removes the ledger when no launch spec exists. With no override to remove it writes nothing.
 - Every mutation also clears the throttle and the waiver.
+- After the ledger write, the command appends an audit-only `agent.tune` event with the raw budget argument and optional calling handle; reset omits the value. A failed append reports that the cap took effect without its audit record.
 - The report prints source `override` for both absolute and relative edits, since the ledger does not record which one it was.
 
 [`rimz budget`](../../../crates/rimz/src/cli/budget.rs) inspects or sets a time-windowed scope: the daily fleet by default, or one day or month pool with `--account`. `--account claude` resolves to this room's `claude` account, and `--account claude@work` names one declared account. Either way the command acts on that account's pool.

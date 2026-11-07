@@ -220,6 +220,7 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
             | "compact"
             | "resume"
             | "refresh"
+            | "tune"
             | "budget"
             | "exec"
             | "session-step"

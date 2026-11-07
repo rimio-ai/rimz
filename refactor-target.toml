@@ -1140,6 +1140,11 @@ surface-budget = 272
 
 [[verdict]]
 kind = "item"
+key = "config::agents::FlipCompact"
+reason = "The typed session smart-compaction override exposes its parser and value to the tune handler."
+
+[[verdict]]
+kind = "item"
 key = "config::mux::MuxConfig"
 reason = "The mux-owned settings class table destructures every field so new settings cannot go unclassified."
 
@@ -1201,12 +1206,12 @@ reason = "Dispatch and harness consumers resolve the same role/profile threshold
 [[verdict]]
 kind = "item"
 key = "config::effective::KeepWarmSeat"
-reason = "Runtime holds and launch compilation share the declared team/profile horizon and child exclusion without evaluating live stage or TTL inputs."
+reason = "Without a session override, runtime holds and launch compilation share the declared team/profile horizon and child exclusion without evaluating live stage or TTL inputs."
 
 [[verdict]]
 kind = "item"
 key = "config::effective::IdleCompactSeat"
-reason = "Runtime idle compaction and launch compilation share role/profile/harness floor resolution and launched-child exclusion."
+reason = "Without a session override, runtime idle compaction and launch compilation share role/profile/harness floor resolution and launched-child exclusion."
 
 [[verdict]]
 kind = "item"
@@ -2268,7 +2273,13 @@ path = "crates/rimz/src/harness"
 # workflow::restart shares the manual agent-step restart transition with the CLI (+1).
 # workflow::condition_now shares live read-only condition answers with CLI inspection (+1).
 # ConfiguredValues and SeatPolicy::configured_values expose declared settings to the CLI (+2).
-surface-budget = 1090
+# budget::remove_ledger drops an agent override when reset has no launch cap (+1).
+surface-budget = 1091
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::remove_ledger"
+reason = "The tune handler removes only the cache-class ledger addressed by the budget module."
 
 [[verdict]]
 kind = "item"
@@ -6269,7 +6280,7 @@ reason = "Pass 27c: timing only; kind() is the one public reader."
 [[verdict]]
 kind = "item"
 key = "message::dispatch::dispatch"
-reason = "Every dispatch caller inherits the recipient's smart-compact seat line at enqueue; bare seats keep the core-only harness default read."
+reason = "Every dispatch caller inherits the recipient's session override or configured smart-compact seat line at enqueue; unbound bare panes keep the core-only harness default read."
 
 [[verdict]]
 kind = "item"

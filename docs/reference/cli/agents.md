@@ -10,7 +10,7 @@ error: `rimz agents` needs a verb or a launch spec; to list agents, run `rimz ag
     rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)
 
   See:     list  show  logs  history  top  attribution
-  Drive:   focus  wait  stop  restart  compact  refresh  fork  budget
+  Drive:   focus  wait  stop  restart  compact  refresh  fork  molt  tune
   Start:   launch  resume  profiles  explain
   Define:  validate  register  check
 ```
@@ -26,7 +26,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | Check machine definitions | `validate` | [Validate definitions](#validate-definitions) |
 | Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
 | Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
-| Cap one agent's spend | `budget` | [Budget CLI](./budget.md#cap-one-agent) |
+| Retune one agent's keep-warm, compaction, or spend cap | `tune` | [Tune a session](#tune) |
 
 Neighbouring commands have their own pages: [`rimz teams`](./teams.md) launches and drives configured teams, [`rimz subagents`](./subagents.md) launches supervised children from an agent, [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and types into raw panes, and [`rimz worktree`](./worktree.md) manages worktree lanes.
 
@@ -67,7 +67,7 @@ How many matches a command accepts:
 
 | Commands | Rule |
 | --- | --- |
-| `show`, `logs`, `history`, `focus`, `fork`, `restart`, `compact`, `budget` | Exactly one agent. An address that matches several fails and lists the candidates. |
+| `show`, `logs`, `history`, `focus`, `fork`, `restart`, `compact`, `tune` | Exactly one agent. An address that matches several fails and lists the candidates. |
 | `stop` | One agent; `--all` acts on every match. |
 | `wait` | One or more references, each resolved independently. |
 | `refresh` | One agent with a reference; every live root agent in the channel without one; the whole workspace with `--all`. |
@@ -201,7 +201,7 @@ These flags select a resume path or override the launch's agent cells. Each adap
 | `--tier <TIER>` | Select `intern`, `junior`, `senior`, or `principal` for the launched Markdown profile. Conflicts with `--model`. |
 | `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag or OpenCode's checked session variant. Hermes checks its level list; OpenCode checks the chosen model's live variants and needs a model. Unsupported effort warns and launches without it; the per-agent mappings are in [agent support](../agent-support.md#model-and-effort). |
 | `--fast`, `--no-fast` | Launch in the provider's fast mode, or request none even where the profile sets `fast`. Claude, Codex, Amp, and Pi take `--fast` (Pi only on supported OpenAI models); every other kind warns with the alternative and launches without it, and `--no-fast` never refuses. `--no-fast` renders no switch, so a fast mode set inside the provider itself still applies. The launch record keeps the effective choice for restart, resume, and rebirth; the per-agent switches are in [agent support](../agent-support.md#fast-mode). |
-| `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
+| `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents tune … budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
 | `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited profile and role fragment list with these files, in command-line order; the team layer stays intact. |
 | `--ask`, `--yolo` | Replace the permission posture, including a profile's declared mode, and record it for restart and resume; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
@@ -608,6 +608,7 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 rimz agents stop @coder --when-idle      # stop it once it has rested 3m with nothing owed
 rimz agents restart @claude-2#cli-docs   # replace the pane and resume the session
 rimz agents compact @coder               # compact context at the next turn boundary
+rimz agents tune @coder keep-warm off    # release this session's idle cache hold
 ```
 
 | Verb | Acts on | Does |
@@ -625,8 +626,37 @@ rimz agents compact @coder               # compact context at the next turn boun
 | `stop` | one run or agent; `--all` for every match | cancels the run or closes the pane |
 | `restart` | one live agent | replaces its pane and resumes its session |
 | `compact` | one agent with a bound pane | sends its native compaction command, with the brief for its seat, at a turn boundary |
+| `tune` | one agent | reports, overrides, or resets keep-warm, idle-compaction, smart-compaction, and budget |
 
-`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, and `compact` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`, and the [Budget CLI](./budget.md#cap-one-agent) covers `budget`.
+`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, `compact`, and `tune` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`.
+
+#### `tune`
+
+`rimz agents tune <AGENT> [SETTING] [VALUE] [--no-continue] [--json]` reports or changes one session's settings without editing configuration. Omit `SETTING` to report all four; give only a setting to report it; add a value to change it and print the resulting report. `reset` restores the configured resolution. Resetting a key with no override succeeds without recording another change.
+
+| `SETTING` | Values |
+| --- | --- |
+| `keep-warm` | `off` or a duration such as `2h`. No `{max, while}` form. The override replaces the complete configured rule, including its `while` condition. |
+| `idle-compact` | `off` or a positive token floor such as `120k`. |
+| `smart-compact` | `off`, a token threshold such as `200k`, or a percentage such as `70%`. An explicit `rimz message --smart-compact` still wins for that message. |
+| `budget` | `AMOUNT`, `AMOUNT/day`, `+AMOUNT`, `off`/`clear`, or `reset`. See [Cap one agent](./budget.md#cap-one-agent) for park lifting and `--no-continue`, which is accepted only with this setting. |
+
+```sh
+rimz agents tune @coder
+rimz agents tune @coder keep-warm off
+rimz agents tune @coder idle-compact 120k
+rimz agents tune @coder smart-compact 70%
+rimz agents tune @coder keep-warm reset
+rimz agents tune @coder budget +5
+```
+
+Each compaction or keep-warm line names its effective value and source (`config` or `override`); an override also shows the configured value it replaces and `by @handle` when an agent set it. The actor is absent when run from a shell. Changes are recorded with their actor and timestamp. A configured keep-warm line shows its declared maximum and `while` clause, not the current cache or board verdict. The card's keep-warm clock updates on the next refresh pass.
+
+The three overrides last across same-session restart, resume, room rebirth, and a same-process `/clear`, but not a fresh session, molt, or fork. They replace the role, team, profile chain, and harness default, including on a pane-backed `rimz subagents` child. Setting or resetting any key refuses ended sessions and provider-native subagents; reports never refuse on that basis. Use the exact session id to select either; their reports retain that stable address and omit budget write hints. Budget retains its separate ledger lifetime.
+
+Keep-warm still requires the configured minimum cache TTL. Turning it off ends an idle hold, not the pings serving an agent sleeping on a wait. Launch-only choices stay fixed: tuning keep-warm does not change Pi's long cache retention. Tuning idle-compaction on a Claude session launched without a floor leaves Claude's native idle compaction running beside RimZ's; tuning it off on a session launched with a floor leaves neither running. Existing pacing is retained, and queued messages keep their enqueue-time smart-compaction threshold.
+
+With `--json`, one folded setting reports `{agent, setting, value, source, configured, set_by?, set_at?}`. Values are canonical strings (`2h`, `off`, `120k`, `70%`); `configured` is null when nothing resolves. `set_at` is present only for an override, and `set_by` only when an agent set it. The budget report keeps [its own shape](./budget.md#cap-one-agent). Reporting all settings yields `{agent, settings: [...], budget: {...}}`: three setting objects and one budget object, each without its repeated `agent` field.
 
 #### `list`
 
@@ -696,7 +726,7 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 | `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | UTC timestamps: `registered_at`, `turn_started_at`, `last_activity` (real activity), `last_seen` (liveness), and `idle_since` (the displayed `AGE` origin, always present). |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
-| `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
+| `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. Inspect or change the cap with [`tune … budget`](#tune). |
 | `sub_agents` | Nested children. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
 
 #### `show` / `inspect`

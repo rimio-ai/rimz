@@ -1,10 +1,10 @@
 # Budget CLI
 
-Two commands read and change dollar caps while the room runs: `rimz agents budget` for one agent, and `rimz budget` for the room's fleet and each provider account. Neither edits a config file: a change is runtime state in RimZ's own state directory, and the config keeps the value you set there. Why and when to cap spend, the turn and loop-task caps, and what resumes a parked agent are in the [budgets guide](../../guide/budget.md); the enforcement engine is [budget.md](../../internals/harness/budget.md).
+Two commands read and change dollar caps while the room runs: `rimz agents tune … budget` for one agent, and `rimz budget` for the room's fleet and each provider account. Neither edits a config file: a change is runtime state in RimZ's own state directory, and the config keeps the value you set there. Why and when to cap spend, the turn and loop-task caps, and what resumes a parked agent are in the [budgets guide](../../guide/budget.md); the enforcement engine is [budget.md](../../internals/harness/budget.md).
 
 | Scope | Armed by | Window | Command |
 | --- | --- | --- | --- |
-| One agent | `--budget` at launch, or the profile `budget` field | session, or `/day` | `rimz agents budget <REF>` |
+| One agent | `--budget` at launch, or the profile `budget` field | session, or `/day` | `rimz agents tune <REF> budget` |
 | Room fleet | `harness.budget` in `config.toml`, or `rimz budget N/day` | `/day` only | `rimz budget` |
 | Provider account | `[accounts.budget]`, a standalone account's `budget`, or `rimz budget --account KIND N/month` | `/day`, or `/month` for API-key billing | `rimz budget --account <KIND>` |
 
@@ -12,14 +12,16 @@ A cap is a non-negative dollar amount with an optional `$`, such as `5` or `$4.5
 
 ## Cap one agent
 
-`rimz agents budget <REF> [VALUE]` inspects or changes one agent's cap. `REF` is any [address](./agents.md#addressing-agents) that resolves to exactly one agent. The agent needs no launch `--budget`: any agent can be given a cap here.
+`rimz agents tune <REF> budget [VALUE]` inspects or changes one agent's cap. `REF` is any [address](./agents.md#addressing-agents) that resolves to exactly one agent. The agent needs no launch `--budget`. Writes refuse ended sessions and provider-native subagents; reading their caps still works.
+
+`rimz agents budget <REF> [VALUE]` is a hidden compatibility alias with identical output and behavior.
 
 ```sh
-rimz agents budget @coder          # inspect
-rimz agents budget @coder 10       # set a $10 session cap
-rimz agents budget @coder 20/day   # set a $20 daily cap
-rimz agents budget @coder +5       # raise the current cap by $5
-rimz agents budget @coder off      # remove the cap
+rimz agents tune @coder budget          # inspect
+rimz agents tune @coder budget 10       # set a $10 session cap
+rimz agents tune @coder budget 20/day   # set a $20 daily cap
+rimz agents tune @coder budget +5       # raise the current cap by $5
+rimz agents tune @coder budget off      # remove the cap
 ```
 
 | `VALUE` | Effect |
@@ -28,10 +30,11 @@ rimz agents budget @coder off      # remove the cap
 | `AMOUNT` or `AMOUNT/day` | Set the cap and its window. Switching a session cap to `/day` counts only spend from that moment for the rest of today. |
 | `+AMOUNT` | Raise the current cap by `AMOUNT`, keeping its window. On an agent that never had a cap, this sets an `AMOUNT` session cap. A cleared cap refuses the raise (`cannot raise a cleared budget; set an absolute cap first`), and `+AMOUNT/day` is refused. |
 | `off`, `clear` | Remove the cap. |
+| `reset` | Restore the launch/profile cap and its window, or remove the cap when no launch cap exists. Switching back into `/day` takes a fresh spend baseline; switching to session drops it. An already configured cap records no change. |
 
 Every form prints one line naming the handle and window (`session` or `day`). With a cap it shows spend of cap, parked or not, the source, and the raise and lift commands. Without a cap it shows the command to set one. Unknown spend is labelled `unknown spend`.
 
-With `--json`, the report is one object: `agent` (handle, channel included), `spend_usd` and `cap_usd` (numbers or null), `window` (`session`, `day`, or null when never capped), `source`, and `parked` (boolean). A cleared cap keeps its last window. Source is `launch` for the original launch/profile cap, `override` for runtime edits (absolute or relative), `cleared` after lifting, and `none` when never capped.
+With `--json`, the report is one object: `agent` (handle, channel included), `spend_usd` and `cap_usd` (numbers or null), `window` (`session`, `day`, or null when no cap remains after reset or none was ever set), `source`, and `parked` (boolean). A cleared cap keeps its last window. Source is `launch` for the original launch/profile cap, `override` for runtime edits (absolute or relative), `cleared` after `off` or `clear`, and `none` when no cap remains after reset or none was ever set.
 
 Any change lifts the park this agent's cap set. When that park had interrupted a running turn, RimZ also queues the configured continue prompt (`[resume] auto_continue_text`, default `continue`) to the agent; `--no-continue` lifts the park and leaves the agent at rest. A park set by the room or account cap stays until `rimz budget` lifts it.
 

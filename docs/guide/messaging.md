@@ -184,7 +184,7 @@ A long turn can hit the context limit mid-message. An agent compacts by itself o
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
 ```
 
-Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the recipient's role or profile-chain `smart-compact`, falling back to `[harness] smart_compact`, which defaults to `258k`. An explicit `off` stops inheritance. The flag overrides the recipient's line; queued messages keep the line selected at enqueue ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
+Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the session's [`tune smart-compact` override](../reference/cli/agents.md#tune), then the recipient's role or profile-chain `smart-compact`, falling back to `[harness] smart_compact`, which defaults to `258k`. An explicit `off` stops inheritance. The flag overrides even a session override; queued messages keep the line selected at enqueue ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
 
 That same seat line also drives [mid-turn soft compaction](./loops.md#smart-compaction): RimZ asks a busy agent to wrap up cleanly, then compacts at rest if still needed and sends continue. A per-message flag changes only that delivery, not the mid-turn trigger. A steer or interrupt into a busy turn delivers your text without typing a compact command first.
 

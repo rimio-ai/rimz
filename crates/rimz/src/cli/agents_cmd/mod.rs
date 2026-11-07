@@ -3,7 +3,6 @@
 mod attribution;
 mod auto_continue;
 mod auto_redeem;
-mod budget;
 mod budget_park;
 mod cache_keepalive;
 mod check;
@@ -42,6 +41,7 @@ mod stop;
 mod subagent_report;
 pub(in crate::cli) mod team_report;
 mod top;
+mod tune;
 mod validate;
 mod wait;
 
@@ -89,7 +89,6 @@ use rimz::workspace::WorkspaceResolver;
 use attribution::attribution;
 use auto_continue::run_auto_continue;
 use auto_redeem::run_auto_redeem;
-use budget::{BudgetArgs, run_budget};
 use budget_park::run_budget_park;
 use check::{CheckArgs, run_check};
 use exec::run_exec;
@@ -118,6 +117,7 @@ use stop::{WhenIdle, parse_when_idle, stop_agent};
 use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
+use tune::{BudgetArgs, TuneArgs, run_tune};
 pub(in crate::cli) use wait::wait_agent;
 
 fn read_heartbeat_agents(
@@ -859,7 +859,10 @@ enum AgentsSubcmd {
     },
     /// Force-refresh agent-card context from local transcripts and helpers.
     Refresh(RefreshArgs),
-    /// Inspect or change one agent's dollar cap.
+    /// Inspect or change one agent's keep-warm, compaction, or dollar cap.
+    Tune(TuneArgs),
+    /// Inspect or change one agent's dollar cap (compatibility alias).
+    #[command(hide = true)]
     Budget(BudgetArgs),
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
@@ -1069,7 +1072,8 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::SuperviseDuty(args)) => return exec::run_supervise_duty(args.request),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args.request),
         Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args.request),
-        Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),
+        Some(AgentsSubcmd::Tune(args)) => return run_tune(args, globals),
+        Some(AgentsSubcmd::Budget(args)) => return run_tune(args.into(), globals),
         Some(AgentsSubcmd::List {
             scope,
             json,

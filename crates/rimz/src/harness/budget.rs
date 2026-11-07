@@ -1863,6 +1863,18 @@ pub fn write_ledger(
     write_temp_then_rename_cache(&path, ledger)
 }
 
+/// Drop a runtime agent cap that has no launch specification to restore.
+pub fn remove_ledger(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> std::io::Result<()> {
+    match std::fs::remove_file(budget_ledger_path(runtime, kind, agent_id)) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 fn account_ledger_component(key: &LoginKey) -> String {
     if key
         .kind
