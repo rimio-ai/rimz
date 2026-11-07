@@ -267,6 +267,8 @@ idle_compact = "100k"
 
 An idle agent may get its next prompt after its provider's warm prompt cache has expired, and that prompt then pays to cache the whole conversation again. Idle compaction shrinks the conversation first, while the cache is still warm. `idle_compact` is a token floor: once an agent has sat idle for its provider's prompt-cache lifetime less `prompt_cache_margin`, RimZ compacts it if its occupied context has reached the floor. It defaults to `"100k"`; it takes a token count in digits or `k` (`"50k"`, `"250000"`, `"1000k"`) or `"off"`; an `m` suffix is refused, since an old minute value such as `"25m"` would otherwise read as millions. A profile's or team role's [`idle-compact`](../reference/definitions.md#idle-compaction) sets its own floor, so a cheap reviewer can compact at `50k` while a long-running planner stays at `250k` or `off`.
 
+For Claude seats whose floor is enabled and whose configured lifetime exceeds the margin for every sign-in (including unknown sign-in), RimZ switches off Claude's own idle compaction per launch unless your launch settings explicitly choose otherwise; `idle-compact = "off"` leaves Claude's own setting alone, as do children, headless runs, and a lifetime that is `off` or too short for any sign-in. Configuration changes take effect at the next launch or restart.
+
 | Provider | Default prompt-cache lifetime | Compacts after idle (default margin) |
 | --- | --- | --- |
 | Claude, every sign-in | 60 minutes | 59 minutes |

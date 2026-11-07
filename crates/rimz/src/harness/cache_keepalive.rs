@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::schedule::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
-use crate::config::{HarnessConfig, IdleCompact, MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::{format_duration_coarse, format_duration_compact};
@@ -77,29 +77,11 @@ impl SeatPolicy {
     /// `rimz subagents` child never resolves one; an agent-launched peer resolves like any
     /// other seat.
     pub fn idle_compact_floor(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<u64> {
-        if agent.is_launched_child() {
-            return None;
-        }
-        let role = agent.team.as_ref().and_then(|team| {
-            let role = agent.role.as_deref()?;
-            self.teams
-                .0
-                .get(team)?
-                .roles
-                .iter()
-                .find(|binding| binding.role == role)?
-                .idle_compact
-        });
-        let setting = role
-            .or_else(|| {
-                self.profiles
-                    .setting(agent.profile.as_deref()?, |profile| profile.idle_compact)
-            })
-            .unwrap_or(harness.idle_compact);
-        match setting {
-            IdleCompact::Off => None,
-            IdleCompact::Tokens(floor) => Some(floor),
-        }
+        crate::config::effective::IdleCompactSeat::from(agent).resolve(
+            &self.teams,
+            &self.profiles,
+            harness,
+        )
     }
 
     /// The seat's smart-compaction line, including a pane-backed child's launch namespace.

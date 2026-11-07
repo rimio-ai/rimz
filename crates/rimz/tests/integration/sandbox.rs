@@ -4458,6 +4458,7 @@ fn sandbox_skills_under_host_use_provider_switches() {
                     overrides["commit"] = serde_json::json!("user-invocable-only");
                 }
                 let mut expected = serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":overrides});
+                expected["idleCompaction"] = serde_json::json!(false);
                 if fast {
                     expected["fastMode"] = serde_json::json!(true);
                 }

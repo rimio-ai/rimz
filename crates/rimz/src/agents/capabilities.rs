@@ -650,6 +650,16 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Disable provider-native idle compaction unless launch settings explicitly choose a value.
+    fn disable_native_idle_compaction_args(
+        &self,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Take a fast switch that belongs inside the provider's settings document
     /// out of launch argv, reporting whether one was there. The process
     /// compiler merges it back through [`Self::merge_fast_settings`] after

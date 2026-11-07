@@ -583,6 +583,14 @@ A subagent definition can only lower its inherited window. That field has no eff
 
 The valid range is 100K to 1M tokens, capped at the model's context window. The window is where compaction is allowed to fire, not an exact trigger count, and the statusline's `used_percentage` keeps measuring against the full model window.
 
+### Native idle compaction
+
+Checked 2026-11-07: [`idleCompaction`](https://code.claude.com/docs/en/settings-reference#idlecompaction) defaults to `true`; `false` stops Claude Code from compacting a long conversation while the user is away. It requires v2.1.290 or later; earlier versions ignore the key. The [v2.1.299 release notes](https://github.com/anthropics/claude-code/blob/v2.1.302/CHANGELOG.md#21299) describe terminal idle compaction and its threshold override; [v2.1.302](https://github.com/anthropics/claude-code/blob/v2.1.302/CHANGELOG.md#21302) adds the `/config` toggle. The setting can also travel through launch-local `--settings`.
+
+The settings reference requires an interactive session, auto-compaction on, a one-hour prompt cache, enough context, and sufficient idle time. [`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`](https://code.claude.com/docs/en/env-vars) changes the default 200,000-token minimum; it accepts a positive whole number, ignores other values, and raises values below 100,000 to 100,000.
+
+Observed in the installed Claude Code 2.1.319 binary on 2026-11-06: it fires at 90% of the cache lifetime (about 54 minutes for a one-hour cache), with auto-compaction on, `idleCompaction` not false, a one-hour cache, context at least `max(100000, CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS ?? 200000)`, no near usage limit, and no newer request. It abandons an attempt more than 60 seconds late. These exact timing and usage-limit gates are binary observations, not a published settings contract.
+
 ### Per-launch skill overrides
 
 [`skillOverrides`](https://code.claude.com/docs/en/skills) accepts `"user-invocable-only"`, which leaves explicit `/skill` expansion available while removing model invocation. [`--settings`](https://code.claude.com/docs/en/cli-reference) accepts a file or inline JSON. Local probes on 2.1.282 found that keys are skill directory names, only the last `--settings` takes effect, and `*` is not a wildcard.

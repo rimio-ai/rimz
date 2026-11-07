@@ -1302,6 +1302,13 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
+    if reminders.disable_native_idle_compaction {
+        adapter.disable_native_idle_compaction_args(
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if fast_settings {
         adapter.merge_fast_settings(
             (cwd, artifact_dir),

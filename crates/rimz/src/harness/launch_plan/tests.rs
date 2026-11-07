@@ -5,6 +5,9 @@ use crate::ids::AgentKind;
 #[path = "session_step_tests.rs"]
 mod session_step;
 
+#[path = "idle_compact_tests.rs"]
+mod idle_compact;
+
 fn long_cache_env(
     project: &Path,
     machine: &crate::config::MachineConfig,
@@ -1857,7 +1860,12 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
     .unwrap();
     let mut request = ExecRequest::bare_launch(
         AgentKind::new_unchecked("claude"),
-        vec!["--settings".into(), settings.display().to_string()],
+        vec![
+            "--settings".into(),
+            settings.display().to_string(),
+            "--settings".into(),
+            r#"{"fastMode":true}"#.into(),
+        ],
     );
     request.skills = Some(Vec::new());
     let plan = compile(LaunchPlanInputs {
@@ -1899,6 +1907,8 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
     let merged: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(merged["env"]["ANTHROPIC_API_KEY"], "sk-secret-123");
     assert!(merged["skillOverrides"].is_object());
+    assert_eq!(merged["fastMode"], true);
+    assert_eq!(merged["idleCompaction"], false);
     assert_eq!(
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
         0o600
