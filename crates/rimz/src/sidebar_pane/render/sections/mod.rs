@@ -13,7 +13,7 @@
 //! This file owns only the shared section primitives — the width tiers and the
 //! gutter every section composes with.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
@@ -131,6 +131,7 @@ impl CardExpansion {
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) now: Timestamp,
+    pub(in crate::sidebar_pane::render) typing_until: &'a HashMap<crate::ids::PaneId, Timestamp>,
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) tier: Tier,
     pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,

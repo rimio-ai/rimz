@@ -115,6 +115,8 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardParkedBg, "⋯", None),
     glyph!(CardTierMove, "↪", None),
     glyph!(CardFast, "ϟ", Some("\u{f0e7}")),
+    glyph!(CardMessageQueued, "↧", Some("\u{f10da}")),
+    glyph!(CardTyping, "✎", Some("\u{f03eb}")),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),
     glyph!(ProcessIo, "⇅", Some("\u{f09f}")),
@@ -461,6 +463,11 @@ mod tests {
     /// override rather than a copy of the Unicode glyph it replaces.
     #[test]
     fn catalog_rows_are_ordered_complete_and_renderable() {
+        assert_eq!(
+            [GlyphRole::CardMessageQueued, GlyphRole::CardTyping]
+                .map(|role| (unicode_glyph(role), nerd_font_glyph(role))),
+            [("↧", Some("\u{f10da}")), ("✎", Some("\u{f03eb}"))]
+        );
         let fast = GlyphRole::from_namespaced("card", "fast");
         assert_eq!(fast.map(unicode_glyph), Some("ϟ"));
         assert_eq!(fast.and_then(nerd_font_glyph), Some("\u{f0e7}"));

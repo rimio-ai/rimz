@@ -1228,6 +1228,7 @@ fn scroll_lines_windowed(
     let ctx = RowCtx {
         theme,
         now: snapshot.now,
+        typing_until: &snapshot.typing_until,
         width,
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,

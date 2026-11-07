@@ -28,6 +28,7 @@ pub(super) fn identity_line(
     row: &SidebarRow,
     attention: CardAttention,
     cost_usd: Option<f64>,
+    show_marks: bool,
 ) -> Line<'static> {
     let width = content_width(row_ctx.width);
     if row.is_process() {
@@ -41,7 +42,7 @@ pub(super) fn identity_line(
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
-    agent_identity_line(row_ctx, row, status, attention, cost_usd)
+    agent_identity_line(row_ctx, row, status, attention, cost_usd, show_marks)
 }
 
 /// The leading status cell for an agent row. Transient overlays choose its role
@@ -108,10 +109,11 @@ pub(super) fn agent_identity_line(
     status: AgentStatus,
     attention: CardAttention,
     cost_usd: Option<f64>,
+    show_marks: bool,
 ) -> Line<'static> {
     let theme = row_ctx.theme;
     let width = content_width(row_ctx.width);
-    let right = cost_spans(row_ctx, row, cost_usd);
+    let mut right = cost_spans(row_ctx, row, cost_usd);
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —
     // metadata, a step under the soft stat figures — over `·` seams of the
@@ -129,6 +131,19 @@ pub(super) fn agent_identity_line(
         &row.name,
         attention,
     ));
+    if show_marks {
+        let budget = width.saturating_sub(
+            spans_width(&left) + spans_width(&right) + 1 + usize::from(!right.is_empty()),
+        );
+        let mut marks = message_marks(row_ctx, row, budget);
+        if !marks.is_empty() {
+            if !right.is_empty() {
+                marks.push(Span::raw(" "));
+            }
+            marks.extend(right);
+            right = marks;
+        }
+    }
     // The capability cluster is the model and its properties: effort or thinking
     // configures the model, and the window is the model's window. With no model resolved a
     // bare `xhigh`/`272k` names nothing, so the whole cluster rides behind a
@@ -295,6 +310,13 @@ pub(super) fn stale_line(
         &row.name,
         attention,
     ));
+    let budget = width.saturating_sub(spans_width(&left) + spans_width(&right) + 2);
+    let mut marks = message_marks(ctx, row, budget);
+    if !marks.is_empty() {
+        marks.push(Span::raw(" "));
+        marks.extend(right);
+        right = marks;
+    }
     left.push(Span::styled(value_seam(theme), theme.muted()));
     let mut remaining = width.saturating_sub(spans_width(&left) + spans_width(&right) + 1);
     for mut span in description_spans(ctx, row, attention) {

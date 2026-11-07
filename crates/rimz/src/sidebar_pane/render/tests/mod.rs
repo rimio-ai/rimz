@@ -560,6 +560,7 @@ fn test_row_ctx<'a>(
     RowCtx {
         theme,
         now: snapshot.now,
+        typing_until: &snapshot.typing_until,
         width,
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,

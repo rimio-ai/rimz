@@ -235,7 +235,9 @@ pub(super) fn row_lines(
     {
         inner.extend(not_tracked_lines(ctx, row, &note.fix).map(CardLine::from));
     } else if row.is_process() {
-        inner.push(CardLine::from(identity_line(ctx, row, attention, cost_usd)));
+        inner.push(CardLine::from(identity_line(
+            ctx, row, attention, cost_usd, false,
+        )));
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
             inner.push(line.into());
         }
@@ -247,11 +249,21 @@ pub(super) fn row_lines(
             ctx.stale_after_secs,
             ctx.now,
         );
-        for slot in template(stage, status, ctx.card_density, expanded) {
+        let slots = template(stage, status, ctx.card_density, expanded);
+        for slot in slots {
             match slot {
                 CardSlot::Stale => inner.push(stale_line(ctx, row, attention, cost_usd).into()),
                 CardSlot::Identity => {
-                    inner.push(identity_line(ctx, row, attention, cost_usd).into());
+                    inner.push(
+                        identity_line(
+                            ctx,
+                            row,
+                            attention,
+                            cost_usd,
+                            !slots.contains(&CardSlot::Description),
+                        )
+                        .into(),
+                    );
                 }
                 CardSlot::Description => inner.extend(
                     description_lines(ctx, row, attention)
@@ -363,6 +375,48 @@ pub(super) fn row_lines(
             target: card.target,
         })
         .collect()
+}
+
+fn message_marks(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> Vec<Span<'static>> {
+    let Some(agent) = row.as_agent() else {
+        return Vec::new();
+    };
+    let typing = row.pane.as_ref().is_some_and(|pane| {
+        ctx.typing_until
+            .get(&pane.pane_id)
+            .is_some_and(|until| *until > ctx.now)
+    });
+    let mut marks = Vec::new();
+    let pen = ctx.theme.glyph(GlyphRole::CardTyping);
+    if typing && text_width(pen) <= width {
+        marks.push(Span::styled(
+            pen.to_owned(),
+            ctx.theme.styled(Component::Typing, Modifier::empty()),
+        ));
+        width -= text_width(pen);
+    }
+    if agent.due_messages == 0 {
+        return marks;
+    }
+    let queued = ctx.theme.glyph(GlyphRole::CardMessageQueued);
+    let gap = usize::from(!marks.is_empty());
+    if text_width(queued) + gap > width {
+        return marks;
+    }
+    if gap > 0 {
+        marks.push(Span::raw(" "));
+    }
+    marks.push(Span::styled(
+        queued.to_owned(),
+        ctx.theme
+            .styled(Component::MessageQueued, Modifier::empty()),
+    ));
+    width -= text_width(queued) + gap;
+    let count = format!(" {}", agent.due_messages);
+    if ctx.tier != Tier::L0 && text_width(&count) <= width {
+        marks.push(Span::styled(count, ctx.theme.body()));
+    }
+    marks
 }
 
 /// The standing delegation line carries lifetime children, their known cost,

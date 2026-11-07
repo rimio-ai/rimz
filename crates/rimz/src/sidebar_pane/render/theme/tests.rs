@@ -446,6 +446,14 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
 fn components_resolve_concretely_and_collapse_under_no_color() {
     for theme in [Theme::fixed(false), truecolor_default()] {
         assert_eq!(
+            [Component::MessageQueued, Component::Typing]
+                .map(|component| theme.component(component)),
+            [
+                tone_color(theme.palette.muted),
+                tone_color(theme.palette.accent)
+            ]
+        );
+        assert_eq!(
             theme.component(Component::WorktreePrConflict),
             tone_color(theme.palette.caution)
         );
