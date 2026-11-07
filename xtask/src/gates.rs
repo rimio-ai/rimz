@@ -865,13 +865,33 @@ fn report_task_failure(name: &str, detail: &str, invocation: &str) {
 fn report_failure(prefix: &str, name: &str, detail: &str, invocation: &str) {
     eprintln!("{prefix}: fail at {name}");
     eprintln!("{detail}");
-    if compiler_died_without_diagnostic(detail) {
-        eprintln!(
+    eprintln!("{}", failure_next_step(name, detail, invocation));
+}
+
+fn failure_next_step(name: &str, detail: &str, invocation: &str) -> String {
+    if let Some(wrapper) = unstartable_compiler_wrapper(detail) {
+        format!(
+            "NEXT: compiler wrapper `{wrapper}` could not start; rerun without it: `RIMZ_SCCACHE=off RUSTC_WRAPPER= {invocation}`"
+        )
+    } else if compiler_died_without_diagnostic(detail) {
+        format!(
             "NEXT: rustc was killed (likely host out of memory); retry when other builds finish or set CARGO_BUILD_JOBS=2, then rerun `{invocation}`"
-        );
+        )
     } else {
-        eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
+        format!("NEXT: fix the {name} errors above, then rerun `{invocation}`")
     }
+}
+
+/// The program a failed compiler process was launched through, when that process's own stderr
+/// says its program is missing: a `sccache` shim whose target a sandbox `HOME` hides exits
+/// without a diagnostic, which would otherwise read as a killed compiler.
+fn unstartable_compiler_wrapper(output: &str) -> Option<&str> {
+    output.lines().find_map(|line| {
+        let missing = line.strip_suffix(": No such file or directory")?;
+        let wrapper = missing.rsplit(['/', ' ']).next()?;
+        let launched = format!("process didn't exit successfully: `{wrapper} ");
+        output.contains(&launched).then_some(wrapper)
+    })
 }
 
 /// Cargo appends `due to N previous errors` to its `could not compile` line
