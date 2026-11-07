@@ -343,6 +343,14 @@ The backends bind the chords differently:
 - **tmux** binds a server-global root-table key that carries no room identity and resolves the pressing pane's session at keypress.
 - **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration, and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. A client attach reloads its stock bindings, so the plugin replays already-applied runtime configuration once per observed increase in connected clients. The focus pipe runs the sidebar toggle and the zoom pipe runs `rimz pane zoom`. The user's `config.kdl` is unchanged, and the bindings end with the session.
 
+### Palette popups
+
+`rimz palette --popup` resolves the room before calling `MuxBackend::open_popup`. tmux uses a managed `display-popup -E` client with explicit client, optional anchor pane, cwd, and direct argv. Like attach, that interactive client has no command deadline: it waits for the job to exit, and a nonzero exit is logged as the job's status, not an opening failure. Zellij uses a deadline-bounded, session-addressed `new-pane --floating --close-on-exit` action. Both use 80% width and height, with no shell command interpolation.
+
+Zellij's cached pane listing carries manifest titles. A floating `rimz palette` title suppresses a second open; a failed listing does not block opening. Opening reveals the tab's floating layer, and other user floats can remain shown afterward. The popup has no store or frame marker and remains an ordinary user float. No room key is registered by the palette command.
+
+The TUI retains one passive `PublishedSnapshotReader`, refreshes about every two seconds, and never reads pane text or starts a producer. Its selection follows published row identity across refreshes, not a reusable pane id; a row republished under a new id on the same pane keeps it. The footer and runner share one argv value. Children run at the room's project root with its workspace identity pin; card targets carry their channel explicitly. Each card finds its `AgentState` in the snapshot and takes `agent_handle` with the lane, checked through `resolve_many`; one that selects anything else falls to the session id, then the pane id. A row with no `AgentState`, such as a wired pane before its session binds, is a pane-only card. A nested child whose lane differs from its parent's, since an explicit child cwd can move it, shows that lane's group, or the lane alone with no PR when the room has none, and its own branch, rather than the parent group's label and PR. [Palette](../reference/cli/palette.md) documents its modes and commands.
+
 ## One sidebar per view
 
 Every occupied view should hold exactly one live sidebar pane. `reconcile_sidebars` converges toward that in place, without disturbing working panes and without recreating the session.

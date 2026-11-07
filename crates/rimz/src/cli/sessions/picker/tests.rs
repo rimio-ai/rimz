@@ -4,6 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
+use ratatui::style::Color;
 
 use super::*;
 

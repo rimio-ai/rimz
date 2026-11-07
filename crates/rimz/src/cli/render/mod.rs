@@ -24,6 +24,13 @@ use jiff::Timestamp;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+pub(super) fn tui_color(tone: rimz::theme::Tone) -> ratatui::style::Color {
+    match tone {
+        rimz::theme::Tone::Indexed(index) => ratatui::style::Color::Indexed(index),
+        rimz::theme::Tone::Rgb(red, green, blue) => ratatui::style::Color::Rgb(red, green, blue),
+    }
+}
+
 pub(crate) fn truncate_left_width(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_owned();

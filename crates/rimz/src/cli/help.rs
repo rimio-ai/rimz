@@ -23,6 +23,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "transcript",
             "events",
             "pane",
+            "palette",
             "worktree",
             "lsp",
             "loop",

@@ -1,6 +1,6 @@
 # The theme core
 
-The theme core turns the machine's `[theme]` config into the vocabulary every human surface paints with: color tones, glyphs, provider identity, and value formats. Four renderers paint with it: the CLI's `anstyle` output, the sidebar's ratatui frames, the ratatui picker of `rimz sessions`, and tmux pane-border labels. All four read the same resolved vocabulary; tmux borders refresh on the next room open, reattach, or `rimz reload`.
+The theme core turns the machine's `[theme]` config into the vocabulary every human surface paints with: color tones, glyphs, provider identity, and value formats. Five renderers paint with it: the CLI's `anstyle` output, the sidebar's ratatui frames, the ratatui picker of `rimz sessions`, the `rimz palette` view, and tmux pane-border labels. All five read the same resolved vocabulary; tmux borders refresh on the next room open, reattach, or `rimz reload`.
 
 The core lives in [`crates/rimz/src/theme/`](../../crates/rimz/src/theme/) and is renderer-neutral. It names every color as a `Tone`, and each renderer converts that `Tone` to its own terminal color type at the last moment, so the core depends on neither ratatui nor `anstyle`. Its output is display preference only: a theme changes what a frame looks like, never what an agent can do.
 
@@ -25,11 +25,11 @@ Layer 3  Component    sidebar_pane/render/      one variant per fixed sidebar UI
 Layer 4  Carrier      cli/render/palette.rs     Tone → anstyle::Color
                       sidebar_pane/render/      Tone → ratatui::Color
                       theme.rs
-                      cli/sessions/picker.rs    Tone → ratatui::Color
+                      cli/render/mod.rs         Tone → ratatui::Color (sessions and palette)
                       mux/tmux/options.rs       Tone → tmux #[fg=…]
 ```
 
-Layers 1 and 2 are the shared core and never name a terminal color type. Layer 3 exists only in the sidebar, which has enough distinct fixed roles to need names for them, and `Component::resolve` returns a ratatui `Color` through the Layer 4 conversion. The CLI's `anstyle` output has no Layer 3: it reads Layer 2 through the accessors in `cli/render/palette.rs` and a typed state mapping. The `rimz sessions` picker resolves its own `Palette` in `crates/rimz/src/cli/sessions/picker.rs::PickerTheme` and converts with a private `tone_color`. Outside the Layer 3 and Layer 4 modules, sidebar render code passes resolved colors around and writes no color literal except `Color::Reset` (see [Boundaries](#boundaries)).
+Layers 1 and 2 are the shared core and never name a terminal color type. Layer 3 exists only in the sidebar, which has enough distinct fixed roles to need names for them, and `Component::resolve` returns a ratatui `Color` through the Layer 4 conversion. The CLI's `anstyle` output has no Layer 3: it reads Layer 2 through the accessors in `cli/render/palette.rs` and a typed state mapping. The `rimz sessions` picker and `rimz palette` each resolve their own `Palette` and share the carrier conversion in `crates/rimz/src/cli/render/mod.rs::tui_color`. Outside the Layer 3 and Layer 4 modules, sidebar and palette render code pass resolved colors around and write no color literal except `Color::Reset` (see [Boundaries](#boundaries)).
 
 The tmux border carrier in `crates/rimz/src/mux/tmux/options.rs` resolves the machine theme at apply time. Provider kinds come from the agent registry and valid `[theme.providers]` keys; agent titles use their provider brand, titles without a matching kind use `body`, and the current-command fallback uses `muted`. Origin leads use `meta` (magenta) for teams and `accent` (cyan) for loops and workflows; the separator and rest keep the provider brand. The sidebar border has no label. `Tone::Indexed` becomes `colour<n>` and `Tone::Rgb` becomes `#rrggbb` inside `#[fg=…]`. Borders use truecolor under `auto` (tmux downgrades for each client's capabilities) and indexed tones under `mode = "256"`. Reload refreshes existing windows; the new-window hook's captured theme refreshes on the next room open, reattach, or sidebar reconcile.
 
@@ -241,11 +241,11 @@ Fixed-width sidebar labels keep their own clipping and rounding in `sidebar_pane
 
 The theme applies to human presentation only. JSON, hook stdout, pane capture, scripting values, and streaming protocols stay canonical raw data, so neither configuration nor terminal capability can change a machine-readable contract, and ANSI emission stays inside the renderers. The one known break is the `product_name` field of `rimz accounts --json` ([Provider identity](#provider-identity)).
 
-Four checks in [`xtask/src/invariants.rs`](../../xtask/src/invariants.rs) guard the boundaries, and `cargo xtask invariants` runs them. Test modules are exempt from all four. No check scans the `rimz sessions` picker, which builds ratatui colors under `cli/`, so its colors stay on the theme pipeline only by review.
+Four checks in [`xtask/src/invariants.rs`](../../xtask/src/invariants.rs) guard the boundaries, and `cargo xtask invariants` runs them. Test modules are exempt from all four. The palette's ratatui renderer is scanned alongside sidebar render code. The `rimz sessions` picker remains outside that scan and shares its carrier conversion with the palette.
 
 | invariant | enforces |
 | --- | --- |
-| `ensure_no_hardcoded_ui_colors` | Sidebar render code names a `Component` or a semantic accessor, never a ratatui `Color` variant. Only `Color::Reset` may be written by hand, and `Indexed` and `Rgb` values come from the theme pipeline. The render-side `theme.rs`, its `theme/` directory, and the ANSI quantizer `ansi.rs` are exempt. |
+| `ensure_no_hardcoded_ui_colors` | Sidebar and palette render code name a `Component` or a semantic accessor, never a ratatui `Color` variant. Only `Color::Reset` may be written by hand, and `Indexed` and `Rgb` values come from the theme pipeline. The render-side `theme.rs`, its `theme/` directory, and the ANSI quantizer `ansi.rs` are exempt. |
 | `ensure_cli_color_provenance` | CLI colors resolve through `cli/render/palette.rs` accessors, and no other CLI file constructs an `anstyle` color. |
 | `ensure_no_hardcoded_glyphs` | Sidebar render code outside `render/animation.rs` writes none of the catalog's shipped glyph literals (a fixed list in the check) outside comments. It reads them through `Theme::glyph`. |
 | `ensure_brand_resolution_single_home` | Only the agent definition modules and `theme/provider.rs` read a definition's brand color field directly. Everything else, including scenario presets, resolves the brand through the theme core. |
