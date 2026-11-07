@@ -205,6 +205,7 @@ pub(crate) fn worktree_group(
         trunk_sync: None,
         pr_state: None,
         pr_queue: None,
+        pr_conflicting: false,
         ci: None,
         pr_number: None,
         pr_url: None,

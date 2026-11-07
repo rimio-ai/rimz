@@ -324,6 +324,46 @@ fn pr_state_projection_uses_the_given_map() {
         Some(crate::store::snapshot::WorktreePrQueue::Dequeued)
     );
 
+    let mut readings = Vec::new();
+    let mut expected = Vec::new();
+    for (case, settled_head, trunk, linked, checkout, conflicting) in [
+        ("current", Some("head"), false, true, true, true),
+        ("stale", Some("older"), false, true, true, false),
+        ("unknown", None, false, true, true, false),
+        ("trunk", Some("head"), true, true, true, false),
+        ("lost link", Some("head"), false, false, true, false),
+        ("lost checkout", Some("head"), false, true, false, false),
+    ] {
+        let mut projected = snapshot.clone();
+        let group = &mut Arc::make_mut(&mut projected.worktree_groups)[0];
+        group.pr_conflicting = !conflicting;
+        if !checkout {
+            group.place = None;
+        }
+        let mut links = states.clone();
+        let link = links.get_mut(&worktree.display().to_string()).unwrap();
+        link.open.as_mut().unwrap().mergeability = settled_head
+            .map(|head| crate::forge::pr_state::SettledMergeability::Conflicting(head.to_owned()));
+        if !linked {
+            links.clear();
+        }
+        let mut diff = DiffStatsCache::default();
+        if trunk {
+            diff.entries.insert(
+                worktree.display().to_string(),
+                DiffStatsCacheEntry {
+                    branch: Some("main".to_owned()),
+                    trunk: Some("origin/main".to_owned()),
+                    ..Default::default()
+                },
+            );
+        }
+        project_pr_state_map(&mut projected, &links, &branch_ci, &diff);
+        readings.push((case, projected.worktree_groups[0].pr_conflicting));
+        expected.push((case, conflicting));
+    }
+    assert_eq!(readings, expected);
+
     for state in ["active", "parked"] {
         let mut rowless = snapshot.clone();
         let group = &mut Arc::make_mut(&mut rowless.worktree_groups)[0];
