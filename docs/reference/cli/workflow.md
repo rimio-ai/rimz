@@ -54,16 +54,16 @@ Failed or interrupted turns, live provider limits, and budget parks keep every w
 
 `keep = true` on a `turn` or `until` agent step leaves the leader and companions open, outside the workflow, on a natural attempt end or a closing check route. Default false retains cleanup. Cancel, restart, deadline, a turn step's timeout, and a push-back cap parked at `@user` still stop them; a cap routed elsewhere detaches them. A `turn` check returning to the step can leave the old agent beside the new one; occupancy and `takeover` still apply. `stay` steps and non-agent nodes warn and ignore `keep`, including an explicit false value.
 
-A check's `on.<outcome>` accepts a target string or `{ to = "<target>", delay = "30m" }`. `to` is required; `delay` is optional and uses a nonzero `s`/`m`/`h`/`d` duration. The delay applies only while an until session is held at that check, measured from the saved answer's instant. It defers closing without rerunning the check or triggering its timeout. A new turn discards the verdict; cancel, restart, deadline, and provider exit still interrupt. Signals and active-run extensions do not shorten it. Without a held session the route goes at once, including after `resume --at` the check. Expiry rides the minute tick, so closing can be about a minute late. Node details and validate print `outcome → target after 30m`, and definition and run rails `outcome target after 30m`; node detail states the held-only rule.
+A check's `on.<outcome>` accepts a target string or `{ to = "<target>", delay = "30m" }`. `to` is required; `delay` is optional and uses a nonzero `s`/`m`/`h`/`d` duration, at most `365d`. The delay applies only while an until session is held at that check, measured from the saved answer's instant. It defers closing without rerunning the check or triggering its timeout. A new turn discards the verdict; cancel, restart, deadline, and provider exit still interrupt. Signals and active-run extensions do not shorten it. Without a held session the route goes at once, including after `resume --at` the check. Expiry rides the minute tick, so closing can be about a minute late. Node details and validate print `outcome → target after 30m`, and definition and run rails `outcome target after 30m`; node detail states the held-only rule.
 
-A check selects exactly one of `run`, `shell`, `agent`, `sleep`, or nonempty `cases`. A sleep check takes required `sleep` (nonzero `s`/`m`/`h`/`d` duration) and `then` (node, `@done`, `@failed`, or `@user`, never `@wait`), optional `when` (a nonempty ANDed loop-condition array) and `for` (a continuous hold shorter than `sleep`). It may take `provider` and `account` for window terms. Expiry follows `then` even during a hold; a true condition follows it early. Unread data, including under negation, never wakes it. Re-entry or a parked resume restarts its clock. A sleep forwards its incoming input and key unchanged and needs no timeout. An until step's `then` cannot name a sleep.
+A check selects exactly one of `run`, `shell`, `agent`, `sleep`, or nonempty `cases`. A sleep check takes required `sleep` (nonzero `s`/`m`/`h`/`d` duration, at most `365d`) and `then` (node, `@done`, `@failed`, or `@user`, never `@wait`), optional `when` (a nonempty ANDed loop-condition array) and `for` (a continuous hold shorter than `sleep`). It may take `provider` and `account` for window terms. Expiry follows `then` even during a hold; a true condition follows it early. Unread data, including under negation, never wakes it. Re-entry or a parked resume restarts its clock. A sleep forwards its incoming input and key unchanged and needs no timeout. An until step's `then` cannot name a sleep.
 
 `[workflow.limit]` limits open agents started by that workflow name across rooms; `[steps.<name>.limit]` limits agents started for that step. Each takes at least one of the fields below. An unknown key or an invalid value warns and is ignored, and a limit left with neither field is ignored whole, with `set max-parallel or stagger`:
 
 | Field | Rule |
 | --- | --- |
 | `max-parallel` | Integer at least 1. Counts open agents, including idle staying sessions, companions, RimZ-launched children and peers, and live agents whose last turn errored. Ended or dead agents, failed launches, and provider-built-in subagents do not count. An automated step larger than a cap fails with the fix, without waiting or taking `on.capacity`. |
-| `stagger` | Positive duration in `s`, `m`, `h`, or `d`. Minimum gap between launches at this scope, stamped at launch and shared across rooms and restarts. |
+| `stagger` | Positive duration in `s`, `m`, `h`, or `d`, at most `365d`. Minimum gap between launches at this scope, stamped at launch and shared across rooms and restarts. |
 
 Limits use each run's sealed definition, but count open agents of that workflow name even after their runs finish. Waiting, paused, hibernated, and compacting agents count. The whole incoming agent group must fit, including starts admitted but not yet launched. Limits apply after window and occupancy, before the two machine caps and other machine checks, even with no `[throttle]` table. No workflow or step limit bypasses a machine cap. Earlier Active capacity waiters held by a workflow limit go first across all steps; a step-limit waiter holds only its step. Ties use run id. A freed slot waits for the earlier run's next retry. Limits never stop an existing turn or pane.
 
@@ -181,13 +181,15 @@ Unknown fields at every table depth warn and are ignored. A wrong-typed or inval
 | --- | --- |
 | `summary` on the workflow, a check, or a step | Blank or multiline. |
 | `workflow.deadline` | Not a supported date or datetime. |
-| `timeout`, `window` | Not a supported duration or provider-window expression, respectively. |
+| `timeout` | Not a supported `s`/`m`/`h`/`d` duration, or over `365d`. |
+| `window` | Not a supported provider-window expression. |
 | A `wake` entry | Wrong-typed, an invalid selector or match, an agent lifecycle selector, or a team selector other than exact `team.stage`. Only that entry is dropped; other entries stay. Unknown keys in a wake table are ignored individually. |
 | `max-visits` | Not a positive integer. |
 | `max-visits-per-outcome` | Not a positive integer or `{ limit = N, reset-on = "outcome" }` table (`reset-on` is optional and accepts one outcome or a nonempty list). A missing or invalid `limit`, an invalid `reset-on`, or a limit at least `max-visits` drops the whole cap. Unknown inner fields warn at their dotted path and are ignored individually. |
-| A case's `for` | Unparsable, zero, or on an outcome routed to `@wait`. |
-| A sleep's `for` | Wrong-typed, unparsable, zero, without `when`, or not shorter than `sleep`. |
-| A check route's `delay` | Wrong-typed, unparsable, zero, on a check not listed by an until step's `then`, targeting `@wait`, returning to an owning until step, or routing to another check in that step's list. Only the delay is dropped; the route remains. |
+| A case's `for` | Unparsable, zero, over `365d`, or on an outcome routed to `@wait`. |
+| A sleep's `for` | Wrong-typed, unparsable, zero, over `365d`, without `when`, or not shorter than `sleep`. |
+| A check route's `delay` | Wrong-typed, unparsable, zero, over `365d`, on a check not listed by an until step's `then`, targeting `@wait`, returning to an owning until step, or routing to another check in that step's list. Only the delay is dropped; the route remains. |
+| Workflow or step `stagger` | Wrong-typed, unparsable, zero, or over `365d`. |
 | A condition or conditional sleep's `provider` | Unknown, or no term reads `window.*`. |
 | A condition or conditional sleep's `account` | No provider remains after ignoring. |
 
