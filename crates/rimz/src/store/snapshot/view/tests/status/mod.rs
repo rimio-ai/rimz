@@ -1,6 +1,7 @@
 use super::*;
 
 mod api_errors;
+mod card_status;
 mod compaction;
 mod native_permission;
 mod sleeping;
