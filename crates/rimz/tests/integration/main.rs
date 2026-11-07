@@ -40,6 +40,7 @@ mod mux_command;
 mod oauth_usage;
 mod output_files;
 mod packs;
+mod palette;
 mod paths;
 mod performance;
 mod presence_wake;

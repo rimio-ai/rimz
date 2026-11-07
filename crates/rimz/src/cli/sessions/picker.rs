@@ -12,7 +12,7 @@ use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
@@ -27,7 +27,7 @@ use rimz::{RuntimePaths, SpendWindow, StatePaths};
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli::GlobalFlags;
-use crate::cli::render::truncate_left_width;
+use crate::cli::render::{truncate_left_width, tui_color};
 
 const EVENT_POLL: Duration = Duration::from_millis(250);
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
@@ -786,7 +786,7 @@ impl PickerTheme {
         if self.no_color {
             Style::default()
         } else {
-            Style::default().fg(tone_color(tone))
+            Style::default().fg(tui_color(tone))
         }
     }
 
@@ -832,20 +832,13 @@ impl PickerTheme {
             style
         } else {
             style
-                .fg(tone_color(self.palette.selection()))
-                .bg(tone_color(self.palette.selection_bg()))
+                .fg(tui_color(self.palette.selection()))
+                .bg(tui_color(self.palette.selection_bg()))
         }
     }
 
     fn provider(&self, kind: &str) -> Style {
         self.style(resolve_provider_brand(kind, &self.providers).tone(&self.palette))
-    }
-}
-
-fn tone_color(tone: Tone) -> Color {
-    match tone {
-        Tone::Indexed(index) => Color::Indexed(index),
-        Tone::Rgb(red, green, blue) => Color::Rgb(red, green, blue),
     }
 }
 

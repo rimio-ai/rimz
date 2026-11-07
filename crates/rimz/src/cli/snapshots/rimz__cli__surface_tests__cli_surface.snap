@@ -1366,6 +1366,8 @@ rimz help packs show
 
 rimz help packs update
 
+rimz help palette
+
 rimz help pane
 
 rimz help pane bandwidth
@@ -2541,6 +2543,19 @@ rimz packs update
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --yes  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz palette
+    --client <CLIENT>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --from-pane <FROM_PANE>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mode <MODE>  [action=set takes=1..=1 default=cards values=cards|commands|worktrees|new]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --popup  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz pane

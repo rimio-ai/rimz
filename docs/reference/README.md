@@ -12,6 +12,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 
 | Page | What it covers |
 | --- | --- |
+| [palette.md](./cli/palette.md) | Search live cards, commands, and worktree groups in a terminal or popup. |
 | [getting-started.md](./cli/getting-started.md) | Opening, reaching, and diagnosing a local room: `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. |
 | [remote.md](./cli/remote.md) | `rimz remote`: connecting to a room on another host over SSH, saved aliases, installing RimZ on the host, port forwarding and its live port view, and opening a remote room in the browser. |
 | [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the writable and broadcast daemons, named tokens, and the JSON payloads. |

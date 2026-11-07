@@ -30,6 +30,7 @@ mod loop_timer;
 mod lsp;
 mod message;
 mod packs;
+mod palette;
 mod pane;
 mod paths;
 mod pricing_refresh;
@@ -280,6 +281,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
+        Some(Subcmd::Palette(args)) => palette::run(args, &globals),
         Some(Subcmd::PricingRefresh(args)) => pricing_refresh::run(args),
         Some(Subcmd::Message(args)) => message::run(*args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
@@ -772,6 +774,8 @@ enum Subcmd {
         after_help = "To prompt an agent use `rimz message`; to read its conversation, `rimz transcript`."
     )]
     Pane(pane::PaneArgs),
+    /// Search live cards and commands, here or in a popup.
+    Palette(palette::PaletteArgs),
     /// Pricing snapshot projection helper. Contributor automation calls this.
     #[command(hide = true)]
     PricingRefresh(pricing_refresh::PricingRefreshArgs),

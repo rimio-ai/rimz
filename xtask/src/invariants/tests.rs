@@ -912,6 +912,20 @@ fn tests_path_component_matches_nested_test_trees() {
 }
 
 #[test]
+fn hardcoded_palette_colors_are_rejected() {
+    let root = temp_repo_root("palette-colors");
+    let palette = root.join("crates/rimz/src/cli/palette");
+    std::fs::create_dir_all(&palette).unwrap();
+    let path = palette.join("ui.rs");
+    std::fs::write(&path, "fn draw() { Color::Red; }").unwrap();
+    assert!(
+        ensure_no_hardcoded_ui_colors(&root, &[path]).is_err(),
+        "palette renderers must reject hardcoded colors"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ui_color_exemptions_cover_the_carrier_edge_and_tests() {
     // The render-side theme module mints ratatui carriers; ansi.rs quantizes them.
     assert!(ui_color_exempt(Path::new("theme.rs")));

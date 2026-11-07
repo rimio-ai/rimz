@@ -1144,7 +1144,7 @@ fn path_has_tests_component(path: &Path) -> bool {
         .any(|component| component.as_os_str() == OsStr::new("tests"))
 }
 
-/// Sidebar render code names color intent through a component token or a
+/// Sidebar and palette render code name color intent through a component token or a
 /// semantic accessor, never a raw terminal color — so the four-layer theme
 /// stays the one place hue is decided. The only `Color::` path render code may
 /// write is the `Color::Reset` sentinel: the 16 named ANSI variants are intent,
@@ -1155,14 +1155,19 @@ fn path_has_tests_component(path: &Path) -> bool {
 /// carrier→slot mappings. See docs/internals/theme.md and
 /// docs/contributing/rust-conventions.md.
 fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
-    let render_root = root.join("crates/rimz/src/sidebar_pane/render");
+    let render_roots = [
+        root.join("crates/rimz/src/sidebar_pane/render"),
+        root.join("crates/rimz/src/cli/palette"),
+    ];
     let mut violations = Vec::new();
     for path in files {
-        if path.extension().and_then(OsStr::to_str) != Some("rs") || !path.starts_with(&render_root)
-        {
+        if path.extension().and_then(OsStr::to_str) != Some("rs") {
             continue;
         }
-        let Ok(relative) = path.strip_prefix(&render_root) else {
+        let Some(relative) = render_roots
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())
+        else {
             continue;
         };
         if ui_color_exempt(relative) {
@@ -1179,7 +1184,8 @@ fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "sidebar render must name color through a component token (theme.component(Component::…)) \
+        "sidebar and palette render must name color through a component token \
+         (theme.component(Component::…)) \
          or a semantic accessor (theme.good/warn/caution/alarm, body/muted/faint/rule), never a \
          Color variant; only Color::Reset may be named — Color::Indexed/Rgb are minted by the \
          theme pipeline, not hand-picked in render — see docs/internals/theme.md\n{}",
