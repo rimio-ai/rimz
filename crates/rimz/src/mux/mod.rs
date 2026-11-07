@@ -475,10 +475,6 @@ impl ClientView {
             .collect()
     }
 
-    pub fn attended_until(&self, pane: &PaneId, hold: Duration) -> Option<u64> {
-        crate::pane::attended_until(&self.clients, &self.presence.client_input_ms, pane, hold)
-    }
-
     /// Resolve fresh attached-client evidence only when every observation names
     /// the same live pane. Detailed client rows outrank summarized pane ids;
     /// dead summarized panes do not invalidate one distinct live pane.
@@ -1534,13 +1530,20 @@ mod tests {
             ..ClientView::default()
         };
         let hold = Duration::from_secs(30);
-        let mut deadlines = vec![view.attended_until(&pane, hold)];
+        let deadline = |view: &ClientView| {
+            typing::InputSource::ClientClocks {
+                clients: &view.clients,
+                input_ms: &view.presence.client_input_ms,
+            }
+            .deadline(&pane, Some(hold))
+        };
+        let mut deadlines = vec![deadline(&view)];
         view.presence.client_input_ms.insert(b.clone(), 200_000);
-        deadlines.push(view.attended_until(&pane, hold));
+        deadlines.push(deadline(&view));
         view.presence.client_input_ms.insert(a, 100_000);
-        deadlines.push(view.attended_until(&pane, hold));
+        deadlines.push(deadline(&view));
         view.clients[1].pane_id = pane.clone();
-        deadlines.push(view.attended_until(&pane, hold));
+        deadlines.push(deadline(&view));
         assert_eq!(deadlines, [None, None, Some(130_000), Some(230_000)]);
     }
 

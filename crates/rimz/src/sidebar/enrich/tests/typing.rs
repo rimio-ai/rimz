@@ -37,12 +37,16 @@ fn frame_typing_deadlines_match_live_send_and_clear_without_a_frame_or_hold() {
         },
     };
     let hold = Duration::from_secs(30);
+    let source = crate::mux::typing::InputSource::ClientClocks {
+        clients: &view.clients,
+        input_ms: &view.presence.client_input_ms,
+    };
     let expected: HashMap<_, _> = panes
         .iter()
         .filter_map(|pane| {
             Some((
                 pane.clone(),
-                Timestamp::from_millisecond(view.attended_until(pane, hold)? as i64).unwrap(),
+                Timestamp::from_millisecond(source.deadline(pane, Some(hold))? as i64).unwrap(),
             ))
         })
         .collect();

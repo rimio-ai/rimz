@@ -33,6 +33,7 @@ struct PaneInput {
 }
 
 pub(crate) struct TtySample {
+    tty: PathBuf,
     atime_s: u64,
     taken_at: Instant,
     taken_at_ms: u64,
@@ -129,6 +130,7 @@ impl TypingRecord {
             .map_err(io::Error::other)?
             .as_secs();
         Ok(TtySample {
+            tty: tty.clone(),
             atime_s,
             taken_at,
             taken_at_ms,
@@ -155,7 +157,12 @@ impl TypingRecord {
         view_started_at: Option<Instant>,
         now_ms: u64,
     ) -> bool {
-        let entry = self.panes.entry(pane.clone()).or_default();
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return false;
+        };
+        if entry.tty.as_ref() != Some(&sample.tty) {
+            return false;
+        }
         let clients = match view {
             TypingView::Focused(clients) | TypingView::Unreported { clients, .. } => clients,
         };
@@ -259,6 +266,7 @@ mod tests {
 
     fn sample(atime_s: u64) -> TtySample {
         TtySample {
+            tty: "/dev/pts/1".into(),
             atime_s,
             taken_at: Instant::now(),
             taken_at_ms: atime_s * 1_000,
@@ -293,6 +301,7 @@ mod tests {
     #[test]
     fn baseline_records_atime_and_viewers_without_counting_input() {
         let mut record = TypingRecord::default();
+        record.set_tty(&pane(), "/dev/pts/1".into());
         observe(&mut record, 10, &clients(), 10_000);
         assert_eq!(
             record.panes.get(&pane()).map(|entry| (
@@ -306,6 +315,25 @@ mod tests {
                 None
             ))
         );
+    }
+
+    #[test]
+    fn samples_do_not_apply_after_the_tty_changes_or_the_entry_disappears() {
+        let sample = sample(20);
+        for mut record in [record(), TypingRecord::default()] {
+            if record.panes.contains_key(&pane()) {
+                record.set_tty(&pane(), "/dev/pts/2".into());
+            }
+            let prior = record.clone();
+            let pending = record.observe(
+                &pane(),
+                &sample,
+                &TypingView::Focused(&clients()),
+                Some(sample.taken_at),
+                20_000,
+            );
+            assert_eq!((pending, record == prior), (false, true));
+        }
     }
 
     #[cfg(target_os = "linux")]

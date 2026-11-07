@@ -581,7 +581,9 @@ pub(super) fn execute_attempt(
             return Ok(AttemptOutcome::Queued);
         }
     }
-    let receipt = if let Some(until) = live_send.typing_hold_until(workspace, &target.pane_id) {
+    let receipt = if let Some(until) =
+        live_send.typing_hold_until(workspace, store.runtime_paths(), &target.pane_id)
+    {
         Ok(send::Receipt::TypingHeld {
             until,
             compacted: false,

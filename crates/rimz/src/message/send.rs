@@ -13,6 +13,7 @@ use crate::message::{
     command_submit_delay_from_env, message_interval_from_env,
 };
 use crate::mux::PaneWriter;
+use crate::mux::typing::{InputSource, TypingRecord, TypingView};
 use crate::pane::keys::NamedKey;
 use crate::store::follow::{EventFollower, FollowEvent};
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
@@ -86,6 +87,7 @@ impl LiveSend {
     pub(super) fn typing_hold_until(
         &self,
         workspace: &ResolvedWorkspace,
+        runtime: &crate::RuntimePaths,
         pane: &crate::ids::PaneId,
     ) -> Option<Timestamp> {
         if self.kind == DeliveryKind::Interrupt && self.force {
@@ -94,22 +96,62 @@ impl LiveSend {
         let hold = crate::config::MachineConfig::load_lenient()
             .harness
             .typing_hold?;
-        let view =
-            match crate::mux::backend_for(pane.mux()).client_view(crate::mux::ClientFocusOptions {
+        let read_view = || match crate::mux::backend_for(pane.mux()).client_view(
+            crate::mux::ClientFocusOptions {
                 session_name: Some(workspace.session_name.clone()),
                 command_timeout: Some(Duration::from_millis(500)),
-            }) {
-                Ok(view) => view,
+            },
+        ) {
+            Ok(view) => Some(view),
+            Err(error) => {
+                tracing::debug!(%error, %pane, "cannot read typing hold; sending without it");
+                None
+            }
+        };
+        let until = if InputSource::uses_tty() {
+            let sample = match TypingRecord::load(runtime).sample(pane) {
+                Ok(sample) => sample,
                 Err(error) => {
-                    tracing::debug!(%error, %pane, "cannot read typing hold; sending without it");
+                    tracing::debug!(
+                        %error, %pane, "cannot stat typing tty; sending without hold"
+                    );
                     return None;
                 }
             };
-        let now = Timestamp::now();
-        let until = i64::try_from(view.attended_until(pane, hold)?).ok()?;
+            let started_at = Instant::now();
+            let view = read_view()?;
+            let clients = view.typing_clients();
+            let view = TypingView::for_mux(pane.mux(), &clients, &view.presence.client_input_ms);
+            match TypingRecord::update(runtime, |record| {
+                record.observe(
+                    pane,
+                    &sample,
+                    &view,
+                    Some(started_at),
+                    Timestamp::now().as_millisecond().try_into().ok()?,
+                );
+                InputSource::Tty(record).deadline(pane, Some(hold))
+            }) {
+                Ok(until) => until,
+                Err(error) => {
+                    tracing::debug!(
+                        %error, %pane, "cannot update typing record; sending without hold"
+                    );
+                    None
+                }
+            }
+        } else {
+            let view = read_view()?;
+            InputSource::ClientClocks {
+                clients: &view.clients,
+                input_ms: &view.presence.client_input_ms,
+            }
+            .deadline(pane, Some(hold))
+        };
+        let until = i64::try_from(until?).ok()?;
         Timestamp::from_millisecond(until)
             .ok()
-            .filter(|until| *until > now)
+            .filter(|until| *until > Timestamp::now())
     }
 
     fn pause_raw_typing(&self, body: MessageBody) {
@@ -433,7 +475,7 @@ fn write_batch(
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
     // Every delivery binds its claim to the pane before entering the write path.
     let pane = head.pane_id.as_ref().expect("live send has a pane pin");
-    if let Some(until) = send.typing_hold_until(workspace, pane) {
+    if let Some(until) = send.typing_hold_until(workspace, store.runtime_paths(), pane) {
         return Ok(PaneWrite::TypingHeld(until));
     }
     if !store.message_claims_held(batch)? {
