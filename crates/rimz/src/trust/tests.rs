@@ -10,6 +10,22 @@ fn project_with(text: &str) -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn project_key_bindings_do_not_enter_the_executable_surface() {
+    let baseline = ProjectConfig::default();
+    let configured: ProjectConfig = toml::from_str(
+        "[keys]\nprefix='Ctrl+a'\n[keys.bind.normal]\n'Alt+x'={run='rimz message @coder hi'}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        executable_surface_hash(&baseline),
+        executable_surface_hash(&configured)
+    );
+    assert!(configured.hooks.is_empty());
+    assert!(configured.profiles.is_empty());
+    assert!(configured.env.is_empty());
+}
+
 fn birth_prompt_due(project_root: &Path, config_root: &Path) -> bool {
     birth_prompt_with_roots(project_root, config_root)
         .expect("birth prompt")

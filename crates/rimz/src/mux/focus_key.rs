@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::keys::KeyChord;
+
 pub(crate) fn register_room_keys(
     backend: &dyn super::MuxBackend,
     sidebar: &crate::config::SidebarConfig,
@@ -36,47 +38,16 @@ pub(crate) fn register_room_keys(
     }
 }
 
-/// A modifier-plus-key chord such as `Alt+p`. Only modifiers a terminal can
-/// reliably deliver are supported; `Cmd` is intentionally absent because the
-/// terminal emulator swallows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FocusChord {
-    modifier: Modifier,
-    key: char,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Modifier {
-    Alt,
-    Ctrl,
-}
-
-impl FocusChord {
-    /// Parse a `Mod+key` (or `Mod-key`) chord. Unsupported shapes return
-    /// `None` so room birth can warn and skip the binding.
-    fn parse(raw: &str) -> Option<Self> {
-        let raw = raw.trim();
-        let (modifier, key) = raw.split_once(['+', '-'])?;
-        let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
-            "alt" | "meta" | "m" => Modifier::Alt,
-            "ctrl" | "control" | "c" => Modifier::Ctrl,
-            _ => return None,
-        };
-        let mut chars = key.trim().chars();
-        let key = chars.next()?;
-        if chars.next().is_some() || !key.is_ascii_graphic() {
-            return None;
-        }
-        Some(Self { modifier, key })
-    }
-
+impl KeyChord {
     /// tmux root-table key spec: `M-p` / `C-p`.
     pub(crate) fn to_tmux(self) -> String {
-        let prefix = match self.modifier {
-            Modifier::Alt => 'M',
-            Modifier::Ctrl => 'C',
-        };
-        format!("{prefix}-{}", self.key)
+        match self {
+            Self::Alt(key) => format!("M-{key}"),
+            Self::Ctrl(key) => format!("C-{key}"),
+            Self::Character(key) => key.to_string(),
+            Self::Esc => "Escape".into(),
+            Self::Enter => "Enter".into(),
+        }
     }
 }
 
@@ -84,7 +55,7 @@ impl FocusChord {
 /// binding resolves the pressing session at keypress (`#{session_name}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomKeyBinding {
-    pub(crate) chord: FocusChord,
+    pub(crate) chord: KeyChord,
     program: PathBuf,
     args: Vec<String>,
 }
@@ -93,7 +64,7 @@ impl RoomKeyBinding {
     /// Resolve a command and configured chord against the absolute RimZ binary.
     pub(crate) fn resolve(chord: &str, rimz_bin: &Path, args: &[&str]) -> Option<Self> {
         Some(Self {
-            chord: FocusChord::parse(chord)?,
+            chord: KeyChord::parse(chord).filter(|key| key.is_modified())?,
             program: rimz_bin.to_path_buf(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
         })
@@ -124,19 +95,21 @@ mod tests {
 
     #[test]
     fn parses_alt_and_ctrl_chords_into_tmux_syntax() {
-        let alt = FocusChord::parse("Alt+p").expect("alt chord");
+        let alt = KeyChord::parse("Alt+p").expect("alt chord");
         assert_eq!(alt.to_tmux(), "M-p");
-        assert_eq!(FocusChord::parse("ctrl-s").unwrap().to_tmux(), "C-s");
-        assert_eq!(FocusChord::parse("M-0").unwrap().to_tmux(), "M-0");
-        assert_eq!(FocusChord::parse("Alt+`").unwrap().to_tmux(), "M-`");
+        assert_eq!(KeyChord::parse("ctrl-s").unwrap().to_tmux(), "C-s");
+        assert_eq!(KeyChord::parse("M-0").unwrap().to_tmux(), "M-0");
+        assert_eq!(KeyChord::parse("Alt+`").unwrap().to_tmux(), "M-`");
     }
 
     #[test]
     fn rejects_unsupported_chords() {
-        assert_eq!(FocusChord::parse("p"), None);
-        assert_eq!(FocusChord::parse("Super+p"), None);
-        assert_eq!(FocusChord::parse("Alt+Space"), None);
-        assert_eq!(FocusChord::parse("Alt+"), None);
+        for chord in ["p", "Super+p", "Alt+Space", "Alt+"] {
+            assert_eq!(
+                RoomKeyBinding::resolve(chord, Path::new("/usr/bin/rimz"), &[]),
+                None
+            );
+        }
     }
 
     #[test]

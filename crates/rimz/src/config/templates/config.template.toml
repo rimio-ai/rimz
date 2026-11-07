@@ -142,6 +142,13 @@
 [room]
 # style = "native"                   # native keeps your mux navigation; rimz selects sidebar-first navigation
 
+[keys]
+# Read only with room.style = "rimz"; bindings belong in this per-machine file.
+# keymap = "rimz"                     # bundled sidebar-first keymap
+# prefix = "Alt+p"                    # moves both the mode entry and the prefix-mode palette chord
+## [keys.bind.normal]
+## "Alt+x" = "card.close"              # named action, or { run = "rimz ..." }; "none" removes a binding
+
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
 ## status_bar = "on"                 # on, compact, or off; unset: on for native style, off for rimz

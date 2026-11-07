@@ -1139,7 +1139,55 @@ upward-dependencies = [
 # MuxConfig lets the settings class table exhaustively account for backend selection (+1).
 # IdleCompactSeat and resolve share launch/runtime floor resolution and child exclusion (+2).
 # RoomConfig and RoomStyle share the room style and its status-bar default (+2).
-surface-budget = 274
+# Room keymap vocabulary, parser, action commands, and resolver serve mux and CLI (+14).
+# Typed key directions, split directions, palette modes, and mode-change classification
+# keep both backend compilers exhaustive (+3).
+surface-budget = 291
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeysConfig"
+reason = "Machine-only raw key settings preserve malformed bindings for individual notices."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyChord"
+reason = "One case-preserving terminal key grammar serves native chords, keymap validation, and backend compilation."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyMode"
+reason = "The resolved keymap shares four data modes with both backends and the key-list command."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyDirection"
+reason = "Typed focus, swap, and resize directions keep backend compilation exhaustive."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeySplitDirection"
+reason = "The key vocabulary admits only rightward and downward pane splits."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyPaletteMode"
+reason = "Palette bindings carry a typed mode instead of indexing command arguments."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyActionName"
+reason = "Typed native actions, command arguments, and palette modes cross the config-to-backend boundary."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyAction"
+reason = "Resolved bindings carry a named action or literal arguments after the RimZ binary."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::RoomKeymap"
+reason = "MachineConfig resolves one typed keymap without consulting a live multiplexer."
 
 [[verdict]]
 kind = "item"
@@ -4471,7 +4519,13 @@ upward-dependencies = ["agents"]
 # The live resolver shares the project-account refusal with birth and display readers (+1).
 # project_packs reads non-executing pack metadata before the trust gate (+1).
 # project_throttle lets room judgment warn about ignored machine-only project settings (+1).
-surface-budget = 38
+# project_keys detects ignored machine-only key tables for room-entry notices (+1).
+surface-budget = 39
+
+[[verdict]]
+kind = "item"
+key = "trust::project_keys"
+reason = "Room entry detects ignored project key bindings through the trust-owned reader without making them executable."
 
 [[verdict]]
 kind = "item"
@@ -10221,11 +10275,6 @@ reason = "WidthPercent::resolve is called only by the separate integration crate
 kind = "item"
 key = "mux::focus_key::RoomKeyBinding"
 reason = "Signature floor on the pub MuxBackend::register_room_key (mux/mod.rs:932) (pass 24c)."
-
-[[verdict]]
-kind = "item"
-key = "mux::focus_key::FocusChord"
-reason = "Return floor on RoomKeyBinding::chord (focus_key.rs:55), which the room-key path reads at crate reach (pass 24c)."
 
 [[verdict]]
 kind = "item"

@@ -64,6 +64,17 @@ fn every_room_setting_has_its_apply_class() {
     assert!(!table.contains_key("mux.default"));
     assert_eq!(table.get("sidebar.focus_key"), Some(&Reload));
     assert_eq!(table.get("sidebar.zoom_key"), Some(&Reload));
+    for key in [
+        "room.style",
+        "keys.keymap",
+        "keys.prefix",
+        "keys.bind.normal",
+        "keys.bind.prefix",
+        "keys.bind.resize",
+        "keys.bind.move",
+    ] {
+        assert_eq!(table.get(key), Some(&Reload), "{key}");
+    }
     let tmux = classes(&config, MuxName::Tmux);
     assert_eq!(tmux.get("mux.status_bar"), Some(&Reload));
     for key in [
@@ -82,6 +93,29 @@ fn every_room_setting_has_its_apply_class() {
     ] {
         assert_eq!(tmux.get(format!("tmux.{key}").as_str()), Some(&Reload));
     }
+}
+
+#[test]
+fn changing_room_style_defers_the_zellij_bar_but_not_the_keymap() {
+    let mut record = Record::default();
+    record.replace_session(&MultiplexerConfig::from(&MachineConfig::default()));
+    let config = MachineConfig::parse_text(
+        std::path::Path::new("config.toml"),
+        "[room]\nstyle='rimz'\n",
+        std::path::Path::new("missing-definitions"),
+    )
+    .unwrap();
+    assert_eq!(
+        classes(&config, MuxName::Zellij).get("room.style"),
+        Some(&AppliesWhen::Reload)
+    );
+    let PendingSettings::Tracked(pending) = diff(Some(&record), &config, MuxName::Zellij) else {
+        panic!("tracked room")
+    };
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].key, "mux.status_bar");
+    assert_eq!(pending[0].configured, Some(json!("off")));
+    assert_eq!(pending[0].when, AppliesWhen::RoomStart);
 }
 
 #[test]

@@ -95,6 +95,52 @@ fn spend_order_round_trips_with_config_set_and_get() {
 }
 
 #[test]
+fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    for (key, default, value) in [
+        ("keys.keymap", "rimz", "rimz"),
+        ("keys.prefix", "Alt+p", "Ctrl+a"),
+    ] {
+        let result = editor.get(Some(key));
+        assert!(result.is_ok(), "{key} must be readable: {result:?}");
+        assert_eq!(result.unwrap().as_str(), Some(default));
+        editor.set(key, value).unwrap();
+        assert_eq!(editor.get(Some(key)).unwrap().as_str(), Some(value));
+    }
+    for (key, value) in [
+        ("keys.keymap", "unknown"),
+        ("keys.keymap", "42"),
+        ("keys.prefix", "p"),
+        ("keys.prefix", "Esc"),
+        ("keys.prefix", "Ctrl+m"),
+        ("keys.prefix", "Alt+Space"),
+        ("keys.prefix", "42"),
+    ] {
+        assert!(editor.set(key, value).is_err(), "{key} accepted {value}");
+    }
+    for key in [
+        "keys.bind",
+        "keys.bind.normal",
+        "keys.bind.prefix",
+        "keys.bind.resize",
+        "keys.bind.move",
+        "keys.bind.normal.Alt+x",
+    ] {
+        assert!(
+            matches!(
+                editor.set(key, "none"),
+                Err(ConfigEditErr::UnknownKey { .. })
+            ),
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn model_aliases_round_trip_with_config_set() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

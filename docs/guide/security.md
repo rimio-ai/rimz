@@ -77,6 +77,8 @@ Every name in those tables is hashed too, so renaming a profile drifts the grant
 
 Per-machine loop schedules are a separate matter. A `check = "<shell>"` line in your own `~/.rimz/loop.toml` is your command, not a repository's. A clone can supply only project `[tasks]`, and those need both a trust grant for the config and a machine-local `rimz loop enable <name>` before they run unattended. Until trust, a same-named machine task remains the runnable definition; after trust, the project definition is visible but disabled here by default.
 
+Room-key `run =` bindings likewise belong only in your per-machine `~/.rimz/config.toml`, under `[keys.bind.<mode>]`. A project `[keys]` table is ignored and warns, whether trusted or not. A binding starts with `rimz` and splits shell-style quoted arguments without evaluating shell syntax; it cannot name another executable. See [room keymaps](./configuration.md#room-keymap).
+
 ### Folder trust for agents
 
 Codex, Claude, and Qoder can stop at a folder-trust screen before they report anything to RimZ. `rimz start` offers to record the decision for detected agents, under the accounts the room will use. `rimz doctor` and `rimz trust` show which agents remain undecided in the project. Human interactive launches there, including `--bg`, warn and let you answer in the agent's pane. Agent-started agent and team launches instead refuse with the grant command to ask you to run, or the option to relaunch from a directory the account already trusts. A fresh subagent with an explicit undecided Claude or Codex `--cwd` instead starts privately with file access to the target, loading none of its configuration, and prints the equivalent `--empty-dir --add-dir` launch.

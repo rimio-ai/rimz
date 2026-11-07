@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{MachineConfig, MultiplexerConfig, MuxConfig, TmuxConfig, ZellijConfig};
+use crate::config::{
+    MachineConfig, MultiplexerConfig, MuxConfig, RoomConfig, TmuxConfig, ZellijConfig,
+};
 use crate::disk::{atomic, lock::WorkspaceLock, paths::RuntimePaths};
 use crate::ids::MuxName;
 
@@ -62,6 +64,7 @@ fn classes(config: &MachineConfig, mux: MuxName) -> BTreeMap<&'static str, Appli
         default: None,
         status_bar: Some(if mux == MuxName::Tmux { Reload } else { RoomStart }),
     });
+    classify!(&config.room, RoomConfig, "room", { style: Some(Reload) });
     classify!(&config.zellij, ZellijConfig, "zellij", {
         mouse_mode: Some(Attach),
         mouse_click_through: Some(Reload),
@@ -90,6 +93,16 @@ fn classes(config: &MachineConfig, mux: MuxName) -> BTreeMap<&'static str, Appli
     });
     table.insert("sidebar.focus_key", Reload);
     table.insert("sidebar.zoom_key", Reload);
+    for key in [
+        "keys.keymap",
+        "keys.prefix",
+        "keys.bind.normal",
+        "keys.bind.prefix",
+        "keys.bind.resize",
+        "keys.bind.move",
+    ] {
+        table.insert(key, Reload);
+    }
     table
 }
 

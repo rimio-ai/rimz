@@ -17,7 +17,7 @@ This page indexes every command and states the rules that hold across all of the
 | Cost, usage, and budgets | `stats`, `budget` | [Stats](./cli/stats.md) · [Budget](./cli/budget.md) |
 | Worktrees and schedules | `worktree`, `loop`, `workflow` | [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) · [Workflow](./cli/workflow.md) |
 | Hooks and trust | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
-| Configure appearance and behavior | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |
+| Configure appearance and behavior | `config`, `keys`, `list-themes`, `list-pets` | [Config](./cli/config.md) · [Room keys](#room-keys) |
 | Load and customize definition and skill packs | `packs` | [Packs](./cli/packs.md) |
 | Find RimZ's files | `paths` | [Paths](./cli/paths.md) |
 | Read the sidebar | `sidebar frame` | [Sidebar frames](./cli/pane.md#render-a-sidebar-frame) |
@@ -25,6 +25,10 @@ This page indexes every command and states the rules that hold across all of the
 | Maintain and recover | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 Tab completion for commands, flags, and live room names is set up in the [shell completion guide](../guide/setup.md#shell-completion).
+
+## Room keys
+
+`rimz keys` prints the resolved per-machine room keymap, grouped by mode, with each key's action name or quoted `rimz` command. It needs no running room. `rimz keys --wait` requires a terminal and holds the list open until a keypress, for use in a popup. [Room keymap configuration](../guide/configuration.md#room-keymap) explains the style switch, prefix, and overrides.
 
 ## Global flags
 

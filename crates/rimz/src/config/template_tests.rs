@@ -71,6 +71,20 @@ fn template_defaults_deserialize_to_machine_defaults() {
 }
 
 #[test]
+fn template_lists_room_keymap_settings() {
+    let template = Kind::Core.template();
+    for setting in [
+        "[room]",
+        "[keys]",
+        "# keymap = \"rimz\"",
+        "# prefix = \"Alt+p\"",
+        "status_bar = \"on\"",
+    ] {
+        assert!(template.contains(setting), "template must list {setting}");
+    }
+}
+
+#[test]
 fn template_covers_serialized_default_leaves() {
     assert!(Kind::Core.template().contains("# typing_hold = \"30s\""));
     let mut defaults = template_comparison_defaults(MachineConfig::default());
