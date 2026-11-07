@@ -240,7 +240,7 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 Inside a group, the workflow card and [cohort blocks](#teams-read-as-one) lead. Among the remaining rows, asks (`?`) and failures (`!`) come first, newest first. A fresh request for attention leads an older one, whether it is a question or a failure. A current child's question lifts its parent's card too.
 
-Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows, including not-tracked agent panes. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
+Everything else comes below in the calm zone: running, done, idle, sleeping, and parked (`⏸`) cards, together with process rows, including not-tracked agent panes. They sort in hot, cooling, then archived bands, newest first inside each band. A new card or shell lands at the top of the calm rows, except an agent launched in an existing shell pane keeps that shell's place. Answering an ask or recovering from a failure puts that card at the top of the calm rows too.
 
 Within a band, prompts, clean finishes, entering or leaving a provider pause, and read receipts do not reshuffle calm cards. A second ask, or a question becoming a failure, keeps its place among the attention cards. Read state affects emphasis and the jump inbox, not this order.
 
