@@ -312,12 +312,6 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &ViewState) -> Option<&'a
     ui.visible_roster(snapshot).row(ui.selected_index?)
 }
 
-/// Only the live-selected, not-yet-prompted idle card draws compose dots and
-/// needs their breath animation grid.
-fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool {
-    selected_row(snapshot, ui).is_some_and(sections::awaiting_first_prompt_affordance)
-}
-
 /// Whether a visible card's open delegation section holds something in motion:
 /// a live child's head or a running shell job's working animation. Either
 /// needs the fast grid whatever the parent's own status, so a sleeping parent
@@ -596,7 +590,7 @@ pub(in crate::sidebar_pane) fn animation_interval(
     if money_rolling {
         return Some(money_grid());
     }
-    if cadence == AnimationCadence::Breath || expanded_row_awaiting_first_prompt(snapshot, view) {
+    if cadence == AnimationCadence::Breath {
         return Some(crate::sidebar::timing::breath_animation_frame(refresh_ms));
     }
     None

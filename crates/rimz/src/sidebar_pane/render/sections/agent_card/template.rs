@@ -66,7 +66,6 @@ pub(super) enum CardSlot {
     Identity,
     Description,
     Question,
-    AwaitingDots,
     Gauge,
     Tokens,
     Cache,
@@ -83,12 +82,6 @@ const IDENTITY_DESCRIPTION: &[CardSlot] = &[CardSlot::Identity, CardSlot::Descri
 const IDENTITY_DESCRIPTION_GAUGE: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
-    CardSlot::Question,
-    CardSlot::Gauge,
-];
-const IDENTITY_AWAITING_GAUGE: &[CardSlot] = &[
-    CardSlot::Identity,
-    CardSlot::AwaitingDots,
     CardSlot::Question,
     CardSlot::Gauge,
 ];
@@ -134,6 +127,13 @@ pub(super) fn template(
     density: CardDensityMode,
     expansion: CardExpansion,
 ) -> &'static [CardSlot] {
+    if let CardStage::Fresh { labeled } = stage {
+        return if labeled && density != CardDensityMode::Compact {
+            IDENTITY_DESCRIPTION
+        } else {
+            IDENTITY
+        };
+    }
     let expanded = expansion.reach.opens_card();
     if stage == CardStage::Stale
         && matches!(status, AgentStatus::Idle | AgentStatus::Success)
@@ -152,34 +152,20 @@ pub(super) fn template(
             | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
         };
     }
-    if let CardStage::Fresh { labeled } = stage
-        && expansion.reach != SelectionReach::Selected
-    {
-        return if labeled {
-            IDENTITY_DESCRIPTION
-        } else {
-            IDENTITY
-        };
-    }
-
-    match stage {
-        CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
-        CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged | CardStage::Stale => match (
-            expanded || density == CardDensityMode::Expanded,
-            expansion.delegation,
-        ) {
-            (true, true) => ENGAGED_EXPANDED,
-            (true, false) => ENGAGED,
-            (false, true) => ENGAGED_RESTING_EXPANDED,
-            (false, false)
-                if expansion.reach == SelectionReach::Unreached
-                    && matches!(status, AgentStatus::Idle | AgentStatus::Success) =>
-            {
-                IDENTITY_DESCRIPTION_GAUGE
-            }
-            (false, false) => ENGAGED_RESTING,
-        },
+    match (
+        expanded || density == CardDensityMode::Expanded,
+        expansion.delegation,
+    ) {
+        (true, true) => ENGAGED_EXPANDED,
+        (true, false) => ENGAGED,
+        (false, true) => ENGAGED_RESTING_EXPANDED,
+        (false, false)
+            if expansion.reach == SelectionReach::Unreached
+                && matches!(status, AgentStatus::Idle | AgentStatus::Success) =>
+        {
+            IDENTITY_DESCRIPTION_GAUGE
+        }
+        (false, false) => ENGAGED_RESTING,
     }
 }
 
@@ -229,22 +215,6 @@ mod tests {
         assert_eq!(CardStage::of(&row), CardStage::Engaged);
     }
 
-    #[test]
-    fn selected_unlabeled_card_keeps_the_question_slot() {
-        for status in [AgentStatus::Running, AgentStatus::Waiting] {
-            let slots = template(
-                CardStage::Fresh { labeled: false },
-                status,
-                CardDensityMode::Expanded,
-                CardExpansion {
-                    reach: SelectionReach::Selected,
-                    ..Default::default()
-                },
-            );
-            assert!(slots.contains(&CardSlot::Question));
-        }
-    }
-
     const STAGES: [CardStage; 4] = [
         CardStage::Fresh { labeled: false },
         CardStage::Fresh { labeled: true },
@@ -277,6 +247,14 @@ mod tests {
         density: CardDensityMode,
         expansion: CardExpansion,
     ) -> Vec<CardSlot> {
+        if let CardStage::Fresh { labeled } = stage {
+            return if labeled && density != CardDensityMode::Compact {
+                IDENTITY_DESCRIPTION
+            } else {
+                IDENTITY
+            }
+            .to_vec();
+        }
         if stage == CardStage::Stale
             && matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !expansion.reach.opens_card()
@@ -295,21 +273,8 @@ mod tests {
             }
             .to_vec();
         }
-        if let CardStage::Fresh { labeled } = stage
-            && expansion.reach != SelectionReach::Selected
-        {
-            return if labeled {
-                IDENTITY_DESCRIPTION
-            } else {
-                IDENTITY
-            }
-            .to_vec();
-        }
         let mut slots = match (stage, expansion.reach.opens_card(), expansion.delegation) {
-            (CardStage::Fresh { labeled: false }, false, _) => IDENTITY,
-            (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
-            (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
-            (CardStage::Fresh { labeled: true }, true, _) => IDENTITY_DESCRIPTION_GAUGE,
+            (CardStage::Fresh { .. }, _, _) => unreachable!("fresh cards returned above"),
             (CardStage::Engaged | CardStage::Stale, _, true) => ENGAGED_EXPANDED,
             (CardStage::Engaged | CardStage::Stale, _, false) => ENGAGED,
         }
@@ -327,12 +292,14 @@ mod tests {
         slots
     }
 
-    /// The card shape follows live or held selection and the delegation entries
+    /// Engaged card shape follows live or held selection; delegation entries
     /// follow the resolved open state alone, so a selected card can close its
     /// entries and an unselected one can open them.
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
         assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
@@ -343,16 +310,26 @@ mod tests {
                                 delegation,
                                 history: false,
                             };
-                            assert_eq!(
-                                template(stage, status, density, expansion),
+                            actual.push((
+                                stage,
+                                status,
+                                density,
+                                expansion,
+                                template(stage, status, density, expansion).to_vec(),
+                            ));
+                            expected.push((
+                                stage,
+                                status,
+                                density,
+                                expansion,
                                 expected_template(stage, status, density, expansion),
-                                "{stage:?} {status:?} {density:?} {expansion:?}"
-                            );
+                            ));
                         }
                     }
                 }
             }
         }
+        assert_eq!(actual, expected);
     }
 
     #[test]

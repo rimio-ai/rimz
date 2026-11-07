@@ -495,12 +495,7 @@ fn pre_prompt_rich_context_cannot_reshape_a_fresh_card() {
         .into_iter()
         .skip(1)
         .collect::<Vec<_>>();
-    assert_eq!(selected.len(), 3, "{}", selected.join("\n"));
-    assert!(selected[1].contains(".  "), "{selected:?}");
-    assert!(
-        selected[2].contains('▢') && selected[2].contains("0%"),
-        "{selected:?}"
-    );
+    assert_eq!(selected.len(), 1, "{}", selected.join("\n"));
     assert!(!selected.iter().any(|line| line.contains("New Session")));
 }
 
