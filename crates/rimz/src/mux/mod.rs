@@ -35,7 +35,7 @@ pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::RoomKeyBinding;
 pub(crate) use focus_key::register_room_keys;
-pub use pane_writer::PaneWriter;
+pub use pane_writer::{PaneWriter, exclude_pane_input};
 use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,

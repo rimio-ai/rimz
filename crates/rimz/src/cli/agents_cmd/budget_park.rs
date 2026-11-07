@@ -30,7 +30,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
     });
     rimz::harness::hibernate::wake_pane(store, &request.pane_id)?;
     let interrupted = PaneWriter::open(
-        store.runtime_paths(),
+        Some(store.runtime_paths()),
         &request.pane_id,
         &ctx.workspace.session_name,
     )

@@ -173,14 +173,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             let session_name = resolve_session_name(globals, target.session_name)?;
             rimz::mux::backend_for(target.pane.mux())
                 .require_pane_in_session(&target.pane, &session_name)?;
-            send(
-                &RuntimePaths::shared(),
-                &target.pane,
-                &session_name,
-                text.as_deref(),
-                &key,
-                enter,
-            )
+            send(&target.pane, &session_name, text.as_deref(), &key, enter)
         }
         PaneSubcmd::Focus {
             target,
@@ -826,7 +819,6 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
 }
 
 fn send(
-    runtime: &RuntimePaths,
     pane: &PaneId,
     session_name: &str,
     text: Option<&str>,
@@ -839,11 +831,14 @@ fn send(
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }
-    if let Some(room) = rimz::room::session::workspace_record_for_session(session_name)? {
-        let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
-        rimz::harness::hibernate::wake_pane_at(&paths, pane)?;
+    let paths = rimz::room::session::workspace_record_for_session(session_name)?
+        .map(|room| rimz::StatePaths::for_workspace(room.workspace_id))
+        .transpose()?;
+    if let Some(paths) = &paths {
+        rimz::harness::hibernate::wake_pane_at(paths, pane)?;
     }
-    let writer = PaneWriter::open(runtime, pane, session_name)?;
+    let runtime = paths.as_ref().map(RuntimePaths::for_state).transpose()?;
+    let writer = PaneWriter::open(runtime.as_ref(), pane, session_name)?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {
         writer.type_text(text)?;
     }
