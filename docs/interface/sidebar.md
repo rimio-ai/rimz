@@ -693,11 +693,11 @@ The workflow badge leads the main rail in walk order: reached steps and checks a
 
 With a current step card, the mark and name use its status tone and animation phase and omit the state word. Otherwise Active uses a static running tone, Parked a waiting tone, followed by the check outcome, `held`, `takeover`, `running` for a step, `checking`, or `parked`. The parked word is yellow. A hold reads `holding <outcome> <age>/<limit>`, using `?` for an unreadable limit. The duration is the outcome's age at a check, node-entry age at a step, or time since parking; the whole run's age pins right. A held session names its step, not the check holding it.
 
-The strip adds neither a selectable row nor attention. Clicking it focuses the current step card when one is shown; otherwise it does nothing. A group with no rows has no lane selection, row ordinal, header jump, or unread reminder, and keyboard row navigation skips it. Its header drops churn before shortening its name. Its open PR still contributes to `⑃ N`, and that lens shows the group, counting it once; status and unread lenses exclude it. An inactive rowless run counts once on the inactive chip and occupies one place in its paged peek, drawing an inert workflow receipt. It stays hidden while the peek is closed. Search matches its label, qualifier, team, PR number (`#91`), or workflow name, and counts a rowless match once.
+The strip adds neither a selectable row nor attention. Clicking it focuses the current step card when one is shown; otherwise it does nothing. A group with no rows has no lane selection, row ordinal, header jump, or unread reminder, and keyboard row navigation skips it. Its header drops churn before shortening its name. Its open PR still contributes to `⑃ N`, and that lens shows the group, counting it once; status and unread lenses exclude it. Search matches its label, qualifier, team, PR number (`#91`), or workflow name, and counts a rowless match once.
 
 On narrow panes, the first fitting shape drops the run total, then the track while keeping a detour's parent, then the parent, badge, and duration, then ellipsizes the state word. The current mark and node name never shorten. The detour connector follows `chrome.box_bottom_left` and `chrome.hairline`, including ASCII overrides, in either glyph set.
 
-A live workflow blocks folding while its checkout is unlanded. Once landed, the latest node entry joins the group's quiet maximum and uses the landed window. A folded group with a live run replaces the team/member roster line with `▸ <workflow> · <node> <word>`, always drawing the strip's word, since the fold hides the cards. Member totals still draw when available; a rowless group has no totals and its receipt is inert. A closed inactive chip hides a rowless group like any other folded group.
+A live workflow keeps its group out of the inactive section, landed or unlanded, with members or rowless. When the run ends, a group with members returns to the ordinary quiet window on its members' clocks; a rowless group disappears. The six-row cap and the header fold still apply to a group with a live run.
 
 ### Row cap and inactive groups
 
@@ -714,7 +714,7 @@ A group shows at most six rows in their section order, folding excess idle cards
    +3 more
 ```
 
-A group becomes inactive once its latest agent launch or non-keepalive prompt is more than an hour old if landed, otherwise more than a day old. Running, asking, failed and parked members block folding; unread rows block unlanded groups only. The main checkout and external groups never fold. Landed means a merged or closed PR or work merged into trunk, with a clean or unknown tree state. A dirty merged tree uses the unlanded window. Process-only groups use their latest activity instead of launches and prompts. Every inactive group with an agent collapses to its header and a two-line receipt:
+A group becomes inactive once its latest agent launch or non-keepalive prompt is more than an hour old if landed, otherwise more than a day old. Running, asking, failed and parked members, and live workflow runs, block folding; unread rows block unlanded groups only. The main checkout and external groups never fold. Landed means a merged or closed PR or work merged into trunk, with a clean or unknown tree state. A dirty merged tree uses the unlanded window. Process-only groups use their latest activity instead of launches and prompts. Every inactive group with an agent collapses to its header and a two-line receipt:
 
 ```
  ↩ merged-work                                   ✓ main

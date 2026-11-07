@@ -48,7 +48,7 @@ pub(crate) enum Component {
     PipelinePassed,
     /// A hollow future dot for a stage this run already entered: shape says not done, tone says been there.
     PipelineRevisited,
-    /// The workflow name leading a workflow strip or its folded receipt (`meta`).
+    /// The workflow name leading a workflow strip (`meta`).
     WorkflowBadge,
     /// The `╰─` connector from a detour's parent to the current detour node (`faint`).
     WorkflowDetour,

@@ -137,7 +137,7 @@ fn elapsed(now: jiff::Timestamp, since: jiff::Timestamp) -> String {
     crate::theme::fmt::run_duration((now.as_second() - since.as_second()).max(0))
 }
 
-pub(super) fn word_style(theme: &Theme, run: &SidebarWorkflow) -> Style {
+fn word_style(theme: &Theme, run: &SidebarWorkflow) -> Style {
     theme.styled(
         if run.state == RunState::Parked {
             Component::WorkflowParked

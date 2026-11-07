@@ -637,6 +637,7 @@ fn group_inactive(
 ) -> Option<SidebarInactive> {
     if group.root_lane
         || group.kind == SidebarWorktreeKind::External
+        || group.workflow.is_some()
         || group
             .rows
             .iter()
@@ -645,7 +646,7 @@ fn group_inactive(
         return None;
     }
     let landed = group_landed(group);
-    if !landed && (group.workflow.is_some() || group.rows.iter().any(|row| row.unread)) {
+    if !landed && group.rows.iter().any(|row| row.unread) {
         return None;
     }
     let quiet = group
@@ -656,8 +657,7 @@ fn group_inactive(
                 .map(|agent| agent.engaged_at.unwrap_or(row.last_activity))
         })
         .max()
-        .or_else(|| group.rows.iter().map(|row| row.last_activity).max())
-        .max(group.workflow.as_ref().map(|run| run.entered_at))?;
+        .or_else(|| group.rows.iter().map(|row| row.last_activity).max())?;
     let window = if landed {
         windows.inactive_after_secs
     } else {
