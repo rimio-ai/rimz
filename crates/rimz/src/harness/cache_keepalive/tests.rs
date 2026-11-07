@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger};
-use crate::config::{KeepWarm, Profile, RoleBinding, Team};
+use crate::config::{IdleCompact, KeepWarm, Profile, RoleBinding, Team};
 
 fn ts(seconds: i64) -> Timestamp {
     Timestamp::from_second(seconds).unwrap()

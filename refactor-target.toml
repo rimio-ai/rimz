@@ -357,7 +357,8 @@ upward-dependencies = ["address"]
 # NotTracked, NotTrackedReason, not_tracked_hooks and untracked_mode_fix share reporting gaps (+4).
 # AgentState::native_compaction shares model-matched display limits with CLI reports and doctor (+1).
 # Variant and its name/args, Runtime and its definition/variant/kind/name, find_runtime and runtime_names share named launch forms (+10).
-surface-budget = 1267
+# LaunchCapability::disable_native_idle_compaction_args shares launch-local ownership (+1).
+surface-budget = 1268
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1130,7 +1131,8 @@ upward-dependencies = [
 # KeepWarmSeat and declared_horizon share the declared hold rule with launch compilation (+2).
 # MuxStatusBar carries the backend-neutral status mode to room setup (+1).
 # MuxConfig lets the settings class table exhaustively account for backend selection (+1).
-surface-budget = 270
+# IdleCompactSeat and resolve share launch/runtime floor resolution and child exclusion (+2).
+surface-budget = 272
 
 [[verdict]]
 kind = "item"
@@ -1196,6 +1198,11 @@ reason = "Dispatch and harness consumers resolve the same role/profile threshold
 kind = "item"
 key = "config::effective::KeepWarmSeat"
 reason = "Runtime holds and launch compilation share the declared team/profile horizon and child exclusion without evaluating live stage or TTL inputs."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::IdleCompactSeat"
+reason = "Runtime idle compaction and launch compilation share role/profile/harness floor resolution and launched-child exclusion."
 
 [[verdict]]
 kind = "item"

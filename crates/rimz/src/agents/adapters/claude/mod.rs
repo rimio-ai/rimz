@@ -907,6 +907,28 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
+    fn disable_native_idle_compaction_args(
+        &self,
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                object
+                    .entry("idleCompaction")
+                    .or_insert(serde_json::Value::Bool(false));
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
+
     fn allow_team_notes_args(
         &self,
         run: &Path,

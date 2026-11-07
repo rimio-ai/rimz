@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::agents::ProviderLogin;
 use crate::agents::account_links::{ShareErr, ShareReport};
 use crate::agents::capabilities::SystemTextChannel;
+use crate::agents::context::SignIn;
 use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, SkillLinkPlan};
 use crate::config::effective::{LaunchAgents, ProfileScope};
 use crate::config::{AccountsConfig, CommandsConfig, Isolation};
@@ -612,6 +613,39 @@ fn long_cache_requested(
     .is_some()
 }
 
+fn idle_compact_covered(
+    request: &ExecRequest,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+) -> bool {
+    if request.headless.is_some() {
+        return false;
+    }
+    let (teams, profiles) = effective.map_or(
+        (&machine.agents.teams, &machine.agents.profiles),
+        |effective| (&effective.teams, &effective.profiles),
+    );
+    let params = &request.identity.params;
+    let floor = crate::config::effective::IdleCompactSeat {
+        team: params.team.as_deref(),
+        role: params.role.as_deref(),
+        profile: params.profile.as_deref(),
+        launched_child: params.parent_agent_id.is_some() && params.launch_depth.is_some(),
+    }
+    .resolve(teams, profiles, &machine.harness);
+    // Sign-in arrives after launch, so every possible reading must admit compaction.
+    floor.is_some()
+        && [None, Some(SignIn::Subscription), Some(SignIn::ApiKey)]
+            .into_iter()
+            .all(|sign_in| {
+                machine
+                    .harness
+                    .configured_lifetime(&request.kind, sign_in)
+                    .ttl
+                    .is_some_and(|ttl| ttl > machine.harness.prompt_cache_margin)
+            })
+}
+
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {
     let mut request = inputs.request.clone();
     let adapter = crate::agents::find_definition(request.kind.as_str())
@@ -642,6 +676,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         }
     }
     reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
+    reminders.disable_native_idle_compaction =
+        idle_compact_covered(&request, inputs.machine, inputs.effective);
     if request
         .allowed_tools
         .as_ref()

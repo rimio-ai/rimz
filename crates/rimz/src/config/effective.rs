@@ -880,6 +880,55 @@ impl KeepWarmSeat<'_> {
     }
 }
 
+/// A seat's idle-compaction floor, also resolvable before a launch has a row.
+pub(crate) struct IdleCompactSeat<'a> {
+    pub team: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub profile: Option<&'a str>,
+    pub launched_child: bool,
+}
+
+impl<'a> From<&'a crate::agents::AgentState> for IdleCompactSeat<'a> {
+    fn from(agent: &'a crate::agents::AgentState) -> Self {
+        Self {
+            team: agent.team.as_deref(),
+            role: agent.role.as_deref(),
+            profile: agent.profile.as_deref(),
+            launched_child: agent.is_launched_child(),
+        }
+    }
+}
+
+impl IdleCompactSeat<'_> {
+    pub fn resolve(
+        &self,
+        teams: &TeamsConfig,
+        profiles: &ProfilesConfig,
+        harness: &super::HarnessConfig,
+    ) -> Option<u64> {
+        if self.launched_child {
+            return None;
+        }
+        let role = self.team.and_then(|team| {
+            let role = self.role?;
+            teams
+                .0
+                .get(team)?
+                .roles
+                .iter()
+                .find(|binding| binding.role == role)?
+                .idle_compact
+        });
+        let setting = role
+            .or_else(|| profiles.setting(self.profile?, |profile| profile.idle_compact))
+            .unwrap_or(harness.idle_compact);
+        match setting {
+            super::IdleCompact::Off => None,
+            super::IdleCompact::Tokens(floor) => Some(floor),
+        }
+    }
+}
+
 /// A seat's live configuration identity, also constructible before a launch has a row.
 pub(crate) struct SmartCompactSeat<'a> {
     pub team: Option<&'a str>,
