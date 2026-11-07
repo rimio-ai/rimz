@@ -748,6 +748,27 @@ The `--cwd` places the view in the held room, since `loop watch` refuses outside
 
 Check a line that fills the view's last column here, not only in a unit test. An erase sent while the cursor sits on a line's last cell clears that cell in tmux, as in a real terminal, while the `vt100` crate behind the unit and integration tests keeps it. That is why `crates/rimz/src/tui.rs::write_crlf` issues each erase while the cursor is still at the start of its line. Running the view under `script` with an `stty` size printed no frame, for a reason not established, so use tmux for this capture.
 
+## Check a popup
+
+`rimz palette --popup` draws on one client, so `rimz pane capture` cannot see it. A check attaches a client of its own in a Python `pty` and reads that client's screen with `pyte` (`uv run --with pyte python`): attach through `sandbox in` (on tmux, `tmux -S "$ROOT/runtime/rimz/tmux/server" attach -t <session>`), feed the pty's bytes to a `pyte.ByteStream`, and send keys by writing to the pty.
+
+The reader needs a `pyte.Screen` subclass that overrides `report_device_status`:
+
+```python
+class Screen(pyte.Screen):
+    def report_device_status(self, *args, **kwargs):
+        pass
+```
+
+The stock method raises on `CSI ? 996 n`, the colour-scheme query, and that ends the reader thread.
+
+Four more traps cost a run each:
+
+- `rimz palette --popup` on tmux blocks until the popup closes, so a driver starts it in the background and goes on to read the screen.
+- A sandbox room's `tmux list-clients` also lists the room's own clients. Give the pty a size no other client has and pick its client by that size for `--client`.
+- A CLI `zellij pipe --name rimz:palette -- cards` blocks until killed, since the plugin never unblocks it. Start it in the background and stop it by its PID once the float appears.
+- Zellij's attach-time DCS prints as base64 text on the `pyte` screen. It means nothing, so wait for a string the popup draws.
+
 ## Capture kitty graphics
 
 A held room draws cell bars, never pixel meters or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
