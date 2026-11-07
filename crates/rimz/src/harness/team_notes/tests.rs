@@ -1,6 +1,8 @@
 use super::*;
 use std::{fs, process::Command};
 
+mod migration;
+
 #[test]
 fn resume_finds_the_newest_matching_run_across_both_layouts() {
     let temp = tempfile::tempdir().unwrap();

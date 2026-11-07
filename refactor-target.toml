@@ -4035,7 +4035,8 @@ path = "crates/rimz/src/store"
 # workflow::PushBack and Store::queue_message_once retain idempotent workflow delivery (+2).
 # workflow::Restart carries one manual launch's optional continued session (+1).
 # Store::retire_message cancels obsolete workflow prompts, including unconfirmed sends (+1).
-surface-budget = 561
+# notes::migrate_legacy shares collision-safe archive moves with room-birth policy (+1).
+surface-budget = 562
 
 [[verdict]]
 kind = "item"
@@ -12051,3 +12052,13 @@ reason = "Link validation, restoration, GC and migration share the only reader o
 kind = "item"
 key = "harness::team_notes::is_open"
 reason = "GC receives the harness-owned protective board-stage policy without importing harness into store."
+
+[[verdict]]
+kind = "item"
+key = "store::notes::migrate_legacy"
+reason = "Room-birth policy moves legacy team archives through store-owned dated naming and collision-safe publication."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_notes::migrate"
+reason = "Room birth migrates archives before agents start and repoints only checkout links that resolved to each old run."

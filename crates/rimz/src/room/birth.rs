@@ -237,6 +237,17 @@ impl RoomContext {
             if Isolation::ambient(&crate::agents::ambient_env()).is_some_and(Isolation::is_scoped) {
                 bail!("this pane runs inside a RimZ scoped view; start the room from a host shell");
             }
+            // Every team-notes reader accepts the legacy layout, so a failed move
+            // costs only the dated path and must not keep the room from opening.
+            let paths = StatePaths::for_project_root(&self.workspace.project_root)
+                .context("preparing team notes paths for birth")?;
+            if let Err(error) = crate::harness::team_notes::migrate(&paths) {
+                tracing::warn!(
+                    workspace = %self.workspace.workspace_id,
+                    %error,
+                    "team notes stay in the legacy layout",
+                );
+            }
             crate::sidebar::purge_rebirth_heartbeats(&self.runtime);
             if let Err(err) = crate::mux::width_target::clear(&self.runtime) {
                 tracing::debug!(
