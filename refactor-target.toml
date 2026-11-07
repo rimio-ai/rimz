@@ -270,6 +270,7 @@ upward-dependencies = ["address"]
 # PermissionMode::rank shares the grant order with the supervised child cap (+1).
 # Test fixtures share the native hook trust writer through trust_hook_config_for_test (+1).
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
+# RaisedAsk, RaisedAskState and CardAlert share enrich-only attention vocabulary (+3).
 # LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
 # WaitingResolution and its resolver share answered-ask proof with the sidebar (+2).
 # PendingWaitClass (including its re-export), rested_status and display_rest_status replace sleeping_over (+3 net).
@@ -362,7 +363,7 @@ upward-dependencies = ["address"]
 # TuneSetting and AgentTune::apply share the typed parse-and-apply boundary (+2).
 # AgentTune keeps override-first runtime policy at the agents boundary.
 # AgentTune's per-key accessors project effective overrides before configured fallback (+3).
-surface-budget = 1275
+surface-budget = 1278
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4066,7 +4067,8 @@ path = "crates/rimz/src/store"
 # MessageRecord::is_open_and_due counts due queued messages for sidebar cards (+1).
 # AgentTunePayload and Store::tune_agent share the locked override/audit boundary (+2).
 # workflow::RouteDefaults freezes routing policy for sealed runs across upgrades (+1).
-surface-budget = 566
+# raised shares its record module, four record/error types, open predicate and seven operations (+13).
+surface-budget = 579
 
 [[verdict]]
 kind = "item"
@@ -4801,7 +4803,8 @@ allowed-dependencies = [
 # Store::agent_with_context copies one selected row for hook decisions (+1).
 # Store::audit_rows exposes the frame's shared durable fold (+1).
 # The store-owned notes manifest, allocator and archive reader module (+1).
-surface-budget = 42
+# The durable raised-attention record module (+1).
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -5247,6 +5250,86 @@ reason = "Doctor reads disk floors, including owned fan-out checkout paths, and 
 kind = "item"
 key = "disk::paths::loop_throttle_check_cache"
 reason = "The home-wide capacity-check verdict cache is addressed only through the disk path module."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::RaisedAskState"
+reason = "A self raise arms for its current turn before it becomes an open ask."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::RaisedAsk"
+reason = "The durable side record and enrich-only agent projection share raised ask vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::CardAlert"
+reason = "The side record and card projection share manually raised alert text and provenance."
+
+[[verdict]]
+kind = "item"
+key = "store::raised"
+reason = "CLI writers and sidebar readers share one per-session raised-attention record."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::Entry"
+reason = "Ask, alert and human-turn arrays use the same typed session key and flattened codec."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::RaisedErr"
+reason = "Raised-attention writes expose typed durability and already-answered refusals."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::HumanTurn"
+reason = "Hook writers and session retirement share the last human-turn stamp."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::RaisedRecord"
+reason = "Readers inspect the single versioned ask, alert and human-turn record."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::RaisedRecord::is_open"
+reason = "Attach and mutation use the same strict human-turn comparison, preserving ties."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::read"
+reason = "Lock-free readers treat absent, corrupt and unknown-version raised records as empty."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::attach"
+reason = "CLI snapshots and sidebar enrichment attach identical live overlays without touching native asks."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::raise"
+reason = "The CLI replaces a session's ask under the same lock that guards human-turn stamps."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::withdraw"
+reason = "Withdraw and answer share ask-id-checked removal so a replacing raise survives."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::set_alert"
+reason = "The mark command durably replaces a session's alert under the workspace lock."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::clear_alert"
+reason = "Explicit human read marks remove the durable alert while focus reads hide it by receipt."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::retire"
+reason = "Full session retirement removes every raised-attention entry for that session."
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

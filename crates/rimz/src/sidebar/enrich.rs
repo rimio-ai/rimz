@@ -764,6 +764,7 @@ fn enrich_core(
         );
         project_due_messages(&mut snapshot, state);
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
+        crate::store::raised::attach(&mut snapshot.agents, state);
     }
     let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state, runtime);
     let workflow_seeds = workflows::seeds(&workflow_records, state);

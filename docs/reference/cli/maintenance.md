@@ -266,7 +266,7 @@ rimz reset [--yes] [--no-start] [--hard] [--account <KIND@NAME>]... [PATH]
 
 1. deletes the room's multiplexer session and purges the multiplexer's resurrection cache for it;
 2. signals the room's orphaned processes and clears the runtime `sock/`, `live/`, and `lanes/` classes, keeping lock inodes;
-3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them, and drops every pending [`stop --when-idle`](./agents.md#stop) request;
+3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them, and drops every pending [`stop --when-idle`](./agents.md#stop) request, raised ask, card alert, and human-turn stamp;
 4. archives the active event log, clears rebuildable caches and its recorded provider accounts;
 5. starts the room again and attaches, with no prior agents recovered.
 

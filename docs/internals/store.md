@@ -44,6 +44,7 @@ Four boundaries decide where new code goes:
 | [`live_roster.rs`](../../crates/rimz/src/store/live_roster.rs) | The `records/live-roster.json` codec for rebirth recovery. |
 | [`pending_recovery.rs`](../../crates/rimz/src/store/pending_recovery.rs) | The `records/pending-recovery.json` codec: lost agents parked at a rebirth boundary until a settlement resumes or ends them. |
 | [`idle_stop.rs`](../../crates/rimz/src/store/idle_stop.rs) | The `records/idle-stop.json` codec: pending `agents stop --when-idle` requests, written under the workspace lock. An absent or unreadable record reads as no requests. |
+| [`raised.rs`](../../crates/rimz/src/store/raised.rs) | `records/raised.json`, version 1: at most one raised ask, alert, and last human-turn stamp per `(kind, agent_id)`. Writers take the workspace lock and publish durably; lock-free readers treat missing, invalid, and unknown-version records as empty. |
 | [`hibernate.rs`](../../crates/rimz/src/store/hibernate.rs) | `records/hibernation.json`, version 1: one entry per `(kind, agent_id)` with `pane_id`, `scope`, `provider_pid`, `frozen_at`, `anon_at_freeze`, `step`, `wake_error`, and cumulative `reclaimed_bytes`. Absent numeric fields read as zero and an absent `wake_error` as none. Reads are lock-free, and a missing, unreadable, or unknown-version record reads empty. Replacement and withdrawal take the workspace lock and publish durably, and reset deletes the record. The [hibernation helper](./harness/hibernate.md) records confirmed freezes and reclaim steps. |
 | [`message.rs`](../../crates/rimz/src/store/message.rs), [`message/codec.rs`](../../crates/rimz/src/store/message/codec.rs) | The durable message record, FIFO/claim/batch selection, and the live-queue and history codec. |
 | [`run.rs`](../../crates/rimz/src/store/run.rs) | `RunRecord` and `RunStatus`, the durable codec, and `wake_run`. |
@@ -76,7 +77,7 @@ Room files have one lifetime class per directory, and only `disk/paths.rs` const
 | Class directory | Tier | Reclamation rule |
 | --- | --- | --- |
 | `log/` | State | Event log: rotate at 64 MiB, with 14-day retention for archives and carryover. Hook ingress: truncate only after it is fully drained, with no age sweep or rotation. |
-| `records/` | State | Standing records, with no age sweep. |
+| `records/` | State | Standing records, with no age sweep. Both resets remove pending idle stops and raised attention. |
 | `audit/` | State | Except `transcript/` and `messages/`, remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. Those two subdirectories follow `gc.transcript_retention` (default `forever`) and report together as `transcript`. |
 | `cache/` | State | Rebuildable. Cleared on reset, with no age sweep. `rimz doctor --audit` warns above 150,000 entries. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Workflow homes: see [Garbage collection](#garbage-collection). Restorability does not extend the grace. |
@@ -118,6 +119,7 @@ records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision
 records/idle-stop.json                        pending `agents stop --when-idle` requests, one per session
+records/raised.json                           raised asks, card alerts, and human-turn stamps, one each per session
 records/hibernation.json                      frozen agents and their reclaim steps
 records/last-death.json                       last incident
 records/budget.fleet.json                     standing fleet override, raise, or disable
@@ -165,6 +167,7 @@ This page owns the log, the caches derived from it, hook ingress, and the worksp
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
 | `records/loop-launches.json`, `records/loop-workflow-launches.json` | [loops.md](./harness/loops.md#the-launch-ledger) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
+| `records/raised.json` | [Raised attention](#raised-attention) below |
 | `records/hibernation.json` | [hibernate.md](./harness/hibernate.md) |
 | `records/lsp-usage.jsonl` | [lsp.md](./lsp.md#query-usage) |
 | `tmp/`, `shared/`, `owned/agents/` | [sandbox.md](./sandbox.md#temp-units) |
@@ -494,6 +497,12 @@ Ended and expelled identities ride the published snapshot as `fenced_sessions`, 
 
 Pick the scope by the question, because the wrong one is silent. `Store::snapshot_cached` and `Store::runtime_projection(RuntimeScope::Runtime)` answer "who is here now". Audit rows or `Store::runtime_projection(RuntimeScope::Audit)` retain the evidence for a liveness gate, a retirement predicate or a resume check; role decisions require marked copies. Asking the runtime scope whether a session has ended returns a clean empty answer, since the row that carries the proof is the one that scope removed.
 
+## Raised attention
+
+`records/raised.json` is a durable-record-class locked read-modify-write, not a lifecycle fold. Its `asks`, `alerts`, and `human_turns` arrays key entries by `(kind, agent_id)`. An ask is visible only in `open` state and while no human-turn stamp is strictly newer than its `basis_at`; a tie stays open. Replacing a session's ask prunes its earlier one. Snapshot CLI reads and sidebar enrichment attach the current record without changing native input ownership; ended rows receive no overlay.
+
+Full session retirement (stop, exit, fresh-session restart, or Ended/Lost) removes all three entries; a same-session restart retains them. Both reset modes remove the file. Reading a card never closes an ask; read receipts hide alerts, and a later unread mark does not restore a read alert.
+
 ## Session death
 
 Two mechanisms end sessions in the store. The reap converges individual sessions RimZ can prove are gone, and the `session.death` record captures the loss of a whole room.
@@ -559,6 +568,7 @@ For a layout-2 room, soft or hard, `rimz reset`:
 - Cancels active supervised runs. Their records stay loadable for waiters until terminal-run GC reclaims them after its 7-day grace.
 - Clears the room account selection.
 - Removes `records/idle-stop.json`. A soft reset leaves its agents resumable, and a surviving request would stop the resumed session.
+- Removes `records/raised.json`, so resumed sessions inherit neither raised attention nor old human-turn stamps.
 - Stops the hook drainer and removes ingress and its cursor ([Hook ingress](#hook-ingress)).
 - Stages carryover on a soft reset, and rotates the log.
 - Clears `cache/`, skill copies included, and the runtime `sock/`, `live/`, and `lanes/`.
@@ -616,6 +626,8 @@ The sidebar host is the sole automatic trigger: once a day per room, after a fiv
 Room and machine stamps both use `{ "swept_at": <Timestamp> }` and record failed attempts too, so a persistent failure retries daily. A closed room waits for the machine sweep. Assist records carry `scope` and the helper's own room's `class_bytes`, while the other totals cover the whole selected scope. Automatic sweeps require a readable core config, so an unreadable opt-out never becomes an enabled default. See [automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps) for the settings.
 
 ## What survives what
+
+Raised asks, alerts, and their human-turn stamps survive teardown and reboot with state, but neither reset mode keeps `records/raised.json`.
 
 Reset, teardown, and reboot each draw a fixed line through the classes, and age-based GC runs independently of all three. A soft reset drops `cache/`, the runtime `sock/`, `live/`, and `lanes/`, and the active log after archiving it. A hard reset also drops carryover, `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, `automation-notes/`, and `out/` ([Reset](#reset)). Workflow homes under `owned/workflows/` and both notes archives therefore survive a soft reset but not a hard one. Both resets keep state lock inodes. Teardown drops those three runtime classes and keeps `snapshots/` and state; reboot drops all of runtime and keeps state. Whole-room deletion and `uninstall --state` or `--all` remove both notes archives with the room, and a default uninstall keeps room state.
 

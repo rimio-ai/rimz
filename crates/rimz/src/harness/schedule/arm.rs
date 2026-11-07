@@ -268,7 +268,8 @@ pub enum RetireScope {
 /// Overlay cleanup is best-effort and warns instead of failing, so the count is
 /// reported whatever the overlays do; `Err` means the durable map could not be
 /// rewritten and nothing was removed, or the session's idle-stop request could
-/// not be withdrawn after its rows went, and carries the count either way
+/// not be withdrawn, or its raised attention could not be retired after its rows
+/// went, and carries the count either way
 /// ([`RetireFailure::dropped`]).
 pub fn retire_session(
     project_root: &Path,
@@ -338,6 +339,12 @@ fn retire_session_in(
         message: err.to_string(),
         dropped,
     })?;
+    if scope == RetireScope::Session {
+        crate::store::raised::retire(paths, kind, session).map_err(|err| RetireFailure {
+            message: err.to_string(),
+            dropped,
+        })?;
+    }
     Ok(dropped)
 }
 
@@ -349,8 +356,8 @@ fn retire_session_in(
 /// an `ended_at`. A session whose latest lifecycle event revived it has no
 /// `ended_at` and stays; a target with no agent row at all is gc's business.
 ///
-/// `agents` is read only once this workspace is known to hold a pinned row or
-/// an idle-stop request, so a caller with neither pays two file reads.
+/// `agents` is read only once this workspace holds a pinned row, an idle-stop
+/// request, raised attention, or a hibernation record.
 pub fn retire_ended_sessions(
     project_root: &Path,
     agents: impl FnOnce() -> crate::store::runtime::AuditRows,
@@ -369,6 +376,25 @@ fn retire_ended_sessions_in(
     agents: impl FnOnce() -> crate::store::runtime::AuditRows,
 ) -> Result<usize, RetireFailure> {
     let mut pinned = super::instances::pinned_sessions(&paths.root);
+    let raised = crate::store::raised::read(paths);
+    pinned.extend(
+        raised
+            .asks
+            .into_iter()
+            .map(|entry| (entry.kind, entry.agent_id)),
+    );
+    pinned.extend(
+        raised
+            .alerts
+            .into_iter()
+            .map(|entry| (entry.kind, entry.agent_id)),
+    );
+    pinned.extend(
+        raised
+            .human_turns
+            .into_iter()
+            .map(|entry| (entry.kind, entry.agent_id)),
+    );
     pinned.extend(
         crate::store::idle_stop::read(paths)
             .into_iter()
@@ -739,6 +765,65 @@ mod tests {
             .into_iter()
             .map(|request| request.agent_id.to_string())
             .collect()
+    }
+
+    #[test]
+    fn raised_attention_survives_only_same_session_retirement() {
+        for scope in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+            let (dir, paths, runtime) = idle_stop_fixture();
+            let record = serde_json::json!({"version": 1,
+                "asks": [{"kind": "claude", "agent_id": "stopping",
+                    "ask_id": crate::ids::AskId::new(), "state": "open",
+                    "raised_at": "1970-01-01T00:00:00Z", "basis_at": "1970-01-01T00:00:00Z"}],
+                "alerts": [{"kind": "claude", "agent_id": "stopping", "text": "Review",
+                    "raised_at": "1970-01-01T00:00:00Z"}],
+                "human_turns": [{"kind": "claude", "agent_id": "stopping",
+                    "at": "1970-01-01T00:00:00Z"}]});
+            crate::disk::atomic::write_temp_then_rename(&paths.raised, &record).unwrap();
+            retire_session_in(
+                &paths,
+                &runtime,
+                dir.path(),
+                &crate::ids::AgentKind::new_unchecked("claude"),
+                &"stopping".into(),
+                scope,
+                Path::new("/sys/fs/cgroup"),
+            )
+            .unwrap();
+            let record = crate::store::raised::read(&paths);
+            assert_eq!(
+                (
+                    record.asks.len(),
+                    record.alerts.len(),
+                    record.human_turns.len()
+                ),
+                (
+                    usize::from(scope == RetireScope::UnrestorableOnly),
+                    usize::from(scope == RetireScope::UnrestorableOnly),
+                    usize::from(scope == RetireScope::UnrestorableOnly)
+                ),
+                "{scope:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ended_session_with_only_a_raised_record_is_retired() {
+        let (dir, paths, runtime) = idle_stop_fixture();
+        let record = serde_json::json!({"version": 1, "asks": [], "alerts": [],
+            "human_turns": [{"kind": "claude", "agent_id": "record-only",
+                "at": "1970-01-01T00:00:00Z"}]});
+        crate::disk::atomic::write_temp_then_rename(&paths.raised, &record).unwrap();
+        let mut ended = crate::agents::AgentState::stub(
+            "claude",
+            "record-only",
+            crate::agents::AgentStatus::Idle,
+        );
+        ended.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+        retire_ended_sessions_in(&paths, &runtime, dir.path(), || vec![ended].into()).unwrap();
+        let bytes: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&paths.raised).unwrap()).unwrap();
+        assert_eq!(bytes["human_turns"], serde_json::json!([]));
     }
 
     #[test]

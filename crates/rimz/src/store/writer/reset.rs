@@ -156,6 +156,7 @@ impl Store {
             // Reset ends every agent, and a soft reset leaves them resumable:
             // a surviving request would stop the resumed session.
             remove_file_if_exists(&paths.idle_stop_requests)?;
+            remove_file_if_exists(&paths.raised)?;
             remove_file_if_exists(&paths.hibernation)?;
             {
                 let _ingress = crate::disk::lock::WorkspaceLock::acquire(&paths.hook_ingress_lock)?;
@@ -333,6 +334,27 @@ mod tests {
             assert!(
                 crate::store::idle_stop::read(&paths).is_empty(),
                 "hard={hard}: a resumed agent must not inherit a stop"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_drops_raised_attention_records() {
+        for hard in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = WorkspaceId::from_project_root(dir.path());
+            let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+            let store =
+                Store::open(paths.clone(), RuntimePaths::under(id, dir.path()).unwrap()).unwrap();
+            crate::disk::atomic::write_temp_then_rename(
+                &paths.raised,
+                &serde_json::json!({"version": 1, "asks": [], "alerts": [], "human_turns": []}),
+            )
+            .unwrap();
+            store.reset_records(hard).unwrap();
+            assert!(
+                !paths.raised.exists(),
+                "hard={hard}: reset must drop raised attention"
             );
         }
     }

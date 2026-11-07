@@ -622,6 +622,8 @@ pub struct AgentCard {
     /// Label explaining why the row projected to paused or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay_raised_at: Option<Timestamp>,
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
@@ -683,6 +685,7 @@ impl Default for AgentCard {
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
             turn_error_label: None,
+            overlay_raised_at: None,
         }
     }
 }
@@ -781,6 +784,7 @@ impl AgentCard {
             tool_calls: agent.tool_calls.clone(),
             tool_repeat: agent.tool_repeat.clone(),
             turn_error_label: None,
+            overlay_raised_at: None,
         }
     }
 
