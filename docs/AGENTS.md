@@ -49,6 +49,7 @@ Two figures RimZ prints in more than one place, each correct where it appears. N
 ## Mechanics
 
 - Prose carries no em or en dashes. Use a period, comma, colon, or parentheses. A `console` block keeps whatever the command printed.
+- A doc states what the product does now. Words relative to a change ("unchanged", "now", "no longer") belong in the PR, not the page.
 - `sh` blocks are copy-runnable, checked against the clap definition that parses them.
 - In a recipe spread over several `sh` blocks, every file argument names the path an earlier block created (`"$ROOT/tmp/replay/..."`), never a bare filename that depends on the reader's directory.
 - A fact from a subagent's summary is not grounded. Use a subagent to find the function; read the function before writing the sentence.
