@@ -172,41 +172,75 @@ fn pane_exclusion_keeps_unrelated_and_newly_rowless_run_groups() {
 }
 
 #[test]
-fn run_inactivity_uses_landed_window_and_latest_node_or_member() {
-    let snapshot = base().with_live_panes(vec![pane("%1", "zsh", "/trees/lane")], None);
-    let template = snapshot.worktree_groups[0].clone();
-    for state in [RunState::Active, RunState::Parked] {
-        for (landed, age, row_age, expected) in [
-            (false, 90000, None, None),
-            (true, 3600, None, None),
-            (true, 3601, None, Some(SidebarInactive::Landed)),
-            (true, 3601, Some(30), None),
-            (true, 30, Some(90000), None),
-        ] {
-            let mut projected = snapshot.clone();
-            let mut group = template.clone();
+fn live_runs_prevent_inactivity_and_terminal_runs_use_member_clocks() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for state in [
+        RunState::Active,
+        RunState::Parked,
+        RunState::Done,
+        RunState::Failed,
+        RunState::Canceled,
+    ] {
+        let cases = if state.is_terminal() {
+            vec![
+                (true, Some(3601), Some(SidebarInactive::Landed)),
+                (true, Some(3600), None),
+                (false, Some(90000), Some(SidebarInactive::Unlanded)),
+            ]
+        } else {
+            vec![
+                (false, None, None),
+                (true, None, None),
+                (false, Some(90000), None),
+                (true, Some(90000), None),
+            ]
+        };
+        for (landed, row_age, inactive) in cases {
+            let members = row_age
+                .map(|age| {
+                    let mut member =
+                        agent("codex", "member", AgentStatus::Idle, 0).worktree("/trees/lane");
+                    member.registered_at = Some(ago(age));
+                    member.last_activity = ago(age);
+                    member
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            let rows = members
+                .iter()
+                .map(|member| row_from_agent(member, epoch()))
+                .collect();
+            let mut projected = base_with(members);
             let mut run = workflow("/trees/lane", state);
-            run.entered_at = ago(age);
-            group.workflow = Some(run);
+            run.entered_at = if state.is_terminal() {
+                epoch()
+            } else {
+                ago(90000)
+            };
+            let mut groups =
+                projected.build_worktree_groups(rows, &ParkDemotion::default(), &[run]);
+            let group = &mut groups[0];
             group.clean = Some(true);
             group.pr_state = Some(if landed {
                 WorktreePrState::Merged
             } else {
                 WorktreePrState::Open
             });
-            if let Some(age) = row_age {
-                Arc::make_mut(&mut group.rows)[0].last_activity = ago(age);
-            } else {
-                group.rows = Vec::new().into();
-            }
-            projected.worktree_groups = vec![group].into();
+            projected.worktree_groups = groups.into();
             projected.sort_groups_for_presentation();
-            assert_eq!(
-                projected.worktree_groups[0].inactive, expected,
-                "{state:?}, landed={landed}, node={age}, member={row_age:?}"
-            );
+            let group = &projected.worktree_groups[0];
+            actual.push((
+                state,
+                landed,
+                row_age,
+                group.workflow.is_some(),
+                group.inactive,
+            ));
+            expected.push((state, landed, row_age, !state.is_terminal(), inactive));
         }
     }
+    assert_eq!(actual, expected);
 }
 
 #[test]

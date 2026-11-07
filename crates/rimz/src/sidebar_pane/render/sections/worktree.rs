@@ -360,11 +360,7 @@ fn push_pipeline(
 }
 
 fn inactive_folded(group: &VisibleGroup<'_>) -> bool {
-    !group.expanded()
-        && ((group.hidden_count() > 0 && group.source().collapses())
-            || (group.source().rows.is_empty()
-                && group.source().workflow.is_some()
-                && group.source().inactive.is_some()))
+    !group.expanded() && group.hidden_count() > 0 && group.source().collapses()
 }
 
 /// Whole stage track and name, with muted stage duration immediately after
@@ -493,12 +489,6 @@ fn worktree_tail(
     let group = visible_group.source();
     let collapses = group.collapses();
     let hidden = visible_group.hidden_count();
-    if inactive_folded(visible_group) && group.workflow.is_some() {
-        return [
-            Some(inactive_roster_line(ctx, visible_group, roster)),
-            inactive_totals_line(ctx, group).map(|line| (line, Vec::new())),
-        ];
-    }
     if hidden > 0 && !visible_group.expanded() {
         return [
             Some(if inactive_folded(visible_group) {
@@ -582,25 +572,6 @@ fn inactive_roster_line(
         ),
         Span::raw(" "),
     ];
-    if let Some(run) = &group.workflow {
-        spans.push(Span::styled(
-            run.workflow.clone(),
-            ctx.theme
-                .styled(Component::WorkflowBadge, Modifier::empty()),
-        ));
-        spans.push(Span::styled(
-            format!("{}{}", value_seam(ctx.theme), run.current.name),
-            ctx.theme.muted(),
-        ));
-        spans.push(Span::styled(
-            format!(" {}", run.word),
-            workflow::word_style(ctx.theme, run),
-        ));
-        return (
-            pin_right(spans, cost_spans, content_width(ctx.width)),
-            Vec::new(),
-        );
-    }
     if let Some(team) = team {
         spans.push(Span::styled(
             team.to_owned(),

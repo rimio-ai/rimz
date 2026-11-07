@@ -1,6 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::theme::Component;
-use crate::store::snapshot::{SidebarInactive, SidebarWorkflow, WorkflowNodeKind};
+use crate::store::snapshot::{SidebarWorkflow, WorkflowNodeKind};
 
 fn snapshot() -> SidebarSnapshot {
     crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
@@ -177,7 +177,7 @@ fn workflow_narrow_trim_boundaries_keep_the_current_name_whole() {
 
 #[test]
 fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
-    let mut snapshot = snapshot();
+    let snapshot = snapshot();
     let mut ui = ViewState::default();
     let pane_ui = UiState::default();
     for query in ["land", "merge-lane", "#91"] {
@@ -199,12 +199,6 @@ fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
         let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 22);
         assert!(!screen.contains("merge-lane"), "{screen}");
     }
-    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-    group.inactive = Some(SidebarInactive::Unlanded);
-    assert_eq!(BodyFilter::OpenPr.total(&snapshot.worktree_groups), 1);
-    ui.make_up_filter = BodyFilter::OpenPr.into();
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 22);
-    assert!(screen.contains("land"), "{screen}");
 }
 
 #[test]
@@ -395,51 +389,4 @@ fn workflow_card_section_tone_click_and_ordinals_agree() {
         "workflow_takeover_with_team",
         snapshot_to_screen_for_theme(&snapshot, false, 64, 32),
     );
-}
-
-#[test]
-fn workflow_folded_receipt_is_inert_without_members() {
-    for members in [false, true] {
-        let mut snapshot = snapshot();
-        if members {
-            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows =
-                super::worktree::pipeline_snapshot().worktree_groups[0]
-                    .rows
-                    .clone();
-            for row in std::sync::Arc::make_mut(
-                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-            ) {
-                row.last_activity = snapshot.now;
-            }
-            // The fold hides the step card, so the receipt still draws the word.
-            let card = &snapshot.worktree_groups[0].rows[0];
-            let owner = (
-                crate::ids::AgentKind::new_unchecked(&card.name),
-                card.id.clone().into(),
-            );
-            run(&mut snapshot).agent = Some(owner);
-        }
-        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
-            Some(SidebarInactive::Landed);
-        let theme = Theme::fixed(false);
-        let costs = CostRolls::default();
-        let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &costs);
-        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
-        let texts = line_texts(&block.lines);
-        assert!(
-            texts
-                .get(1)
-                .is_some_and(|text| text.contains("▸ land · watch queued")),
-            "{texts:?}"
-        );
-        assert_eq!(block.interactions.target_at(3, 1).is_some(), members);
-        assert_snapshot(
-            if members {
-                "workflow_folded_members"
-            } else {
-                "workflow_folded_rowless"
-            },
-            snapshot_to_screen_for_theme(&snapshot, false, 54, 18),
-        );
-    }
 }

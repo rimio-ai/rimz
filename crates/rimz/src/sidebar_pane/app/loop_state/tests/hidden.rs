@@ -50,7 +50,6 @@ fn card_less_mirror_pair(mux: MuxName, keys: &[&str]) -> super::scroll::SharedPa
         .at(Duration::ZERO);
     let mut group = workflow.worktree_groups[0].clone();
     group.rows = Arc::new(Vec::new());
-    group.inactive = None;
     pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
         Arc::make_mut(&mut v.context.current.worktree_groups).splice(
             0..0,

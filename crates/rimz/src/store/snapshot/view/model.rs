@@ -531,8 +531,8 @@ pub struct SidebarWorktreeGroup {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
     /// Quiet past the landed or unlanded window, with no running or attention
-    /// member. Root-lane and external groups never fold. A renderer may defer
-    /// admission while the group is viewed or the layout is held.
+    /// member and no live workflow run. Root-lane and external groups never fold.
+    /// A renderer may defer admission while the group is viewed or the layout is held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inactive: Option<SidebarInactive>,
     /// Whether the working tree is clean.

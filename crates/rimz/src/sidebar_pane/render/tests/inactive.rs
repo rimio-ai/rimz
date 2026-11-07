@@ -548,46 +548,6 @@ fn inactive_receipt_member_columns_follow_wide_glyphs_and_names() {
 }
 
 #[test]
-fn workflow_receipt_has_no_member_regions_and_stays_inert_without_rows() {
-    let mut snapshot = receipt_snapshot();
-    let workflow = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
-        .unwrap()
-        .at(Duration::ZERO)
-        .worktree_groups[0]
-        .workflow
-        .clone();
-    let theme = Theme::fixed(true);
-    let costs = CostRolls::default();
-    for rowless in [false, true] {
-        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
-        group.workflow = workflow.clone();
-        if rowless {
-            group.rows = Default::default();
-        }
-        let group = &snapshot.worktree_groups[0];
-        let ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &costs);
-        let block = worktree_group_block(&ctx, group, false, None);
-        let receipt_hits = block
-            .interactions
-            .regions()
-            .iter()
-            .filter(|hit| hit.rows == (1..2))
-            .collect::<Vec<_>>();
-        assert_eq!(receipt_hits.len(), usize::from(!rowless));
-        assert!(receipt_hits.iter().all(|hit| hit.columns == (0..u16::MAX)));
-        for column in 0..60 {
-            assert_eq!(
-                block.interactions.target_at(column, 1),
-                (!rowless).then(|| HitTarget::ExpandGroup {
-                    key: group.key.clone(),
-                    row: "planner".to_owned(),
-                })
-            );
-        }
-    }
-}
-
-#[test]
 fn inactive_chip_is_one_target_in_both_states() {
     let mut snapshot = inactive_snapshot();
     mark_one_unlanded(&mut snapshot);
@@ -647,22 +607,8 @@ fn expanded_frame_opens_inactive_and_every_card() {
 }
 
 #[test]
-fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
-    let mut snapshot = paged_snapshot();
-    let workflow = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
-        .unwrap()
-        .at(Duration::ZERO)
-        .worktree_groups[0]
-        .workflow
-        .clone();
-    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
-        .iter_mut()
-        .filter(|group| group.inactive.is_some())
-    {
-        group.rows = Default::default();
-        group.status_counts.clear();
-        group.workflow = workflow.clone();
-    }
+fn inactive_peek_pages_receipts_without_ordinals() {
+    let snapshot = paged_snapshot();
     let mut view = ViewState::default();
     let rows = view
         .visible_roster(&snapshot)
@@ -686,12 +632,14 @@ fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
                 "page {pages}: {text}"
             );
         }
-        assert_eq!(text.matches("▸ land · watch queued").count(), shown);
-        for (line, receipt) in texts.iter().enumerate() {
-            if receipt.contains("▸ land · watch queued") {
-                assert_eq!(block.interactions.row_at_line(line), None);
-                assert_eq!(block.interactions.target_at(3, line as u16), None);
-            }
+        let receipts = texts
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim_start().starts_with("▸ "))
+            .collect::<Vec<_>>();
+        assert_eq!(receipts.len(), shown, "page {pages}: {text}");
+        for (line, _) in receipts {
+            assert_eq!(block.interactions.row_at_line(line), None);
         }
         if pages > 0 && shown < 25 {
             let tail = texts
@@ -715,13 +663,6 @@ fn inactive_peek_pages_rowless_workflow_receipts_without_ordinals() {
             rows
         );
     }
-    let mut ansi = Vec::new();
-    render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
-    let text = String::from_utf8(ansi).unwrap();
-    for index in 1..=25 {
-        assert!(text.contains(&format!("old-{index:02}")), "{text}");
-    }
-    assert!(!text.contains(" older"), "{text}");
 }
 
 #[test]
