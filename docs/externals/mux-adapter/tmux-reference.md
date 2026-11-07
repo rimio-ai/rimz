@@ -299,7 +299,7 @@ The accepted capture flags are defined in [cmd-capture-pane.c](https://github.co
 
 **`bind-key [-nr] [-N note] [-T key-table] key [command [argument…]]`** binds a key to a tmux command in a key table. `-n` is `-T root`, so the binding fires without the prefix from any pane on the server. Key tables are server-global. `-r` makes the key repeatable. A key named `UserN` is the sequence defined at index N of the `user-keys` option ([key-string.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/key-string.c)).
 
-**`run-shell [-bCE] [-c dir] [-d delay] [-t pane] [shell-command [argument…]]`** runs a command through `/bin/sh -c`, or a tmux command with `-C`, after expanding formats. It blocks the command queue until done unless `-b`. `-E` sends stderr to the output as well (3.6), and arguments after the command expand as `#{1}`, `#{2}`, and so on (3.7).
+**`run-shell [-bCE] [-c dir] [-d delay] [-t pane] [shell-command [argument…]]`** runs a command through `/bin/sh -c`, or a tmux command with `-C`, after expanding formats. On 3.5 the `-c` directory is used literally, without format expansion, so a working directory that must expand (`#{session_path}`) goes into the command string instead (`cd -- #{q:session_path} && …`). It blocks the command queue until done unless `-b`. `-E` sends stderr to the output as well (3.6), and arguments after the command expand as `#{1}`, `#{2}`, and so on (3.7).
 
 **`if-shell [-bF] [-t pane] condition command [command]`** runs the first command when a shell condition exits 0, otherwise the second. With `-F` the condition is a format, true when it expands to something other than empty or `0`, and no shell runs. The branches are tmux command strings, parsed when the condition resolves.
 
