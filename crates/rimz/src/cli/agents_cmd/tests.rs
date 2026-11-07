@@ -22,6 +22,36 @@ struct AgentsHarness {
 }
 
 #[test]
+fn launch_chrome_excludes_every_agents_subcommand_and_alias_except_launch() {
+    let command = crate::cli::Cli::command();
+    let agents = command.find_subcommand("agents").unwrap();
+    let cases = agents
+        .get_subcommands()
+        .flat_map(|subcommand| {
+            std::iter::once(subcommand.get_name())
+                .chain(subcommand.get_all_aliases())
+                .map(move |verb| {
+                    (
+                        format!("rimz agents {verb} value"),
+                        subcommand.get_name() == "launch",
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    assert!(!cases.is_empty());
+    assert_eq!(
+        cases
+            .iter()
+            .map(|(command, _)| (command, rimz::command_is_launch_chrome(command)))
+            .collect::<Vec<_>>(),
+        cases
+            .iter()
+            .map(|(command, expected)| (command, *expected))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn fresh_launch_account_pins_supervised_runs() {
     for verb in [false, true] {
         let mut argv = vec!["agents"];

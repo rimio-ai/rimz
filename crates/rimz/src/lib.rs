@@ -79,7 +79,7 @@ pub use crate::disk::paths::{RuntimePaths, StatePaths};
 pub use crate::ids::{
     AskId, EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
-pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
+pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind, command_is_launch_chrome};
 pub use crate::store::event::EventEnvelope;
 pub use crate::store::{RuntimeProjection, RuntimeScope, Store};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
