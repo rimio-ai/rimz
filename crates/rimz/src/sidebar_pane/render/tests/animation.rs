@@ -289,6 +289,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         trunk_sync: None,
         pr_state: None,
         pr_queue: None,
+        pr_conflicting: false,
         ci: None,
         pr_number: None,
         pr_url: None,

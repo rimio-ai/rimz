@@ -14,7 +14,7 @@ use std::time::Instant;
 use crate::agents::AgentState;
 use crate::agents::context::SignIn;
 use crate::agents::spending::SpendingCaches;
-use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
+use crate::forge::pr_state::{PrLink, PrQueueFact, SettledMergeability, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::snapshot::{
@@ -329,6 +329,7 @@ fn project_pr_state_map(
 ) {
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.pr_stack = Default::default();
+        group.pr_conflicting = false;
         let Some(path) = group.git_checkout() else {
             continue;
         };
@@ -355,6 +356,10 @@ fn project_pr_state_map(
             PrQueueFact::Queued { .. } => WorktreePrQueue::Queued,
             PrQueueFact::Dequeued { .. } => WorktreePrQueue::Dequeued,
         });
+        group.pr_conflicting = matches!(
+            link.and_then(PrLink::current_mergeability),
+            Some(SettledMergeability::Conflicting(_))
+        );
         group.ci = match link {
             Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {
                 link.ci

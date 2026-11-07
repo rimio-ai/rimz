@@ -550,6 +550,9 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort merge-queue state of this worktree's open pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_queue: Option<WorktreePrQueue>,
+    /// The open pull request conflicts with its base at its current forge head.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pr_conflicting: bool,
     /// Best-effort CI verdict for the trunk's branch or the branch's open/merged pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<WorktreeCi>,
@@ -977,6 +980,7 @@ mod tests {
             trunk_sync: None,
             pr_state: None,
             pr_queue: None,
+            pr_conflicting: false,
             ci: None,
             pr_number: None,
             pr_url: None,
@@ -1023,6 +1027,23 @@ mod tests {
         let decoded: SidebarWorktreeGroup = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.cohort_effort, None);
+    }
+
+    #[test]
+    fn worktree_conflict_is_optional_and_only_serialized_when_true() {
+        let mut group = collapse_test_group(Vec::new());
+        let mut absent = serde_json::to_value(&group).unwrap();
+        let serialized_false = absent.get("pr_conflicting").cloned();
+        absent.as_object_mut().unwrap().remove("pr_conflicting");
+        let legacy = serde_json::from_value::<SidebarWorktreeGroup>(absent)
+            .map(|group| group.pr_conflicting)
+            .map_err(|error| error.to_string());
+        group.pr_conflicting = true;
+        let present = serde_json::to_value(group).unwrap();
+        assert_eq!(
+            (serialized_false, legacy, present["pr_conflicting"].clone()),
+            (None, Ok(false), serde_json::json!(true))
+        );
     }
 
     #[test]

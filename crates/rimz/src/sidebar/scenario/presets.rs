@@ -379,6 +379,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         trunk_sync: spec.trunk_sync,
         pr_state: spec.pr_state,
         pr_queue: None,
+        pr_conflicting: false,
         ci: spec.ci,
         pr_number: spec.pr_number,
         pr_url: None,
