@@ -1928,7 +1928,7 @@ fn client_view_uses_a_printable_field_separator() {
         [
             "list-clients",
             "-F",
-            "#{client_name}|#{pane_id}|#{client_activity}|#{client_flags}",
+            "#{client_name}|#{pane_id}|#{client_activity}|#{client_key_table}|#{pane_mode}|#{client_flags}",
             "-t",
             "rimz-room",
         ],

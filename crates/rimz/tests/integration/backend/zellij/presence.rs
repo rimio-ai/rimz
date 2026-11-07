@@ -7,7 +7,7 @@ use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend, zellij};
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, ZellijNamespace};
+use crate::common::{CommandTimeoutExt, ScrubSessionEnvExt, ZellijNamespace};
 
 use super::support::*;
 
@@ -1780,5 +1780,294 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
     assert!(
         zoom_line.contains("--mux zellij"),
         "zoom pipe should force the Zellij backend; got {zoom_line:?}",
+    );
+}
+
+#[test]
+fn rimz_keymap_clears_bindings_and_keeps_modes_per_client() {
+    use rimz::ids::MuxClientId;
+    use rimz::mux::ClientFocusOptions;
+    use rimz::pane::RoomMode;
+    use std::collections::BTreeMap;
+
+    require_zellij!();
+    let room = LiveZellijSession::new("room-modes");
+    let zellij_config = room.path().join(".config/zellij/config.kdl");
+    std::fs::write(
+        &zellij_config,
+        format!(
+            "{}\ndefault_mode \"locked\"\n",
+            std::fs::read_to_string(&zellij_config).unwrap()
+        ),
+    )
+    .unwrap();
+    let wasm = presence_wasm_artifact();
+    seed_presence_permissions(room.path(), &wasm);
+    std::fs::write(room.path().join(".zshrc"), "").unwrap();
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let log = room.path().join("keys.log");
+    let shim = write_poke_shim(room.path(), &log, &real_rimz, &room.path().join("exec.log"));
+    let opts = sidebar_opts(room.name(), room.path(), real_rimz, 120);
+    let mut opts = opts;
+    opts.workspace_id = WorkspaceId::from_project_root(room.path());
+    let state = rimz::StatePaths::for_project_root_under(room.path(), room.path()).unwrap();
+    opts.runtime = rimz::RuntimePaths::for_state_under(&state, room.path());
+    publish_room_bin(room.path(), &opts);
+    let config = "[room]\nstyle='rimz'\n[keys.bind.normal]\n\
+                  \"Alt+x\"={run='rimz config set sidebar.focus_key Alt+u'}\n";
+    let config_path = room.path().join("config.toml");
+    std::fs::write(&config_path, config).unwrap();
+    let machine: rimz::config::MachineConfig = toml::from_str(config).unwrap();
+    let presence = rimz::mux::PresencePluginOptions {
+        session_name: room.name().to_owned(),
+        workspace_id: opts.workspace_id,
+        wasm,
+        rimz_bin: shim,
+        keymap: machine.room_keymap(),
+        project_root: room.path().to_path_buf(),
+        session_options: Vec::new(),
+    };
+    let mut first = AttachedClient::create_and_attach(&room, 120, 40);
+    room.backend()
+        .converge_presence_plugin_for(&presence)
+        .unwrap();
+    first.send(b"\x07\x1bx");
+    let key_runs = || {
+        poke_lines(&log)
+            .iter()
+            .filter(|line| logged_command_is(line, "config set sidebar.focus_key"))
+            .count()
+    };
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(key_runs()),
+        |count| *count > 0,
+        "Ctrl g is inert and the locked-mode command runs",
+    );
+    assert_eq!(key_runs(), 1, "one press runs one indexed command");
+
+    let first_id = first.view().clients[0].client_id.clone();
+    let mut second = AttachedClient::attach_beside(&room, 120, 40, 1);
+    let second_id = second
+        .view()
+        .clients
+        .into_iter()
+        .find(|client| client.client_id != first_id)
+        .unwrap()
+        .client_id;
+    let MuxClientId::Zellij(second_client) = &second_id else {
+        panic!("Zellij client id");
+    };
+    // Zellij can replay cached mode events to every replica still loading.
+    poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            let lanes =
+                std::fs::read_dir(&opts.runtime.lanes_dir).map_err(|err| err.to_string())?;
+            Ok(lanes.flatten().any(|entry| {
+                let Some(mode) = std::fs::read(entry.path())
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                else {
+                    return false;
+                };
+                mode["session_name"] == room.name()
+                    && mode["client_id"].as_u64() == Some(u64::from(*second_client))
+                    && mode["mode"].is_string()
+            }))
+        },
+        |published| *published,
+        "second replica publishes its load-time normal mode",
+    );
+    let wait_modes = |expected: BTreeMap<MuxClientId, RoomMode>| {
+        let context = format!("client-local room modes {expected:?}");
+        poll_until(
+            SPAWN_TIMEOUT,
+            || {
+                room.backend()
+                    .client_view(ClientFocusOptions {
+                        session_name: Some(room.name().to_owned()),
+                        ..Default::default()
+                    })
+                    .map_err(|err| err.to_string())
+            },
+            |view| view.presence.client_modes == expected,
+            &context,
+        )
+    };
+    first.press_alt('p');
+    wait_modes([(first_id.clone(), RoomMode::Prefix)].into());
+    second.press_alt('p');
+    wait_modes(
+        [
+            (first_id.clone(), RoomMode::Prefix),
+            (second_id.clone(), RoomMode::Prefix),
+        ]
+        .into(),
+    );
+    second.send(b"r");
+    wait_modes(
+        [
+            (first_id.clone(), RoomMode::Prefix),
+            (second_id, RoomMode::Resize),
+        ]
+        .into(),
+    );
+    second.send(b"\x1b");
+    wait_modes([(first_id, RoomMode::Prefix)].into());
+    first.send(b"z");
+    wait_modes(BTreeMap::new());
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(poke_lines(&log)),
+        |lines| {
+            lines
+                .iter()
+                .any(|line| logged_command_is(line, "pane zoom"))
+        },
+        "prefix z dispatches zoom and returns to locked",
+    );
+
+    let runs = key_runs();
+    second.press_alt('x');
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(key_runs()),
+        |count| *count > runs,
+        "the second client installs the same keymap",
+    );
+    assert_eq!(
+        key_runs(),
+        runs + 1,
+        "the pressing client's replica runs the command exactly once"
+    );
+    drop(second);
+    let heartbeat = crate::common::room::seed_sidebar_heartbeat(
+        &opts.runtime,
+        MuxName::Zellij,
+        room.name(),
+        "keys",
+    );
+    let mut claim: rimz::wakeup::heartbeat::SidebarHeartbeat =
+        serde_json::from_slice(&std::fs::read(&heartbeat).unwrap()).unwrap();
+    claim.build = Some(rimz::build_id::of_file(&opts.rimz_bin).unwrap());
+    claim.pane_id = Some(first.view().clients[0].pane_id.clone());
+    rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat, &claim).unwrap();
+    crate::common::room::date_heartbeat_as_live(&heartbeat);
+    std::fs::write(
+        &config_path,
+        "[room]\nstyle='rimz'\n[keys.bind.normal]\n\"Alt+x\"='none'\n\
+         \"Alt+y\"={run='rimz config set sidebar.focus_key Alt+v'}\n",
+    )
+    .unwrap();
+    let fixture = room.command();
+    let output = std::process::Command::new(&opts.rimz_bin)
+        .scrub_session_env()
+        .envs(
+            fixture
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        )
+        .env("RIMZ_PRESENCE_PLUGIN", &presence.wasm)
+        .arg("reload")
+        .bounded_output_within(Duration::from_secs(30))
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "reload failed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let focus_key = || {
+        let config = std::fs::read_to_string(&config_path).map_err(|err| err.to_string())?;
+        toml::from_str::<rimz::config::MachineConfig>(&config)
+            .map(|config| config.sidebar.focus_key)
+            .map_err(|err| err.to_string())
+    };
+    first.press_alt('y');
+    poll_until(
+        SPAWN_TIMEOUT,
+        focus_key,
+        |key| key == "Alt+v",
+        "reload installs the replacement keymap on the attached client",
+    );
+    let cwd = room.path().join("tab cwd");
+    std::fs::create_dir(&cwd).unwrap();
+    let before: BTreeSet<_> = work_pane_geometry(room.path(), room.name())
+        .into_iter()
+        .map(|pane| pane.id)
+        .collect();
+    let unbound_input = room.path().join("unbound-key");
+    let receiver = format!(
+        "cat > {}; exec sleep 600",
+        sh_quote(&unbound_input.display().to_string())
+    );
+    let output = room.action(&[
+        "new-pane",
+        "--cwd",
+        cwd.to_str().unwrap(),
+        "--",
+        "sh",
+        "-c",
+        &receiver,
+    ]);
+    assert!(output.status.success(), "receiver spawn: {output:?}");
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(unbound_input.exists()),
+        |ready| *ready,
+        "removed-chord input receiver",
+    );
+    let source = work_pane_geometry(room.path(), room.name())
+        .into_iter()
+        .find(|pane| !before.contains(&pane.id))
+        .unwrap();
+    let source = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", source.id));
+    first.press_alt_until(
+        'l',
+        &source,
+        "removed-chord receiver and tab.new source pane",
+    );
+    first.press_alt('x');
+    first.send(b"\n");
+    poll_until(
+        SPAWN_TIMEOUT,
+        || std::fs::read(&unbound_input).map_err(|err| err.to_string()),
+        |input| input == b"\x1bx\n",
+        "reload unbinds Alt+x so it reaches the pane",
+    );
+    first.send(b"\x04");
+    assert_eq!(
+        focus_key().unwrap(),
+        "Alt+v",
+        "clear-defaults must drop the removed chord"
+    );
+
+    let before = PaneSnapshot::expect(room.path(), room.name()).tab_ids();
+    first.press_alt('t');
+    let after = poll_until(
+        SPAWN_TIMEOUT,
+        || list_panes(room.path(), room.name()),
+        |snapshot| snapshot.tab_ids().iter().any(|id| !before.contains(id)),
+        "tab.new opens a fresh tab",
+    );
+    let target = after
+        .panes
+        .iter()
+        .find(|pane| pane.is_live_terminal() && !before.contains(&pane.tab_id))
+        .unwrap();
+    let target = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id));
+    first.wait_until_focused(&target, "tab.new target pane");
+    first.assert_input_reaches(&target, "tab.new target pane");
+    let marker = room.path().join("new-tab-cwd");
+    first.send_line(&format!(
+        "pwd > {}",
+        sh_quote(&marker.display().to_string())
+    ));
+    poll_until(
+        SPAWN_TIMEOUT,
+        || std::fs::read_to_string(&marker).map_err(|err| err.to_string()),
+        |observed| observed.trim() == cwd.to_str().unwrap(),
+        "tab.new inherits the focused pane cwd",
     );
 }

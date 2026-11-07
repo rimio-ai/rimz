@@ -151,7 +151,7 @@ To stop using the view, run `rimz config set agents.isolation host` and restart 
 
 On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant is five permissions:
 
-- **Access Zellij state.** The plugin watches pane and tab shape.
+- **Access Zellij state.** The plugin watches pane and tab shape and, with RimZ room style, its own client's input mode. Mode records contain only the mode word and observation time.
 - **Run commands.** It runs `rimz sidebar wake`, `rimz palette --popup`, and the RimZ commands selected by the resolved [room keymap](./configuration.md#room-keymap), including per-machine `[keys.bind]` commands. Those commands must start with `rimz`; their arguments are not evaluated by a shell. Project config cannot supply bindings.
 - **Reconfigure.** It applies the room's mouse options and resolved room keymap at runtime without writing your `config.kdl`. RimZ style replaces stock and user bindings in its seven modes until the client detaches; native style only adds its two chords.
 - **Change application state.** It applies a host-selected pane's mechanical fullscreen toggle; sidebar-aware target selection stays in the host command.

@@ -88,9 +88,9 @@ pub(super) const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// (`min_pane_cache_ms`) overrides it without requiring a new plugin publication.
 pub(crate) const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
-/// How often the producer re-samples tmux client activity while an idle-capable
-/// client is attached, independent of the heavy pane cache TTL, so the AFK
-/// badge clears within this bound of a keypress.
+/// How often the producer re-samples client activity and modes while a client is
+/// attached, independent of the heavy pane cache TTL, so mode changes and input
+/// reach the frame within this bound on both backends.
 pub(super) const PRESENCE_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
 /// Maximum time a sibling may be carried while its root remains live but its

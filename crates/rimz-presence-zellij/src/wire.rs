@@ -286,6 +286,11 @@ pub enum WakeRequest {
         client_id: u16,
         last_input_ms: u64,
     },
+    Mode {
+        client_id: u16,
+        mode: String,
+        at_ms: u64,
+    },
     SwitchSettled {
         tab: u64,
         generation: u64,
@@ -305,6 +310,7 @@ pub fn wake_argv(
         WakeRequest::Changed => "panes-changed",
         WakeRequest::Alive(_) => "alive",
         WakeRequest::Input { .. } => "input",
+        WakeRequest::Mode { .. } => "mode",
         WakeRequest::SwitchSettled { .. } => "switch-settled",
     };
     let mut argv = vec![
@@ -315,6 +321,23 @@ pub fn wake_argv(
         reason.to_owned(),
     ];
     match request {
+        WakeRequest::Mode {
+            client_id,
+            mode,
+            at_ms,
+        } => {
+            push_session(ctx, &mut argv)?;
+            push_workspace(ctx, &mut argv);
+            argv.extend([
+                "--client-id".to_owned(),
+                client_id.to_string(),
+                "--mode".to_owned(),
+                mode,
+                "--at-ms".to_owned(),
+                at_ms.to_string(),
+            ]);
+            return Some(argv);
+        }
         WakeRequest::Input {
             client_id,
             last_input_ms,

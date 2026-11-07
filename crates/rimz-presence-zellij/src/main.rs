@@ -75,7 +75,12 @@ mod shell {
                 PermissionType::InterceptInput,
             ];
             request_permission(&permissions);
-            subscribe(&subscribed_events());
+            let keymap = configuration
+                .get("keymap")
+                .and_then(|value| wire::Keymap::decode(value));
+            subscribe(&subscribed_events(
+                keymap.as_ref().is_some_and(|keymap| keymap.report_modes),
+            ));
             let now = now_ms();
             self.zellij_version = get_zellij_version();
             let plugin_ids = get_plugin_ids();
@@ -87,9 +92,7 @@ mod shell {
                 client_id: Some(plugin_ids.client_id),
                 plugin_build: configuration.get("plugin_build").cloned(),
                 plugin_config: configuration.get("plugin_config").cloned(),
-                keymap: configuration
-                    .get("keymap")
-                    .and_then(|value| wire::Keymap::decode(value)),
+                keymap,
                 session_options: configuration
                     .iter()
                     .filter_map(|(key, value)| {
@@ -209,6 +212,9 @@ mod shell {
                     engine.on_pane_closed(project_pane_id(pane_id), now, &host)
                 }
                 Event::Timer(_) => engine.on_timer(now, &host),
+                Event::ModeUpdate(info) => {
+                    engine.on_mode_update(&format!("{:?}", info.mode).to_ascii_lowercase(), now)
+                }
                 Event::SessionUpdate(sessions, _) => {
                     let connected_clients =
                         own_session_connected_clients(engine.session_name(), &sessions);
@@ -319,8 +325,8 @@ mod shell {
         run_command_with_env_variables_and_cwd(&refs, BTreeMap::new(), PathBuf::from("/"), context);
     }
 
-    fn subscribed_events() -> [EventType; 11] {
-        [
+    fn subscribed_events(report_modes: bool) -> Vec<EventType> {
+        let mut events = vec![
             EventType::PaneUpdate,
             EventType::TabUpdate,
             EventType::CommandChanged,
@@ -332,7 +338,11 @@ mod shell {
             EventType::SessionUpdate,
             EventType::ListClients,
             EventType::UserAction,
-        ]
+        ];
+        if report_modes {
+            events.push(EventType::ModeUpdate);
+        }
+        events
     }
 
     fn project_pane_id(pane_id: PaneId) -> ProjectedPaneId {

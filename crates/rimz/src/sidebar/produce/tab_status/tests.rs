@@ -57,6 +57,7 @@ fn frame(name: &str, panes: &[&str]) -> PaneFrame {
         carried_panes: Vec::new(),
         viewed_panes: Vec::new(),
         client_views: Vec::new(),
+        client_modes: Vec::new(),
         focused_pane: None,
         presence: None,
     }

@@ -885,6 +885,7 @@ fn enrich_core(
         snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
         snapshot.viewed_panes = frame.viewed_panes.clone();
         snapshot.client_views = frame.client_views.clone();
+        snapshot.client_modes = frame.client_modes.clone();
         snapshot.pane_session_name = Some(frame.session_name.clone());
         snapshot.focused_pane = frame.focused_pane.clone();
         snapshot.truth_degraded = truth_notice_for_frame(frame);

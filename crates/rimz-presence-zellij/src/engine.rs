@@ -555,6 +555,7 @@ pub struct Engine {
     latest_accepted_topology_at: Option<u64>,
     last_input_published_at: Option<u64>,
     pending_input_ms: Option<u64>,
+    last_mode: Option<(String, u64)>,
 }
 
 const INPUT_PUBLISH_FLOOR_MS: u64 = 1_000;
@@ -580,6 +581,7 @@ impl Engine {
             latest_accepted_topology_at: None,
             last_input_published_at: None,
             pending_input_ms: None,
+            last_mode: None,
         }
     }
 
@@ -593,6 +595,46 @@ impl Engine {
 
     pub fn on_load(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
         self.finish_update(now, host, Vec::new())
+    }
+
+    pub fn on_mode_update(&mut self, mode: &str, now: u64) -> Vec<Effect> {
+        if !self.granted
+            || !self
+                .config
+                .keymap
+                .as_ref()
+                .is_some_and(|keymap| keymap.report_modes)
+            || self
+                .last_mode
+                .as_ref()
+                .is_some_and(|(prior, _)| prior == mode)
+        {
+            return Vec::new();
+        }
+        let Some(client_id) = self.config.client_id else {
+            return Vec::new();
+        };
+        // Distinguish changes within one millisecond before wake children can reorder them.
+        let at_ms = self
+            .last_mode
+            .as_ref()
+            .map_or(now, |(_, at)| now.max(at.saturating_add(1)));
+        let Some(argv) = wire::wake_argv(
+            &self.wake_context(),
+            wire::WakeRequest::Mode {
+                client_id,
+                mode: mode.to_owned(),
+                at_ms,
+            },
+            None,
+        ) else {
+            return Vec::new();
+        };
+        self.last_mode = Some((mode.to_owned(), at_ms));
+        vec![Effect::RunCommand {
+            argv,
+            topology_issued_at: None,
+        }]
     }
 
     pub fn on_permission_granted(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
@@ -1029,6 +1071,7 @@ impl Engine {
             return;
         }
         self.granted = true;
+        effects.extend(self.on_mode_update("normal", now));
         self.focus.request_general_observation();
         self.apply_runtime_reconfigure(effects);
         if self.pending_pregrant_change {

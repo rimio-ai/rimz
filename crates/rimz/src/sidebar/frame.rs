@@ -50,6 +50,9 @@ pub struct PaneFrame {
     /// Full native attached-client observations retained for action fences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub client_views: Vec<crate::pane::ClientPaneView>,
+    /// Non-normal room modes per attached client; absence means normal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_modes: Vec<crate::pane::ClientRoomMode>,
     /// Session-global latest focused pane resolved from fresh client views or
     /// a backend register derived from those views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +478,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             carried_panes: Vec::new(),
             viewed_panes: client_viewed.to_vec(),
             client_views: client_views.to_vec(),
+            client_modes: Vec::new(),
             focused_pane,
             focus_origin,
             client_view_fresh,

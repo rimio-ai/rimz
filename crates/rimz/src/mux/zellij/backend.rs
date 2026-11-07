@@ -1169,7 +1169,14 @@ impl MuxBackend for ZellijBackend {
                         super::pane_topology::read_client_input_ms(runtime, &session, id)
                     })
                 })
-                .map(Ok)
+                .map(|mut view| {
+                    view.presence.client_modes = super::pane_topology::read_client_modes(
+                        runtime.as_ref(),
+                        &session,
+                        &view.clients,
+                    );
+                    Ok(view)
+                })
             },
         )
     }

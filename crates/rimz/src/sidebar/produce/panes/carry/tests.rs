@@ -521,6 +521,7 @@ fn omitted_tab_is_recreated_from_prior_metadata() {
         carried_panes: Vec::new(),
         viewed_panes: Vec::new(),
         client_views: Vec::new(),
+        client_modes: Vec::new(),
         focused_pane: None,
         presence: None,
     };

@@ -97,7 +97,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 88;
+pub const SNAPSHOT_VERSION: u32 = 89;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -145,6 +145,9 @@ pub struct SidebarSnapshot {
     /// Per-pane input hold deadlines from the frame's attached-client sample.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub typing_until: HashMap<PaneId, Timestamp>,
+    /// Non-normal room modes per attached client; absence means normal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_modes: Vec<crate::pane::ClientRoomMode>,
     /// Mux session that produced the pane/client frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_session_name: Option<String>,
@@ -416,6 +419,7 @@ impl SidebarSnapshot {
             viewed_panes: Vec::new(),
             client_views: Vec::new(),
             typing_until: HashMap::new(),
+            client_modes: Vec::new(),
             pane_session_name: None,
             focused_pane: None,
             presence: None,

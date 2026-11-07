@@ -3,7 +3,7 @@
 use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::tab_name::{TabOwnerRecord, ViewNaming};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
-use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
+use crate::pane::{ClientPaneView, PaneRef, RoomMode, SIDEBAR_CHROME_TITLE};
 
 use super::options::spawn_command_is_sidebar_serve;
 
@@ -86,8 +86,9 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut human_clients = 0;
     let mut client_input_ms = std::collections::BTreeMap::new();
     let mut unfocused_clients = std::collections::BTreeSet::new();
+    let mut client_modes = std::collections::BTreeMap::new();
     for line in String::from_utf8_lossy(stdout).lines() {
-        let mut cols = line.splitn(4, '|');
+        let mut cols = line.splitn(6, '|');
         let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
             continue;
         };
@@ -97,6 +98,8 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
             continue;
         }
         let activity_s = cols.next().map(str::trim);
+        let key_table = cols.next().unwrap_or_default();
+        let pane_mode = cols.next().unwrap_or_default();
         let flags = cols.next().unwrap_or_default();
         if flags.split(',').any(|flag| flag.trim() == "ignore-size") {
             continue;
@@ -116,7 +119,17 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
             .and_then(|activity| activity.parse::<u64>().ok())
             .map(|activity| activity.saturating_mul(1_000));
         if let Some(activity_ms) = activity_ms {
-            client_input_ms.insert(client_id, activity_ms);
+            client_input_ms.insert(client_id.clone(), activity_ms);
+        }
+        let mode = match (pane_mode, key_table) {
+            ("copy-mode", _) => Some(RoomMode::Scrollback),
+            (_, "rimz-prefix") => Some(RoomMode::Prefix),
+            (_, "rimz-resize") => Some(RoomMode::Resize),
+            (_, "rimz-move") => Some(RoomMode::Move),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            client_modes.insert(client_id, mode);
         }
         viewed.push((pane, activity_ms));
     }
@@ -136,6 +149,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
             human_clients,
             client_input_ms,
             unfocused_clients,
+            client_modes,
         },
     }
 }
@@ -321,8 +335,8 @@ mod tests {
     #[test]
     fn terminal_focus_does_not_remove_clients_or_their_activity_clocks() {
         let view = parse_client_view(
-            b"away|%1|1|attached\nhere|%2|2|attached,focused,UTF-8\n\
-              control|%3|3|ignore-size\n",
+            b"away|%1|1|root||attached\nhere|%2|2|root||attached,focused,UTF-8\n\
+              control|%3|3|root||ignore-size\n",
         );
         assert_eq!(view.clients.len(), 2);
         assert_eq!(view.presence.human_clients, 2);
@@ -335,8 +349,10 @@ mod tests {
 
     #[test]
     fn parse_client_view_reads_panes_activity_and_human_clients() {
-        let panes = parse_client_view(b"client-a|%10|100|\nclient-a|%10|100|\nclient-b|%11|100|\n")
-            .viewed_panes;
+        let panes = parse_client_view(
+            b"client-a|%10|100|root||\nclient-a|%10|100|root||\nclient-b|%11|100|root||\n",
+        )
+        .viewed_panes;
         assert_eq!(
             panes,
             vec![
@@ -352,11 +368,11 @@ mod tests {
         );
 
         let view = parse_client_view(
-            b"client-a|%10|1700000000|\n\
-              client-b|%10|1700000001|attached\n\
-              client-c|%11|1699999999|ignore-size,no-output\n\
-              client-d|%12|bad|attached\n\
-              client-e|no-pane|1700000002|attached\n",
+            b"client-a|%10|1700000000|root||\n\
+              client-b|%10|1700000001|root||attached\n\
+              client-c|%11|1699999999|root||ignore-size,no-output\n\
+              client-d|%12|bad|root||attached\n\
+              client-e|no-pane|1700000002|root||attached\n",
         );
 
         assert_eq!(
@@ -399,6 +415,28 @@ mod tests {
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);
         assert_eq!(view.presence.last_input_ms(), None);
+    }
+
+    #[test]
+    fn client_modes_are_per_human_client_and_copy_mode_outranks_the_table() {
+        use crate::pane::RoomMode;
+        let view = parse_client_view(
+            b"a|%1|100|rimz-prefix||\nb|%2|101|rimz-resize||\n\
+              c|%3|102|rimz-move||\nd|%4|103|rimz-prefix|copy-mode|\n\
+              e|%5|104|prefix||\nf|%6|105|root|view-mode|\n\
+              watch|%7|106|rimz-resize||ignore-size,no-output\n",
+        );
+        assert_eq!(
+            view.presence.client_modes,
+            [
+                (MuxClientId::Tmux("a".into()), RoomMode::Prefix),
+                (MuxClientId::Tmux("b".into()), RoomMode::Resize),
+                (MuxClientId::Tmux("c".into()), RoomMode::Move),
+                (MuxClientId::Tmux("d".into()), RoomMode::Scrollback),
+            ]
+            .into()
+        );
+        assert_eq!(view.presence.human_clients, 6);
     }
 
     #[test]

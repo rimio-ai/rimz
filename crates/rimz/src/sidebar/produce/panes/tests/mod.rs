@@ -232,7 +232,7 @@ fn pane_drop_evidence_distinguishes_plain_managed_partial_and_mass_loss() {
 }
 
 #[test]
-fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
+fn presence_sample_due_requires_attached_stale_sample() {
     let now = 10_000;
     let ttl = crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64;
     let stale = now - ttl;
@@ -249,7 +249,7 @@ fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
         None,
         now
     ));
-    assert!(!presence_sample_due(
+    assert!(presence_sample_due(
         &frame_with_presence(Some(presence_sample(1, None, stale),)),
         None,
         now
@@ -361,17 +361,17 @@ fn unchanged_presence_updates_returned_sample_without_selecting_publish() {
 
     assert!(!apply_presence_sample(
         &mut frame,
-        presence_sample(1, Some(1_000), 2_000),
+        (presence_sample(1, Some(1_000), 2_000), Vec::new()),
     ));
     assert_eq!(frame.presence.as_ref().unwrap().sampled_at_ms, 2_000);
 
     assert!(apply_presence_sample(
         &mut frame,
-        presence_sample(2, Some(1_000), 3_000),
+        (presence_sample(2, Some(1_000), 3_000), Vec::new()),
     ));
     assert!(apply_presence_sample(
         &mut frame,
-        presence_sample(2, Some(1_500), 4_000),
+        (presence_sample(2, Some(1_500), 4_000), Vec::new()),
     ));
 }
 
@@ -405,7 +405,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
             None,
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
-            &|_, _| Some(presence_sample(1, Some(1_000), 2_000)),
+            &|_, _| Some((presence_sample(1, Some(1_000), 2_000), Vec::new())),
             &|_| None,
         )
         .unwrap();
@@ -425,7 +425,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
             None,
             &crate::diag::DiagSink::disabled(),
             &mut |_, _| panic!("fresh prior must not list panes"),
-            &|_, _| Some(presence_sample(2, Some(1_000), 3_000)),
+            &|_, _| Some((presence_sample(2, Some(1_000), 3_000), Vec::new())),
             &|_| None,
         )
         .unwrap();

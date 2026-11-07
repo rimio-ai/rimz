@@ -13,6 +13,40 @@ fn strings(values: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn mode_wake_carries_only_the_own_client_mode_and_stamp() {
+    let request = WakeRequest::Mode {
+        client_id: 17,
+        mode: "tmux".into(),
+        at_ms: 1234,
+    };
+    assert_eq!(
+        wake_argv(&ctx(), request.clone(), Some("{\"panes\":[]}")),
+        Some(strings(&[
+            "/bin/rimz",
+            "sidebar",
+            "wake",
+            "--reason",
+            "mode",
+            "--session-name",
+            "session-1",
+            "--workspace-id",
+            "workspace-1",
+            "--client-id",
+            "17",
+            "--mode",
+            "tmux",
+            "--at-ms",
+            "1234"
+        ]))
+    );
+    let no_session = WakeContext {
+        session_name: None,
+        ..ctx()
+    };
+    assert_eq!(wake_argv(&no_session, request, None), None);
+}
+
+#[test]
 fn input_wake_carries_only_the_client_clock_not_topology() {
     let request = WakeRequest::Input {
         client_id: 17,

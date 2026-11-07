@@ -1,4 +1,4 @@
-//! Zellij topology and per-client input caches published by the presence plugin through
+//! Zellij topology and per-client input and mode caches published by the presence plugin through
 //! `rimz sidebar wake`.
 //!
 //! The cache is Zellij's pushed pane projection, not proof of absence: it
@@ -34,6 +34,101 @@ struct ClientInput {
     session_name: String,
     client_id: u32,
     last_input_ms: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientModeWriteError {
+    #[error("could not lock the client mode record: {0}")]
+    Lock(#[from] crate::disk::lock::LockErr),
+    #[error("could not publish the client mode record: {0}")]
+    Write(#[from] crate::disk::atomic::AtomicErr),
+}
+
+pub(crate) fn write_client_mode(
+    runtime: &RuntimePaths,
+    session: &str,
+    client_id: u32,
+    mode: &str,
+    at_ms: u64,
+) -> Result<(), ClientModeWriteError> {
+    let (path, lock) = runtime.zellij_client_mode_paths(session, client_id);
+    let _guard = crate::disk::lock::WorkspaceLock::acquire_with_timeout(
+        &lock,
+        std::time::Duration::from_secs(1),
+    )?;
+    if read_client_mode_record(runtime, session, client_id)
+        .is_some_and(|record| record.at_ms >= at_ms)
+    {
+        return Ok(());
+    }
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &ClientMode {
+            session_name: session.to_owned(),
+            client_id,
+            mode: mode.to_owned(),
+            at_ms,
+        },
+    )?;
+    Ok(())
+}
+
+pub(super) fn read_client_mode(
+    runtime: &RuntimePaths,
+    session: &str,
+    client_id: u32,
+) -> Option<crate::pane::RoomMode> {
+    use crate::pane::RoomMode;
+    match read_client_mode_record(runtime, session, client_id)?
+        .mode
+        .as_str()
+    {
+        "tmux" => Some(RoomMode::Prefix),
+        "resize" => Some(RoomMode::Resize),
+        "move" => Some(RoomMode::Move),
+        "scroll" | "search" | "entersearch" => Some(RoomMode::Scrollback),
+        _ => None,
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClientMode {
+    session_name: String,
+    client_id: u32,
+    mode: String,
+    at_ms: u64,
+}
+
+fn read_client_mode_record(
+    runtime: &RuntimePaths,
+    session: &str,
+    client_id: u32,
+) -> Option<ClientMode> {
+    let bytes = std::fs::read(runtime.zellij_client_mode_paths(session, client_id).0).ok()?;
+    let record: ClientMode = serde_json::from_slice(&bytes).ok()?;
+    (record.session_name == session && record.client_id == client_id).then_some(record)
+}
+
+pub(super) fn read_client_modes(
+    runtime: Option<&RuntimePaths>,
+    session: &str,
+    clients: &[ClientPaneView],
+) -> std::collections::BTreeMap<MuxClientId, crate::pane::RoomMode> {
+    let Some(runtime) = runtime else {
+        return Default::default();
+    };
+    clients
+        .iter()
+        .filter_map(|client| {
+            let MuxClientId::Zellij(id) = &client.client_id else {
+                return None;
+            };
+            Some((
+                client.client_id.clone(),
+                read_client_mode(runtime, session, *id)?,
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn write_client_input(
@@ -123,9 +218,11 @@ impl PaneTopologyCache {
             ..
         } = self;
         let client_view = clients.map(|clients| {
-            clients.into_client_view(|id| {
+            let mut view = clients.into_client_view(|id| {
                 runtime.and_then(|runtime| read_client_input_ms(runtime, &cache_session, id))
-            })
+            });
+            view.presence.client_modes = read_client_modes(runtime, &cache_session, &view.clients);
+            view
         });
         let session_focus = project_session_focus(&panes, client_view.as_ref(), focused_pane);
         PaneListing {

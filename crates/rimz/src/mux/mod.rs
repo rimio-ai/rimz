@@ -443,6 +443,8 @@ pub struct ClientPresence {
     pub client_input_ms: BTreeMap<crate::ids::MuxClientId, u64>,
     /// Clients whose outer terminal is known to lack focus; empty when unreported.
     pub unfocused_clients: BTreeSet<crate::ids::MuxClientId>,
+    /// Non-normal modes, kept separate from pane-view identity.
+    pub client_modes: BTreeMap<crate::ids::MuxClientId, crate::pane::RoomMode>,
 }
 
 impl ClientPresence {

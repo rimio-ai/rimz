@@ -104,6 +104,37 @@ fn input_wake_requires_session_client_and_action_stamp() {
 }
 
 #[test]
+fn mode_wake_requires_session_client_mode_and_stamp() {
+    use clap::Parser;
+    let flags = [
+        "--session-name",
+        "s",
+        "--client-id",
+        "7",
+        "--mode",
+        "tmux",
+        "--at-ms",
+        "1234",
+    ];
+    let accepted = (0..=4)
+        .map(|missing| {
+            let args = flags
+                .chunks_exact(2)
+                .enumerate()
+                .filter(|(i, _)| *i != missing)
+                .flat_map(|(_, pair)| pair.iter().copied());
+            crate::cli::Cli::try_parse_from(
+                ["rimz", "sidebar", "wake", "--reason", "mode"]
+                    .into_iter()
+                    .chain(args),
+            )
+            .is_ok()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accepted, [false, false, false, false, true]);
+}
+
+#[test]
 fn plugin_focus_argv_parses_without_workspace_id() {
     use clap::Parser;
 

@@ -247,12 +247,16 @@ struct WakeArgs {
     workspace_id: Option<String>,
     #[arg(long, value_enum)]
     reason: WakeReason,
-    #[arg(long, required_if_eq("reason", "input"))]
+    #[arg(long, required_if_eq_any([("reason", "input"), ("reason", "mode")]))]
     session_name: Option<String>,
-    #[arg(long, hide = true, required_if_eq("reason", "input"))]
+    #[arg(long, hide = true, required_if_eq_any([("reason", "input"), ("reason", "mode")]))]
     client_id: Option<u32>,
     #[arg(long, hide = true, required_if_eq("reason", "input"))]
     last_input_ms: Option<u64>,
+    #[arg(long, hide = true, required_if_eq("reason", "mode"))]
+    mode: Option<String>,
+    #[arg(long, hide = true, required_if_eq("reason", "mode"))]
+    at_ms: Option<u64>,
     #[arg(long)]
     pane_id: Option<String>,
     #[arg(long, hide = true)]
@@ -339,6 +343,7 @@ impl WakeArgs {
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum WakeReason {
     Input,
+    Mode,
     PanesChanged,
     PaneOpened,
     PaneClosed,
@@ -354,11 +359,18 @@ impl WakeReason {
         self,
         client_id: Option<u32>,
         last_input_ms: Option<u64>,
+        mode: Option<String>,
+        at_ms: Option<u64>,
     ) -> Result<ZellijWakeReason> {
         Ok(match self {
             WakeReason::Input => ZellijWakeReason::Input {
                 client_id: client_id.context("input wake requires --client-id")?,
                 last_input_ms: last_input_ms.context("input wake requires --last-input-ms")?,
+            },
+            WakeReason::Mode => ZellijWakeReason::Mode {
+                client_id: client_id.context("mode wake requires --client-id")?,
+                mode: mode.context("mode wake requires --mode")?,
+                at_ms: at_ms.context("mode wake requires --at-ms")?,
             },
             WakeReason::PanesChanged
             | WakeReason::PaneOpened
@@ -576,6 +588,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 session_name,
                 client_id,
                 last_input_ms,
+                mode,
+                at_ms,
                 pane_id,
                 active_tab,
                 focus_generation,
@@ -602,7 +616,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 globals,
                 workspace_id,
                 ZellijWake {
-                    reason: reason.into_wake_reason(client_id, last_input_ms)?,
+                    reason: reason.into_wake_reason(client_id, last_input_ms, mode, at_ms)?,
                     session_name,
                     pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
                     active_tab,

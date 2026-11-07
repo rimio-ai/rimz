@@ -311,6 +311,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         viewed_panes,
         client_views,
         typing_until,
+        client_modes,
         pane_session_name,
         focused_pane,
         presence,
@@ -363,6 +364,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && viewed_panes == &right.viewed_panes
         && client_views == &right.client_views
         && typing_until == &right.typing_until
+        && client_modes == &right.client_modes
         && pane_session_name == &right.pane_session_name
         && focused_pane == &right.focused_pane
         && presence == &right.presence

@@ -2671,6 +2671,13 @@ fn both_client_view_builders_join_only_attached_clients_input_records() {
             }),
         )
         .unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &room.runtime.zellij_client_mode_paths("rimz-test", id).0,
+            &serde_json::json!({
+                "session_name": "rimz-test", "client_id": id, "mode": "tmux", "at_ms": stamp,
+            }),
+        )
+        .unwrap();
     }
     let (_temp, shim) = zellij_shim(
         r#"#!/bin/sh
@@ -2708,6 +2715,12 @@ printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n2 terminal_8
         [expected.clone(), expected]
     );
     for view in [direct, listed] {
+        assert_eq!(
+            view.presence.client_modes,
+            [1, 2, 3]
+                .map(|id| (MuxClientId::Zellij(id), crate::pane::RoomMode::Prefix))
+                .into()
+        );
         assert_eq!(view.presence.last_input_ms(), Some(3_000));
         let source = crate::mux::typing::InputSource::ClientClocks {
             clients: &view.clients,
@@ -2726,6 +2739,66 @@ printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n2 terminal_8
                 Some(Duration::from_secs(30))
             ),
             Some(32_000)
+        );
+    }
+}
+
+#[test]
+fn client_mode_lane_keeps_newest_observation_including_normal() {
+    let room = TestRoom::new();
+    for (mode, at, expected) in [
+        ("tmux", 200, "tmux"),
+        ("resize", 100, "tmux"),
+        ("normal", 300, "normal"),
+        ("move", 200, "normal"),
+    ] {
+        pane_topology::write_client_mode(&room.runtime, "rimz-test", 7, mode, at).unwrap();
+        let bytes = std::fs::read(room.runtime.zellij_client_mode_paths("rimz-test", 7).0)
+            .unwrap_or_default();
+        let record: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        assert_eq!(record["mode"], expected);
+    }
+}
+
+#[test]
+fn client_mode_lane_maps_raw_words_and_rejects_foreign_identity() {
+    use crate::pane::RoomMode;
+    let room = TestRoom::new();
+    for (word, mode) in [
+        ("tmux", Some(RoomMode::Prefix)),
+        ("resize", Some(RoomMode::Resize)),
+        ("move", Some(RoomMode::Move)),
+        ("scroll", Some(RoomMode::Scrollback)),
+        ("search", Some(RoomMode::Scrollback)),
+        ("entersearch", Some(RoomMode::Scrollback)),
+        ("normal", None),
+        ("locked", None),
+        ("pane", None),
+        ("unknown", None),
+    ] {
+        let path = room.runtime.zellij_client_mode_paths("rimz-test", 7).0;
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &path,
+            &serde_json::json!({
+                "session_name":"rimz-test", "client_id":7, "mode":word, "at_ms":100,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            pane_topology::read_client_mode(&room.runtime, "rimz-test", 7),
+            mode,
+            "{word}"
+        );
+    }
+    for (session, id) in [("other", 7), ("rimz-test", 8)] {
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &room.runtime.zellij_client_mode_paths("rimz-test", 7).0,
+            &serde_json::json!({"session_name":session,"client_id":id,"mode":"tmux","at_ms":100}),
+        )
+        .unwrap();
+        assert_eq!(
+            pane_topology::read_client_mode(&room.runtime, "rimz-test", 7),
+            None
         );
     }
 }
