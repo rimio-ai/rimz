@@ -441,6 +441,8 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
              elif is_sidebar serve \"$@\"; then\n\
                exec {real_rimz} \"$@\" 2>> {focus_exec_log}\n\
+             elif [ \"${{1:-}}\" = palette ]; then\n\
+               :\n\
              else\n\
                {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
              fi\n",
@@ -1941,6 +1943,22 @@ fn rimz_keymap_clears_bindings_and_keeps_modes_per_client() {
         runs + 1,
         "the pressing client's replica runs the command exactly once"
     );
+    // On 0.44.2 the second client's replica is muted for topology. Its own
+    // palette key must still open the palette, and no other replica a second.
+    let palettes = || {
+        poke_lines(&log)
+            .iter()
+            .filter(|line| logged_command_is(line, "palette --popup --mode new"))
+            .count()
+    };
+    second.press_alt('n');
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(palettes()),
+        |count| *count > 0,
+        "the second client's palette key opens the palette",
+    );
+    assert_eq!(palettes(), 1, "one palette key opens one palette");
     drop(second);
     let heartbeat = crate::common::room::seed_sidebar_heartbeat(
         &opts.runtime,

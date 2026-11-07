@@ -11,7 +11,7 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::engine::{
-        Effect, Engine, EngineConfig, Host, ProjectedClientFocus, ProjectedPaneId,
+        Effect, Engine, EngineConfig, Host, PaletteSender, ProjectedClientFocus, ProjectedPaneId,
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
@@ -252,7 +252,11 @@ mod shell {
                 let focus = get_focused_pane_info()
                     .ok()
                     .map(|(_, pane)| project_pane_id(pane));
-                execute(engine.on_palette_pipe(pipe_message.payload.as_deref(), focus));
+                let sender = match pipe_message.source {
+                    PipeSource::Keybind if pipe_message.is_private => PaletteSender::OwnClientKey,
+                    _ => PaletteSender::Broadcast,
+                };
+                execute(engine.on_palette_pipe(pipe_message.payload.as_deref(), focus, sender));
                 return false;
             }
             if pipe_message.name == TOGGLE_FULLSCREEN_PIPE {

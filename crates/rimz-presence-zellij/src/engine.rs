@@ -18,6 +18,15 @@ pub trait Host {
     fn telemetry(&self) -> PluginTelemetry;
 }
 
+/// Who sent a `rimz:palette` pipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteSender {
+    /// A keybind's `MessagePluginId`, addressed to the pressing client's replica.
+    OwnClientKey,
+    /// Any other sender, such as a CLI `zellij pipe`, which may reach every replica.
+    Broadcast,
+}
+
 /// What the shell must execute, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -924,8 +933,13 @@ impl Engine {
         &mut self,
         payload: Option<&str>,
         focus: Option<ProjectedPaneId>,
+        sender: PaletteSender,
     ) -> Vec<Effect> {
-        if self.muted || !self.granted {
+        // A broadcast reaches every replica, and only the unmuted one may open
+        // the palette. A key press reaches the pressing client's replica alone,
+        // which topology muting must not silence, as for `on_key_pipe`.
+        let muted = self.muted && sender == PaletteSender::Broadcast;
+        if muted || !self.granted {
             return Vec::new();
         }
         let mode = match payload {
