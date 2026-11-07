@@ -3,6 +3,31 @@ use crate::config::MuxStatusBar;
 use serde_json::json;
 
 #[test]
+fn old_full_status_is_pending_without_migrating_the_birth_record() {
+    let record: Record = serde_json::from_value(json!({
+        "version": 1,
+        "session": {"mux.status_bar": "full"},
+        "client": null
+    }))
+    .unwrap();
+    let PendingSettings::Tracked(pending) =
+        diff(Some(&record), &MachineConfig::default(), MuxName::Zellij)
+    else {
+        panic!("tracked room")
+    };
+    assert!(
+        pending.contains(&PendingSetting {
+            key: "mux.status_bar".into(),
+            configured: Some(json!("on")),
+            recorded: Some(json!("full")),
+            when: AppliesWhen::RoomStart,
+        }),
+        "{pending:?}"
+    );
+    assert_eq!(record.session.unwrap()["mux.status_bar"], json!("full"));
+}
+
+#[test]
 fn every_room_setting_has_its_apply_class() {
     use AppliesWhen::{Attach, Reload, RoomStart};
     let config = MachineConfig::default();
@@ -68,7 +93,7 @@ fn birth_replaces_session_and_clears_prior_client() {
     record.replace_session(&config);
     assert!(record.session.is_some(), "birth records its settings");
     let session = record.session.as_ref().unwrap();
-    assert_eq!(session["mux.status_bar"], json!("full"));
+    assert_eq!(session["mux.status_bar"], json!("on"));
     assert_eq!(session["zellij.scroll_buffer_size"], json!(10000));
     assert_eq!(session["zellij.pane_frames"], json!(true));
     for fixed in ["auto_layout", "stacked_resize", "stacked_pane_list"] {
@@ -157,7 +182,7 @@ fn attach_records_exactly_the_client_flags_and_replaces_previous_ones() {
 fn pending_compares_birth_removals_and_attach_assertions_but_not_live_changes() {
     let record = Record {
         session: Some(BTreeMap::from([
-            ("mux.status_bar".into(), json!("full")),
+            ("mux.status_bar".into(), json!("on")),
             ("zellij.pane_frames".into(), json!(false)),
             ("zellij.copy_on_select".into(), json!(true)),
         ])),
@@ -165,7 +190,7 @@ fn pending_compares_birth_removals_and_attach_assertions_but_not_live_changes() 
         ..Record::default()
     };
     let mut config = MachineConfig::default();
-    config.mux.status_bar = MuxStatusBar::Off;
+    config.mux.status_bar = Some(MuxStatusBar::Off);
     config.zellij.pane_frames = Some(true);
     config.zellij.mouse_mode = Some(false);
     config.mux.default = Some(MuxName::Tmux);
@@ -176,7 +201,7 @@ fn pending_compares_birth_removals_and_attach_assertions_but_not_live_changes() 
         (
             "mux.status_bar",
             Some(json!("off")),
-            Some(json!("full")),
+            Some(json!("on")),
             AppliesWhen::RoomStart,
         ),
         (

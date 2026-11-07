@@ -111,7 +111,7 @@ fn compact_strip_tracks_window_events_and_clamps_both_ends() {
     let other = "full-other";
     server
         .backend
-        .ensure_session(&options(&server, other, "full"))
+        .ensure_session(&options(&server, other, "on"))
         .unwrap();
     server.output(&["new-window", "-t", other, "-n", "other", "sh"]);
     server.output(&["rename-window", "-t", other, "renamed"]);
@@ -146,7 +146,7 @@ fn status_modes_restore_inheritance_and_preserve_multiline_formats() {
     set_user_bar();
     server
         .backend
-        .ensure_session(&options(&server, session, "full"))
+        .ensure_session(&options(&server, session, "on"))
         .unwrap();
     for (key, value) in user_bar {
         assert_eq!(server.show_option(&["-t", session], key), value, "{key}");
@@ -155,7 +155,7 @@ fn status_modes_restore_inheritance_and_preserve_multiline_formats() {
     server.output(&["set-option", "-u", "-t", session, "status-format"]);
     server
         .backend
-        .ensure_session(&options(&server, session, "full"))
+        .ensure_session(&options(&server, session, "on"))
         .unwrap();
     assert_inherits_status(&server, session);
     let hooks = server.stdout(&["show-hooks", "-g"]);
@@ -220,7 +220,7 @@ fn status_modes_restore_inheritance_and_preserve_multiline_formats() {
     assert!(strip(&server, session).is_empty());
     server
         .backend
-        .ensure_session(&options(&server, session, "full"))
+        .ensure_session(&options(&server, session, "on"))
         .unwrap();
     assert_inherits_status(&server, session);
     assert_eq!(
@@ -348,7 +348,7 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
     );
     rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat_path, &heartbeat).unwrap();
     crate::common::room::date_heartbeat_as_live(&heartbeat_path);
-    for mode in ["off", "compact", "full"] {
+    for mode in ["off", "compact", "on"] {
         std::fs::write(
             env.rimz_home().join("config.toml"),
             format!(

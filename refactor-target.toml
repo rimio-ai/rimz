@@ -1138,7 +1138,18 @@ upward-dependencies = [
 # MuxStatusBar carries the backend-neutral status mode to room setup (+1).
 # MuxConfig lets the settings class table exhaustively account for backend selection (+1).
 # IdleCompactSeat and resolve share launch/runtime floor resolution and child exclusion (+2).
-surface-budget = 272
+# RoomConfig and RoomStyle share the room style and its status-bar default (+2).
+surface-budget = 274
+
+[[verdict]]
+kind = "item"
+key = "config::mux::RoomConfig"
+reason = "Machine configuration and room-key resolution share the room style."
+
+[[verdict]]
+kind = "item"
+key = "config::mux::RoomStyle"
+reason = "Room style selects native navigation or the configured RimZ keymap and bar default."
 
 [[verdict]]
 kind = "item"

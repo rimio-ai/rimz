@@ -41,7 +41,7 @@ impl Drop for TempLayoutFile {
 }
 
 /// The one-row compact-bar plugin pane. Supplying our own layout replaces
-/// Zellij's built-in tab/status bar. Full and compact modes re-add this pane;
+/// Zellij's built-in tab/status bar. On and compact modes re-add this pane;
 /// off omits it. Must stay multi-line: Zellij's KDL parser rejects the
 /// single-line `pane {{ plugin … }}` form.
 const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
@@ -50,7 +50,7 @@ const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
 
 fn status_bar_kdl(mode: MuxStatusBar) -> &'static str {
     match mode {
-        MuxStatusBar::Full | MuxStatusBar::Compact => COMPACT_BAR_KDL,
+        MuxStatusBar::On | MuxStatusBar::Compact => COMPACT_BAR_KDL,
         MuxStatusBar::Off => "",
     }
 }

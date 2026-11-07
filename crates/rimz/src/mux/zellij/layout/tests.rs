@@ -296,18 +296,15 @@ fn status_bar_off_omits_every_bar_and_keeps_all_layouts_valid() {
 }
 
 #[test]
-fn status_bar_compact_is_identical_to_full_in_every_layout() {
-    let full = status_bar_layouts(crate::config::MuxStatusBar::Full);
+fn status_bar_compact_is_identical_to_on_in_every_layout() {
+    let on = status_bar_layouts(crate::config::MuxStatusBar::On);
     assert_eq!(
-        full.each_ref()
+        on.each_ref()
             .map(|layout| layout.matches("zellij:compact-bar").count()),
         [4, 1, 1, 1],
-        "{full:#?}",
+        "{on:#?}",
     );
-    assert_eq!(
-        full,
-        status_bar_layouts(crate::config::MuxStatusBar::Compact)
-    );
+    assert_eq!(on, status_bar_layouts(crate::config::MuxStatusBar::Compact));
 }
 
 #[test]

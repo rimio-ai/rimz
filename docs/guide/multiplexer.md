@@ -38,22 +38,24 @@ Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, and
 
 With hundreds of windows, tmux's full tab list can make switching slow: it formats every tab on each status redraw, including redraws triggered by agents changing their terminal titles. `[mux] status_bar` in `~/.rimz/config.toml` offers three modes, at any room size:
 
-- `"full"` (default): leave your bar alone, including a `set status off` you type inside the room.
+- `"on"`: leave your bar alone, including a `set status off` you type inside the room.
 - `"compact"`: keep a clickable strip of up to 21 tabs around the current window, shifted inward at either end of the list. tmux's own `<`/`>` overflow markers, tab clicks, `prefix w`, and the sidebar still work.
 - `"off"`: hide the bar for this room.
+
+When unset, the bar is `"on"` with the default `[room] style = "native"`, or `"off"` with `style = "rimz"`. An explicit value wins over the style's default ([configuration](./configuration.md#multiplexer-room-options)).
 
 ```sh
 rimz config set mux.status_bar compact
 rimz reload
 ```
 
-On tmux, changes apply when you start or attach to the room, or run `rimz reload` for a live room; Zellij's timing is below. In `compact` or `off`, RimZ owns the tmux room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `full` returns them to your config.
+On tmux, changes apply when you start or attach to the room, or run `rimz reload` for a live room; Zellij's timing is below. In `compact` or `off`, RimZ owns the tmux room's `status` and `status-format`, so a toggle typed inside the room lasts until that next apply; switching back to `on` returns them to your config.
 
 Compact keeps your left and right status text, lengths and styles, tab formats and styles, separators, and justification. It replaces a custom `status-format[0]` with tmux's standard layout; additional global status lines are preserved. If your global bar is off, choosing compact turns it on for the room; an existing multi-line bar keeps its line count.
 
 Tab contents refresh when windows are selected, added, removed, renamed or moved, and on activity, bell and silence alerts. Time- or title-driven tab content (`%H`, `#T`), including the current tab's, waits for the next such event or re-apply. A manual `swap-window` on tmux older than 3.8, and activity or bell flags with `activity-action none` or `bell-action none`, also wait for that next event. Sparse indices with `renumber-windows` off can show fewer than 21 tabs.
 
-On Zellij, `full` and `compact` look the same: both keep Zellij's one-row compact bar. Zellij runs one bar instance per tab: in a 268-tab measurement it added about 14 ms to each tab switch and about 700 MiB to the Zellij server. `off` removes that bar, including its tab names and input-mode indicator, so there is no visible cue for locked mode versus a `Ctrl+g` mode. The sidebar still lists and jumps to agents. Tabs RimZ opens follow a change immediately; existing tabs stay as they are, while tabs you open yourself (`Ctrl+t` or `zellij action new-tab`) use the room's birth choice. A room can therefore be mixed until its next birth (`rimz reset`, or the next `rimz start` after the session ends), which makes it uniform again. `rimz reload` names the pending bar change under `Applies when the room next starts:` without changing existing tabs.
+On Zellij, `on` and `compact` look the same: both keep Zellij's one-row compact bar. Zellij runs one bar instance per tab: in a 268-tab measurement it added about 14 ms to each tab switch and about 700 MiB to the Zellij server. `off` removes that bar, including its tab names and input-mode indicator, so there is no visible cue for locked mode versus a `Ctrl+g` mode. The sidebar still lists and jumps to agents. Tabs RimZ opens follow a change immediately; existing tabs stay as they are, while tabs you open yourself (`Ctrl+t` or `zellij action new-tab`) use the room's birth choice. A room can therefore be mixed until its next birth (`rimz reset`, or the next `rimz start` after the session ends), which makes it uniform again. `rimz reload` names the pending bar change under `Applies when the room next starts:` without changing existing tabs.
 
 ### Two keys that work from any pane
 
