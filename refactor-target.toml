@@ -363,7 +363,8 @@ upward-dependencies = ["address"]
 # TuneSetting and AgentTune::apply share the typed parse-and-apply boundary (+2).
 # AgentTune keeps override-first runtime policy at the agents boundary.
 # AgentTune's per-key accessors project effective overrides before configured fallback (+3).
-surface-budget = 1278
+# RaisedAsk::detail and question_sentence share the card's question line (+2).
+surface-budget = 1280
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -5255,6 +5256,11 @@ reason = "The home-wide capacity-check verdict cache is addressed only through t
 kind = "item"
 key = "agents::state::RaisedAskState"
 reason = "A self raise arms for its current turn before it becomes an open ask."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::question_sentence"
+reason = "Raised ask summaries and native ask rendering use one question-sentence rule."
 
 [[verdict]]
 kind = "item"

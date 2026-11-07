@@ -425,7 +425,14 @@ pub(super) fn render_activity_section(
             .map(crate::cli::transcript::ask_summary)
             .unwrap_or_else(|| {
                 render::one_line(agent.ask.as_ref().map_or_else(
-                    || agent.description.as_deref().unwrap_or("in the pane"),
+                    || {
+                        agent
+                            .needs_you
+                            .as_ref()
+                            .and_then(|attention| attention.reason.as_deref())
+                            .or(agent.description.as_deref())
+                            .unwrap_or("in the pane")
+                    },
                     |ask| {
                         ask.detail
                             .as_deref()

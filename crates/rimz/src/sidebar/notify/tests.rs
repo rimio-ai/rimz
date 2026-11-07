@@ -19,6 +19,162 @@ fn prefs() -> NotificationsPrefs {
     }
 }
 
+#[test]
+fn self_raised_attention_opens_after_a_receipt_during_its_armed_turn() {
+    use crate::agents::state::{RaisedAsk, RaisedAskState};
+    use crate::sidebar::read_marks::ReadMarks;
+    use crate::sidebar::unread::UnreadEpisodes;
+    let opened_at = Timestamp::now();
+    let raised_at = opened_at - Duration::from_secs(2);
+    let receipt_at = opened_at - Duration::from_secs(1);
+    let mut raised = agent("raised", AgentStatus::Success, false);
+    raised.last_activity = raised_at;
+    raised.raised_ask = Some(RaisedAsk {
+        ask_id: AskId::new(),
+        state: RaisedAskState::Open,
+        raised_at,
+        basis_at: raised_at,
+        opened_at: Some(opened_at),
+        raised_by: None,
+        text: Some("Ship it?".into()),
+        options: vec![],
+    });
+    let mut snapshot = snapshot(vec![raised]);
+    snapshot.panes_produced_at_ms = Some(opened_at.as_millisecond() as u64);
+    let mut episodes = UnreadEpisodes::default();
+    let marks = ReadMarks::from_entries([("raised".into(), receipt_at.as_millisecond())]);
+    let opened = episodes.reconcile(&mut snapshot, &marks, false).opened;
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].episode_ms, opened_at.as_millisecond());
+}
+
+#[test]
+fn deferred_raised_attention_notifies_after_a_read_before_clean_rest() {
+    use crate::agents::state::{RaisedAsk, RaisedAskState};
+    use crate::sidebar::read_marks::ReadMarks;
+    use crate::sidebar::unread::UnreadEpisodes;
+    let at = Timestamp::from_second(1_000).unwrap();
+    let raised_at = at - Duration::from_secs(3);
+    let receipt_at = at - Duration::from_secs(2);
+    for (status, phase) in [
+        (AgentStatus::Running, crate::agents::TurnPhase::Reasoning),
+        (AgentStatus::Failed, crate::agents::TurnPhase::Idle),
+        (AgentStatus::Paused, crate::agents::TurnPhase::Idle),
+        (AgentStatus::Sleeping, crate::agents::TurnPhase::Idle),
+        (AgentStatus::Success, crate::agents::TurnPhase::Parked),
+    ] {
+        let mut raised = agent("raised", status, false);
+        raised.phase = phase;
+        raised.last_activity = raised_at - Duration::from_secs(1);
+        raised.turn_started_at = Some(raised.last_activity);
+        raised.turn_ended_at = Some(raised.last_activity);
+        raised.raised_ask = Some(RaisedAsk {
+            ask_id: AskId::new(),
+            state: RaisedAskState::Open,
+            raised_at,
+            basis_at: raised_at,
+            opened_at: Some(raised_at),
+            raised_by: None,
+            text: Some("Ship it?".into()),
+            options: vec![],
+        });
+        let build = |raised: AgentState| {
+            let panes = raised.pane.iter().cloned().collect();
+            let mut snapshot = SidebarSnapshot::build_with_agents(workspace(), vec![raised], at)
+                .with_live_panes(panes, None);
+            snapshot.panes_produced_at_ms = Some(at.as_millisecond() as u64);
+            snapshot
+        };
+        let before = build(raised.clone());
+        assert_eq!(
+            before
+                .worktree_groups
+                .iter()
+                .map(|group| group.rows.len())
+                .sum::<usize>(),
+            1
+        );
+        assert!(
+            before
+                .worktree_groups
+                .iter()
+                .flat_map(|group| group.rows.iter())
+                .all(|row| row
+                    .as_agent()
+                    .is_none_or(|card| card.overlay_raised_at.is_none()))
+        );
+        raised.status = AgentStatus::Success;
+        raised.phase = crate::agents::TurnPhase::Idle;
+        raised.turn_ended_at = Some(at);
+        raised.last_activity = at;
+        let mut snapshot = build(raised);
+        assert_eq!(
+            snapshot.worktree_groups[0].rows[0].status(),
+            Some(AgentStatus::Waiting)
+        );
+        let mut episodes = UnreadEpisodes::default();
+        let marks = ReadMarks::from_entries([("raised".into(), receipt_at.as_millisecond())]);
+        let opened = episodes.reconcile(&mut snapshot, &marks, false).opened;
+        assert_eq!(
+            opened.len(),
+            1,
+            "{status:?}/{phase:?}: a read before rest cannot absorb the question"
+        );
+        assert_eq!(opened[0].episode_ms, at.as_millisecond());
+        let mut notifications = NotificationState::default();
+        assert_eq!(
+            notifications
+                .evaluate(&snapshot, &opened, &prefs(), 1_000_000)
+                .len(),
+            1
+        );
+        let opened = episodes.reconcile(&mut snapshot, &marks, false).opened;
+        assert!(opened.is_empty());
+        assert!(
+            notifications
+                .evaluate(&snapshot, &opened, &prefs(), 1_000_001)
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn deferred_raised_attention_uses_a_provider_settle_when_no_stop_arrived() {
+    use crate::agents::state::{RaisedAsk, RaisedAskState};
+    let at = Timestamp::from_second(1_000).unwrap();
+    let raised_at = at - Duration::from_secs(3);
+    let mut raised = agent("raised", AgentStatus::Running, false);
+    raised.last_activity = raised_at - Duration::from_secs(1);
+    raised.turn_ended_at = None;
+    raised.raised_ask = Some(RaisedAsk {
+        ask_id: AskId::new(),
+        state: RaisedAskState::Open,
+        raised_at,
+        basis_at: raised_at,
+        opened_at: Some(raised_at),
+        raised_by: None,
+        text: Some("Ship it?".into()),
+        options: vec![],
+    });
+    raised.context = Some(crate::agents::AgentContext {
+        settle: Some(crate::agents::context::TurnSettle {
+            at,
+            outcome: crate::agents::TurnSettleOutcome::Complete,
+        }),
+        ..Default::default()
+    });
+    let panes = raised.pane.iter().cloned().collect();
+    let snapshot = SidebarSnapshot::build_with_agents(workspace(), vec![raised], at)
+        .with_live_panes(panes, None);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(
+        row.as_agent().unwrap().overlay_raised_at,
+        Some(at),
+        "the display's clean-rest verdict owns the attention clock, not just Stop"
+    );
+}
+
 fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
     snapshot_with(agents)
 }
@@ -157,6 +313,65 @@ fn agent_with_context(
         task: Some(task.to_owned()),
         ..agent(id, status, false)
     }
+}
+
+#[test]
+fn raised_notifications_use_the_ask_line_and_id_and_alerts_need_you() {
+    use crate::agents::state::{CardAlert, RaisedAsk, RaisedAskState};
+    let mut raised = agent("raised", AgentStatus::Success, false);
+    let id = AskId::new();
+    raised.raised_ask = Some(RaisedAsk {
+        ask_id: id.clone(),
+        state: RaisedAskState::Open,
+        raised_at: Timestamp::now(),
+        basis_at: Timestamp::now(),
+        opened_at: None,
+        raised_by: Some("@lead".into()),
+        text: Some("Ready. Which one?".into()),
+        options: vec![],
+    });
+    let mut state = NotificationState::default();
+    let notifications = evaluate_opened(
+        &mut state,
+        snapshot(vec![raised.clone()]),
+        &["raised"],
+        &prefs(),
+        100,
+    );
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].body, "Which one?");
+    assert_eq!(notify_ask_env(&notifications[0]), id.to_string());
+    raised.raised_ask.as_mut().unwrap().ask_id = AskId::new();
+    raised.raised_ask.as_mut().unwrap().text = Some("Again. Ship now?".into());
+    let notifications = evaluate_opened(
+        &mut state,
+        snapshot(vec![raised]),
+        &["raised"],
+        &prefs(),
+        101,
+    );
+    assert_eq!(
+        notifications.len(),
+        1,
+        "a new raise is not a duplicate notification"
+    );
+    assert_eq!(notifications[0].body, "Ship now?");
+    let mut alerted = agent("alerted", AgentStatus::Running, false);
+    alerted.alert = Some(CardAlert {
+        text: "Check this result".into(),
+        raised_at: Timestamp::now(),
+        raised_by: None,
+    });
+    let notifications = evaluate_opened(
+        &mut state,
+        snapshot(vec![alerted]),
+        &["alerted"],
+        &prefs(),
+        200,
+    );
+    assert_eq!(notifications.len(), 1);
+    assert!(notifications[0].title.ends_with("needs you"));
+    assert_eq!(notifications[0].body, "Check this result");
 }
 
 #[test]

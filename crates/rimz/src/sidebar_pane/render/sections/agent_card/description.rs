@@ -1,23 +1,7 @@
 use super::*;
+use crate::agents::state::question_sentence;
 use crate::sidebar_pane::render::layout::wrap_words;
 use crate::store::snapshot::CardDescription;
-
-fn question_sentence(text: &str) -> &str {
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((at, ch)) = chars.next() {
-        if matches!(ch, '.' | '!' | '?')
-            && chars.peek().is_none_or(|(_, next)| next.is_whitespace())
-        {
-            let end = at + ch.len_utf8();
-            if ch == '?' {
-                return text[start..end].trim();
-            }
-            start = end;
-        }
-    }
-    text
-}
 
 /// The open ask while waiting, led by its first question and word-wrapped over
 /// at most two lines with an ellipsis for omitted text, then ` +N` for extra questions.

@@ -46,13 +46,15 @@ Only the agent episode path applies triggers, debounce, and coalescing. Agent no
 
 ## The host
 
+Displayed raised asks reopen unread at the later of their opening time and the card's clean rest (turn end or admitted provider settle marker); displayed card alerts use their raise time, including over an existing episode. A read before clean rest cannot absorb a question that was raised while the card was working or otherwise unable to display it. A genuinely new overlay bypasses status debounce and replaces an older pending notification for that session during coalescing. Their push title is `RimZ: {label} needs you`; the body is the ask line or alert text. A raised ask supplies its own ask id to `RIMZ_NOTIFY_ASK`. Native waiting takes precedence over these overlays. Templates and the user's notification preferences still apply.
+
 The room host's fetch worker decides agent notifications once for all its panes ([state.md → The cycle](./state.md#the-cycle)). It evaluates on every final fold, before publication, and delivers after publication. The worker wakes for a pending batch's coalesce flush or an armed room reminder at its due, plus that cycle's fold time, even in an unwatched room with a 5 s idle backstop. The 250 ms post-cycle floor still applies: a due that lands after a cycle has decided, and before it returns, starts the next cycle at the floor. A due at or before the preceding cycle's start retries after one data tick if a failed fold or missing Final left it pending ([state.md → Requests](./state.md#requests)). Debounce drops a rejected episode rather than scheduling a retry.
 
 `evaluate_notifications` first calls `sidebar::unread::reconcile_snapshot`, which loads `unread.json` and the room read marks. A snapshot without a produced pane frame neither opens nor prunes, since a missing frame says nothing about which rows left the room. On a framed snapshot, reconcile does three things:
 
 1. It prunes read marks whose rows left the room.
 2. It prunes episodes a receipt reaches, silently, and episodes whose row has left the snapshot, with an `unread_cleared` record of cause `row_gone`.
-3. It opens an episode for each row whose displayed status needs a look (`AgentStatus::needs_a_look`), that has no open episode, and that no receipt reaches at its `last_activity`.
+3. It opens an episode for each row whose displayed status needs a look (`AgentStatus::needs_a_look`), that no receipt reaches at its activity or overlay stamp, and that has no episode or an older episode replaced by a new overlay.
 
 The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz sidebar mark-unread` or the renderer's `m` key goes straight to `unread.json` through `mark_rows_unread`, never appears in that list, and pushes nothing.
 

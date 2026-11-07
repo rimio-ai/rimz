@@ -17,6 +17,48 @@ fn entry() -> AgentReportEntry {
 }
 
 #[test]
+fn raised_waiting_activity_shows_the_question_instead_of_the_old_task() {
+    let mut state = rimz::testkit::agent_state("codex", "raised", jiff::Timestamp::UNIX_EPOCH);
+    state.status = AgentStatus::Success;
+    state.description = Some("old task".into());
+    state.raised_ask = Some(rimz::agents::state::RaisedAsk {
+        ask_id: rimz::ids::AskId::new(),
+        state: rimz::agents::state::RaisedAskState::Open,
+        raised_at: jiff::Timestamp::UNIX_EPOCH,
+        basis_at: jiff::Timestamp::UNIX_EPOCH,
+        opened_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        raised_by: None,
+        text: Some("Which deployment?".into()),
+        options: vec![],
+    });
+    let mut pane = rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+    pane.command = Some("codex".into());
+    state.pane = Some(pane.clone());
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        vec![state.clone()],
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+    .with_live_panes(vec![pane], None);
+    assert_eq!(
+        row_for_agent(&snapshot, &state).unwrap().status(),
+        Some(AgentStatus::Waiting)
+    );
+    let entry = build_entry(
+        &Default::default(),
+        &state,
+        row_for_agent(&snapshot, &state),
+        None,
+        "@raised".into(),
+        None,
+        snapshot.now,
+        ReportOverrides::default(),
+    );
+    let text = strip(|w| render_activity_section(w, &entry, None, None, false, snapshot.now));
+    assert!(text.contains("  waiting: Which deployment?"), "{text}");
+}
+
+#[test]
 fn context_cards_use_published_capacity_but_keep_usable_window_fill() {
     for (kind, window, capacity, used, label) in [
         ("opencode", 200_000, 400_000, 26_000, "400k"),

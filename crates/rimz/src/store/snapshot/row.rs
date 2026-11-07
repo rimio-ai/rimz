@@ -482,7 +482,7 @@ pub enum RowCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
-    /// The visible blocking ask's summary, omitted during automatic review.
+    /// The visible native or raised ask's summary; native asks omit it during automatic review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask_detail: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero_usize")]

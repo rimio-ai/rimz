@@ -787,6 +787,18 @@ fn enrich_core(
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load(runtime);
+    let alert_read = |agent: &AgentState| {
+        agent.alert.as_ref().is_some_and(|alert| {
+            super::unread::receipt_reaches(&read_marks, agent.agent_id.as_str(), alert.raised_at)
+        })
+    };
+    if snapshot.agents.iter().any(alert_read) {
+        for agent in Arc::make_mut(&mut snapshot.agents) {
+            if alert_read(agent) {
+                agent.alert = None;
+            }
+        }
+    }
     let unread_row_ids = episodes.unread_row_ids(&read_marks);
 
     // Reap daemon-mode Codex ghosts the app-server no longer holds. The cache

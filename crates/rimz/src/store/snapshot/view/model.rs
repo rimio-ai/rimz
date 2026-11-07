@@ -72,6 +72,15 @@ pub fn needs_you(
             &fallback
         }
     };
+    if card.status == AgentStatus::Waiting
+        && let Some(since) = card.overlay_raised_at
+    {
+        return Some(NeedsYou {
+            status,
+            reason: card.ask_detail.clone(),
+            since,
+        });
+    }
     let ask = agent.attention_ask(now);
     let reason = ask
         .and_then(|ask| ask.detail.clone())
