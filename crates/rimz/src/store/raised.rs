@@ -18,6 +18,23 @@ pub enum RaisedErr {
     AlreadyAnswered,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseCause {
+    UserTurn,
+    TurnFailed,
+    TurnUnseen,
+}
+
+impl CloseCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserTurn => "user_turn",
+            Self::TurnFailed => "turn_failed",
+            Self::TurnUnseen => "turn_unseen",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry<T> {
     pub kind: AgentKind,
@@ -221,5 +238,168 @@ fn update<T>(
     Ok(result)
 }
 
+#[must_use = "durability barrier; check the result"]
+pub fn observe(
+    paths: &StatePaths,
+    kind: &AgentKind,
+    observation: &crate::agents::AgentLifecycleObservation,
+    transition: Option<crate::agents::lifecycle::Transition>,
+    at: Timestamp,
+    human: bool,
+    reply: Option<&str>,
+) -> Result<Option<(RaisedAsk, CloseCause)>, RaisedErr> {
+    use crate::agents::LifecycleSignal;
+    use crate::agents::lifecycle::TransitionKind;
+
+    let Some(agent_id) = observation.agent_id.as_ref() else {
+        return Ok(None);
+    };
+    let Some(transition) =
+        transition.filter(|step| !matches!(step.kind, TransitionKind::Ignored { .. }))
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        observation.signal,
+        LifecycleSignal::TurnStarted { .. }
+            | LifecycleSignal::TurnEnded { .. }
+            | LifecycleSignal::TurnInterrupted { .. }
+    ) {
+        return Ok(None);
+    }
+    // Codex's async replies carry TurnStarted but no new task prompt.
+    let question_reply = observation.prompt.is_none()
+        && observation
+            .ask_queue
+            .as_ref()
+            .is_some_and(|edit| !edit.clear_all);
+    let stamps_human_turn = human
+        && !question_reply
+        && matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
+        && !observation
+            .prompt
+            .as_deref()
+            .and_then(|prompt| prompt.split_whitespace().next())
+            .is_some_and(|first| {
+                crate::agents::spec_by_kind(kind.as_str())
+                    .and_then(|spec| spec.launch.compact_command)
+                    .is_some_and(|compact| first == compact.command)
+            });
+    if !stamps_human_turn
+        && !read(paths)
+            .asks
+            .iter()
+            .any(|ask| ask.matches(kind, agent_id))
+    {
+        return Ok(None);
+    }
+    update(paths, |record| {
+        let prior = record
+            .asks
+            .iter()
+            .find(|ask| ask.matches(kind, agent_id))
+            .cloned();
+        let was_open = prior.as_ref().is_some_and(|ask| record.is_open(ask));
+        if stamps_human_turn {
+            if let Some(turn) = record
+                .human_turns
+                .iter_mut()
+                .find(|turn| turn.matches(kind, agent_id))
+            {
+                turn.value.at = turn.value.at.max(at);
+            } else {
+                record.human_turns.push(Entry {
+                    kind: kind.clone(),
+                    agent_id: agent_id.clone(),
+                    value: HumanTurn { at },
+                });
+            }
+        }
+        let Some(prior) = prior else { return Ok(None) };
+        if prior.value.state == RaisedAskState::Armed && at >= prior.value.raised_at {
+            let cause = match observation.signal {
+                LifecycleSignal::TurnEnded { errored: true, .. }
+                | LifecycleSignal::TurnInterrupted { .. } => Some(CloseCause::TurnFailed),
+                LifecycleSignal::TurnStarted { .. }
+                    if transition.opened_turn && !question_reply && at > prior.value.raised_at =>
+                {
+                    Some(CloseCause::TurnUnseen)
+                }
+                _ => None,
+            };
+            if let Some(cause) = cause {
+                record.asks.retain(|ask| !ask.matches(kind, agent_id));
+                return Ok(Some((prior.value, cause)));
+            }
+            if matches!(
+                observation.signal,
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    ..
+                }
+            ) && !record.answered(&prior)
+            {
+                let mut opened = prior.value;
+                opened.state = RaisedAskState::Open;
+                opened.opened_at = Some(at);
+                opened.text = opened.text.or_else(|| reply.map(ToOwned::to_owned));
+                if opened.text.is_none() {
+                    opened.text = match crate::transcript::latest_assistant(
+                        paths,
+                        kind,
+                        agent_id,
+                        opened.raised_at,
+                    ) {
+                        Ok(entry) => entry.map(|entry| entry.text),
+                        Err(error) => {
+                            tracing::warn!(%error, "raised ask: could not read the final reply");
+                            None
+                        }
+                    };
+                }
+                record.asks.retain(|ask| !ask.matches(kind, agent_id));
+                record.asks.push(Entry {
+                    kind: kind.clone(),
+                    agent_id: agent_id.clone(),
+                    value: opened,
+                });
+                return Ok(None);
+            }
+        }
+        if was_open && record.answered(&prior) {
+            return Ok(Some((prior.value, CloseCause::UserTurn)));
+        }
+        record.prune_closed(kind, agent_id);
+        Ok(None)
+    })
+}
+
+#[must_use = "durability barrier; check the result"]
+pub fn audit(
+    store: &super::Store,
+    session_name: &str,
+    method: &str,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    mut params: serde_json::Value,
+) -> Result<(), super::StoreErr> {
+    params["kind"] = serde_json::json!(kind);
+    params["agent_id"] = serde_json::json!(agent_id);
+    store
+        .append_event(&super::event::EventEnvelope::new(
+            store.paths().workspace_id.clone(),
+            session_name,
+            "rimz",
+            "runtime",
+            method,
+            params,
+        ))
+        .map(|_| ())
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

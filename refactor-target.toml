@@ -4069,7 +4069,9 @@ path = "crates/rimz/src/store"
 # AgentTunePayload and Store::tune_agent share the locked override/audit boundary (+2).
 # workflow::RouteDefaults freezes routing policy for sealed runs across upgrades (+1).
 # raised shares its record module, four record/error types, open predicate and seven operations (+13).
-surface-budget = 579
+# raised::observe and raised::audit share lifecycle settlement and operator audit writes (+2).
+# raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
+surface-budget = 583
 
 [[verdict]]
 kind = "item"
@@ -5336,6 +5338,21 @@ reason = "Explicit human read marks remove the durable alert while focus reads h
 kind = "item"
 key = "store::raised::retire"
 reason = "Full session retirement removes every raised-attention entry for that session."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::observe"
+reason = "The hook applies first-application human stamps and receipt-gated armed-turn settlement under the record lock."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::CloseCause"
+reason = "Lifecycle settlement returns typed close causes; the hook renders their stable audit names."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::audit"
+reason = "Attention commands, hook closes and retirement append the same target-keyed Other audit events."
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

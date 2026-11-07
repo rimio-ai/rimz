@@ -385,6 +385,14 @@ pub(super) fn handle_lifecycle_frame(
                 "lifecycle: failed to record transcript entry",
             );
         }
+        record_raised_attention(
+            workspace,
+            store,
+            agent,
+            recorded,
+            opened_by_human && !replay,
+            assistant_message.as_deref(),
+        );
         runtime_env::attach_runtime_env(
             workspace,
             store,
@@ -455,6 +463,48 @@ fn assistant_message_for_lifecycle(
     (needs_run_message || needs_conversation_message)
         .then(extract)
         .flatten()
+}
+
+fn record_raised_attention(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+    human: bool,
+    reply: Option<&str>,
+) {
+    let kind = agent.spec().kind_id();
+    let result = rimz::store::raised::observe(
+        store.paths(),
+        &kind,
+        &recorded.observation,
+        recorded.receipt.transition,
+        rimz::harness::hook_drain::frame_timestamp(),
+        human,
+        reply,
+    );
+    let closed = match result {
+        Ok(closed) => closed,
+        Err(error) => {
+            warn!(%error, "lifecycle: could not update raised attention");
+            return;
+        }
+    };
+    let Some((ask, cause)) = closed else { return };
+    let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
+        return;
+    };
+    let params = serde_json::json!({"ask_id": ask.ask_id, "cause": cause.as_str()});
+    if let Err(error) = rimz::store::raised::audit(
+        store,
+        &workspace.session_name,
+        "ask.closed",
+        &kind,
+        agent_id,
+        params,
+    ) {
+        warn!(%error, "lifecycle: could not record the raised ask close");
+    }
 }
 
 fn derive_subagent_lifecycle(

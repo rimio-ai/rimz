@@ -58,6 +58,125 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
     (dir, store)
 }
 
+fn apply_raised_frame(
+    event: &str,
+    replay: bool,
+    state: rimz::agents::state::RaisedAskState,
+) -> (
+    rimz::store::raised::RaisedRecord,
+    Vec<rimz::store::event::EventEnvelope>,
+) {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths =
+        rimz::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+            .unwrap();
+    let store = rimz::Store::open(paths, runtime).unwrap();
+    store.record_workspace(&workspace).unwrap();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let at = jiff::Timestamp::now();
+    rimz::store::raised::raise(
+        store.paths(),
+        rimz::store::raised::Entry {
+            kind: agent.spec().kind_id(),
+            agent_id: "session".into(),
+            value: rimz::agents::state::RaisedAsk {
+                ask_id: rimz::ids::AskId::new(),
+                state,
+                raised_at: at - std::time::Duration::from_secs(1),
+                basis_at: at - std::time::Duration::from_secs(1),
+                opened_at: None,
+                text: None,
+                options: vec![],
+                raised_by: None,
+            },
+        },
+    )
+    .unwrap();
+    let mut payload = serde_json::json!({"session_id": "session", "prompt": "headerless notice",
+        "last_assistant_message": "Ship?"});
+    if event == "StopFailure" {
+        payload["error"] = serde_json::json!("failed");
+    }
+    let mut decoded = agent.decode_hook(event, &payload).unwrap();
+    let frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
+        schema_version: "1".into(),
+        event_id: rimz::EventId::new(),
+        ts: at,
+        source: agent.spec().kind_id(),
+        event: Some(event.into()),
+        payload: payload.to_string(),
+        cwd: workspace.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: std::collections::BTreeMap::from([
+            ("RIMZ_AGENT_KIND".into(), "claude".into()),
+            ("RIMZ_AGENT_ID".into(), "session".into()),
+            ("RIMZ_AGENT_NAME".into(), "worker".into()),
+        ]),
+    };
+    let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    if replay {
+        scoped
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: agent.spec().kind_id(),
+                event_name: event,
+                observation: decoded.lifecycle().unwrap(),
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let recovered = store.read_events().unwrap();
+    with_frame_env(
+        &frame,
+        if replay {
+            FrameAttempt::Replay
+        } else {
+            FrameAttempt::First
+        },
+        || {
+            super::lifecycle::handle_lifecycle_frame(
+                &workspace,
+                &scoped,
+                agent,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &crate::cli::GlobalFlags {
+                    root: None,
+                    mux: None,
+                    zellij: false,
+                    tmux: false,
+                    color: crate::cli::ColorWhen::Never,
+                },
+                &recovered,
+            )
+        },
+    )
+    .unwrap();
+    (
+        rimz::store::raised::read(store.paths()),
+        store.read_events().unwrap(),
+    )
+}
+
+#[test]
+fn raised_attention_replay_does_not_stamp_human_turns_but_still_opens_armed_asks() {
+    use rimz::agents::state::RaisedAskState;
+    let (record, _) = apply_raised_frame("UserPromptSubmit", true, RaisedAskState::Open);
+    assert!(
+        record.human_turns.is_empty(),
+        "a replay cannot reclassify a prompt as human"
+    );
+    assert!(record.is_open(&record.asks[0]));
+    let (record, _) = apply_raised_frame("Stop", true, RaisedAskState::Armed);
+    assert_eq!(record.asks[0].value.state, RaisedAskState::Open);
+}
+
 #[test]
 fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
