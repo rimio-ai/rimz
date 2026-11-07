@@ -582,7 +582,14 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
             "terminal_7"
         )]
     );
-    assert_eq!(frame.presence.expect("pushed presence").human_clients, 1);
+    assert_eq!(
+        frame
+            .presence
+            .as_ref()
+            .expect("pushed presence")
+            .human_clients,
+        1
+    );
 }
 
 #[test]

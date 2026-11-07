@@ -854,12 +854,36 @@ pub struct SidebarStallItem {
 
 /// The producer's raw client-presence sample, classified into
 /// [`SidebarPresence`] at enrich time against the configured idle window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PresenceSample {
     pub human_clients: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_input_ms: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "serialize_client_clocks",
+        deserialize_with = "deserialize_client_clocks"
+    )]
+    pub client_input_ms: BTreeMap<crate::ids::MuxClientId, u64>,
+    /// Client-to-pane pairs from the same read as the input clocks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_views: Vec<crate::pane::ClientPaneView>,
     pub sampled_at_ms: u64,
+}
+
+fn serialize_client_clocks<S: serde::Serializer>(
+    clocks: &BTreeMap<crate::ids::MuxClientId, u64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(clocks.iter())
+}
+
+fn deserialize_client_clocks<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<crate::ids::MuxClientId, u64>, D::Error> {
+    Vec::<(crate::ids::MuxClientId, u64)>::deserialize(deserializer)
+        .map(|pairs| pairs.into_iter().collect())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -872,9 +896,8 @@ pub enum SidebarPresence {
 
 impl SidebarPresence {
     /// Classify client presence from the producer's mux sample against the
-    /// reader's clock. `last_input_ms` is `None` when the backend cannot report
-    /// trustworthy input idle (Zellij), so an attached client reads active until
-    /// it detaches.
+    /// reader's clock. With no known input clock, an attached client on either
+    /// backend reads active until input supplies a clock or the client detaches.
     pub fn classify(sample: PresenceSample, now_ms: u64, idle_threshold_ms: u64) -> Self {
         if sample.human_clients == 0 {
             return Self::Detached;
@@ -1216,12 +1239,14 @@ mod tests {
         let now = 1_700_000_000_000;
         let threshold_ms = 15 * 60 * 1_000;
         let idle_sample = PresenceSample {
+            client_input_ms: Default::default(),
+            client_views: Vec::new(),
             human_clients: 1,
             last_input_ms: Some(now - threshold_ms),
             sampled_at_ms: now,
         };
         assert_eq!(
-            SidebarPresence::classify(idle_sample, now, threshold_ms),
+            SidebarPresence::classify(idle_sample.clone(), now, threshold_ms),
             SidebarPresence::classify(idle_sample, now + 60_000, threshold_ms),
             "idle presence content must stay stable as the snapshot clock advances",
         );
@@ -1230,6 +1255,8 @@ mod tests {
             SidebarPresence::classify(
                 PresenceSample {
                     human_clients: 0,
+                    client_input_ms: Default::default(),
+                    client_views: Vec::new(),
                     last_input_ms: Some(now),
                     sampled_at_ms: now,
                 },
@@ -1243,6 +1270,8 @@ mod tests {
                 PresenceSample {
                     human_clients: 1,
                     last_input_ms: Some(now - threshold_ms + 1),
+                    client_input_ms: Default::default(),
+                    client_views: Vec::new(),
                     sampled_at_ms: now,
                 },
                 now,
@@ -1256,6 +1285,8 @@ mod tests {
                     human_clients: 1,
                     last_input_ms: Some(now - threshold_ms),
                     sampled_at_ms: now,
+                    client_input_ms: Default::default(),
+                    client_views: Vec::new(),
                 },
                 now,
                 threshold_ms,
@@ -1269,6 +1300,8 @@ mod tests {
                 PresenceSample {
                     human_clients: 1,
                     last_input_ms: None,
+                    client_input_ms: Default::default(),
+                    client_views: Vec::new(),
                     sampled_at_ms: now,
                 },
                 now,
@@ -1282,6 +1315,8 @@ mod tests {
                     human_clients: 1,
                     last_input_ms: Some(now - threshold_ms),
                     sampled_at_ms: now - 10_000,
+                    client_input_ms: Default::default(),
+                    client_views: Vec::new(),
                 },
                 now + 5_000,
                 threshold_ms,

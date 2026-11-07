@@ -82,6 +82,8 @@ pub(super) fn fold(
                     _ => None,
                 },
                 sampled_at_ms: snapshot.now.as_millisecond().max(0) as u64,
+                client_input_ms: Default::default(),
+                client_views: Vec::new(),
             }
         });
         Arc::new(frame)

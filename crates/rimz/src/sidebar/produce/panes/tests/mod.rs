@@ -6,6 +6,7 @@ use crate::sidebar::timing::SNAPSHOT_CACHE_TTL;
 mod cache;
 mod fields;
 mod held;
+mod presence;
 mod resume;
 
 #[test]
@@ -163,6 +164,8 @@ fn presence_sample(
     PresenceSample {
         human_clients,
         last_input_ms,
+        client_input_ms: Default::default(),
+        client_views: Vec::new(),
         sampled_at_ms,
     }
 }
@@ -358,7 +361,7 @@ fn unchanged_presence_updates_returned_sample_without_selecting_publish() {
         &mut frame,
         presence_sample(1, Some(1_000), 2_000),
     ));
-    assert_eq!(frame.presence.unwrap().sampled_at_ms, 2_000);
+    assert_eq!(frame.presence.as_ref().unwrap().sampled_at_ms, 2_000);
 
     assert!(apply_presence_sample(
         &mut frame,
@@ -408,7 +411,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
         before,
         "an unchanged sample writes nothing"
     );
-    assert_eq!(returned.presence.unwrap().sampled_at_ms, 2_000);
+    assert_eq!(returned.presence.as_ref().unwrap().sampled_at_ms, 2_000);
     producer.presence_probed_at_ms = None;
     producer
         .tick_with(
