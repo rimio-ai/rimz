@@ -1775,14 +1775,13 @@ fn focus_jumps_keep_the_make_up_filter() {
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
 
-    // A digit resolves its target in the filtered body and focuses it without
-    // changing renderer-local state.
+    // A birth slot focuses its card without changing the active lens.
     let mut ui = render::ViewState {
         make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
-    let outcome = handle_key(KeyAction::Digit(1), &mut ui, &mut pane_ui, &snapshot);
+    let outcome = handle_key(KeyAction::Digit(3), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(failed.clone()));
     assert_eq!(
         ui.make_up_filter,

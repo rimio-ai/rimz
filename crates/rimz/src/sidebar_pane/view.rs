@@ -16,6 +16,18 @@ pub(super) use crate::sidebar::body_filter::BodyLens;
 /// Maximum calm rows painted before overflow moves behind `+K more`.
 pub(crate) const WORKTREE_ROW_CAP: usize = 6;
 
+pub(super) fn card_slots(snapshot: &SidebarSnapshot) -> Vec<&PaneId> {
+    let mut panes: Vec<_> = snapshot
+        .rows()
+        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .collect();
+    panes.sort_unstable_by_key(|pane| {
+        let ordinal = pane.creation_ordinal();
+        (ordinal.is_none(), ordinal, pane.as_str())
+    });
+    panes
+}
+
 /// One projected group, indexed into its roster's flat row slice.
 #[derive(Clone, Debug)]
 pub(super) struct VisibleGroup<'a> {

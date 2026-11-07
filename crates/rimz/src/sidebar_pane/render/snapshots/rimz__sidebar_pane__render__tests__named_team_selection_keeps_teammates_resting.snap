@@ -10,17 +10,17 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
 
 ▎⑂ team-expand · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌⢄ planner                                           ▐
+▌⢄ planner 1                                         ▐
 ▌  plan                                              ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
 ▌  ⧉ subagents (1)                                   ▐
 ▌    ⣾ research · map the renderer                   ▐
 ▌                                                 <1m▐
-▎○ coder                                             🮇
+▎○ coder 2                                           🮇
 ▎  implement                                         🮇
 ▎  ▢ ────────────────────────────────────  0.0%      🮇
-▎✓ stray                                             🮇
+▎✓ stray 3                                           🮇
 ▎  observe                                           🮇
 ▎  ▢ ────────────────────────────────────  0.0%      🮇
 

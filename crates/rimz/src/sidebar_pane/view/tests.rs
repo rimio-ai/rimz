@@ -5,6 +5,47 @@ use crate::store::snapshot::{AgentCard, RowCard, SidebarWorktreeKind, WorktreePr
 use jiff::Timestamp;
 
 #[test]
+fn card_slots_are_dense_room_birth_order_independent_of_presentation() {
+    let mut rows = vec![
+        agent_row("12", AgentStatus::Waiting),
+        agent_row("2", AgentStatus::Idle),
+        process_row("4"),
+        agent_row("unknown-z", AgentStatus::Idle),
+        agent_row("unknown-a", AgentStatus::Idle),
+        agent_row("gone", AgentStatus::Idle),
+    ];
+    rows[5].pane = None;
+    let mut snapshot = snapshot(vec![group(rows)]);
+    let expected = ["%2", "%4", "%12", "%unknown-a", "%unknown-z"];
+    let slots = |snapshot: &SidebarSnapshot| {
+        card_slots(snapshot)
+            .iter()
+            .map(|pane| pane.raw().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(slots(&snapshot), expected);
+
+    let lens = BodyFilter::NeedsYou.into();
+    let collapsed = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+    assert_eq!(collapsed.len(), 1);
+    assert_eq!(slots(&snapshot), expected);
+    {
+        let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+        std::sync::Arc::make_mut(&mut groups[0].rows).reverse();
+        groups[0].inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
+    }
+    assert_eq!(
+        slots(&snapshot),
+        expected,
+        "folds and ranks are not slot inputs"
+    );
+
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .retain(|row| row.id != "4");
+    assert_eq!(slots(&snapshot), ["%2", "%12", "%unknown-a", "%unknown-z"]);
+}
+
+#[test]
 fn unstaged_cohort_keeps_layout_order_ahead_of_solo_cards_and_shells() {
     let roleless = cohort_row("roleless", "crew", None, Some(4));
     let mut waiting = cohort_row("waiting", "crew", Some(1), Some(2));

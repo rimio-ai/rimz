@@ -1,6 +1,30 @@
 use super::*;
 use crate::sidebar_pane::render::theme::Component;
 
+#[test]
+fn process_and_not_tracked_heads_show_their_room_slot() {
+    for not_tracked in [false, true] {
+        let mut snapshot = not_tracked_snapshot("codex", "allow reporting");
+        if !not_tracked {
+            std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )[0]
+            .as_process_mut()
+            .unwrap()
+            .not_tracked = None;
+        }
+        let lines = group_lines(&snapshot, &Theme::fixed(false), usize::MAX);
+        let head = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "codex"))
+            .unwrap();
+        assert!(
+            head.spans.iter().any(|span| span.content == " 1"),
+            "{head:?}"
+        );
+    }
+}
+
 fn not_tracked_snapshot(label: &str, fix: &str) -> SidebarSnapshot {
     let mut snapshot =
         snapshot_with(Vec::new()).with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
