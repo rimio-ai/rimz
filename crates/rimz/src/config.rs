@@ -110,8 +110,8 @@ pub use loop_::{
     TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
-pub(crate) use mux::MuxConfig;
 pub use mux::{MultiplexerConfig, MuxStatusBar};
+pub(crate) use mux::{MuxConfig, RoomConfig};
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};
 #[cfg(test)]
 pub(crate) use mux::{TmuxPaneBorderLines, ZellijClipboard, ZellijForceClose};
@@ -572,6 +572,7 @@ pub struct MachineConfig {
     /// falls back to the system zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+    pub room: RoomConfig,
     pub mux: MuxConfig,
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
@@ -838,6 +839,7 @@ impl MachineConfig {
             models: core.models,
             lsp: core.lsp,
             timezone: core.timezone,
+            room: core.room,
             mux: core.mux,
             accounts: core.accounts,
             remote_control: core.remote_control,
@@ -1266,6 +1268,7 @@ struct CoreConfig {
     agents: AgentsConfig,
     subagents: SubagentProfilesConfig,
     timezone: Option<String>,
+    room: RoomConfig,
     mux: MuxConfig,
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,

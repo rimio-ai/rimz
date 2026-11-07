@@ -444,9 +444,12 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without your editing the global Zellij or tmux config. `rimz reload` also re-applies options to live tmux sessions and their current windows, and sends Zellij's live options through its presence plugin. Before tmux 3.7, a `history_limit` change affects only new panes, not existing panes' scrollback. Reload names settings waiting for the next room start or attach. These tables are the only ones this page does not list in full: `rimz config init --print` gives every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
 
 ```toml
+[room]
+style = "native"             # native or rimz
+
 [mux]
 default = "tmux"
-status_bar = "full"           # full, compact, or off; Zellij full and compact look the same
+status_bar = "on"             # on, compact, or off; omit to follow the room style
 
 [zellij]
 pane_frames = true            # an optional override; unset, your config.kdl wins
@@ -457,9 +460,11 @@ pane_border_status = "top"    # default; "bottom", "off", or "inherit"
 
 `[mux] default` picks the backend, consulted after an explicit `--mux <name>`, its `--zellij` and `--tmux` shorthands, and the check for a Zellij or tmux you are already inside. Left unset, RimZ takes tmux when both are installed. If the configured backend is not installed, RimZ skips the setting and auto-detects an installed backend; room start warns. An already-open room keeps its backend until it is reset.
 
-`[mux] status_bar` selects the room's status bar. On tmux, `"full"` (the default) leaves your bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. See [large rooms](./multiplexer.md#large-rooms) for the compact bar's trade-offs.
+`[room] style` defaults to `"native"`, keeping your multiplexer navigation and RimZ's two room chords. Choose `"rimz"` for sidebar-first navigation. An omitted `[mux] status_bar` resolves to `"on"` under `native` and `"off"` under `rimz`; an explicit value always wins. These settings are per-machine, not project configuration.
 
-On Zellij, `"full"` and `"compact"` both keep Zellij's one-row compact bar, and `"off"` omits it. A change reaches tabs RimZ opens at once and the rest of the room at its next birth; `rimz reload` names the pending change without changing existing bars. See [large rooms](./multiplexer.md#large-rooms) for what the Zellij bar shows and when a change applies.
+`[mux] status_bar` selects the room's status bar. On tmux, `"on"` leaves your bar alone, `"compact"` keeps a clickable strip of up to 21 tabs around the current window, and `"off"` hides it. Changes apply on start, attach, or `rimz reload`. See [large rooms](./multiplexer.md#large-rooms) for the compact bar's trade-offs.
+
+On Zellij, `"on"` and `"compact"` both keep Zellij's one-row compact bar, and `"off"` omits it. A change reaches tabs RimZ opens at once and the rest of the room at its next birth; `rimz reload` names the pending change without changing existing bars. See [large rooms](./multiplexer.md#large-rooms) for what the Zellij bar shows and when a change applies.
 
 The two backends differ in what an unset key means.
 

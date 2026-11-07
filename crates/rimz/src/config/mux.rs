@@ -4,6 +4,20 @@ use crate::ids::MuxName;
 
 use super::{MachineConfig, ThemeConfig};
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RoomConfig {
+    pub style: RoomStyle,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomStyle {
+    #[default]
+    Native,
+    Rimz,
+}
+
 /// Multiplexer preferences. `default` is consulted after `--mux` and an
 /// active mux env; unset resolves from installed binaries with tmux as the
 /// tiebreak. An uninstalled configured backend is treated as unset.
@@ -12,14 +26,15 @@ use super::{MachineConfig, ThemeConfig};
 pub struct MuxConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<MuxName>,
-    pub status_bar: MuxStatusBar,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_bar: Option<MuxStatusBar>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MuxStatusBar {
     #[default]
-    Full,
+    On,
     Compact,
     Off,
 }
@@ -37,7 +52,10 @@ pub struct MultiplexerConfig {
 impl From<&MachineConfig> for MultiplexerConfig {
     fn from(config: &MachineConfig) -> Self {
         Self {
-            status_bar: config.mux.status_bar,
+            status_bar: config.mux.status_bar.unwrap_or(match config.room.style {
+                RoomStyle::Native => MuxStatusBar::On,
+                RoomStyle::Rimz => MuxStatusBar::Off,
+            }),
             zellij: config.zellij.clone(),
             tmux: config.tmux.clone(),
             theme: config.theme.clone(),

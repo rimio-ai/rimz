@@ -485,7 +485,7 @@ fn pending_and_remote_restart_lines_are_informational_and_shell_quote_targets() 
         PendingSetting {
             key: "mux.status_bar".into(),
             configured: Some(json!("off")),
-            recorded: Some(json!("full")),
+            recorded: Some(json!("on")),
             when: AppliesWhen::RoomStart,
         },
         PendingSetting {
@@ -535,7 +535,7 @@ fn pending_and_remote_restart_lines_are_informational_and_shell_quote_targets() 
         "Claude remote control restarts in tracked; an open phone session drops.",
         "Applies when the room next starts:",
         "Applies when you next attach:",
-        "[mux] status_bar is \"off\" in your config; the room started with \"full\"",
+        "[mux] status_bar is \"off\" in your config; the room started with \"on\"",
         "[zellij] mouse_mode is false in your config; your last attach used true",
         "[zellij] copy_on_select is unset in your config; the room keeps true",
         "the room started with your config.kdl value",

@@ -99,7 +99,7 @@ fn refresh_body(session: Option<&str>) -> String {
 }
 
 /// `compact` and `off` take `status` and `status-format` over, so they clear
-/// both. `full` clears them only while the session carries the mode marker:
+/// both. `on` clears them only while the session carries the mode marker:
 /// without it they hold the user's own values (a typed `set status off`).
 fn status_commands(
     session: &str,
@@ -114,7 +114,7 @@ fn status_commands(
             .to_vec()
     };
     let bar = [unset("status"), unset("status-format")];
-    let mut commands = if mode == MuxStatusBar::Full {
+    let mut commands = if mode == MuxStatusBar::On {
         vec![vec![
             "if-shell".into(),
             "-F".into(),
@@ -133,7 +133,7 @@ fn status_commands(
             .to_vec()
     };
     match mode {
-        MuxStatusBar::Full => return commands,
+        MuxStatusBar::On => return commands,
         MuxStatusBar::Off => {
             commands.push(set("@rimz_status", "off"));
             commands.push(set("status", "off"));
@@ -265,7 +265,7 @@ impl TmuxBackend {
             error = &err as &dyn std::error::Error,
             "could not apply tmux status mode; restoring the inherited bar",
         );
-        if let Err(err) = self.try_apply_status(session, MuxStatusBar::Full) {
+        if let Err(err) = self.try_apply_status(session, MuxStatusBar::On) {
             tracing::warn!(
                 session,
                 error = &err as &dyn std::error::Error,

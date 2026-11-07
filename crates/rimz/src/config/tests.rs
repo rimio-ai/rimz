@@ -1911,10 +1911,7 @@ fn mux_default_parse_and_defaults_to_unset() {
     let defaults = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(defaults.mux.default, None);
     let mux = toml::Value::try_from(defaults.mux).unwrap();
-    assert_eq!(
-        mux.get("status_bar").and_then(toml::Value::as_str),
-        Some("full")
-    );
+    assert_eq!(mux.get("status_bar").and_then(toml::Value::as_str), None);
 
     let config = load_no_fragments(&write(
         &dir,
@@ -1927,7 +1924,7 @@ fn mux_default_parse_and_defaults_to_unset() {
 
 #[test]
 fn mux_status_bar_round_trips() {
-    let results = ["full", "compact", "off"].map(|mode| {
+    let results = ["on", "compact", "off"].map(|mode| {
         let config: MachineConfig =
             toml::from_str(&format!("[mux]\nstatus_bar = {mode:?}\n")).expect("status mode parses");
         let mux = toml::Value::try_from(config.mux).unwrap();
@@ -1937,9 +1934,61 @@ fn mux_status_bar_round_trips() {
     });
     assert_eq!(
         results,
-        ["full", "compact", "off"].map(|mode| Some(mode.into()))
+        ["on", "compact", "off"].map(|mode| Some(mode.into()))
     );
     assert!(toml::from_str::<MachineConfig>("[mux]\nstatus_bar = 'typo'\n").is_err());
+}
+
+#[test]
+fn room_style_resolves_the_status_bar_default_but_not_explicit_values() {
+    for style in ["native", "rimz"] {
+        for bar in [None, Some("on"), Some("off"), Some("compact")] {
+            let mut text = format!("[room]\nstyle = '{style}'\n");
+            if let Some(bar) = bar {
+                text.push_str(&format!("[mux]\nstatus_bar = '{bar}'\n"));
+            }
+            let parsed = parse_core_text_collecting(Path::new("config.toml"), &text).unwrap();
+            assert!(parsed.unknown_keys.is_empty(), "{:?}", parsed.unknown_keys);
+            let config = MachineConfig::assemble(
+                parsed.value,
+                ThemeConfig::default(),
+                LoopConfig::default(),
+            );
+            let expected = bar.unwrap_or(if style == "rimz" { "off" } else { "on" });
+            assert_eq!(
+                serde_json::to_value(MultiplexerConfig::from(&config).status_bar).unwrap(),
+                expected,
+                "{text}"
+            );
+        }
+    }
+    assert_eq!(
+        serde_json::to_value(MachineConfig::default()).unwrap()["room"]["style"],
+        "native"
+    );
+}
+
+#[test]
+fn invalid_room_style_and_old_full_status_use_the_file_fallback() {
+    for (text, expected) in [
+        (
+            "[mux]\nstatus_bar = 'full'\n",
+            &["on", "compact", "off"][..],
+        ),
+        ("[room]\nstyle = 'unknown'\n", &["native", "rimz"][..]),
+    ] {
+        let dir = tempdir().unwrap();
+        let path = write(&dir, &format!("timezone='UTC'\n{text}"));
+        assert!(load_no_fragments(&path).is_err(), "{text}");
+        let mut notices = ConfigNotices::default();
+        let core = recover_parsed(&path, parse_core_text_collecting, &mut notices);
+        assert_eq!(core.value.mux, MuxConfig::default());
+        assert_eq!(core.value.timezone, None);
+        let notice = &notices.unreadable_files[&path];
+        for value in expected {
+            assert!(notice.contains(value), "{notice}");
+        }
+    }
 }
 
 #[test]

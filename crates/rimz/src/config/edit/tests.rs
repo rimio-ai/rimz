@@ -34,7 +34,13 @@ fn mux_status_bar_round_trips_with_config_set_and_get() {
         dir.path().join("config.toml"),
         dir.path().join("definitions"),
     ));
-    for value in ["full", "compact", "off"] {
+    for key in ["mux.default", "mux.status_bar"] {
+        assert!(
+            matches!(editor.get(Some(key)), Err(ConfigEditErr::UnsetKey { .. })),
+            "{key}"
+        );
+    }
+    for value in ["on", "compact", "off"] {
         let result = editor.set("mux.status_bar", value);
         assert!(result.is_ok(), "status mode must be editable: {result:?}");
         assert_eq!(
@@ -43,6 +49,26 @@ fn mux_status_bar_round_trips_with_config_set_and_get() {
         );
     }
     assert!(editor.set("mux.status_bar", "typo").is_err());
+}
+
+#[test]
+fn room_style_round_trips_with_config_set_and_get() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    let default = editor.get(Some("room.style"));
+    assert!(default.is_ok(), "room.style must be readable: {default:?}");
+    assert_eq!(default.unwrap().as_str(), Some("native"));
+    for value in ["rimz", "native"] {
+        editor.set("room.style", value).unwrap();
+        assert_eq!(
+            editor.get(Some("room.style")).unwrap().as_str(),
+            Some(value)
+        );
+    }
+    assert!(editor.set("room.style", "unknown").is_err());
 }
 
 #[test]

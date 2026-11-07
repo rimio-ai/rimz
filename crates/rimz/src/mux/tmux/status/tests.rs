@@ -6,7 +6,7 @@ fn commands(mode: MuxStatusBar) -> Vec<Vec<String>> {
 
 #[test]
 fn status_modes_clear_owned_state_before_writing_their_mode() {
-    let modes = [MuxStatusBar::Full, MuxStatusBar::Compact, MuxStatusBar::Off];
+    let modes = [MuxStatusBar::On, MuxStatusBar::Compact, MuxStatusBar::Off];
     let outcomes = modes.map(|mode| {
         let commands = commands(mode);
         let unset = |key: &'static str| ["set-option", "-qu", "-t", "room", key];
