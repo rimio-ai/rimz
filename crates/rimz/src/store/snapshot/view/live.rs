@@ -382,6 +382,10 @@ impl SidebarSnapshot {
     }
 
     pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) -> bool {
+        if command.split_whitespace().count() == 1 && crate::proc::program_label(command) == "rimz"
+        {
+            return false;
+        }
         let mut changed = false;
         for index in 0..self.worktree_groups.len() {
             let group = &self.worktree_groups[index];

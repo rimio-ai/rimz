@@ -1192,6 +1192,36 @@ fn idle_agent_and_chrome_commands_are_not_process_gated() {
 }
 
 #[test]
+fn tmux_launch_wrapper_argv_survives_the_shell_child_probe() {
+    let commands = [
+        "rimz agents plain",
+        "/bin/rimz agents exec claude --request-file /request --supervise /park",
+    ];
+    let actual = commands.map(|command| {
+        let mut frame = frame(vec![tmux_pane("rimz")]);
+        first_mut(&mut frame).current.pid = Some(100);
+        reconcile_active_commands(
+            &mut frame,
+            &|pid| match pid {
+                100 => Some("-bash".to_owned()),
+                200 => Some(command.to_owned()),
+                _ => None,
+            },
+            &|pid| (pid == 100).then(|| "bash".to_owned()),
+            &|pid| if pid == 100 { vec![200] } else { vec![] },
+        );
+        (
+            first(&frame).current.command.clone(),
+            first(&frame).current.foreground_cmdline.clone(),
+        )
+    });
+    assert_eq!(
+        actual,
+        commands.map(|command| (Some("rimz".to_owned()), Some(command.to_owned())))
+    );
+}
+
+#[test]
 fn tmux_shells_are_probed_but_chrome_is_not() {
     for command in ["zsh", "sh", "rimz-sidebar"] {
         let mut frame = frame(vec![tmux_pane(command)]);

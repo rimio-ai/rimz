@@ -230,6 +230,61 @@ fn command_events_preserve_due_messages_on_rebuilt_agent_cards() {
 }
 
 #[test]
+fn bare_rimz_command_events_wait_for_pulled_argv_without_deferring_other_commands() {
+    let actual = [false, true].map(|agent_before| {
+        let mut live = pane("%1", "bash");
+        live.pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+        let mut snapshot = pulled(vec![live], 10);
+        if agent_before {
+            let row = snapshot.rows_mut().next().unwrap();
+            row.id = "session-plain".to_owned();
+            row.name = "claude".to_owned();
+            row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+                crate::store::snapshot::AgentCard {
+                    handle: Some("plain".to_owned()),
+                    ..Default::default()
+                },
+            ));
+        }
+        let before = snapshot.rows().next().unwrap().clone();
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+                command: "rimz".to_owned(),
+            },
+        );
+        let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+        let after = fused.rows().next().unwrap().clone();
+        (after, before)
+    });
+    assert_eq!(
+        actual.clone().map(|(after, _)| after),
+        actual.map(|(_, before)| before)
+    );
+
+    for (mux, raw) in [(MuxName::Tmux, "%1"), (MuxName::Zellij, "terminal_1")] {
+        let mut live = pane(raw, "bash");
+        live.pane_id = PaneId::from_parts(mux, raw);
+        let pane_id = live.pane_id.clone();
+        let snapshot = pulled(vec![live], 10);
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id,
+                command: "vim".to_owned(),
+            },
+        );
+        let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+        assert_eq!(fused.rows().next().unwrap().name, "vim", "{mux:?}");
+    }
+}
+
+#[test]
 fn command_events_keep_pane_slots_and_preserve_process_sinks() {
     for agent_before in [false, true] {
         let mut pane = pane("terminal_1", "zsh");
