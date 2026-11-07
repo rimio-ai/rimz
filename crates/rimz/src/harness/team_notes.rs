@@ -144,6 +144,45 @@ pub fn is_open(run: &Path) -> bool {
     scratch::board_is_open(&run.join(super::board::BOARD_FILE))
 }
 
+pub(crate) fn migrate(paths: &crate::StatePaths) -> Result<(), RegisterErr> {
+    use crate::store::notes::{self, Kind, Manifest};
+
+    let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let folders = notes::enumerate(&paths.team_notes_dir).map_err(|source| RegisterErr::Io {
+        path: paths.team_notes_dir.clone(),
+        source,
+    })?;
+    for run in folders.runs {
+        if folders.dates.iter().any(|date| run.starts_with(date)) {
+            continue;
+        }
+        let Ok(manifest) = Manifest::read(&run) else {
+            continue;
+        };
+        if !matches!(manifest.kind, Kind::Team { .. }) {
+            continue;
+        }
+        let old = run.canonicalize().map_err(|source| RegisterErr::Io {
+            path: run.clone(),
+            source,
+        })?;
+        let link = manifest.checkout.join(TEAM_LINK);
+        let relink = fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink())
+            && link.canonicalize().is_ok_and(|target| target == old);
+        let moved = notes::migrate_legacy(paths, &run)
+            .map_err(|source| RegisterErr::Io { path: run, source })?;
+        if relink && let Some(moved) = moved {
+            let target = moved.canonicalize().map_err(|source| RegisterErr::Io {
+                path: moved,
+                source,
+            })?;
+            atomic::symlink_atomically(&target, &link)?;
+            atomic::sync_dir(&manifest.checkout)?;
+        }
+    }
+    Ok(())
+}
+
 fn latest_run(store: &Store, checkout: &Path, team: &str) -> Result<Option<PathBuf>, RegisterErr> {
     let archive = &store.paths().team_notes_dir;
     let folders = crate::store::notes::enumerate(archive).map_err(|source| RegisterErr::Io {

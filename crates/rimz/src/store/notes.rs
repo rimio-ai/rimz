@@ -105,23 +105,8 @@ pub(crate) fn allocate(
         ),
     };
     let date = PathBuf::from(created_at.strftime("%Y%m%d").to_string());
-    let date_dir = paths.notes_run(class, &date);
-    atomic::create_dir_all_mode(&date_dir, 0o700).map_err(io::Error::other)?;
     let base = format!("{}-{label}", created_at.strftime("%H%M%SZ"));
-    let mut suffix = 1;
-    let (relative, run) = loop {
-        let relative = date.join(if suffix == 1 {
-            base.clone()
-        } else {
-            format!("{base}-{suffix}")
-        });
-        let run = paths.notes_run(class, &relative);
-        match fs::create_dir(&run) {
-            Ok(()) => break (relative, run),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => suffix += 1,
-            Err(error) => return Err(error),
-        }
-    };
+    let (relative, run) = claim_run(paths, class, &date, &base, |run| fs::create_dir(run))?;
     atomic::write_temp_then_rename(
         &run.join("run.json"),
         &Manifest {
@@ -132,8 +117,63 @@ pub(crate) fn allocate(
         },
     )
     .map_err(io::Error::other)?;
-    atomic::sync_dir(&date_dir).map_err(io::Error::other)?;
+    atomic::sync_dir(&paths.notes_run(class, &date)).map_err(io::Error::other)?;
     Ok(relative)
+}
+
+pub(crate) fn migrate_legacy(paths: &crate::StatePaths, run: &Path) -> io::Result<Option<PathBuf>> {
+    let Some((stamp, rest)) = run
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.split_once('-'))
+        .filter(|(_, rest)| !rest.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Ok(created_at) = jiff::civil::DateTime::strptime("%Y%m%dT%H%M%SZ", stamp) else {
+        return Ok(None);
+    };
+    let date = PathBuf::from(created_at.strftime("%Y%m%d").to_string());
+    let base = format!("{}-{rest}", created_at.strftime("%H%M%SZ"));
+    atomic::sync_tree(run).map_err(io::Error::other)?;
+    let (_, moved) = claim_run(paths, Class::TeamNotes, &date, &base, |destination| {
+        atomic::publish_staged_no_replace(run, destination).map_err(|error| match error {
+            atomic::AtomicErr::Exists { .. } => io::Error::from(io::ErrorKind::AlreadyExists),
+            error => io::Error::other(error),
+        })
+    })?;
+    atomic::sync_dir(&paths.team_notes_dir).map_err(io::Error::other)?;
+    Ok(Some(moved))
+}
+
+fn claim_run(
+    paths: &crate::StatePaths,
+    class: Class,
+    date: &Path,
+    base: &str,
+    mut claim: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<(PathBuf, PathBuf)> {
+    atomic::create_dir_all_mode(&paths.notes_run(class, date), 0o700).map_err(io::Error::other)?;
+    let mut suffix = 1;
+    let mut recreated_date = false;
+    loop {
+        let relative = date.join(if suffix == 1 {
+            base.to_owned()
+        } else {
+            format!("{base}-{suffix}")
+        });
+        let run = paths.notes_run(class, &relative);
+        match claim(&run) {
+            Ok(()) => return Ok((relative, run)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => suffix += 1,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !recreated_date => {
+                atomic::create_dir_all_mode(&paths.notes_run(class, date), 0o700)
+                    .map_err(io::Error::other)?;
+                recreated_date = true;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 pub(crate) fn enumerate(root: &Path) -> io::Result<RunFolders> {

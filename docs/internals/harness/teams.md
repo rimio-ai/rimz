@@ -40,6 +40,8 @@ It canonicalizes the checkout and takes the [board lock](#the-board-lock) before
 
 A new run is named `<UTC %Y%m%d>/<%H%M%SZ>-<team>-<checkout basename>`. Each name component keeps its first 80 characters, maps every character outside `[A-Za-z0-9_-]` to `-`, trims `-`, and falls back to `run`. A collision appends `-2`, `-3`, and so on. `run.json` is written once: `version: 2`, `kind: "team"`, `team`, `created_at`, `checkout`, and, for a RimZ worktree, its marker's `name`, `branch`, `base_branch`, `from_pr`, and `repo_root`. A version 1 manifest without `kind` reads as a team. The link is then replaced atomically with the run's canonical absolute path. Replacing a link never changes the run it pointed at.
 
+Before creating a new room session, birth migrates legacy flat `<%Y%m%dT%H%M%SZ>-<rest>` runs to `<%Y%m%d>/<%H%M%SZ>-<rest>`, taking the date and time from the old name and preserving the manifest and contents. It uses the same collision suffix as allocation. Only a checkout link that resolved to the moved run is repointed; other links and removed checkouts are untouched. Unparseable names or manifests remain in place, and rerunning migration changes nothing. Live room attachment never migrates: agents may still hold grants on the old canonical path. A crash between the move and link rewrite can leave a dangling link; `rimz teams resume` finds the moved run through its manifest and relinks it.
+
 `register` refuses, with the path and the fix, in four cases (`RegisterErr`):
 
 | Variant | Condition |

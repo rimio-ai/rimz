@@ -2,6 +2,40 @@ use super::*;
 use std::fs;
 
 #[test]
+fn a_claim_recreates_a_pruned_date_once_without_hiding_persistent_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    for keeps_disappearing in [false, true] {
+        let mut calls = 0;
+        let result = claim_run(
+            &paths,
+            Class::AutomationNotes,
+            Path::new("20261107"),
+            "002336Z-loop-review",
+            |run| {
+                calls += 1;
+                if calls == 1 || keeps_disappearing {
+                    fs::remove_dir(run.parent().unwrap())?;
+                }
+                fs::create_dir(run)
+            },
+        );
+        assert_eq!(result.is_ok(), !keeps_disappearing, "{result:?}");
+        assert_eq!(calls, 2, "a vanished date gets exactly one retry");
+        if let Ok((_, run)) = result {
+            assert!(run.is_dir());
+            fs::remove_dir_all(run).unwrap();
+        } else {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        }
+    }
+}
+
+#[test]
 fn allocation_dates_each_kind_and_preserves_the_creation_sample() {
     let temp = tempfile::tempdir().unwrap();
     let paths = crate::StatePaths::under(
