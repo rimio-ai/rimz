@@ -445,6 +445,10 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
 #[test]
 fn components_resolve_concretely_and_collapse_under_no_color() {
     for theme in [Theme::fixed(false), truecolor_default()] {
+        assert_eq!(
+            theme.component(Component::WorktreePrConflict),
+            tone_color(theme.palette.caution)
+        );
         for &component in Component::ALL {
             let tone = theme.component(component);
             assert!(

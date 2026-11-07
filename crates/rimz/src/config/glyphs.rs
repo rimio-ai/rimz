@@ -118,6 +118,7 @@ glyph_roles! {
         WorktreePrOpen => "pr_open",
         WorktreePrClosed => "pr_closed",
         WorktreePrQueue => "pr_queue",
+        WorktreePrConflict => "pr_conflict",
         WorktreePrStack => "pr_stack",
         WorktreeCiPassing => "ci_passing",
         WorktreeCiFailing => "ci_failing",
