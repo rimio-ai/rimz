@@ -22,6 +22,7 @@ printf '%s\n' "$*" >> "$RIMZ_TEST_TYPING_TRACE"
 case "$1" in
   -V) printf 'tmux 3.8\n' ;;
   list-clients) cat "$RIMZ_TEST_TYPING_CLIENTS" ;;
+  list-panes) printf '%s,@1,%%3,claude\n' "$RIMZ_TEST_TYPING_SESSION" ;;
   load-buffer) dd of=/dev/null status=none ;;
 esac"#,
         );
@@ -88,6 +89,12 @@ esac"#,
         )
         .env("RIMZ_TEST_TYPING_CLIENTS", &self.clients)
         .env("RIMZ_TEST_TYPING_TRACE", &self.trace)
+        .env(
+            "RIMZ_TEST_TYPING_SESSION",
+            self.env
+                .resolve_workspace(&self.env.project_root)
+                .session_name,
+        )
         .env("RIMZ_TEST_PANE_LIST", &self.panes)
         .args(["--mux", "tmux"]);
         cmd
@@ -664,4 +671,77 @@ fn input_before_the_compact_command_keeps_the_prompts_compaction_intent() {
         .filter(|r| r.body == MessageBody::Command && r.status == MessageStatus::Sent)
         .count();
     assert_eq!(commands, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pane_writes_stamp_the_target_room_before_and_after_each_backend_result() {
+    let mut actual = Vec::new();
+    for kind in ["text", "key", "paste"] {
+        for fail in [false, true] {
+            let fixture = Fixture::new(false);
+            run_success(
+                fixture
+                    .command()
+                    .args(["config", "set", "harness.typing_hold", "off"]),
+                "disable hold for explicit write",
+            );
+            crate::common::write_path_shim(
+                &fixture.bin,
+                "tmux",
+                r#"if [ "$1" = -S ]; then shift 3; fi
+case "$1" in
+  -V) printf 'tmux 3.8\n' ;;
+  list-panes) printf '%s,@1,%%3,claude\n' "$RIMZ_TEST_TYPING_SESSION" ;;
+  list-clients) cat "$RIMZ_TEST_TYPING_CLIENTS" ;;
+  send-keys|load-buffer)
+    if [ "$1" = load-buffer ]; then dd of=/dev/null status=none; fi
+    if [ -f "$RIMZ_TEST_TYPING_RECORD" ]; then
+      cp "$RIMZ_TEST_TYPING_RECORD" "$RIMZ_TEST_TYPING_BEFORE.$1"
+    fi
+    printf '{"panes":{}}' > "$RIMZ_TEST_TYPING_RECORD"
+    exit "$RIMZ_TEST_TYPING_WRITE_RC"
+    ;;
+esac"#,
+            );
+            let record = fixture.env.runtime_paths().lane_path("typing.json");
+            let before = fixture.env.project_root.join("before-write");
+            let mut command = fixture.command();
+            command
+                .env("RIMZ_TEST_TYPING_RECORD", &record)
+                .env("RIMZ_TEST_TYPING_BEFORE", &before)
+                .env("RIMZ_TEST_TYPING_WRITE_RC", if fail { "1" } else { "0" });
+            match kind {
+                "text" => command.args(["pane", "send", "tmux:%3", "hello"]),
+                "key" => command.args(["pane", "send", "tmux:%3", "--key", "Enter"]),
+                "paste" => command.args(["message", "--steer", "@claude", "hello"]),
+                _ => unreachable!("the table names every write kind"),
+            };
+            let output = command.output().unwrap();
+            if !fail {
+                assert!(output.status.success(), "{kind}: {output:?}");
+            }
+            let stamped = |path: &Path| {
+                std::fs::read(path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .and_then(|value| value["panes"]["tmux:%3"]["quiet_until_ms"].as_u64())
+                    .is_some_and(|until| until > rimz::utils::time::unix_now_ms())
+            };
+            let backend = if kind == "paste" {
+                "load-buffer"
+            } else {
+                "send-keys"
+            };
+            let at_call = before.with_extension(backend);
+            let after_paste =
+                kind != "paste" || fail || stamped(&before.with_extension("send-keys"));
+            actual.push((kind, fail, stamped(&at_call), stamped(&record), after_paste));
+        }
+    }
+    let expected: Vec<_> = ["text", "key", "paste"]
+        .into_iter()
+        .flat_map(|kind| [false, true].map(|fail| (kind, fail, true, true, true)))
+        .collect();
+    assert_eq!(actual, expected);
 }

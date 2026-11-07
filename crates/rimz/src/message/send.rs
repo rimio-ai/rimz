@@ -140,7 +140,7 @@ pub(super) fn send_batch_to_live_pane(
         .expect("send_batch_to_live_pane requires at least one message");
     crate::harness::hibernate::wake_pane(store, &target.pane_id)?;
     let writer = PaneWriter::open(
-        store.runtime_paths(),
+        Some(store.runtime_paths()),
         &target.pane_id,
         &workspace.session_name,
     )?;

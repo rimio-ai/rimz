@@ -3148,7 +3148,13 @@ path = "crates/rimz/src/mux"
 # typing, its record, samples, source selector and operations share pane input timing (+14).
 # ClientView::typing_clients narrows only Linux typing viewers by terminal focus (+1).
 # TypingView and its backend selector distinguish focus evidence from corroborating clocks (+2).
-surface-budget = 336
+# exclude_pane_input shares pane-write exclusions with the palette (+1).
+surface-budget = 337
+
+[[verdict]]
+kind = "item"
+key = "mux::pane_writer::exclude_pane_input"
+reason = "PaneWriter and the palette share the same best-effort room-owned terminal-input exclusion."
 
 [[verdict]]
 kind = "item"

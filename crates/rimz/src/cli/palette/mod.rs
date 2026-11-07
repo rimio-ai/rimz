@@ -112,21 +112,34 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
         return run_terminal(&ctx, args.mode, opener);
     }
     let backend = rimz::mux::backend_for(mux);
+    let mut typing_pane = None;
     let client = match mux {
         MuxName::Tmux => {
-            let view = if args.client.is_some() {
-                ClientView::default()
-            } else {
+            let read_view = || {
                 backend.client_view(ClientFocusOptions {
                     session_name: Some(ctx.workspace.session_name.clone()),
                     ..Default::default()
-                })?
+                })
             };
-            Some(popup_client(
-                &ctx.workspace.session_name,
-                args.client.as_deref(),
-                &view,
-            )?)
+            let view = if args.client.is_none() {
+                read_view()?
+            } else if cfg!(target_os = "linux") {
+                read_view().unwrap_or_else(|error| {
+                    tracing::debug!(
+                        %error, "cannot read palette client's pane for typing exclusion"
+                    );
+                    ClientView::default()
+                })
+            } else {
+                ClientView::default()
+            };
+            let client = popup_client(&ctx.workspace.session_name, args.client.as_deref(), &view)?;
+            typing_pane = view
+                .clients
+                .iter()
+                .find(|view| matches!(&view.client_id, MuxClientId::Tmux(name) if *name == client))
+                .map(|view| view.pane_id.clone());
+            Some(client)
         }
         MuxName::Zellij => {
             if args.client.is_some() {
@@ -135,14 +148,22 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
             None
         }
     };
-    backend.open_popup(&PopupRequest {
+    let request = PopupRequest {
         session_name: ctx.workspace.session_name.clone(),
         program: std::env::current_exe()?.to_string_lossy().into_owned(),
         args: popup_args(&args, &ctx.workspace.session_name, mux, opener.as_ref()),
         cwd: ctx.workspace.project_root.clone(),
         client,
         anchor_pane: opener,
-    })?;
+    };
+    if let Some(pane) = &typing_pane {
+        rimz::mux::exclude_pane_input(ctx.store.runtime_paths(), pane);
+    }
+    let result = backend.open_popup(&request);
+    if let Some(pane) = &typing_pane {
+        rimz::mux::exclude_pane_input(ctx.store.runtime_paths(), pane);
+    }
+    result?;
     Ok(())
 }
 
