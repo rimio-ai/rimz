@@ -241,6 +241,8 @@
 ## parked_bg = "⋯"
 ## tier_move = "↪"
 ## fast = "ϟ"
+## message_queued = "↧"
+## typing = "✎"
 
 [theme.glyphs.unicode.process]
 ## cpu = "C"
@@ -382,6 +384,8 @@
 ## parked_bg = "⋯"
 ## tier_move = "↪"
 ## fast = ""
+## message_queued = "󱃚"
+## typing = "󰏫"
 
 [theme.glyphs.nerd_font.process]
 ## cpu = ""

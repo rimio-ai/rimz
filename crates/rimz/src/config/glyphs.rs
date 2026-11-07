@@ -146,6 +146,8 @@ glyph_roles! {
         CardParkedBg => "parked_bg",
         CardTierMove => "tier_move",
         CardFast => "fast",
+        CardMessageQueued => "message_queued",
+        CardTyping => "typing",
     }
     "process" {
         ProcessCpu => "cpu",

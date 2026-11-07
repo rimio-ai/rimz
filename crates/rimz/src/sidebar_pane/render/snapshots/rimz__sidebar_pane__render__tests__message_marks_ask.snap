@@ -1,0 +1,26 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                      $0.00
+ ──────────────────────────────
+ ? 1   ! 0   ⏸︎ 0   ✓ 0   ⢿ 0
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌? coder                  $1.27▐
+▌  Should I refresh the pricing▐
+▌  cache and every do… +2 ✎ ↧ 3▐
+▌  ▢ ────────────────────  0.0%▐
+▌  ▤ 0                         ▐
+
+
+
+
+ ──────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0 $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0 $0.00
+
+                     ? for help

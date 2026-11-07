@@ -55,6 +55,7 @@ impl CardHeights {
         let RowCtx {
             theme: _, // The owned Rc is compared by identity below.
             now,
+            typing_until: _, // Marks never change a card's height.
             width,
             tier: _, // Derived from width.
             bands,

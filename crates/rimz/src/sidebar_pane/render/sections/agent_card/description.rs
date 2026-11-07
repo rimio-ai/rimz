@@ -72,7 +72,11 @@ pub(super) fn description_lines(
     else {
         let mut spans = vec![Span::raw("  ")];
         spans.extend(description_spans(ctx, row, attention));
-        return vec![Line::from(trim_spans_to_width(spans, width))];
+        return vec![pin_right(
+            spans,
+            message_marks(ctx, row, width.saturating_sub(3)),
+            width,
+        )];
     };
     let text = question_sentence(ask);
     let suffix = if extra_questions > 0 {
@@ -97,14 +101,32 @@ pub(super) fn description_lines(
             *last = format!("{}{suffix}", ellipsize(&format!("{last}…"), budget));
         }
     }
-    lines
+    let marks = message_marks(ctx, row, wrap_width.saturating_sub(text_width(&suffix) + 1));
+    if !marks.is_empty()
+        && let Some(last) = lines.last_mut()
+    {
+        let question = last
+            .strip_suffix(suffix.trim_start())
+            .unwrap_or(last)
+            .trim_end();
+        let budget = wrap_width.saturating_sub(text_width(&suffix) + spans_width(&marks) + 1);
+        // A count that wrapped alone keeps no lead space before it.
+        *last = format!("{}{suffix}", ellipsize(question, budget))
+            .trim_start()
+            .to_owned();
+    }
+    let mut rendered: Vec<_> = lines
         .into_iter()
         .map(|text| {
             let mut spans = vec![Span::raw("  ")];
             spans.extend(body_spans(ctx.theme, attention, &text, false));
             Line::from(trim_spans_to_width(spans, width))
         })
-        .collect()
+        .collect();
+    if let Some(last) = rendered.last_mut() {
+        *last = pin_right(std::mem::take(&mut last.spans), marks, width);
+    }
+    rendered
 }
 
 fn body_spans(
