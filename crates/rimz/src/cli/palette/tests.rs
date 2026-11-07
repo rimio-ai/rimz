@@ -146,7 +146,7 @@ fn query_prefix_alone_controls_mode_and_erasing_it_returns_to_cards() {
     ] {
         assert_eq!(Mode::from_query(query), expected, "{query}");
     }
-    let mut state = PaletteState::new(Mode::Commands, None);
+    let mut state = PaletteState::new(Mode::Commands, None, "room");
     assert_eq!(state.query, ">");
     state.set_query(String::new());
     assert_eq!(state.mode(), Mode::Cards);
@@ -158,7 +158,7 @@ fn fuzzy_subsequence_weights_handle_before_description_and_keeps_ties() {
     assert!(fuzzy_score("cxz", "card popup engine").is_none());
     let mut source = cards();
     source[0].description = "reviewer".to_owned();
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     state.refresh(source.clone(), true);
     state.set_query("rvw".to_owned());
     assert_eq!(
@@ -183,7 +183,7 @@ fn fuzzy_subsequence_weights_handle_before_description_and_keeps_ties() {
 #[test]
 fn every_card_search_field_matches() {
     let source = cards().into_iter().take(1).collect();
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     state.refresh(source, true);
     for query in ["cdr", "cdx", "ftr", "ftr/kyb", "42", "shppp"] {
         state.set_query(query.to_owned());
@@ -261,7 +261,7 @@ fn a_wired_pane_before_its_session_is_a_pane_only_card() {
     assert_eq!(source[0].target, "tmux:%1");
     assert_eq!(source[0].label, "codex");
     assert!(!source[0].agent);
-    assert_eq!(command_entries(Some(&source[0])).len(), 9);
+    assert_eq!(command_entries(Some(&source[0]), "room").len(), 21);
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn bare_kind_agents_are_searchable_by_pet_name_and_keep_agent_commands() {
     assert_selects(&snapshot, &source[0]);
     assert!(source[0].agent);
     assert_eq!(source[0].name, "pet-1");
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     state.refresh(source, true);
     state.set_query("pet-1".to_owned());
     assert_eq!(state.entries().len(), 1);
@@ -373,7 +373,7 @@ fn a_child_at_the_root_joins_the_root_group_under_its_branch_label() {
     );
     assert_eq!(at_root.pr, Some(7));
 
-    let mut state = PaletteState::new(Mode::Worktrees, None);
+    let mut state = PaletteState::new(Mode::Worktrees, None, "room");
     state.refresh(source, true);
     assert_eq!(
         state.entries().len(),
@@ -387,7 +387,7 @@ fn compact_is_offered_only_to_kinds_it_can_compact() {
     let mut source = cards();
     source[0].compact = false;
     assert!(
-        !command_entries(Some(&source[0]))
+        !command_entries(Some(&source[0]), "room")
             .iter()
             .any(|entry| entry.label.contains("compact"))
     );
@@ -403,13 +403,13 @@ fn compact_is_offered_only_to_kinds_it_can_compact() {
 fn commands_parse_through_real_clap_and_respect_target_class() {
     let source = cards();
     assert!(!source.is_empty(), "pane-backed agents must be candidates");
-    let agent = command_entries(Some(&source[0]));
+    let agent = command_entries(Some(&source[0]), "room");
     let mut process_card = source[0].clone();
     process_card.agent = false;
     process_card.target = process_card.pane.to_string();
-    let process = command_entries(Some(&process_card));
-    let room = command_entries(None);
-    assert_eq!((agent.len(), process.len(), room.len()), (14, 9, 7));
+    let process = command_entries(Some(&process_card), "room");
+    let room = command_entries(None, "room");
+    assert_eq!((agent.len(), process.len(), room.len()), (26, 21, 19));
     for entry in agent.iter().chain(&process).chain(&room) {
         let action = entry.action.as_ref().unwrap();
         let parsed = crate::cli::Cli::try_parse_from(
@@ -428,21 +428,77 @@ fn commands_parse_through_real_clap_and_respect_target_class() {
             .iter()
             .filter(|e| e.action.as_ref().unwrap().effect == Effect::Act)
             .count(),
-        5
+        17
     );
     assert_eq!(
         process
             .iter()
             .filter(|e| e.action.as_ref().unwrap().effect == Effect::Act)
             .count(),
-        2
+        14
+    );
+}
+
+#[test]
+fn sidebar_navigation_is_a_room_action_independent_of_the_palette_target() {
+    let source = cards();
+    let mut process = source[0].clone();
+    process.agent = false;
+    let mut expected = vec![
+        "rimz sidebar walk next --session-name room".to_owned(),
+        "rimz sidebar walk prev --session-name room".to_owned(),
+    ];
+    expected.extend((1..=9).map(|n| format!("rimz sidebar slot {n} --session-name room")));
+    expected.push("rimz sidebar last --session-name room".to_owned());
+    let expected = expected
+        .into_iter()
+        .map(|label| (label, Effect::Act))
+        .collect::<Vec<_>>();
+    let actual = [Some(&source[0]), Some(&process), None].map(|target| {
+        command_entries(target, "room")
+            .into_iter()
+            .filter_map(|entry| {
+                let action = entry.action.unwrap();
+                (action.args[0] == "sidebar" && action.args[1] != "repair")
+                    .then_some((entry.label, action.effect))
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(actual, [expected.clone(), expected.clone(), expected]);
+}
+
+#[test]
+fn sidebar_navigation_runs_the_displayed_command_in_the_palettes_room() {
+    let mut state = PaletteState::new(Mode::Cards, Some(pane(1)), "other room");
+    state.refresh(cards(), true);
+    state.move_selection(1);
+    let mut actual = Vec::new();
+    for query in ["walk next", "walk prev", "slot 9", "last"] {
+        state.set_query(format!(">sidebar {query}"));
+        let footer = state.footer();
+        state.activate(|action| {
+            assert_eq!(
+                shlex::split(footer.trim_start_matches("$ ")).unwrap()[1..],
+                action.args
+            );
+            assert_eq!(action.effect, Effect::Act);
+            ChildOutcome::Success
+        });
+        actual.push((footer, state.closed));
+    }
+    assert_eq!(
+        actual,
+        ["walk next", "walk prev", "slot 9", "last"].map(|query| (
+            format!("$ rimz sidebar {query} --session-name 'other room'"),
+            true
+        ))
     );
 }
 
 #[test]
 fn command_target_is_moved_card_then_opener_else_none() {
     let source = cards();
-    let mut state = PaletteState::new(Mode::Cards, Some(pane(1)));
+    let mut state = PaletteState::new(Mode::Cards, Some(pane(1)), "room");
     state.refresh(source, true);
     state.set_query(">".to_owned());
     assert_eq!(
@@ -456,7 +512,7 @@ fn command_target_is_moved_card_then_opener_else_none() {
         state.target().map(|c| c.target.as_str()),
         Some("@reviewer#feature")
     );
-    let mut departed = PaletteState::new(Mode::Cards, None);
+    let mut departed = PaletteState::new(Mode::Cards, None, "room");
     departed.refresh(cards(), true);
     departed.move_selection(1);
     let moved = departed.target().unwrap().id.clone();
@@ -467,16 +523,20 @@ fn command_target_is_moved_card_then_opener_else_none() {
         departed.target().is_none(),
         "a departed target never passes to another card"
     );
-    let mut absent = PaletteState::new(Mode::Commands, Some(pane(99)));
+    let mut absent = PaletteState::new(Mode::Commands, Some(pane(99)), "room");
     absent.refresh(cards(), true);
     assert!(absent.target().is_none());
-    assert_eq!(absent.entries().len(), 7);
-    assert!(PaletteState::new(Mode::Commands, None).target().is_none());
+    assert_eq!(absent.entries().len(), 19);
+    assert!(
+        PaletteState::new(Mode::Commands, None, "room")
+            .target()
+            .is_none()
+    );
 }
 
 #[test]
 fn opening_on_commands_selects_the_first_row_of_the_opener_card() {
-    let mut state = PaletteState::new(Mode::Commands, Some(pane(1)));
+    let mut state = PaletteState::new(Mode::Commands, Some(pane(1)), "room");
     state.refresh(cards(), true);
     assert_eq!(state.selected, 0);
     assert_eq!(state.footer(), "$ rimz pane focus @coder#feature");
@@ -485,7 +545,7 @@ fn opening_on_commands_selects_the_first_row_of_the_opener_card() {
 #[test]
 fn commands_opened_before_any_card_arrives_land_on_the_opener_card() {
     for published in [false, true] {
-        let mut state = PaletteState::new(Mode::Commands, Some(pane(1)));
+        let mut state = PaletteState::new(Mode::Commands, Some(pane(1)), "room");
         state.refresh(Vec::new(), published);
         state.refresh(cards(), true);
         assert_eq!(
@@ -518,7 +578,7 @@ fn command_lines_quote_only_what_a_shell_would_change() {
 
 #[test]
 fn selection_survives_refresh_by_identity_or_pane_and_falls_to_top() {
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     let mut source = cards();
     state.refresh(source.clone(), true);
     assert_eq!(state.entries().len(), 2);
@@ -547,7 +607,7 @@ fn selection_survives_refresh_by_identity_or_pane_and_falls_to_top() {
 #[test]
 fn footer_is_exactly_the_action_passed_to_runner_in_each_mode() {
     for mode in [Mode::Cards, Mode::Commands, Mode::Worktrees] {
-        let mut state = PaletteState::new(mode, Some(pane(1)));
+        let mut state = PaletteState::new(mode, Some(pane(1)), "room");
         state.refresh(cards(), true);
         let footer = state.footer();
         assert!(footer.starts_with("$ rimz "), "{mode:?}: {footer}");
@@ -563,7 +623,7 @@ fn footer_is_exactly_the_action_passed_to_runner_in_each_mode() {
         });
         assert!(ran);
     }
-    let mut state = PaletteState::new(Mode::New, None);
+    let mut state = PaletteState::new(Mode::New, None, "room");
     assert_eq!(state.entries().len(), 1);
     assert_eq!(state.footer(), "nothing to run");
     state.activate(|_| panic!("placeholder must not run"));
@@ -572,7 +632,7 @@ fn footer_is_exactly_the_action_passed_to_runner_in_each_mode() {
 
 #[test]
 fn action_failure_keeps_palette_open_and_success_closes_it() {
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     state.refresh(cards(), true);
     state.activate(|_| ChildOutcome::Failure("exit 3: pane is gone\nmore detail".to_owned()));
     assert!(!state.closed);
@@ -583,7 +643,7 @@ fn action_failure_keeps_palette_open_and_success_closes_it() {
 
 #[test]
 fn missing_publication_has_no_candidates_and_names_repair() {
-    let mut state = PaletteState::new(Mode::Cards, None);
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
     state.refresh(Vec::new(), false);
     assert!(state.entries().is_empty());
     assert_eq!(
@@ -663,7 +723,7 @@ fn renders_complete_cards_selection_and_command_at_normal_and_minimum_size() {
     for (width, height) in [(80, 24), (32, 8)] {
         for no_color in [false, true] {
             let theme = PaletteTheme::resolve(&ThemeConfig::default(), true, no_color);
-            let mut state = PaletteState::new(Mode::Cards, None);
+            let mut state = PaletteState::new(Mode::Cards, None, "room");
             let mut source = cards();
             if width == 32 {
                 source[0].target = "@coder-with-a-long-handle#feature".to_owned();
@@ -717,7 +777,7 @@ fn renders_complete_cards_selection_and_command_at_normal_and_minimum_size() {
 #[test]
 fn command_target_and_new_placeholder_render_without_inventing_an_action() {
     for mode in [Mode::Commands, Mode::New] {
-        let state = PaletteState::new(mode, None);
+        let state = PaletteState::new(mode, None, "room");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let theme = PaletteTheme::resolve(&ThemeConfig::default(), false, true);
         terminal
