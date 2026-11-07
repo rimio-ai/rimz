@@ -77,6 +77,32 @@ fn tune_budget_and_unknown_sessions_do_not_change_rows() {
 }
 
 #[test]
+fn tune_survives_provisional_adoption() {
+    let mut payload = launch_payload("launch_seat", "coder");
+    payload.state = AgentLaunchState::Starting;
+    let mut launched = launch_event("codex", payload);
+    launched.timestamp = epoch();
+    let mut events = vec![launched, tune("launch_seat", "keep-warm", Some("2h"))];
+    let expected = json!({"value": "2h", "by": "@operator", "at": epoch()});
+    assert_eq!(row(&events, "launch_seat")["tune"]["keep_warm"], expected);
+
+    events.push(same_process_registration(
+        "registered",
+        "coder",
+        1,
+        "tmux:%1",
+        100,
+    ));
+    let agents = reduce_agent_states(&events);
+    assert_eq!(agents.len(), 1, "{agents:#?}");
+    assert_eq!(agents[0].agent_id.as_str(), "registered");
+    assert_eq!(
+        serde_json::to_value(&agents[0].tune).unwrap()["keep_warm"],
+        expected
+    );
+}
+
+#[test]
 fn tune_survives_registration_and_same_process_clear_but_not_a_fresh_launch() {
     let mut launch = launch_payload("seat", "coder");
     launch.launch_id = Some("seat".into());
