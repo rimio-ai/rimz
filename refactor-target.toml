@@ -3286,7 +3286,7 @@ reason = "Zellij creation records only sessions created by this process."
 [[verdict]]
 kind = "item"
 key = "mux::room_settings::record_live"
-reason = "Presence hand-offs preserve birth and client assertions while recording live keys."
+reason = "Presence hand-offs merge only reload-class session options; birth and client assertions stay intact, and runtime keymaps are installed separately."
 
 [[verdict]]
 kind = "item"
@@ -3301,7 +3301,7 @@ reason = "Crate-internal reload reads the mux-owned record rather than duplicati
 [[verdict]]
 kind = "item"
 key = "mux::keymap::register_room_keys"
-reason = "Birth and tmux reload apply the resolved machine keymap through the same body."
+reason = "Birth and tmux reload share best-effort installation for native and RimZ keymaps; parsing and resolution remain config-owned."
 
 [[verdict]]
 kind = "item"
@@ -8933,7 +8933,7 @@ reason = "Consumer-side lazy projection previews visibility from the frame witho
 [[verdict]]
 kind = "item"
 key = "sidebar::frame::PaneFrame"
-reason = "The published pane-frame wire: the bench, the integration crate and daemon_view read it, and its pub fields floor the whole nested family (TabFrame, CarriedPane, PaneState, PaneProcess, PaneMetrics) at pub. The assembly helpers around it narrowed instead (pass 23c)."
+reason = "The published pane-frame wire: the bench, the integration crate and daemon_view read it, and its pub fields floor the whole nested family (TabFrame, CarriedPane, PaneState, PaneProcess, PaneMetrics) at pub. The assembly helpers around it narrowed instead (pass 23c). Client modes stay separate from pane-view identity."
 
 [[verdict]]
 kind = "item"
