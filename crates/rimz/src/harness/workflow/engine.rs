@@ -794,6 +794,13 @@ fn prepare(
         seq,
         node: t.record.node.clone(),
         visit: step.map(|_| t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket())),
+        started_past_limit: admission
+            .capacity
+            .as_ref()
+            .and_then(|(_, _, answer)| match answer {
+                Ok(throttle::Attempt::Turn(turn)) => turn.started_past_limit().map(str::to_owned),
+                _ => None,
+            }),
         started_at: t.now,
         host: agent::identity(),
         woken: false,
@@ -1203,6 +1210,7 @@ pub fn restart(
             seq: previous.seq,
             node: step.clone(),
             visit: Some(previous.visit),
+            started_past_limit: None,
             started_at: previous.started_at,
             host: agent::identity(),
             run: Some(workflow::AttemptRun {
