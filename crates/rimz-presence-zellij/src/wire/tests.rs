@@ -262,6 +262,32 @@ fn command_counters_split_every_exit_bucket() {
     assert_eq!(counters.other_failures, 2);
 }
 
+/// `rimz doctor` reads the other-failure count and the retained failure as wake
+/// health, so a failing key binding must reach neither.
+#[test]
+fn key_command_results_leave_wake_counters_and_retained_failure_alone() {
+    let mut counters = CommandCounters::default();
+    let wake = fold_command_result(&mut counters, None, false, false, Some(1), b"wake died", 5);
+    let after_key = fold_command_result(
+        &mut counters,
+        wake.clone(),
+        true,
+        false,
+        Some(2),
+        b"error: unrecognized subcommand 'walk'",
+        6,
+    );
+
+    assert_eq!(after_key, wake);
+    assert_eq!(counters.completed, 1);
+    assert_eq!(counters.other_failures, 1);
+    assert_eq!(
+        fold_command_result(&mut counters, None, true, false, Some(2), b"gone", 7),
+        None
+    );
+    assert_eq!(counters.completed, 1);
+}
+
 /// The host names the cause on its first stderr line; the rest is argv the
 /// reader already has.
 #[test]
@@ -434,31 +460,6 @@ fn wake_argv_none_gates_session_bound_requests() {
 }
 
 #[test]
-fn focus_sidebar_argv_uses_zellij_mux_and_optional_session() {
-    assert_eq!(
-        focus_sidebar_argv(&ctx()),
-        strings(&[
-            "/bin/rimz",
-            "sidebar",
-            "focus",
-            "--toggle",
-            "--session-name",
-            "session-1",
-            "--mux",
-            "zellij",
-        ]),
-    );
-    assert_eq!(
-        focus_sidebar_argv(&WakeContext {
-            rimz_bin: None,
-            workspace_id: None,
-            session_name: None,
-        }),
-        strings(&["rimz", "sidebar", "focus", "--toggle", "--mux", "zellij"]),
-    );
-}
-
-#[test]
 fn palette_argv_preserves_the_opener_and_omits_absent_context() {
     assert_eq!(PALETTE_PIPE, "rimz:palette");
     assert_eq!(
@@ -509,28 +510,23 @@ fn palette_argv_preserves_the_opener_and_omits_absent_context() {
     );
 }
 
-#[test]
-fn zoom_pane_argv_uses_zellij_mux_and_optional_session() {
-    assert_eq!(
-        zoom_pane_argv(&ctx()),
-        strings(&[
-            "/bin/rimz",
-            "pane",
-            "zoom",
-            "--session-name",
-            "session-1",
-            "--mux",
-            "zellij",
-        ]),
-    );
-    assert_eq!(
-        zoom_pane_argv(&WakeContext {
-            rimz_bin: None,
-            workspace_id: None,
-            session_name: None,
-        }),
-        strings(&["rimz", "pane", "zoom", "--mux", "zellij"]),
-    );
+fn native_keys() -> Keymap {
+    let binds = serde_json::json!([
+        {"key":"Alt p","steps":[{"run":0}]},
+        {"key":"Alt g","steps":[{"run":1}]}
+    ]);
+    serde_json::from_value(serde_json::json!({
+        "report_modes":false,
+        "commands":[
+            ["sidebar","focus","--toggle","--session-name","session-1","--mux","zellij"],
+            ["pane","zoom","--session-name","session-1","--mux","zellij"]
+        ],
+        "modes":[
+            {"mode":"normal","clear":false,"binds":binds},
+            {"mode":"locked","clear":false,"binds":binds}
+        ]
+    }))
+    .unwrap()
 }
 
 #[test]
@@ -575,8 +571,8 @@ fn runtime_reconfigure_kdl_drops_a_key_that_is_not_an_identifier() {
 fn runtime_reconfigure_kdl_combines_options_and_room_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
-        focus_key: Some("Alt+p"),
-        zoom_key: Some("Alt+g"),
+        keymap: Some(&native_keys()),
+        rimz_bin: None,
         // Key order, the order `load` collects the host's entries from the
         // `BTreeMap` Zellij hands it.
         session_options: &[
@@ -592,8 +588,7 @@ fn runtime_reconfigure_kdl_combines_options_and_room_keybinds() {
     ));
     assert!(kdl.contains("bind \"Alt p\""));
     assert!(kdl.contains("bind \"Alt g\""));
-    assert!(kdl.contains("name \"rimz:focus_sidebar\""));
-    assert!(kdl.contains("name \"rimz:zoom_pane\""));
+    assert_eq!(kdl.matches("name \"rimz:key\"").count(), 4);
     assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
     assert!(!kdl.contains("MessagePlugin \""));
     assert!(!kdl.contains("plugin_url"));
@@ -603,7 +598,7 @@ fn runtime_reconfigure_kdl_combines_options_and_room_keybinds() {
 fn runtime_reconfigure_kdl_emits_keybinds_without_options() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
-        focus_key: Some("Alt+p"),
+        keymap: Some(&native_keys()),
         ..RuntimeReconfigure::default()
     })
     .expect("keybinds produce a reconfigure payload");
@@ -618,52 +613,17 @@ fn runtime_reconfigure_kdl_skips_empty_payload() {
     assert!(
         runtime_reconfigure_kdl(&RuntimeReconfigure {
             plugin_id: Some(42),
-            focus_key: Some("off"),
             ..RuntimeReconfigure::default()
         })
         .is_none()
     );
     assert!(
         runtime_reconfigure_kdl(&RuntimeReconfigure {
-            focus_key: Some("Alt+p"),
+            keymap: Some(&native_keys()),
             ..RuntimeReconfigure::default()
         })
         .is_none()
     );
-}
-
-#[test]
-fn focus_chord_parses_alt_and_ctrl_with_separators() {
-    assert_eq!(
-        FocusChord::parse("Alt+p"),
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'p',
-        }),
-    );
-    assert_eq!(
-        FocusChord::parse("ctrl-S"),
-        Some(FocusChord {
-            modifier: ChordModifier::Ctrl,
-            key: 'S',
-        }),
-    );
-    assert_eq!(
-        FocusChord::parse("  m+j  "),
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'j',
-        }),
-    );
-}
-
-#[test]
-fn focus_chord_rejects_malformed_shapes() {
-    assert_eq!(FocusChord::parse("p"), None);
-    assert_eq!(FocusChord::parse("super+p"), None);
-    assert_eq!(FocusChord::parse("alt+pp"), None);
-    assert_eq!(FocusChord::parse("alt+ "), None);
-    assert_eq!(FocusChord::parse(""), None);
 }
 
 #[test]
@@ -678,48 +638,6 @@ fn fullscreen_payload_parses_terminal_and_plugin_ids() {
     );
     assert_eq!(fullscreen_pane(Some("terminal_nope")), None);
     assert_eq!(fullscreen_pane(None), None);
-}
-
-#[test]
-fn room_keybinds_kdl_targets_plugin_id_in_normal_and_locked_modes() {
-    let kdl = room_keybinds_kdl(
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'p',
-        }),
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'g',
-        }),
-        42,
-    )
-    .expect("keybinds");
-
-    assert_eq!(kdl.matches("bind \"Alt p\"").count(), 2);
-    assert_eq!(kdl.matches("bind \"Alt g\"").count(), 2);
-    assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
-    assert_eq!(kdl.matches("name \"rimz:focus_sidebar\"").count(), 2);
-    assert_eq!(kdl.matches("name \"rimz:zoom_pane\"").count(), 2);
-    assert!(kdl.contains("normal {"));
-    assert!(kdl.contains("locked {"));
-    assert!(!kdl.contains("MessagePlugin \""));
-    assert!(!kdl.contains("plugin_url"));
-}
-
-#[test]
-fn room_keybinds_kdl_formats_ctrl_chords() {
-    let kdl = room_keybinds_kdl(
-        None,
-        Some(FocusChord {
-            modifier: ChordModifier::Ctrl,
-            key: 's',
-        }),
-        7,
-    )
-    .expect("keybinds");
-
-    assert_eq!(kdl.matches("bind \"Ctrl s\"").count(), 2);
-    assert!(kdl.contains("MessagePluginId 7"));
 }
 
 #[test]

@@ -45,6 +45,23 @@ impl Host for FakeHost {
     }
 }
 
+fn keymap(modes: &[&str]) -> wire::Keymap {
+    serde_json::from_value(serde_json::json!({
+        "report_modes":false,
+        "commands":[
+            ["sidebar","focus","--toggle","--session-name","session-1","--mux","zellij"],
+            ["pane","zoom","--session-name","session-1","--mux","zellij"]
+        ],
+        "modes":modes.iter().map(|mode| serde_json::json!({
+            "mode":mode,"clear":false,"binds":[
+                {"key":"Alt p","steps":[{"run":0}]},
+                {"key":"Alt g","steps":[{"run":1}]}
+            ]
+        })).collect::<Vec<_>>()
+    }))
+    .unwrap()
+}
+
 fn config() -> EngineConfig {
     EngineConfig {
         workspace_id: Some("workspace-1".to_owned()),
@@ -54,8 +71,7 @@ fn config() -> EngineConfig {
         client_id: Some(17),
         plugin_build: Some("wasm-build".to_owned()),
         plugin_config: Some("config-hash".to_owned()),
-        focus_key: None,
-        zoom_key: None,
+        keymap: Some(keymap(&[])),
         session_options: Vec::new(),
     }
 }
@@ -116,7 +132,13 @@ fn input_is_independent_of_topology_writer_muting_and_is_not_rebroadcast() {
     assert!(!reasons(&engine.on_user_action(17, None, false, 0, &host)).contains(&"input"));
     grant(&mut engine, 1, &host);
     for now in 2..5 {
-        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(now), now, &host);
+        engine.on_run_command_result(
+            Some(wire::STALE_WRITER_EXIT_CODE),
+            Some(now),
+            now,
+            &host,
+            false,
+        );
     }
     assert!(engine.muted);
     let first = engine.on_user_action(17, None, false, 10, &host);
@@ -141,8 +163,7 @@ fn input_is_independent_of_topology_writer_muting_and_is_not_rebroadcast() {
 
 fn reconfigure_config() -> EngineConfig {
     EngineConfig {
-        focus_key: Some("Alt+p".to_owned()),
-        zoom_key: Some("Alt+g".to_owned()),
+        keymap: Some(keymap(&["normal", "locked"])),
         // Zellij hands `load` a `BTreeMap`, so the shell collects the host's
         // `opt_` entries in key order, not in the host's resolved order.
         session_options: vec![
@@ -155,15 +176,25 @@ fn reconfigure_config() -> EngineConfig {
 }
 
 #[test]
-fn zoom_pipe_runs_the_host_command_after_permission() {
+fn key_pipe_runs_only_configured_command_indices_after_permission() {
     let host = FakeHost::default();
-    let mut engine = Engine::new(0, config());
-    assert!(engine.on_zoom_pane_pipe().is_empty());
+    let mut config = config();
+    config.keymap = Some(
+        serde_json::from_value(serde_json::json!({
+            "report_modes":false,
+            "commands":[["pane","zoom","--session-name","session-1","--mux","zellij"]],
+            "modes":[]
+        }))
+        .unwrap(),
+    );
+    let mut engine = Engine::new(0, config);
+    assert!(engine.on_key_pipe(Some("0")).is_empty());
 
     grant(&mut engine, 1, &host);
+    let command = engine.on_key_pipe(Some("0"));
     assert_eq!(
-        engine.on_zoom_pane_pipe(),
-        vec![Effect::RunCommand {
+        command,
+        vec![Effect::RunKeyCommand {
             argv: strings(&[
                 "/bin/rimz",
                 "pane",
@@ -173,8 +204,16 @@ fn zoom_pipe_runs_the_host_command_after_permission() {
                 "--mux",
                 "zellij",
             ]),
-            topology_issued_at: None,
         }]
+    );
+    assert!(engine.on_key_pipe(Some("1")).is_empty());
+    assert!(engine.on_key_pipe(Some("0; sh")).is_empty());
+    engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    assert!(engine.muted);
+    assert_eq!(
+        engine.on_key_pipe(Some("0")),
+        command,
+        "topology retirement must not drop this client's indexed command"
     );
 }
 
@@ -195,7 +234,7 @@ fn palette_pipe_payloads_require_permission_and_default_to_cards() {
     ] {
         assert_eq!(
             engine.on_palette_pipe(payload, focus),
-            vec![Effect::RunCommand {
+            vec![Effect::RunKeyCommand {
                 argv: strings(&[
                     "/bin/rimz",
                     "palette",
@@ -209,7 +248,6 @@ fn palette_pipe_payloads_require_permission_and_default_to_cards() {
                     "--mux",
                     "zellij",
                 ]),
-                topology_issued_at: None,
             }],
             "{payload:?}",
         );
@@ -225,7 +263,7 @@ fn palette_pipe_without_focus_still_opens_but_a_muted_copy_does_not() {
     grant(&mut engine, 1, &host);
     assert_eq!(
         engine.on_palette_pipe(None, None),
-        vec![Effect::RunCommand {
+        vec![Effect::RunKeyCommand {
             argv: strings(&[
                 "/bin/rimz",
                 "palette",
@@ -237,7 +275,6 @@ fn palette_pipe_without_focus_still_opens_but_a_muted_copy_does_not() {
                 "--mux",
                 "zellij",
             ]),
-            topology_issued_at: None,
         }],
     );
     engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
@@ -384,7 +421,7 @@ fn run_commands(effects: &[Effect]) -> Vec<&Vec<String>> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::RunCommand { argv, .. } => Some(argv),
+            Effect::RunCommand { argv, .. } | Effect::RunKeyCommand { argv } => Some(argv),
             _ => None,
         })
         .collect()
@@ -1912,7 +1949,7 @@ fn client_query_merge_prefers_switches_and_newer_generations() {
 }
 
 #[test]
-fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
+fn retire_pipe_mutes_same_plugin_topology_and_closes_different_older_instance() {
     let host = FakeHost::default();
     let mut same_id = Engine::new(0, config());
     grant(&mut same_id, 1, &host);
@@ -1923,8 +1960,8 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
             .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#))
             .is_empty()
     );
-    assert!(same_id.on_focus_sidebar_pipe().is_empty());
-    assert!(same_id.on_zoom_pane_pipe().is_empty());
+    assert!(!same_id.on_key_pipe(Some("0")).is_empty());
+    assert!(!same_id.on_key_pipe(Some("1")).is_empty());
     let effects = same_id.on_timer(KEEPALIVE_MS, &host);
     assert!(run_commands(&effects).is_empty());
     assert!(!effects.contains(&Effect::ListClients));
@@ -1949,8 +1986,8 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
         topology_json(run_commands(&effects)[0])["clients_withheld"],
         true
     );
-    assert!(!same_id.on_focus_sidebar_pipe().is_empty());
-    assert!(!same_id.on_zoom_pane_pipe().is_empty());
+    assert!(!same_id.on_key_pipe(Some("0")).is_empty());
+    assert!(!same_id.on_key_pipe(Some("1")).is_empty());
     assert_eq!(
         same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":40}"#)),
         Vec::new(),
@@ -2004,26 +2041,26 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
 
     assert!(
         engine
-            .on_run_command_result(None, None, 10, &host)
+            .on_run_command_result(None, None, 10, &host, false)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(0), None, 20, &host)
+            .on_run_command_result(Some(0), None, 20, &host, false)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(1), None, 30, &host)
+            .on_run_command_result(Some(1), None, 30, &host, false)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, None, 40, &host)
+            .on_run_command_result(None, None, 40, &host, false)
             .is_empty()
     );
 
-    let effects = engine.on_run_command_result(Some(1), None, 50, &host);
+    let effects = engine.on_run_command_result(Some(1), None, 50, &host, false);
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert_eq!(run_commands(&effects).len(), 1);
     assert_eq!(
@@ -2033,19 +2070,50 @@ fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_strea
 
     assert!(
         engine
-            .on_run_command_result(None, None, 60, &host)
+            .on_run_command_result(None, None, 60, &host, false)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, None, 70, &host)
+            .on_run_command_result(None, None, 70, &host, false)
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(None, None, 80, &host)
+            .on_run_command_result(None, None, 80, &host, false)
             .is_empty(),
         "PATH mode does not keep firing fallback pokes",
+    );
+}
+
+#[test]
+fn key_command_results_never_change_the_wake_failure_budget_or_pinned_binary() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    engine.on_run_command_result(Some(1), None, 2, &host, false);
+    for (now, exit) in [(3, Some(0)), (4, Some(2)), (5, None), (6, Some(1))] {
+        engine.on_run_command_result(exit, None, now, &host, true);
+    }
+    assert_eq!(
+        engine.config.rimz_bin.as_deref(),
+        Some("/bin/rimz"),
+        "failing key commands must never switch wakeups to PATH"
+    );
+    assert_eq!(
+        engine.wake_fork_failures, 1,
+        "key success must not reset wake failures"
+    );
+    assert!(matches!(
+        engine.on_key_pipe(Some("0")).as_slice(),
+        [Effect::RunKeyCommand { .. }]
+    ));
+    engine.on_run_command_result(Some(1), None, 7, &host, false);
+    let effects = engine.on_run_command_result(Some(1), None, 8, &host, false);
+    assert_eq!(
+        run_commands(&effects)[0][0],
+        "rimz",
+        "wake failures still fall back"
     );
 }
 
@@ -2058,28 +2126,46 @@ fn repeated_stale_writer_rejections_mute_the_losing_plugin() {
 
     assert!(
         engine
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(10), 10, &host)
+            .on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(10),
+                10,
+                &host,
+                false
+            )
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(0), None, 15, &host)
+            .on_run_command_result(Some(0), None, 15, &host, false)
             .is_empty(),
         "an unrelated successful command does not reset publish rejections",
     );
     assert!(
         engine
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(20), 20, &host)
+            .on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(20),
+                20,
+                &host,
+                false
+            )
             .is_empty()
     );
     assert!(
         engine
-            .on_run_command_result(Some(2), Some(25), 25, &host)
+            .on_run_command_result(Some(2), Some(25), 25, &host, false)
             .is_empty(),
         "a failed topology fork preserves the stale-writer rejection streak",
     );
     assert_eq!(
-        engine.on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(30), 30, &host),
+        engine.on_run_command_result(
+            Some(wire::STALE_WRITER_EXIT_CODE),
+            Some(30),
+            30,
+            &host,
+            false
+        ),
         Vec::new()
     );
     assert!(engine.on_timer(40, &host).is_empty());
@@ -2091,11 +2177,17 @@ fn repeated_stale_writer_rejections_mute_the_losing_plugin() {
     );
     assert!(
         engine
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(60), 60, &host)
+            .on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(60),
+                60,
+                &host,
+                false
+            )
             .is_empty()
     );
     assert!(
-        !engine.on_focus_sidebar_pipe().is_empty(),
+        !engine.on_key_pipe(Some("0")).is_empty(),
         "revival resets the rejection streak"
     );
 
@@ -2103,17 +2195,29 @@ fn repeated_stale_writer_rejections_mute_the_losing_plugin() {
     grant(&mut reset, 1, &host);
     assert!(
         reset
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(10), 10, &host)
+            .on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(10),
+                10,
+                &host,
+                false
+            )
             .is_empty()
     );
     assert!(
         reset
-            .on_run_command_result(Some(0), Some(20), 20, &host)
+            .on_run_command_result(Some(0), Some(20), 20, &host, false)
             .is_empty()
     );
     assert!(
         reset
-            .on_run_command_result(Some(wire::STALE_WRITER_EXIT_CODE), Some(30), 30, &host)
+            .on_run_command_result(
+                Some(wire::STALE_WRITER_EXIT_CODE),
+                Some(30),
+                30,
+                &host,
+                false
+            )
             .is_empty()
     );
 }
@@ -2136,13 +2240,14 @@ fn accepted_topology_unmutes_and_runs_queued_work_immediately() {
             Some(issued_at),
             10 + issued_at,
             &host,
+            false,
         );
     }
     let manifest = tabs(vec![pane(1)]);
     let queued = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 20, &host);
     assert!(!queued.contains(&Effect::ListClients));
 
-    let accepted = engine.on_run_command_result(Some(0), Some(accepted_at), 30, &host);
+    let accepted = engine.on_run_command_result(Some(0), Some(accepted_at), 30, &host, false);
     assert!(
         accepted.contains(&Effect::ListClients),
         "acceptance must run the query queued while muted: {accepted:?}",
@@ -2173,12 +2278,13 @@ fn publication_on_unmute(
             Some(issued_at),
             10 + issued_at,
             &host,
+            false,
         );
     }
     assert!(run_commands(&absorb(&mut engine, &host)).is_empty());
     assert!(run_commands(&engine.on_timer(1_300, &host)).is_empty());
 
-    let effects = engine.on_run_command_result(Some(0), Some(accepted_at), 1_500, &host);
+    let effects = engine.on_run_command_result(Some(0), Some(accepted_at), 1_500, &host, false);
     let published = run_commands(&effects);
     assert!(
         !published.is_empty(),
@@ -2220,14 +2326,15 @@ fn accepted_topology_ignores_older_and_tied_rejections() {
         seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
         let _ = engine.on_list_clients(Vec::new(), 3, &host);
         let _ = engine.on_list_clients(Vec::new(), 4, &host);
-        let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host);
-        let _ = engine.on_run_command_result(Some(0), Some(3), 21, &host);
+        let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host, false);
+        let _ = engine.on_run_command_result(Some(0), Some(3), 21, &host, false);
         for issued_at in rejected_at {
             let _ = engine.on_run_command_result(
                 Some(wire::STALE_WRITER_EXIT_CODE),
                 Some(issued_at),
                 30,
                 &host,
+                false,
             );
         }
         let manifest = tabs(vec![pane(1), pane(2)]);
@@ -2245,13 +2352,14 @@ fn rejections_after_accepted_topology_still_mute() {
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 1, &host);
     seed_manifest(&mut engine, tabs(vec![pane(1)]), 2, &host);
-    let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host);
+    let _ = engine.on_run_command_result(Some(0), Some(10), 20, &host, false);
     for issued_at in 11..=13 {
         let _ = engine.on_run_command_result(
             Some(wire::STALE_WRITER_EXIT_CODE),
             Some(issued_at),
             30,
             &host,
+            false,
         );
     }
     let manifest = tabs(vec![pane(1), pane(2)]);

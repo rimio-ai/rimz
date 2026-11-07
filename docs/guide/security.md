@@ -152,8 +152,8 @@ To stop using the view, run `rimz config set agents.isolation host` and restart 
 On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant is five permissions:
 
 - **Access Zellij state.** The plugin watches pane and tab shape.
-- **Run commands.** It runs the RimZ-owned `rimz sidebar wake`, `rimz sidebar focus`, `rimz pane zoom`, and `rimz palette --popup` calls, and nothing else.
-- **Reconfigure.** It applies the room's mouse options and binds the configured [room keys](./configuration.md#sidebar-rendering), both at runtime, without writing your `config.kdl`.
+- **Run commands.** It runs `rimz sidebar wake`, `rimz palette --popup`, and the RimZ commands selected by the resolved [room keymap](./configuration.md#room-keymap), including per-machine `[keys.bind]` commands. Those commands must start with `rimz`; their arguments are not evaluated by a shell. Project config cannot supply bindings.
+- **Reconfigure.** It applies the room's mouse options and resolved room keymap at runtime without writing your `config.kdl`. RimZ style replaces stock and user bindings in its seven modes until the client detaches; native style only adds its two chords.
 - **Change application state.** It applies a host-selected pane's mechanical fullscreen toggle; sidebar-aware target selection stays in the host command.
 - **Intercept input (`InterceptInput`).** It observes when its own client acts so the sidebar can show input idle and messages [wait while you type](./messaging.md#park-steer-interrupt-or-schedule). Linux typing holds use the pane terminal's input-read time, corroborated by these client timestamps; without them, Zellij panes hold nothing. Off Linux the client timestamps supply the hold directly. CLI actions and buttonless mouse motion do not count toward the client clock. It reads only the client identity, CLI tag, and whether a mouse action is buttonless motion; it never stores or forwards the action's payload, keys, or pasted text.
 
@@ -161,7 +161,7 @@ The input permission is requested on every platform even with `harness.typing_ho
 
 The vendored plugin is reproducibly built from the checked-in source on the repository's pinned Rust toolchain. Its source digest, wasm digest, and producing toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.
 
-The plugin's code, argv, and configuration are all RimZ-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it. Revoking stops pane discovery, and `rimz doctor` names the fix while discovery is down. It does not stay revoked: the next time RimZ opens or reattaches its session, it seeds the grant again.
+The plugin's code and configuration are RimZ-owned, with key commands resolved from your per-machine config, never from a project or your `config.kdl`. It ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it. Revoking stops pane discovery, and `rimz doctor` names the fix while discovery is down. It does not stay revoked: the next time RimZ opens or reattaches its session, it seeds the grant again.
 
 ## Browser listener
 

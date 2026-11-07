@@ -470,6 +470,8 @@ A value is a named action, `"none"`, or `{ run = "rimz ..." }`. Commands use she
 
 On tmux, reload removes the previous keymap's bindings before installing the new one. RimZ style uses its own prefix, resize, and move tables and vi copy mode; switching back to native removes those tables and restores the prior copy-mode key style. Unrelated root bindings and your tmux prefix table remain, but a user binding overwritten by a RimZ chord needs a server restart to return. Keys are server-global, so the most recently applied keymap wins across rooms. User commands run from the pressing room's directory; RimZ supplies the backend, not a verb-specific `--session-name` flag.
 
+On Zellij, native style adds its two chords in normal and locked modes without clearing anything. RimZ style replaces the locked, prefix, resize, move, scroll, enter-search, and search bindings, including your own bindings in those modes, for each attached client. Reload replaces the map without editing `config.kdl`; switching back to native restores Zellij's full stock and user bindings only after you detach and attach again. User commands receive the room's project root and backend, not a verb-specific `--session-name` flag.
+
 Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind` and its mode tables in `~/.rimz/config.toml`, not with `rimz config set`.
 
 ### Multiplexer room options

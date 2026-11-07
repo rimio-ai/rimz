@@ -243,15 +243,17 @@ impl ZellijBackend {
     fn birth_presence_options(&self, opts: &SidebarPaneOptions) -> Result<PresencePluginOptions> {
         let wasm = super::ensure_presence_plugin_artifact().ok_or_else(|| super::output_error("Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend"))?;
         let machine_config = crate::config::MachineConfig::load_lenient();
-        Ok(PresencePluginOptions::from_config(
+        let mut presence = PresencePluginOptions::from_config(
             &opts.session_name,
             &opts.workspace_id,
             wasm,
             self.state_paths_for_workspace(opts.workspace_id.clone())?
                 .room_bin,
-            &machine_config.sidebar,
-            &opts.config.zellij,
-        ))
+            &machine_config,
+            &opts.project_root,
+        );
+        presence.session_options = super::zellij_session_options(&opts.config.zellij);
+        Ok(presence)
     }
 
     fn ensure_birth_presence_plugin(&self, presence: &PresencePluginOptions) -> Result<()> {

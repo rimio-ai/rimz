@@ -109,15 +109,15 @@ fn check_frames(baseline: bool, frames: Option<bool>, reapply: bool) {
         opts.config.zellij.pane_frames = Some(true);
         let state =
             rimz::StatePaths::under(opts.workspace_id.clone(), room.path()).expect("room state");
-        let sidebar = rimz::config::MachineConfig::load_lenient().sidebar.clone();
+        let machine = rimz::config::MachineConfig::load_lenient();
         room.backend()
             .converge_presence_plugin_for(&PresencePluginOptions {
                 session_name: room.name().to_owned(),
                 workspace_id: opts.workspace_id.clone(),
                 wasm: zellij::ensure_presence_plugin_artifact().expect("embedded presence wasm"),
                 rimz_bin: state.room_bin,
-                focus_key: Some(sidebar.focus_key),
-                zoom_key: Some(sidebar.zoom_key),
+                keymap: machine.room_keymap(),
+                project_root: opts.project_root.clone(),
                 session_options: zellij::zellij_session_options(&opts.config.zellij),
             })
             .expect("reconverge changed session options");

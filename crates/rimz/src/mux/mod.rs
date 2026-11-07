@@ -117,7 +117,7 @@ use crate::pane::keys::NamedKey;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{SidebarConfig, ZellijConfig};
+use crate::config::{MachineConfig, keys::RoomKeymap};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::utils::time::format_duration_bound;
@@ -878,14 +878,10 @@ pub struct PresencePluginOptions {
     /// Stable absolute `rimz` pointer the plugin runs, insulating the poke from
     /// the host PATH without changing the plugin configuration per build.
     pub rimz_bin: PathBuf,
-    /// The focus-key chord (`[sidebar] focus_key`, e.g. `Alt+p`) the plugin
-    /// binds at load so the key reaches the sidebar from any pane; `None` when
-    /// the user disabled it. tmux binds the same chord through `bind-key`
-    /// instead — the Zellij key has to route through the plugin because a plain
-    /// keybind cannot focus a pane by id.
-    pub focus_key: Option<String>,
-    /// The smart-zoom chord (`[sidebar] zoom_key`) bound by the plugin.
-    pub zoom_key: Option<String>,
+    /// Resolved machine keymap installed by each client replica.
+    pub keymap: RoomKeymap,
+    /// Room context for user commands that have no session-name argument.
+    pub project_root: PathBuf,
     /// Session-scoped options the plugin re-asserts through `reconfigure`,
     /// where values are absolute rather than CLI-XORed with `config.kdl`.
     pub session_options: Vec<zellij::ZellijSessionOption>,
@@ -897,17 +893,17 @@ impl PresencePluginOptions {
         workspace_id: &WorkspaceId,
         wasm: PathBuf,
         rimz_bin: PathBuf,
-        sidebar: &SidebarConfig,
-        zellij: &ZellijConfig,
+        config: &MachineConfig,
+        project_root: &std::path::Path,
     ) -> Self {
         Self {
             session_name: session_name.to_owned(),
             workspace_id: workspace_id.clone(),
             wasm,
             rimz_bin,
-            focus_key: SidebarConfig::key_label(&sidebar.focus_key).map(str::to_owned),
-            zoom_key: SidebarConfig::key_label(&sidebar.zoom_key).map(str::to_owned),
-            session_options: zellij::zellij_session_options(zellij),
+            keymap: config.room_keymap(),
+            project_root: project_root.to_owned(),
+            session_options: zellij::zellij_session_options(&config.zellij),
         }
     }
 }

@@ -730,7 +730,8 @@ fn ensure_no_zellij_runtime_list_panes(root: &Path, files: &[PathBuf]) -> Result
 
 /// A Zellij action without `--session` exits 0 and does nothing among several
 /// live sessions, so the `action` argv word is written only beside the
-/// session flag: in `ZellijBackend::zellij_action`, the one builder.
+/// session flag: in `ZellijBackend::zellij_action`, the one builder. The
+/// plugin keymap's `action` JSON field is not an argv word.
 fn ensure_zellij_actions_name_the_session(root: &Path, files: &[PathBuf]) -> Result<()> {
     let needle = concat!("\"act", "ion\"");
     let session_flag = concat!("\"--sess", "ion\"");
@@ -747,7 +748,11 @@ fn ensure_zellij_actions_name_the_session(root: &Path, files: &[PathBuf]) -> Res
             continue;
         };
         for (idx, line) in text.lines().enumerate() {
-            if line.contains(needle) && !line.contains(session_flag) {
+            let has_action_arg = line
+                .split(needle)
+                .skip(1)
+                .any(|tail| !tail.trim_start().starts_with(':'));
+            if has_action_arg && !line.contains(session_flag) {
                 violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
             }
         }

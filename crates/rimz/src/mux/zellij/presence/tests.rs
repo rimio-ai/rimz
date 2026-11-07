@@ -1,16 +1,52 @@
 use super::*;
 
 #[test]
+fn plugin_identity_carries_an_encoded_native_keymap() {
+    let opts = presence_opts("room", "/bin/rimz");
+    let identity = presence_plugin_identity(&opts);
+    let encoded = identity
+        .pairs
+        .iter()
+        .find(|(key, _)| key == "keymap")
+        .expect("the plugin identity must carry its typed keymap")
+        .1
+        .as_str();
+    assert!(!encoded.contains(','));
+    let wire: serde_json::Value =
+        serde_json::from_str(&encoded.replace("%2C", ",").replace("%25", "%")).unwrap();
+    assert_eq!(wire["report_modes"], false);
+    assert_eq!(wire["modes"][0]["mode"], "locked");
+    assert_eq!(wire["modes"][1]["mode"], "normal");
+    assert!(
+        wire["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|mode| mode["clear"] == false)
+    );
+    assert!(
+        identity
+            .pairs
+            .iter()
+            .all(|(key, _)| !matches!(key.as_str(), "focus_key" | "zoom_key"))
+    );
+}
+
+#[test]
 fn layout_entry_and_pipe_configuration_have_identical_maps() {
     for (session, bin, focus, zoom) in [
-        ("room", "/tmp/a\"\\ b/rimz", "Alt+\"\\ p", "Alt+g"),
-        ("room,bad", "/tmp/a=b/rimz", "Alt=p", "Alt,g"),
+        ("room", "/tmp/a\"\\ b/rimz", "Alt+\"", "Ctrl+,"),
+        ("room,bad", "/tmp/a=b/rimz", "Alt+=", "Alt+,"),
         ("room=bad", "/tmp/a,b/rimz", "Alt+p", "Alt+g"),
     ] {
         let mut opts = presence_opts(session, bin);
+        let previous_hash = presence_plugin_identity(&opts).config_hash;
         opts.wasm = "/tmp/a\"\\ b.wasm".into();
-        opts.focus_key = Some(focus.to_owned());
-        opts.zoom_key = Some(zoom.to_owned());
+        let mut config = crate::config::MachineConfig::default();
+        config.sidebar.focus_key = focus.to_owned();
+        config.sidebar.zoom_key = zoom.to_owned();
+        opts.keymap = config.room_keymap();
+        opts.project_root = "/project,=%2C".into();
         let rendered = presence_plugin_entry(&opts).to_string();
         let document: KdlDocument = rendered.parse().expect("entry round-trips through KDL");
         let entry = &document.nodes()[0];
@@ -30,6 +66,9 @@ fn layout_entry_and_pipe_configuration_have_identical_maps() {
             })
             .collect::<std::collections::BTreeMap<_, _>>();
         let identity = presence_plugin_identity(&opts);
+        if focus != "Alt+p" || zoom != "Alt+g" {
+            assert_ne!(identity.config_hash, previous_hash);
+        }
         let pipe_map = identity
             .configuration
             .split(',')
@@ -39,6 +78,19 @@ fn layout_entry_and_pipe_configuration_have_identical_maps() {
             })
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(layout_map, pipe_map);
+        let encoded = &layout_map["keymap"];
+        assert!(!encoded.contains(','));
+        let wire: serde_json::Value =
+            serde_json::from_str(&encoded.replace("%2C", ",").replace("%25", "%")).unwrap();
+        let binds = wire["modes"][0]["binds"].as_array().unwrap();
+        for chord in [focus, zoom] {
+            let (modifier, key) = chord.split_once('+').unwrap();
+            assert!(
+                binds
+                    .iter()
+                    .any(|bind| bind["key"] == format!("{modifier} {key}"))
+            );
+        }
         assert_eq!(children.last().unwrap().name().value(), "plugin_config");
     }
 }
@@ -634,21 +686,12 @@ fn presence_plugin_identity_renders_expressible_fields() {
             extra_options: "",
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
-            mutate: |opts| opts.focus_key = Some("Alt+p".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
-        },
-        Case {
-            extra_options: "",
-            session: "rimz-test",
-            rimz_bin: "/home/user/.cargo/bin/rimz",
-            mutate: |opts| opts.zoom_key = Some("Alt+g".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,zoom_key=Alt+g",
-        },
-        Case {
-            extra_options: "",
-            session: "rimz-test",
-            rimz_bin: "/home/user/.cargo/bin/rimz",
-            mutate: |opts| opts.focus_key = Some("Alt=p".to_owned()),
+            mutate: |opts| {
+                let mut config = crate::config::MachineConfig::default();
+                config.sidebar.focus_key = "Alt+=".to_owned();
+                config.sidebar.zoom_key = "Alt+,".to_owned();
+                opts.keymap = config.room_keymap();
+            },
             expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         },
     ];
@@ -657,8 +700,9 @@ fn presence_plugin_identity_renders_expressible_fields() {
         let mut opts = presence_opts(case.session, case.rimz_bin);
         (case.mutate)(&mut opts);
         let without_config = format!(
-            "{}{DEFAULT_OPTIONS}{},launch_scope=background,plugin_build={}",
+            "{},keymap={}{DEFAULT_OPTIONS}{},launch_scope=background,plugin_build={}",
             case.expected,
+            super::super::keymap::encode(&opts.keymap, &opts.session_name, &opts.project_root),
             case.extra_options,
             presence_plugin_build()
         );

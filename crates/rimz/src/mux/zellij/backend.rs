@@ -217,6 +217,18 @@ fn confirm_tab_action(mut probe: impl FnMut() -> Result<bool>) -> Result<bool> {
 }
 
 impl ZellijBackend {
+    pub(super) fn existing_attach_with_style(
+        &self,
+        name: &str,
+        style: crate::config::RoomStyle,
+    ) -> CommandSpec {
+        let command = self.cmd().args(["attach", name]);
+        if style == crate::config::RoomStyle::Rimz {
+            return command.args(["options", "--default-mode", "locked"]);
+        }
+        command
+    }
+
     pub(super) fn supports_no_focus(&self) -> bool {
         self.version()
             .ok()
@@ -1026,7 +1038,10 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn attach_existing_command(&self, name: &str) -> CommandSpec {
-        self.cmd().args(["attach", name])
+        self.existing_attach_with_style(
+            name,
+            crate::config::MachineConfig::load_lenient().room.style,
+        )
     }
 
     fn attach_readonly_command(&self, name: &str) -> CommandSpec {
