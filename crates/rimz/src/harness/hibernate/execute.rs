@@ -312,6 +312,7 @@ mod tests {
             pane_id: pane.clone(),
             origin: FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: now,
             applied_at_ms: None,
             state: FocusIntentState::Requested,

@@ -16,6 +16,7 @@ use tracing::warn;
 mod attachment;
 mod backend;
 mod cache_refresh;
+mod card_commands;
 mod clock;
 mod fetch;
 #[cfg(test)]

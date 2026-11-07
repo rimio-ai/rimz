@@ -1,6 +1,8 @@
 //! Wire of the pane-to-host attach: a supervisor hands its pane's output to the room host over a stream socket, then forwards input words on it.
 //!
-//! One connection is one pane. The supervisor sends a hello line with the pane's output fd riding the same message and the host answers accept or reject. After acceptance the host writes JSON control lines and the supervisor writes bare input word lines on the attach stream. End of stream from either side detaches the pane. The contract lives in `docs/internals/sidebar/state.md`.
+//! A supervisor sends a hello with its output fd, then exchanges controls and input words.
+//! A tagged card request instead receives one reply and closes, without attaching a pane.
+//! The contract lives in `docs/internals/sidebar/state.md`.
 
 use std::io::{self, BufRead, IoSlice, IoSliceMut, Write};
 use std::mem::MaybeUninit;
@@ -33,6 +35,12 @@ pub(super) struct Hello {
     pub(super) tick_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) refresh_ms: Option<u16>,
+}
+
+#[derive(Debug)]
+pub(super) enum Introduction {
+    Pane(Hello, OwnedFd),
+    Card(super::CardRequest),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,9 +107,9 @@ pub(super) fn send_hello(
     Ok(())
 }
 
-/// Read the hello and the fd that rode with it. `None` is a peer that closed
+/// Read a hello with its fd or a tagged card request. `None` is a peer that closed
 /// without saying anything, such as a liveness probe of the socket.
-pub(super) fn recv_hello(stream: &UnixStream) -> io::Result<Option<(Hello, OwnedFd)>> {
+pub(super) fn recv_hello(stream: &UnixStream) -> io::Result<Option<Introduction>> {
     #[cfg(target_os = "macos")]
     let flags = RecvFlags::empty();
     #[cfg(not(target_os = "macos"))]
@@ -142,10 +150,18 @@ pub(super) fn recv_hello(stream: &UnixStream) -> io::Result<Option<(Hello, Owned
             };
         }
         line.extend_from_slice(&chunk[..received.bytes]);
+        if line.len() > HELLO_LIMIT {
+            return Err(io::Error::other("sidebar attach hello exceeds its limit"));
+        }
     }
-    let hello = serde_json::from_slice(&line).map_err(io::Error::other)?;
+    let value: serde_json::Value = serde_json::from_slice(&line).map_err(io::Error::other)?;
+    if value.get("command").is_some() {
+        let request = serde_json::from_value(value).map_err(io::Error::other)?;
+        return Ok(Some(Introduction::Card(request)));
+    }
+    let hello = serde_json::from_value(value).map_err(io::Error::other)?;
     let output = output.ok_or_else(|| io::Error::other("sidebar attach hello carried no fd"))?;
-    Ok(Some((hello, output)))
+    Ok(Some(Introduction::Pane(hello, output)))
 }
 
 pub(super) fn write_line<T: Serialize>(mut stream: &UnixStream, line: &T) -> io::Result<()> {
@@ -215,7 +231,10 @@ mod tests {
         let sent = hello();
         send_hello(&supervisor, &sent, pane.as_fd()).unwrap();
 
-        let (received, output) = recv_hello(&host).unwrap().expect("a hello");
+        let Introduction::Pane(received, output) = recv_hello(&host).unwrap().expect("a hello")
+        else {
+            panic!("a supervisor sends a pane hello");
+        };
         assert_eq!(received, sent);
         assert!(
             rustix::io::fcntl_getfd(&output)

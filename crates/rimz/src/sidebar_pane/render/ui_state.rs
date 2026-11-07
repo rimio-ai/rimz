@@ -108,6 +108,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// focus, disagreement between co-viewers, or a focused pane without a row).
     /// Arrival from another pane to an unlisted destination clears it with the selection.
     pub(in crate::sidebar_pane) baseline_pane: Option<PaneId>,
+    pub(in crate::sidebar_pane) previous_card: Option<PaneId>,
     /// Whether arrival or the last own-view fold found this view's tab on screen.
     /// Projection arms arrivals, preserving that latch through older hidden
     /// catch-up content. While a view stays routed, an off-screen→on-screen switch

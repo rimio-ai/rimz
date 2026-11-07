@@ -8,6 +8,7 @@ use crate::sidebar_pane::view::BodyFilter;
 use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
 
+mod card_commands;
 mod clock;
 mod displacement;
 mod fetch;

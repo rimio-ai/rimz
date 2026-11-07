@@ -1216,6 +1216,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
                 pane_id: target.clone(),
                 origin: crate::mux::focus_anchor::FocusOrigin::User,
                 repair_generation: None,
+                input_at_ms: None,
                 issued_at_ms: crate::utils::time::unix_now_ms(),
                 applied_at_ms: None,
                 state: crate::mux::focus_anchor::FocusIntentState::Requested,

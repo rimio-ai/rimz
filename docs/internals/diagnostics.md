@@ -291,6 +291,7 @@ Encode a confirmed anomaly as a test in [`observe/detect/tests.rs`](../../crates
 | `fold_decided` | each attachment | Snapshot focus, own-view availability, the baseline, or the selected pane changed |
 | `push_handshake` | the jump's source attachment | Every same-host cross-tab jump that reached push |
 | `click_delivery` | the host, per attached renderer | Every host click datagram |
+| `card_command_refused` | the host or acting attachment | Every refused card command; `reason` includes the command and no-op cause |
 | `jump_progress` | the jump's source attachment | Every lease arming and pre-push checkpoint |
 
 ### Publications and folds
@@ -354,7 +355,7 @@ jq 'select(.event.kind=="push_handshake" and (.event.outcome!="painted" or any(.
 | `request_failed` | The request failed |
 | `anchor_changed` | The stored nonce no longer matched before push. This fallback also uses the request gate for its dispatch fence |
 | `push_superseded` | The obsolete jump stopped before handshake tracing |
-| `input_superseded` | A same-tab focus click or key revoked the lease without arming another. The record keeps the cancelled jump's sequence, target, and source attachment |
+| `input_superseded` | A same-tab focus click or key revoked the active jump before arming its own local lease. The record keeps the cancelled jump's sequence, target, and source attachment |
 
 These records stay when no `push_handshake` follows. Missing progress after a stage means work still in flight or an unavailable sink, not proof of cancellation.
 

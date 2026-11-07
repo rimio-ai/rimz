@@ -32,6 +32,7 @@ impl ViewTarget {
 }
 
 pub(super) struct ViewBorrow<'a> {
+    pub(super) command_refusal: Option<&'static str>,
     pub(super) state: &'a mut ViewState,
     pub(super) context: &'a mut ViewContext,
     pub(super) target: ViewTarget,
@@ -47,6 +48,7 @@ pub(super) struct ViewBorrow<'a> {
 }
 
 pub(super) struct Route<'a> {
+    command: Option<&'a super::super::card_commands::CardInput>,
     input: bool,
     advancing: bool,
     prepared: Option<&'a FoldPreparation>,
@@ -54,18 +56,25 @@ pub(super) struct Route<'a> {
 
 impl<'a> Route<'a> {
     pub(super) const READ: Self = Self {
+        command: None,
         input: false,
         advancing: false,
         prepared: None,
     };
     pub(super) const PAINT: Self = Self {
+        command: None,
         input: false,
         advancing: true,
         prepared: None,
     };
 
-    pub(super) fn fold(input: bool, prepared: &'a FoldPreparation) -> Self {
+    pub(super) fn fold(
+        input: bool,
+        command: Option<&'a super::super::card_commands::CardInput>,
+        prepared: &'a FoldPreparation,
+    ) -> Self {
         Self {
+            command,
             input,
             advancing: true,
             prepared: Some(prepared),
@@ -164,6 +173,7 @@ impl ViewAccess {
         observed: Option<bool>,
     ) -> ViewBorrow<'_> {
         ViewBorrow {
+            command_refusal: None,
             state: &mut self.scratch_state,
             context: &mut self.scratch_context,
             target: ViewTarget::Scratch,
@@ -224,6 +234,14 @@ impl ViewAccess {
             drop(record);
             let mut views = self.registry.lock();
             let now = pane.clock.now();
+            if let Some(command) = route.command
+                && let Err(reason) = command.check(&views, own_pane, now)
+            {
+                drop(views);
+                let mut borrow = self.scratch(events, resolved, observed);
+                borrow.command_refusal = Some(reason);
+                return advance(pane, &mut borrow);
+            }
             let resolved = views.resolved(own_pane);
             if self.was_resolved && !resolved && !route.input {
                 pane.optimistic_watch_until = None;
@@ -317,6 +335,7 @@ impl ViewAccess {
             }
             self.view_advanced |= route.advancing;
             let mut borrow = ViewBorrow {
+                command_refusal: None,
                 state: &mut entry.state,
                 context,
                 target: ViewTarget::Shared(id),

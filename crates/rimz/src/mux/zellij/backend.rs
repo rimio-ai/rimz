@@ -2197,6 +2197,7 @@ pub(super) fn execute_focus_restoration(
         crate::mux::focus_anchor::FocusActionRequest {
             pane_id: pane.clone(),
             origin: crate::mux::focus_anchor::FocusOrigin::User,
+            input_at_ms: None,
             repair_generation: None,
             expected_pre_action: None,
             placement: None,

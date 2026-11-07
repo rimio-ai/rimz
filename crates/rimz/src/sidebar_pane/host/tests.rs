@@ -10,7 +10,29 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
+mod card_commands;
 mod restart;
+
+#[test]
+fn card_request_is_answered_without_admitting_a_pane() {
+    use crate::sidebar_pane::{CardReply, CardRequest};
+    let room = Room::new();
+    let mut stream = room.connect();
+    stream.set_read_timeout(Some(SETTLE)).unwrap();
+    attach::write_line(&stream, &CardRequest::Last).unwrap();
+    let mut replies = BufReader::new(&mut stream);
+    let reply = attach::read_line::<CardReply>(&mut replies).unwrap();
+    assert!(
+        matches!(reply, Some(CardReply::Refused { .. })),
+        "{reply:?}"
+    );
+    assert!(lock(&room.host.attachments).is_empty());
+    assert!(
+        attach::read_line::<CardReply>(&mut replies)
+            .unwrap()
+            .is_none()
+    );
+}
 
 struct Room {
     _dir: tempfile::TempDir,
@@ -1117,6 +1139,7 @@ fn a_pane_that_stopped_reading_does_not_hold_the_host_leaving() {
         config.instance_id.as_str().to_owned(),
         Live {
             close: attachment.close_handle(),
+            pane_id: config.own_pane.clone(),
             leaving: Arc::new(AtomicBool::new(false)),
         },
     );

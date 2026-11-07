@@ -81,7 +81,11 @@ impl Room {
 fn answer(listener: UnixListener, reply: Reply, controls: Vec<Control>) {
     std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let (hello, _output) = attach::recv_hello(&stream).unwrap().unwrap();
+        let attach::Introduction::Pane(hello, _output) =
+            attach::recv_hello(&stream).unwrap().unwrap()
+        else {
+            panic!("a supervisor sends a pane hello");
+        };
         assert_eq!(hello.protocol, PROTOCOL);
         attach::write_line(&stream, &reply).unwrap();
         for control in controls {

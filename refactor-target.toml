@@ -3948,6 +3948,41 @@ surface-budget = 62
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::commands::request_card"
+reason = "The CLI sends one bounded request through the host's private attach socket path."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::commands::CardRequest"
+reason = "The CLI and host share the tagged card action vocabulary without CLI-side selection."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::commands::CardDirection"
+reason = "Walk direction is a typed part of the shared card request wire."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::commands::CardReply"
+reason = "The CLI distinguishes issued actions, no-op refusals and exact close targets."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::commands::CardTarget"
+reason = "Close targets carry a session key or process pane, never a channel-scoped handle."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::commands::COMMAND_TIMEOUT"
+reason = "The host derives queued-command expiry from the client's budget, reserving reply time."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::attach::Introduction"
+reason = "The host distinguishes pane hellos from one-shot card requests before admission."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::view::card_slots"
 reason = "Renderer digits and card jumps share one room-wide pane-birth numbering."
 
@@ -3971,6 +4006,11 @@ path = "crates/rimz/src/sidebar_pane/app"
 # FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
 # RoomConfig separates room-owned settings from pane identity (+1).
 surface-budget = 15
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::card_commands::CardInput"
+reason = "The host queues one reply-bearing command with its original view and expiry."
 
 [[verdict]]
 kind = "item"

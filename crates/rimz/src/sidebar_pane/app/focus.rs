@@ -74,7 +74,7 @@ pub(super) fn request_focus_until(
 /// time and serializes concurrent focus actions. An automatic
 /// Zellij repair re-samples a mismatching fence until its strand deadline.
 /// Errors return to the attachment for selection rollback and a recovered
-/// health notice. A superseded dispatch stays diagnostic only.
+/// health notice. A superseded dispatch releases its input without a failure alert.
 /// A cross-tab user request pushes the stored anchor to host peers
 /// and waits for the destination's frame until click + 500 ms before mux dispatch;
 /// request work and any stale tmux fit spend that same budget, without resetting it.
@@ -83,8 +83,8 @@ pub(super) fn request_focus_until(
 /// the destination consumes the priority push first. Checkpoints fence older
 /// requests before store, after fitting, and under the focus-anchor lock before
 /// each mux dispatch attempt. The lease is
-/// released before error rollback, on return, and on unwinding. Same-tab and
-/// automatic repair requests have no lease. The durable
+/// released before error rollback, on return, and on unwinding. Same-tab
+/// requests keep a lease without pushing or waiting; automatic repairs have none. The durable
 /// request also wakes renderers outside the push path;
 /// command acceptance applies it, and later native observations confirm or
 /// supersede it.
@@ -104,8 +104,10 @@ pub(super) fn spawn_pane_focus(
     repair: Option<FocusRepairDispatch>,
     peers: Option<FocusPeers>,
     wake: Option<SyncSender<Wakeup>>,
+    input: Option<FocusNonce>,
 ) {
     let session_name = session_name.to_owned();
+    let input_at_ms = input.map(|_| clock.timestamp_at(clicked).as_millisecond().max(0) as u64);
     let requested_at_ms = crate::utils::time::unix_now_ms();
     clock.focus(|| {
         std::thread::spawn(move || {
@@ -123,6 +125,7 @@ pub(super) fn spawn_pane_focus(
                         crate::mux::focus_anchor::FocusActionRequest {
                             pane_id: pane_id.clone(),
                             origin,
+                            input_at_ms,
                             repair_generation,
                             expected_pre_action: expected_pre_action.as_deref(),
                             placement: presentation.0.clone(),
@@ -138,9 +141,10 @@ pub(super) fn spawn_pane_focus(
                 None => Some(request()),
             };
             let Some(FocusRequestOutcome { requested, observed, attempts }) = requested else {
+                wake_superseded_input(wake.as_ref(), input);
                 return;
             };
-            let outcome = finish_focus_request(&pane_id, wake.as_ref(), requested, peers.as_ref(), |nonce| {
+            let dispatch = |nonce| {
                 let dispatch = || {
                     crate::mux::focus_anchor::dispatch_action_if_current(
                         backend.as_ref(),
@@ -165,7 +169,15 @@ pub(super) fn spawn_pane_focus(
                 } else {
                     dispatch()
                 }
-            });
+            };
+            let outcome = finish_focus_request(
+                &pane_id,
+                wake.as_ref(),
+                requested,
+                peers.as_ref(),
+                input,
+                dispatch,
+            );
             if let Some(generation) = repair_generation {
                 use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
                 crate::diag::focus_repair::spawn_append(
@@ -201,6 +213,7 @@ pub(super) fn finish_focus_request(
     wake: Option<&SyncSender<Wakeup>>,
     requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
     peers: Option<&FocusPeers>,
+    input: Option<FocusNonce>,
     dispatch: impl FnOnce(FocusNonce) -> std::result::Result<bool, FocusActionError>,
 ) -> (Option<FocusNonce>, &'static str, Option<String>) {
     let (nonce, dispatched) = match requested {
@@ -224,12 +237,20 @@ pub(super) fn finish_focus_request(
         }
     }
     match dispatched {
-        Ok(true) => (nonce, "accepted_unconfirmed", None),
-        Ok(false) => (
-            nonce,
-            "failed",
-            Some("superseded before focus dispatch".into()),
-        ),
+        Ok(true) => {
+            if let (Some(wake), Some(input), Some(nonce)) = (wake, input, nonce) {
+                let _ = wake.send(Wakeup::FocusDispatched { input, nonce });
+            }
+            (nonce, "accepted_unconfirmed", None)
+        }
+        Ok(false) => {
+            wake_superseded_input(wake, input);
+            (
+                nonce,
+                "failed",
+                Some("superseded before focus dispatch".into()),
+            )
+        }
         Err(error) => {
             let error = error.to_string();
             if let Some(wake) = wake {
@@ -240,5 +261,11 @@ pub(super) fn finish_focus_request(
             }
             (nonce, "failed", Some(error))
         }
+    }
+}
+
+fn wake_superseded_input(wake: Option<&SyncSender<Wakeup>>, input: Option<FocusNonce>) {
+    if let (Some(wake), Some(input)) = (wake, input) {
+        let _ = wake.send(Wakeup::FocusSuperseded { input });
     }
 }

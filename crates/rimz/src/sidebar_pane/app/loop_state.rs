@@ -374,10 +374,13 @@ pub(super) fn handle_wakeup(
         // The serve loop intercepts ticks, room events and worker completions;
         // raw presses resolve against the current UI mode.
         Wakeup::Tick
+        | Wakeup::Card(_)
         | Wakeup::Event(_)
         | Wakeup::Press { .. }
         | Wakeup::Snapshot
-        | Wakeup::FocusFailed { .. } => InputOutcome::default(),
+        | Wakeup::FocusFailed { .. }
+        | Wakeup::FocusSuperseded { .. }
+        | Wakeup::FocusDispatched { .. } => InputOutcome::default(),
     }
 }
 
@@ -423,12 +426,13 @@ impl LoopState {
         advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>, &FoldPreparation) -> T,
     ) -> T {
         let inputs = self.inspect_view(|_, view| view.fold_inputs.clone());
-        self.view_transition(false, inputs, None, advance)
+        self.view_transition(false, None, inputs, None, advance)
     }
 
     fn view_transition<T>(
         &mut self,
         input: bool,
+        command: Option<&super::card_commands::CardInput>,
         inputs: Option<Arc<super::fetch::FoldInputs>>,
         visible: Option<bool>,
         advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>, &FoldPreparation) -> T,
@@ -439,11 +443,11 @@ impl LoopState {
         }
         let events = self.events().clone();
         let prepared = FoldPreparation::load(&self.pane.runtime, inputs, visible, events);
-        let result = self
-            .views
-            .with(&mut self.pane, Route::fold(input, &prepared), |pane, v| {
-                advance(pane, v, &prepared)
-            });
+        let result = self.views.with(
+            &mut self.pane,
+            Route::fold(input, command, &prepared),
+            |pane, v| advance(pane, v, &prepared),
+        );
         self.finish_view_effects();
         result
     }
@@ -960,6 +964,25 @@ impl LoopState {
                 self.on_focus_failed(pane, error);
                 Ok(())
             }
+            Wakeup::FocusSuperseded { input } => {
+                self.views.with(&mut self.pane, Route::READ, |_, v| {
+                    v.context.supersede_focus_input(v.state, input);
+                });
+                self.views.registry.lock().supersede_focus_input(input);
+                self.fold_fused_now();
+                Ok(())
+            }
+            Wakeup::FocusDispatched { input, nonce } => {
+                self.views.with(&mut self.pane, Route::READ, |_, v| {
+                    v.context.acknowledge_focus_input(input, nonce);
+                });
+                self.views
+                    .registry
+                    .lock()
+                    .acknowledge_focus_input(input, nonce);
+                self.fold_fused_now();
+                Ok(())
+            }
             Wakeup::Snapshot => {
                 self.on_snapshot();
                 Ok(())
@@ -1027,7 +1050,7 @@ impl LoopState {
             .preview_for(&self.pane.config.own_pane)
             .map(|(own_view, viewed)| self.pane.watches_view(own_view.as_ref(), viewed));
         let mut reduction = None;
-        let rejected = self.view_transition(false, inputs, visible, |state, v, prepared| {
+        let rejected = self.view_transition(false, None, inputs, visible, |state, v, prepared| {
             if v.target.shared_id().is_some() && v.latest {
                 state.own.accepted = None;
                 return v.context.gate != GateState::default();
@@ -1450,6 +1473,7 @@ impl LoopState {
             Some(dispatch),
             None,
             self.pane.wake.clone(),
+            None,
         );
         true
     }
@@ -1700,7 +1724,21 @@ impl LoopState {
         wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
-        self.prepare_action();
+        let wakeups: Vec<_> = wakeups.into_iter().collect();
+        let card = wakeups
+            .iter()
+            .any(|wakeup| matches!(wakeup, Wakeup::Card(_)));
+        if wakeups.len() > 1 && card {
+            for wakeup in wakeups {
+                self.on_input(wakeup, terminal)?;
+            }
+            return Ok(());
+        }
+        if card {
+            self.pane.own.accepted = None;
+        } else {
+            self.prepare_action();
+        }
         let applied = match self.apply_input(wakeups, terminal) {
             Ok(applied) => applied,
             Err(error) => {
@@ -1721,11 +1759,15 @@ impl LoopState {
                         .as_ref()
                         .and_then(FocusPeers::clicked)
                         .unwrap_or_else(|| self.pane.clock.now());
-                    let (placement, order) =
+                    let (placement, order, input) =
                         self.views.with(&mut self.pane, Route::READ, |state, v| {
                             (
                                 state.focus_placement(v.state, v.context, &pane),
                                 v.state.last_order.clone(),
+                                v.context
+                                    .focus_rollback
+                                    .as_ref()
+                                    .map(|rollback| rollback.input),
                             )
                         });
                     spawn_pane_focus(
@@ -1740,6 +1782,7 @@ impl LoopState {
                         None,
                         peers,
                         self.pane.wake.clone(),
+                        input,
                     );
                 }
                 InputEffect::Width(dir) => {
@@ -1752,6 +1795,17 @@ impl LoopState {
                 InputEffect::MarkUnread(row_id) => self.mark_row_unread(&row_id),
                 InputEffect::MarkAllRead => self.mark_all_read(),
                 InputEffect::SyncFilter(filter) => self.persist_body_filter(filter),
+                InputEffect::CardReply(command, reply) => {
+                    if let crate::sidebar_pane::CardReply::Refused { reason } = &reply {
+                        self.pane.diag.trace_focus(
+                            FocusTraceEvent::CardCommandRefused {
+                                reason: reason.clone(),
+                            },
+                            Default::default(),
+                        );
+                    }
+                    let _ = command.reply.try_send(reply);
+                }
                 InputEffect::Reload => (self.pane.request_reload)(),
                 InputEffect::DismissAlert => {}
             }
@@ -1794,6 +1848,34 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
         let wakeups: Vec<_> = wakeups.into_iter().collect();
+        let command = wakeups.iter().find_map(|wakeup| match wakeup {
+            Wakeup::Card(command) => Some(command.clone()),
+            _ => None,
+        });
+        if let Some(command) = &command {
+            if command
+                .answer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_some()
+            {
+                return Ok(InputOutcome::default());
+            }
+            let checked = command.check(
+                &self.views.registry.lock(),
+                &self.pane.config.own_pane,
+                self.pane.clock.now(),
+            );
+            if let Err(reason) = checked {
+                return Ok(InputOutcome {
+                    effects: vec![InputEffect::CardReply(
+                        command.clone(),
+                        command.request.refused(reason),
+                    )],
+                    ..Default::default()
+                });
+            }
+        }
         let user_input = wakeups
             .iter()
             .any(|wakeup| !matches!(wakeup, Wakeup::Resize));
@@ -1802,31 +1884,29 @@ impl LoopState {
             self.pane.optimistic_watch_until =
                 Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         }
-        let (outcome, source_view) = self.view_transition(user_input, None, None, |state, v, _| {
-            (
-                state.reduce_input(v, wakeups, state.clock.now()),
-                v.target.shared_id(),
-            )
-        });
+        let (outcome, source_view) =
+            self.view_transition(user_input, command.as_deref(), None, None, |state, v, _| {
+                (
+                    state.reduce_input(v, wakeups, state.clock.now()),
+                    v.target.shared_id(),
+                )
+            });
         for effect in &outcome.effects {
             if let InputEffect::Focus(pane) = effect {
                 self.pane.input_jump = self
                     .pane
                     .clock
                     .effects_enabled()
-                    .then(|| self.focus_peers_for(pane))
+                    .then(|| {
+                        self.focus_peers_for(pane)
+                            .or_else(|| self.pane.focus_peers.clone().map(FocusPeers::without_push))
+                    })
                     .flatten()
                     .map(|peers| {
                         peers
                             .with_source_view(source_view)
                             .arm(pane.clone(), self.pane.clock.now())
                     });
-                if self.pane.clock.effects_enabled()
-                    && self.pane.input_jump.is_none()
-                    && let Some(peers) = &self.pane.focus_peers
-                {
-                    peers.supersede();
-                }
             }
         }
         if outcome.redraw {
@@ -2897,7 +2977,8 @@ impl PaneState {
         let mut outcome = InputOutcome::default();
         let mut user_input = false;
         for wakeup in wakeups {
-            user_input |= !matches!(wakeup, Wakeup::Resize);
+            let card = matches!(wakeup, Wakeup::Card(_));
+            user_input |= !matches!(wakeup, Wakeup::Resize | Wakeup::Card(_));
             let wheel = matches!(wakeup, Wakeup::Scroll { .. });
             let alert_active = alert_active(v.context);
             let live_frame = self
@@ -2911,20 +2992,68 @@ impl PaneState {
                     )
                 });
             let previous_selection = v.state.selected_pane.clone();
+            let previous_focus = v
+                .context
+                .pending_input_focus
+                .as_ref()
+                .or(v.state.baseline_pane.as_ref())
+                .and_then(|pane| v.context.current.row_owning_pane(pane))
+                .and_then(|row| row.pane.as_ref())
+                .map(|pane| pane.pane_id.clone());
+            let previous_card = v.state.previous_card.clone();
             let previous_entry = v.state.entry_cursor.clone();
             let previous_row = v
                 .state
                 .selected_index
                 .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
                 .map(|row| row.id.clone());
-            let applied = handle_wakeup(
-                wakeup,
-                v.state,
-                &mut self.ui,
-                &v.context.current,
-                &self.nav_keys.1,
-                alert_active,
-            );
+            let applied = match wakeup {
+                Wakeup::Card(command) => {
+                    let mut answer = command
+                        .answer
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if answer.is_some() {
+                        continue;
+                    }
+                    let (mut applied, reply) = match v.command_refusal {
+                        Some(reason) => (InputOutcome::default(), command.request.refused(reason)),
+                        None => super::card_commands::reduce(
+                            &command.request,
+                            v.state,
+                            &v.context.current,
+                        ),
+                    };
+                    *answer = Some(reply.clone());
+                    drop(answer);
+                    if let crate::sidebar_pane::CardReply::Refused { reason } = &reply
+                        && v.target.shared_id().is_some()
+                        && !alert_active
+                    {
+                        let now = self.clock.timestamp_at(now);
+                        v.context.health.alert = Some(render::Alert {
+                            reason: reason.clone(),
+                            since: now,
+                            recovered_at: Some(now),
+                        });
+                        applied.redraw = true;
+                    }
+                    applied.effects.push(InputEffect::CardReply(command, reply));
+                    applied
+                }
+                wakeup => handle_wakeup(
+                    wakeup,
+                    v.state,
+                    &mut self.ui,
+                    &v.context.current,
+                    &self.nav_keys.1,
+                    alert_active,
+                ),
+            };
+            user_input |= card
+                && applied.effects.iter().any(|effect| {
+                    matches!(effect, InputEffect::Focus(_) | InputEffect::SyncFilter(_))
+                });
             if let Some((interactions, roster)) = live_frame {
                 self.ui.interactions = interactions;
                 self.ui.painted_roster = roster;
@@ -2955,9 +3084,26 @@ impl PaneState {
                         .and_then(|selected| v.context.current.row_owning_pane(selected))
                         .filter(|row| row.pane_ids().any(|id| id == pane))
                         .or_else(|| v.context.current.row_owning_pane(pane));
+                    if let Some(target) = owner.and_then(|row| row.pane.as_ref())
+                        && previous_focus
+                            .as_ref()
+                            .is_some_and(|previous| *previous != target.pane_id)
+                    {
+                        v.state.previous_card.clone_from(&previous_focus);
+                    }
                     v.context.focus_rollback = owner.map(|row| FocusRollback {
+                        input: crate::ids::FocusNonce::new(),
+                        dispatched_nonce: None,
+                        anchor_before_input: v
+                            .context
+                            .observed_anchor
+                            .as_ref()
+                            .and_then(|(_, anchor)| anchor.as_ref().map(|anchor| anchor.nonce)),
+                        observed_nonce: None,
+                        started_at_ms: self.clock.now_ms(),
                         target: pane.clone(),
                         baseline: v.state.baseline_pane.clone(),
+                        previous_card: previous_card.clone(),
                         entry_focus: v.state.entry_focus.clone(),
                         label: row.display_name().to_owned(),
                     });
@@ -3389,7 +3535,7 @@ impl PaneState {
         let anchor = self.focus_anchor(v, prepared, now);
         let (presentation, retirement) =
             v.context
-                .pending_focus_intent(anchor.as_ref(), &v.events, now_ms);
+                .pending_focus_intent(v.state, anchor.as_ref(), &v.events, now_ms);
         if let (Some(anchor), Some(outcome)) = (anchor, retirement) {
             self.fold_effects
                 .retirements

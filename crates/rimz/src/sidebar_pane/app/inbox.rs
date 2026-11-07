@@ -164,7 +164,9 @@ fn wake_source(wakeup: &Wakeup) -> Counter {
         Wakeup::Snapshot => Counter::WakePublication,
         Wakeup::Event(_) => Counter::WakeRoomEvent,
         Wakeup::Tick => Counter::WakeHint,
-        Wakeup::FocusFailed { .. } => Counter::WakeFocus,
+        Wakeup::FocusFailed { .. }
+        | Wakeup::FocusSuperseded { .. }
+        | Wakeup::FocusDispatched { .. } => Counter::WakeFocus,
         _ => Counter::WakeInput,
     }
 }

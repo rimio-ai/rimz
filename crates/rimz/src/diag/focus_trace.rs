@@ -109,6 +109,9 @@ impl PushPeer {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum FocusTraceEvent {
+    CardCommandRefused {
+        reason: String,
+    },
     ClickDelivery {
         column: u16,
         row: u16,
@@ -227,6 +230,7 @@ impl Edges {
     pub(super) fn admit(&mut self, event: &FocusTraceEvent, pane_ids: HashSet<PaneId>) -> bool {
         match event {
             FocusTraceEvent::PushHandshake { .. }
+            | FocusTraceEvent::CardCommandRefused { .. }
             | FocusTraceEvent::ClickDelivery { .. }
             | FocusTraceEvent::JumpProgress { .. } => {}
             FocusTraceEvent::FramePublished {

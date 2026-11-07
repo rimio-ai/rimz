@@ -1997,6 +1997,7 @@ fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isi
             pane_id: target_pane.clone(),
             origin: FocusOrigin::User,
             repair_generation: None,
+            input_at_ms: None,
             issued_at_ms: stamp,
             applied_at_ms: Some(stamp),
             state: FocusIntentState::Applied,

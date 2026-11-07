@@ -65,8 +65,14 @@ pub(super) enum FocusMarker {
 
 #[derive(Clone)]
 pub(super) struct FocusRollback {
+    pub(super) input: FocusNonce,
+    pub(super) dispatched_nonce: Option<FocusNonce>,
+    pub(super) anchor_before_input: Option<FocusNonce>,
+    pub(super) observed_nonce: Option<FocusNonce>,
+    pub(super) started_at_ms: u64,
     pub(super) target: PaneId,
     pub(super) baseline: Option<PaneId>,
+    pub(super) previous_card: Option<PaneId>,
     pub(super) entry_focus: Option<PaneId>,
     pub(super) label: String,
 }
@@ -134,6 +140,28 @@ impl ViewContext {
         }
     }
 
+    pub(super) fn supersede_focus_input(&mut self, ui: &mut ViewState, input: FocusNonce) {
+        if self
+            .focus_rollback
+            .take_if(|rollback| rollback.input == input)
+            .is_none()
+        {
+            return;
+        }
+        self.pending_input_focus = None;
+        ui.browse = None;
+    }
+
+    pub(super) fn acknowledge_focus_input(&mut self, input: FocusNonce, nonce: FocusNonce) {
+        if let Some(rollback) = self
+            .focus_rollback
+            .as_mut()
+            .filter(|rollback| rollback.input == input)
+        {
+            rollback.dispatched_nonce = Some(nonce);
+        }
+    }
+
     pub(super) fn set_own_view(&mut self, own_view: Option<SidebarOwnView>) {
         if let Some(baseline) = &mut self.overlay_baseline {
             baseline.own_view = own_view.clone();
@@ -187,10 +215,43 @@ impl ViewContext {
 
     pub(super) fn pending_focus_intent(
         &mut self,
+        ui: &mut ViewState,
         anchor: Option<&FocusAnchor>,
         events: &EventStore,
         now_ms: u64,
     ) -> (Option<FocusPresentation>, Option<FocusObservationOutcome>) {
+        if self.pending_input_focus.is_some()
+            && let Some(rollback) = &mut self.focus_rollback
+        {
+            if let Some(anchor) = anchor
+                && Some(anchor.nonce) != rollback.anchor_before_input
+                && anchor.pane_id == rollback.target
+            {
+                rollback.observed_nonce = Some(anchor.nonce);
+            }
+            // Pending input keeps backstop folds active. Release by the first fold at the
+            // focus-anchor freshness bound (2.5 s), even without an ack or native consensus.
+            // This releases only the pick; the anchor still follows native observations below.
+            let expired = now_ms.saturating_sub(rollback.started_at_ms)
+                >= crate::mux::focus_anchor::FOCUS_ANCHOR_FRESH.as_millis() as u64;
+            // Sidebar anchors carry a separate input stamp, even if dispatch lags.
+            // An ack can beat its sample, and an equal millisecond cannot order inputs;
+            // wait for our nonce or a strictly newer anchor.
+            let replaced = rollback.dispatched_nonce.is_some_and(|nonce| {
+                anchor.is_none_or(|anchor| anchor.nonce != nonce)
+                    && (rollback.observed_nonce == Some(nonce)
+                        || anchor.is_some_and(|anchor| {
+                            Some(anchor.nonce) != rollback.anchor_before_input
+                                && anchor.input_at_ms.unwrap_or(anchor.issued_at_ms)
+                                    > rollback.started_at_ms
+                        }))
+            });
+            if expired || replaced {
+                self.pending_input_focus = None;
+                self.focus_rollback = None;
+                ui.browse = None;
+            }
+        }
         let Some(anchor) = anchor else {
             // A live retirement must fence an older cut's focus observation,
             // not revive either the intent or the pre-jump selection.
@@ -275,10 +336,13 @@ impl ViewContext {
             ui.last_focus_anchor_ms = anchor.issued_at_ms;
         }
         if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
-            if self
-                .focus_rollback
-                .as_ref()
-                .is_some_and(|request| request.target == anchor.pane_id)
+            // A focus event can confirm before the held clients catch up. Keep the input
+            // identity until its pending pick releases, including for a delayed dispatch ack.
+            if self.pending_input_focus.is_none()
+                && self
+                    .focus_rollback
+                    .as_ref()
+                    .is_some_and(|request| request.target == anchor.pane_id)
             {
                 self.focus_rollback = None;
             }
@@ -308,6 +372,7 @@ impl ViewContext {
             .focus_rollback
             .take_if(|request| request.target == *target)?;
         state.baseline_pane = rollback.baseline;
+        state.previous_card = rollback.previous_card;
         state.entry_focus = rollback.entry_focus;
         state.entry_cursor = state.entry_focus.clone().map(render::EntryCursor::SubAgent);
         state.browse = None;
@@ -575,7 +640,32 @@ impl ViewContext {
             set_make_up_filter(ui, &self.current, filter);
         }
         let previous_filter = ui.make_up_filter.filter;
+        let pending_pick = self
+            .pending_input_focus
+            .as_ref()
+            .filter(|pane| ui.selected_pane.as_ref() == Some(pane))
+            .cloned();
+        // A delayed landing must not replace history already advanced by an input.
+        let pending_previous_card = self
+            .pending_input_focus
+            .as_ref()
+            .map(|_| ui.previous_card.clone());
         reconcile_selection_with_previous(ui, &self.current, focused.clone(), Some(previous));
+        if let Some(previous_card) = pending_previous_card {
+            ui.previous_card = previous_card;
+        }
+        if let Some(pane) = pending_pick
+            && focused.as_ref() != Some(&pane)
+            && self.current.row_owning_pane(&pane).is_some()
+        {
+            ui.selected_pane = Some(pane.clone());
+            ui.entry_cursor = None;
+            ui.browse = Some(render::Browse {
+                pane,
+                baseline_at_start: ui.baseline_pane.clone(),
+            });
+            super::selection::anchor_selection(ui, &self.current);
+        }
         if derived_focus_pane && ui.selected_pane.is_some() && ui.selected_pane != selected {
             let dwell = match mux {
                 MuxName::Tmux => FOCUS_MARKER_TMUX_DWELL,
@@ -584,15 +674,17 @@ impl ViewContext {
             self.focus_marker = Some(FocusMarker::Dwelling(clock.now() + dwell));
         }
         if derived_focus_pane && let Some(requested) = &self.pending_input_focus {
-            let landed = self
+            if self
                 .current
                 .row_owning_pane(requested)
                 .and_then(|row| row.pane.as_ref())
-                .is_some_and(|pane| ui.selected_pane.as_ref() == Some(&pane.pane_id));
-            if landed {
+                .is_some_and(|pane| focused.as_ref() == Some(&pane.pane_id))
+            {
                 ui.own_input_reveal = true;
-                self.pending_input_focus = None;
-            } else if ui.selected_pane != selected {
+            }
+            // Fused focus can precede dispatch; only native client consensus confirms a landing.
+            let landed = held_panes.as_slice() == std::slice::from_ref(requested);
+            if landed || ui.selected_pane != selected {
                 self.pending_input_focus = None;
             }
         }

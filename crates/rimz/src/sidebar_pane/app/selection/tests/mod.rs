@@ -5,6 +5,7 @@ use crate::{MuxName, WorkspaceId};
 use jiff::Timestamp;
 
 mod browse;
+mod commands;
 mod filter;
 mod input;
 mod reconcile;

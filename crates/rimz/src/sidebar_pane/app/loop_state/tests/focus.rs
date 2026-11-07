@@ -676,7 +676,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
     );
     let lease = peers.arm(target.clone(), Instant::now());
     let requested = Some(fenced_request(&rig, &expected, moved));
-    finish_focus_request(&target, Some(&tx), requested, Some(&lease), |_| {
+    finish_focus_request(&target, Some(&tx), requested, Some(&lease), None, |_| {
         panic!("failed request must not dispatch")
     });
     assert!(
@@ -690,7 +690,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
         let failed = dispatched.is_err();
         let requested = Some(fenced_request(&rig, &expected, expected.clone()));
         let lease = peers.arm(target.clone(), Instant::now());
-        finish_focus_request(&target, Some(&tx), requested, Some(&lease), |_| {
+        finish_focus_request(&target, Some(&tx), requested, Some(&lease), None, |_| {
             assert!(lease.is_current(), "lease lasts through dispatch");
             dispatched
         });
@@ -707,7 +707,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
         }
     }
     let lease = peers.arm(target.clone(), Instant::now());
-    finish_focus_request(&target, None, None, Some(&lease), |_| unreachable!());
+    finish_focus_request(&target, None, None, Some(&lease), None, |_| unreachable!());
     assert!(!lease.is_current());
 }
 
@@ -783,12 +783,14 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         FocusActionRequest {
             pane_id: picked.clone(),
             origin: FocusOrigin::User,
+            input_at_ms: None,
             repair_generation: None,
             expected_pre_action: Some(&native.client_views),
             placement: None,
             order: None,
         },
         || Ok(native.client_views.clone()),
+        crate::utils::time::unix_now_ms,
     )
     .unwrap();
     let anchor = crate::mux::focus_anchor::load(&rig.runtime).unwrap();
@@ -811,7 +813,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         MuxName::Tmux => MuxName::Zellij,
     });
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    finish_focus_request(&picked, Some(&tx), Some(Ok(nonce)), None, |nonce| {
+    finish_focus_request(&picked, Some(&tx), Some(Ok(nonce)), None, None, |nonce| {
         dispatch_action(
             rejecting_backend.as_ref(),
             &rig.runtime,
@@ -1149,12 +1151,14 @@ fn fenced_request(
         FocusActionRequest {
             pane_id: zellij("terminal_9"),
             origin: FocusOrigin::AutomaticRepair,
+            input_at_ms: None,
             repair_generation: Some(3),
             expected_pre_action: Some(expected),
             placement: None,
             order: None,
         },
         || Ok(sample),
+        crate::utils::time::unix_now_ms,
     )
 }
 
@@ -1649,6 +1653,7 @@ fn applied_focus_anchor(
         pane_id,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
+        input_at_ms: None,
         issued_at_ms: stamp_ms,
         applied_at_ms: Some(stamp_ms),
         state: crate::mux::focus_anchor::FocusIntentState::Applied,
