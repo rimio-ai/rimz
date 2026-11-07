@@ -37,6 +37,34 @@ pub(super) fn caller(globals: &super::super::GlobalFlags) -> Option<rimz::Resolv
     Some(workspace)
 }
 
+pub(super) fn calling_run(globals: &super::super::GlobalFlags) -> Result<Located> {
+    let outside = || {
+        anyhow::anyhow!(
+            "caller is not part of a workflow run; use rimz workflow show <run> or rimz workflow list"
+        )
+    };
+    let workspace = caller(globals).ok_or_else(outside)?;
+    let state = paths::StatePaths::for_project_root(&workspace.project_root)?;
+    let store = super::super::open_existing_store_at(state.clone())?.ok_or_else(outside)?;
+    let snapshot = store.snapshot()?;
+    let mut agent =
+        rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).map_err(|_| outside())?;
+    let mut seen = BTreeSet::new();
+    while seen.insert((&agent.kind, &agent.agent_id)) {
+        if let Some(pin) = &agent.workflow {
+            let paths = state.workflow(&pin.run);
+            return Ok(Located {
+                record: records::load(&paths)?,
+                paths,
+                state,
+            });
+        }
+        agent =
+            rimz::address::launched_parent(snapshot.agents.iter(), agent).ok_or_else(outside)?;
+    }
+    Err(outside())
+}
+
 pub(super) fn all() -> Result<Vec<Located>> {
     let rooms: BTreeMap<_, _> = paths::workflow_runs_under(&paths::rimz_home())?
         .into_iter()

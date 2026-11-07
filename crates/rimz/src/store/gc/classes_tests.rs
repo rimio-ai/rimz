@@ -87,6 +87,7 @@ fn never_swept_classes_keep_stale_entries_under_default_sweep() {
             team_notes_retention: HistoryRetention::Forever,
             automation_notes_retention: HistoryRetention::Forever,
             team_notes_open: |_| false,
+            workflow_history: |_, _| false,
         },
         false,
         &|_| Ok(false),
@@ -403,6 +404,7 @@ fn output_sweep_does_not_hold_the_store_lock() {
             team_notes_retention: HistoryRetention::Forever,
             automation_notes_retention: HistoryRetention::Forever,
             team_notes_open: |_| false,
+            workflow_history: |_, _| false,
         },
         false,
         &|_| {
@@ -676,6 +678,7 @@ fn owned_units_and_terminal_runs_expire_together() {
         &Vec::new().into(),
         &mut Sweep::new(true),
         &mut preview,
+        &|_, _| true,
     )
     .unwrap();
     assert_eq!(preview.sidecar_files_removed, 2);
@@ -686,6 +689,7 @@ fn owned_units_and_terminal_runs_expire_together() {
         &Vec::new().into(),
         &mut Sweep::new(false),
         &mut actual,
+        &|_, _| true,
     )
     .unwrap();
     assert_eq!(preview, actual);
@@ -779,6 +783,7 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         &Vec::new().into(),
         &mut Sweep::new(true),
         &mut preview,
+        &|_, _| true,
     );
     assert!(
         collected.is_ok(),
@@ -795,6 +800,7 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         &Vec::new().into(),
         &mut Sweep::new(false),
         &mut actual,
+        &|_, _| true,
     )
     .unwrap();
     assert_eq!(actual, preview);
@@ -824,6 +830,7 @@ fn owned_sweep_keeps_a_relaunch_with_a_fresh_direct_child() {
         &vec![agent].into(),
         &mut Sweep::new(false),
         &mut GcReport::default(),
+        &|_, _| true,
     )
     .unwrap();
     assert!(unit.join("scratch").exists());
@@ -905,6 +912,7 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
                 team_notes_retention: HistoryRetention::Forever,
                 automation_notes_retention: HistoryRetention::Forever,
                 team_notes_open: |_| false,
+                workflow_history: |_, _| false,
             },
             dry_run,
             &|_| Ok(false),

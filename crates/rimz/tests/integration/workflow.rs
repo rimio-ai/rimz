@@ -9,6 +9,7 @@ mod commands;
 mod conditions;
 mod inspection;
 mod judges;
+mod memory;
 mod scope;
 mod shells;
 mod sleep;
@@ -1019,6 +1020,7 @@ fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
     }
     let value = show(&env, &id);
     assert_eq!(value["record"]["state"], "canceled");
+    memory::assert_history_copy(&env, &id);
     let evaluations = events(&value, "evaluation");
     assert_eq!(
         evaluations.len(),
@@ -1336,6 +1338,7 @@ fn human_show_wait_and_journal_are_readable() {
         .unwrap();
     let mut normalized = text
         .replace(&format!("~/{}", work.display()), "<work>")
+        .replace(value["notes"].as_str().unwrap(), "<notes>")
         .replace(env.project_root.to_str().unwrap(), "<checkout>");
     for at in [
         &value["record"]["created_at"],

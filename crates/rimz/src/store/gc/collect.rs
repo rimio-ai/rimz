@@ -463,6 +463,10 @@ impl Sweep {
         }
     }
 
+    pub(super) fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub(super) fn remember_dir_size(&mut self, path: &Path) {
         if let Ok(meta) = fs::symlink_metadata(path) {
             self.dir_bytes.insert(path.to_path_buf(), meta.len());

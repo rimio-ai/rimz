@@ -746,6 +746,111 @@ fn history_requires_one_run_and_conflicts_with_json() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    for flag in [None, Some("--history"), Some("--json")] {
+        let mut args = vec!["workflow", "show"];
+        args.extend(flag);
+        let output = command(&env, &args);
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{error}");
+        assert_eq!(
+            error.trim(),
+            "error: caller is not part of a workflow run; use rimz workflow show <run> or rimz workflow list"
+        );
+    }
+}
+
+#[test]
+fn bare_show_follows_the_calling_leader_and_two_levels_of_subagents() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    let (env, mut record) = fixture("parked", Some("user"), vec![]);
+    record.notes = Some("20261107/120000Z-workflow-review-project".into());
+    save(&env, &record);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    for (id, parent, depth) in [
+        ("leader", None, 0),
+        ("child", Some("leader"), 1),
+        ("grandchild", Some("child"), 2),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(id.into());
+        observation.pane_id = Some(format!("tmux:{}", depth + 1).parse().unwrap());
+        observation.launch.parent_agent_id = parent.map(Into::into);
+        observation.launch.launch_depth = Some(depth);
+        if parent.is_none() {
+            observation.launch.workflow = Some(
+                serde_json::from_value(json!({
+                    "run":record.id,"seq":1,"role":"step"
+                }))
+                .unwrap(),
+            );
+        }
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                workspace.session_name.clone(),
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let notes = store.paths().notes_run(
+        rimz::disk::paths::Class::AutomationNotes,
+        record.notes.as_ref().unwrap(),
+    );
+    let roster: Vec<_> = store
+        .snapshot()
+        .unwrap()
+        .agents
+        .iter()
+        .map(|agent| {
+            (
+                agent.agent_id.clone(),
+                agent.kind.clone(),
+                agent.workflow.clone(),
+                agent.parent_agent_id.clone(),
+                agent.launch_depth,
+            )
+        })
+        .collect();
+    assert_eq!(roster.len(), 3, "{roster:?}");
+    for id in ["leader", "grandchild"] {
+        for flag in [None, Some("--history"), Some("--json")] {
+            let mut args = vec!["workflow", "show"];
+            args.extend(flag);
+            let output = env
+                .rimz()
+                .args(args)
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", id)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "caller={id} flag={flag:?}: {}\n{roster:?}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = success(output);
+            if flag == Some("--json") {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(value["record"]["id"], json!(record.id));
+                assert_eq!(value["notes"], json!(notes));
+            } else {
+                assert!(
+                    text.starts_with(&format!("{}\n", record.address())),
+                    "{text}"
+                );
+                if flag.is_none() {
+                    assert!(
+                        text.contains(&format!("notes {}\n", notes.display())),
+                        "{text}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

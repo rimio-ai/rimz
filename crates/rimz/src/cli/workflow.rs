@@ -148,13 +148,13 @@ enum Command {
     },
     /// Show a definition, one node, or a run's progress and history.
     Show {
-        /// Run address `<workflow>#<lane>`, workflow name, or run id.
+        /// Run address `<workflow>#<lane>`, workflow name, or run id; defaults to the caller's run.
         #[arg(value_name = "RUN")]
-        id: String,
+        id: Option<String>,
         /// Show this node in full; requires a workflow name, not a run.
-        #[arg(value_name = "NODE", conflicts_with_all = ["json", "history"])]
+        #[arg(value_name = "NODE", requires = "id", conflicts_with_all = ["json", "history"])]
         node: Option<String>,
-        /// Print the run address, work directory, record, and history as JSON.
+        /// Print the run address, work directory, notes folder, record, and history as JSON.
         #[arg(long)]
         json: bool,
         /// Print detailed history instead of the compact run view.
@@ -231,7 +231,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             node,
             json,
             history,
-        } => show(&id, node.as_deref(), json, history, globals),
+        } => show(id.as_deref(), node.as_deref(), json, history, globals),
         Command::Cancel { id, reason } => receipt::cancel(&id, reason.as_deref(), globals),
         Command::Resume { id, at, extend } => receipt::resume(&id, at.as_deref(), &extend, globals),
         Command::Restart { id, continued } => restart(&id, continued, globals),
@@ -241,11 +241,9 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             ..
         } => {
             let (state, _) = locate(&id)?;
-            Ok(workflow::advance(
-                &state,
-                &id,
-                &Host::new(&state, globals, woken_by),
-            )?)
+            workflow::advance(&state, &id, &Host::new(&state, globals, woken_by))?;
+            let record = records::load(&state.workflow(&id))?;
+            write_history_copy(&state, &record)
         }
         Command::Advance {
             wake_signal: Some(signal),
@@ -258,6 +256,17 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Schema => render::json_pretty(&workflow::schema()),
         Command::Validate { dir, json } => validate(dir, json, globals),
     }
+}
+
+fn write_history_copy(state: &rimz::StatePaths, record: &records::RunRecord) -> Result<()> {
+    if let Err(error) = workflow_view::history::write_copy(state, record) {
+        writeln!(
+            render::err(),
+            "warning: could not write history for run `{}`: {error}; GC will retry",
+            record.id
+        )?;
+    }
+    Ok(())
 }
 
 fn definitions() -> rimz::config::definitions::LoadedDefinitions {
@@ -371,12 +380,15 @@ fn definition_dir(name: &std::path::Path) -> PathBuf {
 }
 
 fn show(
-    target: &str,
+    target: Option<&str>,
     node: Option<&str>,
     json: bool,
     history: bool,
     globals: &super::GlobalFlags,
 ) -> Result<()> {
+    let Some(target) = target else {
+        return show::render(&resolve::calling_run(globals)?, json, history, globals);
+    };
     if let Some(node) = node {
         if !resolve::names_workflow(target) {
             return Err(super::usage::UsageError::new(

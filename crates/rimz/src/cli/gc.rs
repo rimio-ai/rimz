@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use super::render::{self, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
+use super::workflow_view::history;
 use super::{GlobalFlags, open_existing_store};
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{self, Assist, AssistRecord};
@@ -124,6 +125,17 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         team_notes_retention: gc_config.team_notes_retention,
         automation_notes_retention: gc_config.automation_notes_retention,
         team_notes_open: rimz::harness::team_notes::is_open,
+        workflow_history: |state, record| match history::write_copy(state, record) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    run = %record.id,
+                    %error,
+                    "keeping workflow home without a history copy"
+                );
+                false
+            }
+        },
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the room for gc; run inside a room or pass --root")?;

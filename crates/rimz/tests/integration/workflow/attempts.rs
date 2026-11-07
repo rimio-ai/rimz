@@ -1857,7 +1857,10 @@ fn supervised_identity_prompt_and_lifecycle_completion() {
     let human = success(command(&room.env, &["workflow", "show", &id, "--history"]));
     assert!(human.contains(previous["handle"].as_str().unwrap()));
     assert!(human.contains(&previous["head_start"].as_str().unwrap()[..8]));
-    assert!(human.contains("cost") && human.contains("stopped (0)") && human.contains("live (0)"));
+    assert!(
+        human.contains("cost") && !human.contains("stopped (0)") && !human.contains("live (0)"),
+        "{human}"
+    );
 }
 
 #[test]
@@ -1995,6 +1998,7 @@ fn cancel_pending_attempt_is_durable_and_idempotent() {
     let (id, run) = room.launch();
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     let value = settled(&room.env, &id, "canceled");
+    memory::assert_history_copy(&room.env, &id);
     assert_eq!(value["record"]["prev_attempt"]["outcome"], "canceled");
     assert_eq!(
         rimz::harness::run::load(
