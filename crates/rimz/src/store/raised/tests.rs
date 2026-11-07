@@ -57,6 +57,42 @@ fn ask(session: &str, state: RaisedAskState) -> Entry<RaisedAsk> {
 }
 
 #[test]
+fn retirement_does_not_report_an_already_human_closed_ask_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    let ask = ask("a", RaisedAskState::Open);
+    raise(&paths, ask.clone()).unwrap();
+    let mut observation = crate::agents::AgentLifecycleObservation::new(
+        Some(ask.agent_id.clone()),
+        crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    observation.prompt = crate::agents::SanitizedPrompt::new(Some("yes"));
+    assert!(
+        observe(
+            &paths,
+            &ask.kind,
+            &observation,
+            Some(AgentState::transition(
+                None,
+                &observation.signal,
+                false,
+                false
+            )),
+            Timestamp::from_second(1).unwrap(),
+            true,
+            None,
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        retire(&paths, &ask.kind, &ask.agent_id).unwrap().is_none(),
+        "retirement must not audit a second close after user_turn"
+    );
+    assert!(read(&paths).human_turns.is_empty());
+}
+
+#[test]
 fn open_predicate_keeps_ties_and_rejects_later_human_turns() {
     let mut record = RaisedRecord::default();
     let ask = ask("a", RaisedAskState::Open);

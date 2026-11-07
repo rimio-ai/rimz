@@ -340,10 +340,51 @@ fn retire_session_in(
         dropped,
     })?;
     if scope == RetireScope::Session {
-        crate::store::raised::retire(paths, kind, session).map_err(|err| RetireFailure {
-            message: err.to_string(),
-            dropped,
-        })?;
+        let closed =
+            crate::store::raised::retire(paths, kind, session).map_err(|err| RetireFailure {
+                message: err.to_string(),
+                dropped,
+            })?;
+        if let Some(ask) = closed {
+            let record =
+                crate::workspace::record::read(&paths.workspace_record).map_err(|err| {
+                    RetireFailure {
+                        message: err.to_string(),
+                        dropped,
+                    }
+                })?;
+            let store =
+                crate::Store::open_existing(paths.clone(), runtime.clone()).ok_or_else(|| {
+                    RetireFailure {
+                        message: "retiring raised attention requires a readable room record".into(),
+                        dropped,
+                    }
+                })?;
+            let mut params = serde_json::json!({"ask_id": ask.ask_id, "cause": "retired"});
+            if let Some(caller) = crate::harness::ancestry::CallerIdentity::from_env() {
+                let actor = crate::store::message::MessageSender::Agent {
+                    kind: caller.kind,
+                    agent_id: caller.launch_id,
+                    name: caller.name,
+                    profile: caller.profile,
+                    role: caller.role,
+                    channel: None,
+                };
+                params["actor"] = serde_json::json!(actor.render());
+            }
+            crate::store::raised::audit(
+                &store,
+                &record.session_name,
+                "ask.closed",
+                kind,
+                session,
+                params,
+            )
+            .map_err(|err| RetireFailure {
+                message: err.to_string(),
+                dropped,
+            })?;
+        }
     }
     Ok(dropped)
 }

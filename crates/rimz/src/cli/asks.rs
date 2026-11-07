@@ -8,8 +8,9 @@ use serde::Serialize;
 
 use super::{Ctx, GlobalFlags, ask_commands, ask_pane_owner, resolve_open_ask};
 use crate::cli::render;
-use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
+use rimz::agents::{AgentState, AskDelivery, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
+use rimz::store::raised;
 
 #[derive(Debug, Args)]
 pub struct AsksArgs {
@@ -27,6 +28,18 @@ pub struct AsksArgs {
 
 #[derive(Debug, Subcommand)]
 enum AsksSubcmd {
+    /// Raise a question for yourself or another agent.
+    Raise {
+        #[arg(value_name = "TARGET|TEXT", allow_hyphen_values = true)]
+        first: Option<String>,
+        #[arg(value_name = "TEXT", allow_hyphen_values = true)]
+        text: Option<String>,
+        /// Offer an answer label; repeat for more options.
+        #[arg(long = "option", value_name = "LABEL")]
+        options: Vec<String>,
+    },
+    /// Withdraw a raised question (your own when TARGET is omitted).
+    Withdraw { target: Option<String> },
     /// List open asks.
     List {
         /// Include asks from every channel.
@@ -69,6 +82,7 @@ struct AskJsonView<'a> {
     delivery: &'static str,
     since: jiff::Timestamp,
     detail: Option<&'a str>,
+    raised_by: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<&'a str>,
     questions: Vec<AskQuestionJson<'a>>,
@@ -98,6 +112,7 @@ impl<'a> From<&'a OpenAskView> for AskJsonView<'a> {
             delivery: view.detail.delivery.label(),
             since: view.detail.open.since,
             detail: view.detail.open.detail.as_deref(),
+            raised_by: view.detail.raised_by.as_deref(),
             context: view.detail.context.as_deref(),
             questions: view
                 .detail
@@ -128,9 +143,164 @@ pub fn run(args: AsksArgs, globals: &GlobalFlags) -> Result<()> {
         return Err(super::usage::UsageError::new(format!("did you mean `{command}`?")).into());
     }
     match args.command {
+        Some(AsksSubcmd::Raise {
+            first,
+            text,
+            options,
+        }) => raise(first, text, options, globals),
+        Some(AsksSubcmd::Withdraw { target }) => withdraw(target.as_deref(), globals),
         None => list(args.all, args.json, globals),
         Some(AsksSubcmd::List { all, json }) => list(args.all || all, args.json || json, globals),
         Some(AsksSubcmd::Show { target, json }) => show(&target, args.json || json, globals),
+    }
+}
+
+fn raised_context(globals: &GlobalFlags, target: Option<&str>, verb: &str) -> Result<Ctx> {
+    let usage = || {
+        super::usage::UsageError::new(format!(
+            "from a user shell, name an agent: rimz asks {verb} @<agent>"
+        ))
+    };
+    let ctx = match Ctx::open(globals) {
+        Ok(ctx) => ctx,
+        Err(_) if target.is_none() && rimz::harness::ancestry::resolve_caller(&[]).is_none() => {
+            return Err(usage().into());
+        }
+        Err(error) => return Err(error),
+    };
+    if target.is_none() && rimz::launcher::context::resolve_caller(&ctx.store)?.is_none() {
+        return Err(usage().into());
+    }
+    Ok(ctx)
+}
+
+fn live_raised_target<'a>(
+    ctx: &Ctx,
+    snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
+    target: Option<&str>,
+) -> Result<&'a AgentState> {
+    let agent = super::resolve_agent_one_unhinted(
+        Some(&ctx.store),
+        snapshot,
+        target.unwrap_or("@me"),
+        None,
+        &ctx.address_context(),
+    )?;
+    if agent.ended_at.is_some() {
+        bail!("cannot change raised attention on a closed agent");
+    }
+    if agent.is_provider_subagent() || agent.agent_id.is_provisional() {
+        bail!("raised attention requires a registered agent with its own session");
+    }
+    Ok(agent)
+}
+
+fn raise(
+    first: Option<String>,
+    text: Option<String>,
+    options: Vec<String>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let (target, text) = match (first, text) {
+        (Some(first), text) if first.starts_with('@') => (Some(first), text),
+        (text, None) => (None, text),
+        _ => {
+            return Err(
+                super::usage::UsageError::new("use rimz asks raise @<agent> TEXT".into()).into(),
+            );
+        }
+    };
+    if text.as_deref().is_some_and(|text| text.trim().is_empty())
+        || options.iter().any(|option| option.trim().is_empty())
+    {
+        return Err(super::usage::UsageError::new(
+            "text and option labels must not be empty".into(),
+        )
+        .into());
+    }
+    let ctx = raised_context(globals, target.as_deref(), "raise")?;
+    let snapshot = ctx.published_snapshot()?;
+    let agent = live_raised_target(&ctx, &snapshot, target.as_deref())?;
+    let caller = rimz::launcher::context::resolve_caller(&ctx.store)?;
+    let is_self = caller
+        .as_ref()
+        .and_then(|caller| {
+            rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller).ok()
+        })
+        .is_some_and(|source| source.kind == agent.kind && source.agent_id == agent.agent_id);
+    let sender = rimz::launcher::context::sender_for(caller.as_ref(), ctx.channel(), false);
+    let actor = caller.as_ref().map(|_| sender.render());
+    let ask = raised::prepare_raise(
+        ctx.store.paths(),
+        agent,
+        is_self,
+        text,
+        options,
+        actor.clone(),
+        jiff::Timestamp::now(),
+    )?;
+    let ask_id = ask.value.ask_id.clone();
+    raised::raise(ctx.store.paths(), ask)?;
+    let mut params = serde_json::json!({"ask_id": ask_id});
+    if let Some(actor) = actor {
+        params["actor"] = serde_json::json!(actor);
+    }
+    raised::audit(
+        &ctx.store,
+        &ctx.workspace.session_name,
+        "ask.raised",
+        &agent.kind,
+        &agent.agent_id,
+        params,
+    )?;
+    let peers = rimz::address::addressable_agents(&snapshot);
+    let handle = rimz::address::agent_handle(agent, &peers, true);
+    let suffix = if is_self {
+        "; the turn's final reply becomes the ask"
+    } else {
+        ""
+    };
+    render::finish(writeln!(
+        render::out(),
+        "raised {ask_id} on {handle}{suffix}"
+    ))
+}
+
+fn withdraw(target: Option<&str>, globals: &GlobalFlags) -> Result<()> {
+    let ctx = raised_context(globals, target, "withdraw")?;
+    let snapshot = ctx.cached_snapshot()?;
+    let agent = live_raised_target(&ctx, &snapshot, target)?;
+    let ask = raised::withdraw(ctx.store.paths(), &agent.kind, &agent.agent_id, None)?
+        .ok_or_else(|| anyhow::anyhow!("agent has no raised ask"))?;
+    let caller = rimz::launcher::context::resolve_caller(&ctx.store)?;
+    let mut params = serde_json::json!({"ask_id": ask.ask_id});
+    if caller.is_some() {
+        params["actor"] = serde_json::json!(
+            rimz::launcher::context::sender_for(caller.as_ref(), ctx.channel(), false).render()
+        );
+    }
+    raised::audit(
+        &ctx.store,
+        &ctx.workspace.session_name,
+        "ask.withdrawn",
+        &agent.kind,
+        &agent.agent_id,
+        params,
+    )?;
+    let peers = rimz::address::addressable_agents(&snapshot);
+    render::finish(writeln!(
+        render::out(),
+        "withdrew {} from {}",
+        ask.ask_id,
+        rimz::address::agent_handle(agent, &peers, true)
+    ))
+}
+
+fn kind_label(detail: &OpenAskDetail) -> &'static str {
+    match detail.delivery {
+        AskDelivery::Blocking => detail.open.kind.short_label(),
+        AskDelivery::Async => "question (async)",
+        AskDelivery::Raised => "raised",
     }
 }
 
@@ -151,7 +321,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
             agent
                 .actionable_asks()
                 .filter(move |(_, delivery)| {
-                    *delivery == rimz::agents::AskDelivery::Async
+                    *delivery != AskDelivery::Blocking
                         || agent.attention_ask(visibility_now).is_some()
                 })
                 .map(move |(ask, _)| (agent, ask.id))
@@ -181,13 +351,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     for view in views {
         table.row([
             render::cell(view.agent.display_name()),
-            render::cell(
-                if view.detail.delivery == rimz::agents::AskDelivery::Blocking {
-                    view.detail.open.kind.short_label()
-                } else {
-                    "question (async)"
-                },
-            ),
+            render::cell(kind_label(&view.detail)),
             render::cell(render::age_short(view.detail.open.since, now)),
             render::cell(preview(&view)),
         ]);
@@ -252,7 +416,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let prose = render::prose::Prose::for_stdout();
     let mut out = render::out();
     let now = jiff::Timestamp::now();
-    writeln!(
+    write!(
         out,
         "{}  {}  {}",
         render::paint(render::palette::accent(), view.detail.open.id.as_str()),
@@ -261,16 +425,27 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             render::palette::muted(),
             &format!(
                 "{} · {}",
-                if view.detail.delivery == rimz::agents::AskDelivery::Blocking {
-                    view.detail.open.kind.short_label()
-                } else {
-                    "question (async)"
-                },
+                kind_label(&view.detail),
                 render::age_short(view.detail.open.since, now)
             )
         )
     )?;
-    if let Some(context) = view.detail.context.as_deref() {
+    if let Some(actor) = &view.detail.raised_by {
+        write!(out, " · raised by {actor}")?;
+    }
+    writeln!(out)?;
+    if view.detail.delivery == AskDelivery::Raised && view.detail.context.is_none() {
+        writeln!(
+            out,
+            "\nThe reply was not captured; look in the pane: {}",
+            view.commands().focus()
+        )?;
+    }
+    if let Some(context) = view.detail.context.as_deref().filter(|context| {
+        !(view.detail.delivery == AskDelivery::Raised
+            && view.detail.questions.len() == 1
+            && context.trim() == view.detail.questions[0].question)
+    }) {
         writeln!(out)?;
         for line in prose.lines(context, render::prose::prose_width(2)) {
             if line.is_empty() {
@@ -347,7 +522,7 @@ impl OpenAskView {
         ask_commands::AskCommands {
             detail: &self.detail,
             pane: &self.agent.handle,
-            target: if self.agent.name.is_some() {
+            target: if self.agent.name.is_some() || self.detail.delivery == AskDelivery::Raised {
                 self.detail.open.id.as_str()
             } else {
                 &self.agent.handle

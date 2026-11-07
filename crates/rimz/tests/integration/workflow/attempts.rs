@@ -2092,6 +2092,58 @@ fn queued_async_question_does_not_end_the_attempt() {
 }
 
 #[test]
+fn raised_question_is_listed_without_holding_a_workflow_attempt() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let store = room.env.store();
+    let bound = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    let at = jiff::Timestamp::now();
+    let ask_id = rimz::ids::AskId::new();
+    rimz::store::raised::raise(
+        store.paths(),
+        rimz::store::raised::Entry {
+            kind: bound.kind,
+            agent_id: bound.agent_id.unwrap(),
+            value: rimz::agents::state::RaisedAsk {
+                ask_id: ask_id.clone(),
+                state: rimz::agents::state::RaisedAskState::Open,
+                raised_at: at,
+                basis_at: at,
+                opened_at: Some(at),
+                raised_by: None,
+                text: Some("Review this?".into()),
+                options: vec![],
+            },
+        },
+    )
+    .unwrap();
+    let asks: Value = serde_json::from_str(&success(
+        room.command(&["asks", "--all", "--json"]).output().unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        asks.as_array()
+            .unwrap()
+            .iter()
+            .any(|ask| ask["ask_id"] == ask_id.as_str()),
+        "a raised question remains actionable while the workflow works: {asks}"
+    );
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let current = show(&room.env, &id);
+    assert_eq!(current["record"]["state"], "active", "{current:#}");
+    assert!(
+        current["record"]["attempt"]["asking"].is_null(),
+        "{current:#}"
+    );
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
+#[test]
 fn permission_stays_live_and_explicit_question_routes_with_evidence() {
     for (extra, payload, held) in [
         (

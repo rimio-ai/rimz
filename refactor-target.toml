@@ -4071,7 +4071,8 @@ path = "crates/rimz/src/store"
 # raised shares its record module, four record/error types, open predicate and seven operations (+13).
 # raised::observe and raised::audit share lifecycle settlement and operator audit writes (+2).
 # raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
-surface-budget = 583
+# raised::prepare_raise owns the CLI's basis, rest and captured-reply decisions (+1).
+surface-budget = 584
 
 [[verdict]]
 kind = "item"
@@ -5348,6 +5349,11 @@ reason = "The hook applies first-application human stamps and receipt-gated arme
 kind = "item"
 key = "store::raised::CloseCause"
 reason = "Lifecycle settlement returns typed close causes; the hook renders their stable audit names."
+
+[[verdict]]
+kind = "item"
+key = "store::raised::prepare_raise"
+reason = "Raised-attention policy owns the seen-prompt basis, clean-rest check and current reply floor below the CLI."
 
 [[verdict]]
 kind = "item"

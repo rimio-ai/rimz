@@ -101,6 +101,7 @@ fn is_zero_usize(n: &usize) -> bool {
 pub enum AskDelivery {
     Blocking,
     Async,
+    Raised,
 }
 
 impl AskDelivery {
@@ -108,6 +109,7 @@ impl AskDelivery {
         match self {
             Self::Blocking => "blocking",
             Self::Async => "async",
+            Self::Raised => "raised",
         }
     }
 }
@@ -2075,7 +2077,7 @@ impl AgentState {
             })
     }
 
-    /// Actionable prompts, blocking first and then non-blocking questions in queue order.
+    /// Actionable prompts: blocking, queued native questions, then raised attention.
     pub fn actionable_asks(&self) -> impl Iterator<Item = (OpenAsk, AskDelivery)> + '_ {
         self.open_ask
             .as_ref()
@@ -2095,6 +2097,24 @@ impl AgentState {
                     AskDelivery::Async,
                 )
             }))
+            .chain(
+                self.raised_ask
+                    .iter()
+                    .filter(|_| self.ended_at.is_none())
+                    .map(|ask| {
+                        (
+                            OpenAsk {
+                                extra_questions: 0,
+                                id: ask.ask_id.clone(),
+                                kind: AskKind::Question,
+                                detail: ask.detail(),
+                                native_key: None,
+                                since: ask.opened_at.unwrap_or(ask.raised_at),
+                            },
+                            AskDelivery::Raised,
+                        )
+                    }),
+            )
     }
 
     /// True when the row must reserve pane input for a native prompt. Durable
