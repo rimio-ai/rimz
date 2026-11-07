@@ -449,6 +449,27 @@ pub(super) fn validate_spec(
         }
     }
     for (node, step) in &spec.steps {
+        if let Some(visits) = step.max_visits
+            && matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)))
+            && cycles_to(spec, node, |name| {
+                spec.steps.get(name).is_some_and(|step| {
+                    matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)))
+                }) || (spec.checks.contains_key(name)
+                    && !spec
+                        .edges(name)
+                        .iter()
+                        .any(|edge| edge.outcome != "deadline" && edge.target == "@wait"))
+            })
+        {
+            report.warnings.push(issue(
+                &format!("steps.{node}"),
+                format!(
+                    "cycle through command steps never waits and can spend all {visits} visits \
+                     in one advance; route it through a check that can wait (@wait) \
+                     if that is not intended"
+                ),
+            ));
+        }
         if step.max_visits.is_none()
             && cycles_to(spec, node, |name| {
                 !spec
