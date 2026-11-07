@@ -154,6 +154,7 @@ fn live_current_node_roles_differ_from_every_node_mark_in_each_set() {
             GlyphRole::StatusWaiting,
             GlyphRole::StatusSleeping,
             GlyphRole::PipelineCurrent,
+            GlyphRole::WorkflowHeld,
         ] {
             for mark in [
                 GlyphRole::PipelineFuture,
@@ -168,6 +169,43 @@ fn live_current_node_roles_differ_from_every_node_mark_in_each_set() {
                 );
             }
         }
+        for attention in [GlyphRole::StatusWaiting, GlyphRole::StatusPaused] {
+            assert_ne!(glyph(GlyphRole::WorkflowHeld), glyph(attention), "{set}");
+        }
+    }
+}
+
+#[test]
+fn legacy_parks_and_needs_fix_holds_use_the_held_mark_and_warning_color() {
+    let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+    let machine = super::super::super::machine_config();
+    let glyph = rimz::theme::theme_glyphs(&machine.theme)(GlyphRole::WorkflowHeld);
+    for hold in [None, Some("check_failed"), Some("disk"), Some("store")] {
+        let mut record = record("sweep");
+        if let Some(hold) = hold {
+            record.wait = Some(
+                serde_json::from_value(serde_json::json!({
+                    "node":"sweep", "outcome":"capacity", "hold":hold,
+                    "first":jiff::Timestamp::UNIX_EPOCH,
+                    "last":jiff::Timestamp::UNIX_EPOCH, "count":1,
+                }))
+                .unwrap(),
+            );
+        } else {
+            record.state = RunState::Parked;
+        }
+        let mut out = Vec::new();
+        horizontal(&mut out, &spec, &record, &land_hops()[..1], &[], None, 0).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let style = render::status::workflow(record.state, true).bold();
+        assert!(
+            text.contains(&format!(
+                "{} {}",
+                render::paint(style, &glyph),
+                render::paint(style, "sweep")
+            )),
+            "{hold:?}: {text}"
+        );
     }
 }
 

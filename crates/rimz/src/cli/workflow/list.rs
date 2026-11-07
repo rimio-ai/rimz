@@ -587,7 +587,9 @@ mod tests {
             journal: Vec::new(),
             ignored: &[],
             address: "review#feature".into(),
-            glyph: "?".into(),
+            glyph: rimz::theme::theme_glyphs(&rimz::config::ThemeConfig::default())(
+                workflow_view::glyph_role(&record),
+            ),
             state: RunState::Parked,
             asking: false,
             detail: "user: This decision needs a long explanation".repeat(3),

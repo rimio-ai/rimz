@@ -128,8 +128,10 @@ pub(super) fn horizontal(
             let reached = counts.contains_key(node.node.as_str());
             let check = spec.checks.contains_key(&node.node);
             let terminal = record.state.is_terminal() && node.node == record.node;
-            let state_style =
-                render::status::workflow(record.state, role == GlyphRole::StatusWaiting);
+            let state_style = render::status::workflow(
+                record.state,
+                matches!(role, GlyphRole::StatusWaiting | GlyphRole::WorkflowHeld),
+            );
             let (glyph_style, name_style) = if current {
                 (state_style.bold(), state_style.bold())
             } else if reached {
