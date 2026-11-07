@@ -41,12 +41,7 @@ timeout = "1h"
 `RIMZ_WORKFLOW_DEFINITION` names the workflow's absolute definition folder, distinct from its work directory and the checkout. Steps, judges, script and shell checks, and command steps all receive it. Every workflow agent's Environment section includes a `- workflow:` line naming that folder, even with `env_reminder` off.
 
 ```markdown
-The test suite in this checkout fails. Read context.json in the directory
-$RIMZ_WORKFLOW_DIR names: its "input" object is the check's answer, and
-input.log is the file with the failing output. Fix the code until the suite
-passes, then commit. An earlier attempt may have left uncommitted changes:
-inspect them and continue from them. Do not report that the suite passes.
-The workflow runs it again after your turn.
+The test suite in this checkout fails. Run `rimz workflow show --history` to read the check's answer and log path, and read your working-memory file named in the Workflow note. Fix the code until the suite passes, then commit. An earlier attempt may have left uncommitted changes: inspect them and continue from them. Do not report that the suite passes. The workflow runs it again after your turn.
 ```
 
 Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends cleanly, RimZ stops the agent and follows `then` back to `tests`. The check decides whether the work is done, never the agent. The check's whole answer, `outcome` and `reason` included, becomes the next node's `input`. That is how `log` reaches the agent.
@@ -158,6 +153,8 @@ rimz workflow show "$RUN" --history  # checks and attempts, repeats folded; --js
 rimz workflow show fix-tests  # definition rail, then live runs
 ```
 
+From a workflow step or one of its subagents, omit the target: `rimz workflow show` finds that run, as do `rimz workflow show --history` and `rimz workflow show --json`. Outside a workflow, name a run or use `rimz workflow list`. The compact view prints the absolute notes folder when the run has one.
+
 `list` puts parks, blocking questions, and capacity holds needing a fix under NEEDS YOU, longest waiting first, with a full address and a hint to inspect the first run. The other rows group by workflow, with active and held counts and self-clearing capacity holds last. Each row has a status glyph, a lane such as `#feat-x`, what it is doing, and its age, followed by a horizontal progress rail. Staying sessions name their agent card as `with you in @<handle>`; a cached PR adds ` · PR #N`. A shared origin appears in the group heading; mixed origins appear on each row. Combine the workflow name and lane, such as `fix-tests#feat-x`, instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
 
 A row marked `· N ignored` has fields RimZ ignored in that run's sealed definition. `show` names each path and reason, even after the run finishes. These notices reflect how the current version reads the sealed definition, so an upgrade can add them to an existing run. A clean run has no mark. Start-time warnings about auto-continue or background reporting do not mark runs.
@@ -197,7 +194,7 @@ A script or shell check runs as a child process in the checkout, with no stdin, 
 
 An agent step's `agent` accepts the same layout grammar as `rimz agents`: a kind, profile, virtual cell such as `claude-auto`, or a layout such as `claude,nvim` or `yagni,reflect-notes`. It needs an unambiguous prompt leader and cannot name a team. Judges still take one profile. The layout opens in an unfocused new tab titled `run <leader kind>`. Every agent cell gets the same workflow environment variables; only the leader gets the composed prompt and owns the supervised run. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to every agent. Attempt cost counts the leader only; companion spend still appears on their cards and in stats.
 
-Only the leader also gets a `### Workflow` launch note (including the check's ordered cases, run or shell commands and summaries, or judge summaries, and that push-backs count as visits): what a workflow is, a compact graph rail marking this step, who started the run, why it arrived here, applicable visit caps, the previous attempt, and what follows its turn. It points to `context.json` and `rimz workflow show` for the full record. Automatic runs name the loop task and its current trigger when available. The note is separate from the prompt and is not saved: agent resume and rebirth do not carry it. `rimz workflow restart`, and `rimz agents restart` on a step agent, compose a new note for the relaunched step, saying the user restarted it.
+Only the leader also gets a `### Workflow` launch note (including the check's ordered cases, run or shell commands and summaries, or judge summaries, and that push-backs count as visits): what a workflow is, a compact graph rail marking this step, who started the run, why it arrived here, applicable visit caps, the previous attempt, and what follows its turn. It names the step's working-memory file and points to `rimz workflow show` and `rimz workflow show --history`. Automatic runs name the loop task and its current trigger when available. `rimz workflow restart`, and `rimz agents restart` on a step agent, compose a new note for the relaunched step, saying the user restarted it. Ordinary agent resume refuses a current workflow step, and room rebirth leaves its recovery to the workflow. Providers without a system-text channel receive no launch note.
 
 Set `lifecycle = "turn"` for a one-clean-turn agent step. When the leader's turn ends cleanly, RimZ by default stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. Failed or interrupted turns and provider or budget limits keep the agent open; a later clean end completes the attempt. Provider exit before that end still follows `then` as `died`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
 
@@ -403,7 +400,7 @@ Answer "revise" with a one-line reason when any comment asks for a code
 change that is not already on the branch. Otherwise answer "approve".
 ```
 
-A judge runs headless in the checkout. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. RimZ adds instructions to its prompt: where `context.json` is, and that the answer must be one JSON object of the same shape a script prints, written to `output_path`. A judge must leave the checkout alone. Under [scoped isolation](./security.md#scoped-isolation), RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation, which is the default, only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
+A judge runs headless in the checkout. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. Its Judge note points to `rimz workflow show $RIMZ_WORKFLOW_RUN --history`; its prompt requires one JSON object of the same shape a script prints, written to the supplied `output_path`. A judge must leave the checkout alone. Under [scoped isolation](./security.md#scoped-isolation), RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation, which is the default, only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
 
 A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run. An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and park policy; `workflow show` includes the upgrade instruction.
 
@@ -487,7 +484,7 @@ A `summary` describes the whole graph in `[workflow]`, or one check or step in i
 
 The engine stays simple because nodes follow four rules.
 
-1. **Make every node safe to repeat.** An agent step launches the same prompt on every visit; a command step runs the same command. Both learn how far things got from the world: the repository, the PR, `$RIMZ_WORKFLOW_DIR/notes/`. A check can run twice for one decision, because the process hosting it can die after the script ran.
+1. **Make every node safe to repeat.** An agent step launches the same prompt on every visit; a command step runs the same command. Both learn how far things got from the world: the repository, the PR, and the run's notes folder. A check can run twice for one decision, because the process hosting it can die after the script ran.
 2. **Say what to do with a dirty tree.** A stopped attempt can leave uncommitted work behind. An agent step's prompt tells the agent to keep it, commit it, or discard it; a command must handle that state itself.
 3. **Tune an agent step through its sign, never its prompt file.** A sign is a file, `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, that RimZ adds after the agent step's prompt at every launch until someone deletes it. A judge can write one to steer the next attempt, and so can you before a resume. The prompt file is shared by every run of the workflow.
 4. **Keep judges read-only.** A judge reads and answers. Work belongs in a step.
@@ -497,6 +494,63 @@ Use a sleep check, not a command that sleeps, for a pause between nodes. It does
 `$RIMZ_WORKFLOW_DIR/notes/` links to the run's kept notes folder, under the room's `automation-notes/<yyyymmdd>/<HHMMSS>Z-workflow-<workflow>-<lane>/`. Each agent step's launch brief names `<step>-notes.md` there as its working memory across visits, restarts, and its subagents. Write it for someone arriving cold, including changes outside the repository: pushes, PR or issue comments, databases, and remote services. Only that step's agent and its subagents write its file. Set `notes = false` on an agent step to omit that instruction; command steps warn and ignore the field. Runs created before notes support keep their old scratch directory and receive no notes instruction.
 
 RimZ never reads the notes. A check that walks a list can record there the items it finished too. Name each file after the item it records, so a repeat overwrites its own file and never adds a second one. Notes survive run-home cleanup and default to permanent retention; `gc.automation_notes_retention` can expire closed runs' folders, and a hard reset removes them.
+
+### Reflect before a failed ending
+
+A hand-written retry loop often leaves only its last error when it gives up. Add an ordinary agent step to leave a cold-reader account instead. If your status script distinguishes `retry`, `done`, and `failed`, this graph sends a failed answer, an exhausted fix cap, or the run's deadline through `reflect`. Success still ends directly. Save it as `~/.rimz/workflows/fix-and-reflect/workflow.toml`, with your existing status script at `checks/status.sh` and the fixer prompt at `prompts/fix.md`; choose a deadline for your job.
+
+```toml
+[workflow]
+scope = "worktree"
+start = "result"
+deadline = "2026-11-08T18:00:00Z"
+on.deadline = "reflect"
+
+[checks.result]
+run = "sh checks/status.sh"
+on = { retry = "fix", done = "@done", failed = "reflect", invalid = "reflect" }
+
+[steps.fix]
+agent = "claude"
+prompt-file = "prompts/fix.md"
+lifecycle = "turn"
+then = "result"
+max-visits = 3
+on.cap = "reflect"
+timeout = "1h"
+
+[steps.reflect]
+agent = "reflector"
+prompt-file = "prompts/reflect.md"
+lifecycle = "turn"
+then = "finish-failed"
+max-visits = 1
+on.cap = "@failed"
+timeout = "10m"
+
+[checks.finish-failed]
+shell = "true"
+on = { pass = "@failed", fail = "@failed" }
+```
+
+Use a cheap [profile](./fleet.md#profiles-shape-an-agent-for-one-job) for the reflection, for example `~/.rimz/agents/reflector.md`, on your configured [Claude kind base](../reference/definitions.md#kind-bases):
+
+```markdown
+---
+description: Summarize a workflow's failed work
+agent: claude
+model: haiku
+tools: [Bash, Read, Write]
+---
+```
+
+Save this prompt as `~/.rimz/workflows/fix-and-reflect/prompts/reflect.md`:
+
+```markdown
+Run `rimz workflow show --history`. Read every step's notes in the folder named by `rimz workflow show`, including your own earlier notes if present. Write only your own reflect-notes.md there. Explain for someone arriving cold what was tried, what failed, what remains, and which changes happened outside the repository. Suggest a concrete improvement to the next run's prompt or checks. Do not modify other steps' notes or change the code.
+```
+
+Validate with `rimz workflow validate fix-and-reflect` before starting it. Reflection is part of the graph, not a special RimZ phase: it writes its own notes, then the final check ends the run as failed, preserving the original result. A deadline fires only once, so it does not interrupt the reflection it routed to. The run's `history.txt` is written after that ending; the reflection reads the live history command, not a file that does not exist yet.
 
 ### The check answer
 
@@ -517,7 +571,7 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 
 ### The context file
 
-The `### Workflow` note points here for the input and previous attempt in full; its visit numbers are the same as this attempt's `visit` and `visits` below.
+Scripts and command steps can read `$RIMZ_WORKFLOW_DIR/context.json` for structured input and the previous attempt. Models use the workflow views instead. The Workflow note's visit numbers match this attempt's `visit` and `visits` below.
 
 | Field | Meaning |
 | --- | --- |

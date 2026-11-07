@@ -304,9 +304,9 @@ For argv channels the wrapper removes matching raw replacement argv before addin
 
 #### Launch reminders
 
-What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, delivered through the adapter's append-system-text channel. Claude, Codex, Qwen, Droid, Grok, Qoder, and MiniMax take it in a native argv flag or config key. Pi, OpenCode, and OMP take it as `RIMZ_LAUNCH_REMINDERS`, which RimZ's in-process extension appends to the root session's system prompt. Every other provider gets only the child no-delegation body, through a user-prompt fallback.
+What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, delivered through the adapter's append-system-text channel. Claude, Codex, Qwen, Droid, Grok, Qoder, and MiniMax take it in a native argv flag or config key. Pi, OpenCode, and OMP take it as `RIMZ_LAUNCH_REMINDERS`, which RimZ's in-process extension appends to the root session's system prompt. Every other provider gets only the child no-delegation body, through a user-prompt fallback. The reminder sections themselves have no prompt fallback.
 
-The wrapper collects the parts as a `LaunchReminders` value, and [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) renders identity followed by `###` sections in a fixed order. Environment always carries the temp lines, so every launch carries the tag.
+The wrapper collects the parts as a `LaunchReminders` value, and [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) renders identity followed by `###` sections in a fixed order. Environment always carries the temp lines, so every launch on an adapter with a system-text channel carries the tag.
 
 | Order | Content | Present when |
 | --- | --- | --- |
