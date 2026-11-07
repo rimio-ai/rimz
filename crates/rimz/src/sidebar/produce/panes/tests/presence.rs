@@ -18,6 +18,7 @@ fn frame_client_samples_carry_clocks_from_pushed_direct_and_prior_views() {
         presence: ClientPresence {
             human_clients: 1,
             client_input_ms: clocks.clone(),
+            ..Default::default()
         },
     };
     let mut prior = frame(Vec::new());

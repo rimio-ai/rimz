@@ -85,6 +85,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut clients = Vec::new();
     let mut human_clients = 0;
     let mut client_input_ms = std::collections::BTreeMap::new();
+    let mut unfocused_clients = std::collections::BTreeSet::new();
     for line in String::from_utf8_lossy(stdout).lines() {
         let mut cols = line.splitn(4, '|');
         let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
@@ -104,6 +105,9 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
         human_clients += 1;
         let pane = PaneId::from_parts(MuxName::Tmux, raw_pane);
         let client_id = MuxClientId::Tmux(raw_client.to_owned());
+        if !flags.split(',').any(|flag| flag.trim() == "focused") {
+            unfocused_clients.insert(client_id.clone());
+        }
         clients.push(ClientPaneView {
             client_id: client_id.clone(),
             pane_id: pane.clone(),
@@ -131,6 +135,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
         presence: ClientPresence {
             human_clients,
             client_input_ms,
+            unfocused_clients,
         },
     }
 }
@@ -311,6 +316,21 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn terminal_focus_does_not_remove_clients_or_their_activity_clocks() {
+        let view = parse_client_view(
+            b"away|%1|1|attached\nhere|%2|2|attached,focused,UTF-8\n\
+              control|%3|3|ignore-size\n",
+        );
+        assert_eq!(view.clients.len(), 2);
+        assert_eq!(view.presence.human_clients, 2);
+        assert_eq!(view.presence.last_input_ms(), Some(2_000));
+        assert_eq!(
+            view.presence.unfocused_clients,
+            [MuxClientId::Tmux("away".into())].into()
+        );
     }
 
     #[test]

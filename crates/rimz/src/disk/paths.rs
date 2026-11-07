@@ -1269,6 +1269,16 @@ impl RuntimePaths {
         self.lock_path("focus-anchor.lock")
     }
 
+    /// Per-pane terminal-input observations and non-typing exclusions.
+    pub(crate) fn typing_path(&self) -> PathBuf {
+        self.lane_path("typing.json")
+    }
+
+    /// Serializes terminal-input observations with pane-write exclusions.
+    pub(crate) fn typing_lock_path(&self) -> PathBuf {
+        self.lock_path("typing.lock")
+    }
+
     /// Serializes complete pane writes, including their submit key.
     pub fn pane_write_lock(&self, pane: &PaneId) -> PathBuf {
         self.shared_root

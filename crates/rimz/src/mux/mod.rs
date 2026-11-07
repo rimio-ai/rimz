@@ -19,6 +19,11 @@ pub mod room_settings;
 mod selection;
 pub mod tab_name;
 pub mod tmux;
+#[expect(
+    dead_code,
+    reason = "Connected by the following pane-write, delivery and host commits."
+)]
+pub(crate) mod typing;
 pub(crate) mod width;
 pub(crate) mod width_target;
 pub mod winsize;
@@ -106,7 +111,7 @@ pub(crate) const REMOTE_CLIENT_ENV: [&str; 7] = [
     OUTER_SCROLL_BRACKET_ENV,
 ];
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -441,6 +446,8 @@ pub struct ClientPresence {
     pub human_clients: usize,
     /// Last input in Unix milliseconds, omitting clients without a known clock.
     pub client_input_ms: BTreeMap<crate::ids::MuxClientId, u64>,
+    /// Clients whose outer terminal is known to lack focus; empty when unreported.
+    pub unfocused_clients: BTreeSet<crate::ids::MuxClientId>,
 }
 
 impl ClientPresence {
@@ -457,6 +464,17 @@ pub struct ClientView {
 }
 
 impl ClientView {
+    pub(crate) fn typing_clients(&self) -> Vec<ClientPaneView> {
+        self.clients
+            .iter()
+            .filter(|client| {
+                !typing::InputSource::uses_tty()
+                    || !self.presence.unfocused_clients.contains(&client.client_id)
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn attended_until(&self, pane: &PaneId, hold: Duration) -> Option<u64> {
         crate::pane::attended_until(&self.clients, &self.presence.client_input_ms, pane, hold)
     }

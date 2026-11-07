@@ -251,6 +251,7 @@ impl TopologyClients {
             presence: crate::mux::ClientPresence {
                 human_clients,
                 client_input_ms,
+                ..Default::default()
             },
             viewed_panes: viewed_panes
                 .into_iter()

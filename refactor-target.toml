@@ -1512,7 +1512,8 @@ allowed-dependencies = [
 # Versioned price-table and refresh-state paths and atomic::publish_staged_replace (+2).
 # paths::PRICING_CACHE_VERSION ties the table schema to its versioned paths (+1).
 # StatePaths::notes_run resolves relative run folders within their lifetime class (+1).
-surface-budget = 325
+# RuntimePaths::typing_path and typing_lock_path class the pane-input record and lock (+2).
+surface-budget = 327
 
 [[verdict]]
 kind = "item"
@@ -3144,7 +3145,35 @@ path = "crates/rimz/src/mux"
 # write_client_input and ClientInputWriteError share plugin input publication with the host (+2).
 # Room settings expose their record writers, diff and vocabulary; key registration is shared (+12).
 # PopupRequest and MuxBackend::open_popup share the interactive palette job (+2).
-surface-budget = 319
+# typing, its record, samples, source selector and operations share pane input timing (+14).
+# ClientView::typing_clients narrows only Linux typing viewers by terminal focus (+1).
+# TypingView and its backend selector distinguish focus evidence from corroborating clocks (+2).
+surface-budget = 336
+
+[[verdict]]
+kind = "item"
+key = "mux::typing"
+reason = "Pane writes, delivery and the sidebar share one locked room-runtime terminal-input rule."
+
+[[verdict]]
+kind = "item"
+key = "mux::typing::TypingRecord"
+reason = "Host and delivery observations preserve pane input and non-typing exclusions across viewer departure."
+
+[[verdict]]
+kind = "item"
+key = "mux::typing::TtySample"
+reason = "A stat's instant fences the client-view read that may decide its atime advance."
+
+[[verdict]]
+kind = "item"
+key = "mux::typing::TypingView"
+reason = "Host and delivery distinguish reported terminal focus from viewers whose input clocks must corroborate an advance."
+
+[[verdict]]
+kind = "item"
+key = "mux::typing::InputSource"
+reason = "One platform selector feeds terminal observations or viewing-client clocks into the shared hold deadline."
 
 [[verdict]]
 kind = "item"
