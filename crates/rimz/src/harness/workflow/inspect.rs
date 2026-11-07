@@ -88,7 +88,8 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry], held: Option<&HeldSes
     hops
 }
 
-/// The latest parked resume at a node or route into it, shared by arrival and park views.
+/// The latest parked or on-break resume at a node or route into it,
+/// shared by arrival and park views.
 /// Active-run extensions do not replace the sender.
 pub fn routing_hop(
     spec: &WorkflowSpec,
@@ -96,11 +97,26 @@ pub fn routing_hop(
     node: &str,
     held: Option<&HeldSession>,
 ) -> Option<Hop> {
+    let hops = hops(spec, journal, held);
     let mut resumed = None;
-    for hop in hops(spec, journal, held).into_iter().rev() {
+    for (index, hop) in hops.iter().cloned().enumerate().rev() {
         match hop.kind {
             HopKind::Restart if hop.node == node => return Some(hop),
-            HopKind::Resume if hop.node == node && resumed.is_none() => resumed = Some(hop),
+            HopKind::Resume if hop.node == node => {
+                if hops[..index]
+                    .iter()
+                    .rev()
+                    .find(|prior| prior.kind != HopKind::VisitsReset)
+                    .is_some_and(|prior| {
+                        prior.target.as_deref().is_some_and(|to| spec.is_break(to))
+                    })
+                {
+                    return Some(hop);
+                }
+                if resumed.is_none() {
+                    resumed = Some(hop);
+                }
+            }
             HopKind::Park { .. } if resumed.is_some() => return resumed,
             HopKind::Route if hop.target.as_deref() == Some(node) => return Some(hop),
             _ => {}
@@ -330,10 +346,18 @@ fn attempt_superseded(
     }) else {
         return false;
     };
+    if outcome == AttemptOutcome::Canceled
+        && entry.node == "@break"
+        && matches!(next.event, JournalEvent::Resume { .. })
+    {
+        return true;
+    }
     if next.node != entry.node {
         return false;
     }
     match (&next.event, outcome) {
+        (JournalEvent::Resume { .. }, AttemptOutcome::Canceled) => true,
+        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Died) => outcome == "invalid",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Canceled) => outcome == "deadline",
         (
@@ -408,7 +432,7 @@ pub(super) fn first_bound(
 ) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
     let deadline = record
         .deadline
-        .filter(|_| !record.deadline_fired)
+        .filter(|_| !record.deadline_fired && !spec.is_break(&record.node))
         .map(|at| (at, "deadline".into()));
     let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout".into()));
     let hold = match hold {

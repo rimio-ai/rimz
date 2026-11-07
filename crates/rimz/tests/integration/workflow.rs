@@ -130,6 +130,80 @@ fn start(env: &Env) -> String {
         .into()
 }
 
+fn start_legacy(env: &Env) -> String {
+    start_legacy_with(env, || env.rimz())
+}
+
+fn start_legacy_with(env: &Env, command: impl Fn() -> std::process::Command) -> String {
+    use rimz::store::workflow as records;
+    use sha2::Digest as _;
+
+    let state = env.state_path_for(&env.project_root);
+    let dir = env.rimz_home().join("workflows/review");
+    let text = fs::read_to_string(dir.join("workflow.toml")).unwrap();
+    let spec: rimz::harness::workflow::WorkflowSpec = toml::from_str(&text).unwrap();
+    let id = rimz::ids::WorkflowRunId::new();
+    let now = jiff::Timestamp::now();
+    let value = json!({
+        "version":3, "default_lifecycle":"until", "id":id, "workflow":"review",
+        "spec_dir":dir, "spec_digest":hex::encode(sha2::Sha256::digest(text.as_bytes())),
+        "prompt":"Review this", "project_root":env.project_root,
+        "scope":{"kind":spec.workflow.scope,"path":env.project_root},
+        "created_at":now, "state":"active", "node":spec.workflow.start, "entered_at":now,
+        "deadline":spec.workflow.deadline.map(|raw| raw.parse::<jiff::Timestamp>().unwrap()),
+        "deadline_fired":false, "next_seq":1, "visits":{}, "visit_grant":0,
+    });
+    {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        records::initialize(
+            &state,
+            &serde_json::from_value(value.clone()).unwrap(),
+            text.as_bytes(),
+            &guard,
+        )
+        .unwrap();
+        rimz::disk::atomic::write_temp_then_rename(&state.workflow(&id).record, &value).unwrap();
+    }
+    let program = command().get_program().to_owned();
+    rimz::child_process::spawn_detached_reaped(
+        program,
+        |advance| {
+            use std::os::unix::process::CommandExt;
+
+            let configured = command();
+            advance.args(configured.get_args());
+            for (key, value) in configured.get_envs() {
+                if let Some(value) = value {
+                    advance.env(key, value);
+                } else {
+                    advance.env_remove(key);
+                }
+            }
+            advance
+                .current_dir(configured.get_current_dir().unwrap())
+                .process_group(0);
+            advance
+                .args(["workflow", "advance", id.as_str()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            Ok(())
+        },
+        "legacy workflow advance",
+    )
+    .unwrap();
+    id.to_string()
+}
+
+fn keep_legacy_routes(env: &Env, id: &str) {
+    let state = env.state_path_for(&env.project_root);
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let path = state.workflow(&id.parse().unwrap()).record;
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("route_defaults");
+    rimz::disk::atomic::write_temp_then_rename(&path, &value).unwrap();
+}
+
 fn show(env: &Env, id: &str) -> Value {
     serde_json::from_str(&success(command(env, &["workflow", "show", id, "--json"]))).unwrap()
 }
@@ -762,7 +836,7 @@ fn malformed_and_unrouted_objects_are_invalid() {
 #[test]
 fn invalid_defaults_park_and_deleted_script_is_invalid() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
-    let id = start(&env);
+    let id = start_legacy(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::remove_file(dir.join("checks/pr.sh")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
@@ -782,7 +856,7 @@ fn failed_script(body: &str) -> Value {
         body,
     );
     fs::rename(dir.join("checks/pr.sh"), dir.join("checks/broken.sh")).unwrap();
-    let id = start(&env);
+    let id = start_legacy(&env);
     settled(&env, &id, "parked")
 }
 
@@ -893,7 +967,7 @@ fn timeout_kills_script_and_routes_or_parks() {
             "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
         );
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-        let id = start(&env);
+        let id = start_legacy(&env);
         let value = until(&env, &id, |v| script_pid(v).is_some());
         let pid = script_pid(&value).unwrap();
         backdate_check(&env, &value);
@@ -933,14 +1007,12 @@ fn timeout_before_script_spawn_records_no_digests() {
     let socket = env.runtime_root.join("context-gate.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket)
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
+    let id = start_legacy_with(&env, || {
+        let mut command = env.rimz();
+        command.env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket);
+        command
+    });
+    let id = id.as_str();
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut gate = loop {
         if let Ok((stream, _)) = listener.accept() {
@@ -971,7 +1043,7 @@ fn timeout_before_script_spawn_records_no_digests() {
 #[test]
 fn waiting_timeout_and_live_deadline_use_original_clock() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env);
+    let id = start_legacy(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     backdate_check(&env, &value);
     success(command(&env, &["workflow", "advance", &id]));
@@ -1128,14 +1200,12 @@ fn stale_host_cannot_overwrite_resumed_context() {
     let socket = env.runtime_root.join("context-gate.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "run", "review"])
-            .env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket)
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap();
+    let id = start_legacy_with(&env, || {
+        let mut command = env.rimz();
+        command.env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket);
+        command
+    });
+    let id = id.as_str();
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut gate = loop {
         if let Ok((stream, _)) = listener.accept() {
@@ -1302,6 +1372,7 @@ fn human_show_wait_and_journal_are_readable() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &pending);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+    keep_legacy_routes(&env, &id);
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
         text.starts_with("review#project\n☾ waiting at pr"),
@@ -1567,9 +1638,9 @@ fn validate_json_shape_errors_and_exit_status() {
             "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
-                {"outcome":"timeout", "target":"@user", "source":"default", "fires":"never", "because":"no-timeout"},
-                {"outcome":"invalid", "target":"@user", "source":"default", "fires":"yes"},
-                {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
+                {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
+                {"outcome":"invalid", "target":"@failed", "source":"default", "fires":"yes"},
+                {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
             ]
         }])
     );
@@ -1625,9 +1696,9 @@ fn validate_json_shape_errors_and_exit_status() {
                 "edges":[
                     {"outcome":"fail", "target":"@user", "source":"explicit", "fires":"yes"},
                     {"outcome":"pass", "target":"@done", "source":"explicit", "fires":"yes"},
-                    {"outcome":"timeout", "target":"@user", "source":"default", "fires":"never", "because":"no-timeout"},
-                    {"outcome":"invalid", "target":"@user", "source":"default", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
+                    {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
+                    {"outcome":"invalid", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
                 ]
             }]
         })
@@ -1635,11 +1706,11 @@ fn validate_json_shape_errors_and_exit_status() {
     let text = success(command(&env, &["workflow", "validate"]));
     assert!(text.contains("printf shell"), "{text}");
     assert!(
-        text.contains("timeout → @user (default, never: no timeout)"),
+        text.contains("timeout → @failed (default, never: no timeout)"),
         "{text}"
     );
     assert!(
-        text.contains("deadline → @user (default, only with a deadline)"),
+        text.contains("deadline → @failed (default, only with a deadline)"),
         "{text}"
     );
     for runner in ["run", "shell"] {
@@ -1665,8 +1736,8 @@ fn validate_json_shape_errors_and_exit_status() {
                 "agent":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"then", "target":"pr", "source":"explicit", "fires":"yes"},
-                    {"outcome":"cap", "target":"@user", "source":"default", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@user", "source":"default", "fires":"with-deadline"}
+                    {"outcome":"cap", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
                 ]
             })
         );

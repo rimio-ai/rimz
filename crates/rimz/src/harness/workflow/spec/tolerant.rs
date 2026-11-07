@@ -9,6 +9,7 @@ mod clean;
 pub(super) fn parse(
     mut value: toml::Value,
     default: crate::store::workflow::StepLifecycle,
+    routes: crate::store::workflow::RouteDefaults,
 ) -> Result<WorkflowSpec, SpecErr> {
     let mut ignored = Vec::new();
     let mut indices = BTreeMap::new();
@@ -20,6 +21,7 @@ pub(super) fn parse(
         let error =
             match serde_path_to_error::deserialize::<_, WorkflowSpec>(deserializer) {
                 Ok(mut spec) => {
+                    spec.route_defaults = routes;
                     if default.is_turn() {
                         for step in spec.steps.values_mut().filter(|step| step.agent.is_some()) {
                             step.lifecycle.get_or_insert(default);
@@ -88,6 +90,7 @@ pub(super) fn parse(
         if path.len() == 4
             && matches!(path[0].as_str(), "checks" | "steps")
             && path[2] == "on"
+            && !(path[0] == "steps" && path[3] == "invalid")
             && let Some(target) = at_mut(&mut value, &path)
         {
             // A typed placeholder lets cleanup classify dead routes without dropping live ones.

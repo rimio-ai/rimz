@@ -71,6 +71,7 @@ impl AttemptHost for FakeHost {
         &self,
         _: &std::path::Path,
         _: &std::path::Path,
+        excluded: &[String],
     ) -> Result<Occupancy, WorkflowErr> {
         self.occupancies.set(self.occupancies.get() + 1);
         if let Some(check) = &*self.on_occupancy.borrow() {
@@ -82,14 +83,35 @@ impl AttemptHost for FakeHost {
                 crate::harness::schedule::takeover::OpenTurn::Working,
             )]));
         }
-        Ok(match &*self.occupancy.borrow() {
+        let mut occupancy = match &*self.occupancy.borrow() {
             Occupancy::Free => Occupancy::Free,
             Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
             Occupancy::Blocked(blockers) => Occupancy::Blocked(blockers.clone()),
-        })
+        };
+        match &mut occupancy {
+            Occupancy::Occupied(handles) if !handles.is_empty() => {
+                handles.retain(|handle| !excluded.contains(handle));
+                if handles.is_empty() {
+                    return Ok(Occupancy::Free);
+                }
+            }
+            Occupancy::Blocked(blockers) if !blockers.is_empty() => {
+                blockers.retain(|(handle, _)| !excluded.contains(handle));
+                if blockers.is_empty() {
+                    return Ok(Occupancy::Free);
+                }
+            }
+            _ => {}
+        }
+        Ok(occupancy)
     }
 
-    fn evict(&self, _: &std::path::Path, _: &std::path::Path) -> Result<Vec<String>, WorkflowErr> {
+    fn evict(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &[String],
+    ) -> Result<Vec<String>, WorkflowErr> {
         self.evictions.set(self.evictions.get() + 1);
         if self.evict_error.get() {
             return Err(WorkflowErr::Refused("occupant did not stop".into()));
@@ -1155,7 +1177,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "invalid"
-        && edge.target == "@user"
+        && edge.target == "@failed"
         && edge.source == EdgeSource::Default));
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
@@ -1171,7 +1193,9 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
             .warnings
             .iter()
             .any(|issue| issue.path == "checks.pick"
-                && issue.message.contains("retries once, then parks")
+                && issue
+                    .message
+                    .contains("retries once, then follows on.invalid")
                 && !issue.message.contains("ends the attempt as limited")),
         "{codex:?}"
     );

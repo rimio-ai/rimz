@@ -87,6 +87,15 @@ pub(super) fn validate_spec(
     if let Some(target) = &spec.workflow.on.deadline {
         report.target(spec, "workflow.on.deadline", target);
     }
+    if spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
+        && let Some(spec::OnBreak::Target(target)) = &spec.workflow.on_break
+        && !matches!(target.as_str(), "@done" | "@failed")
+    {
+        report.error(
+            "workflow.on-break",
+            "use @failed, @done, or { agent = \"<profile>\" }",
+        );
+    }
     for (node, check) in &spec.checks {
         let path = format!("checks.{node}");
         report.node_name(&path, node);
@@ -225,7 +234,10 @@ pub(super) fn validate_spec(
         .collect::<BTreeSet<_>>();
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
-        report.node_name(&path, node);
+        let at_break = spec.is_break(node);
+        if !at_break {
+            report.node_name(&path, node);
+        }
         if let Some(cap) = &step.max_visits_per_outcome {
             let cap_path = format!("{path}.max-visits-per-outcome");
             if !cap.reset_on().is_empty() && step.max_visits.is_none() {
@@ -267,7 +279,7 @@ pub(super) fn validate_spec(
         }
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
         let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
-        if agent && step.prompt_file.is_none() {
+        if agent && !at_break && step.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
                 "an agent step requires prompt-file",
@@ -322,10 +334,11 @@ pub(super) fn validate_spec(
                 "then must name a check or a nonempty list of checks",
             );
         }
-        if step
-            .then
-            .iter()
-            .any(|target| !spec.checks.contains_key(target))
+        if !at_break
+            && step
+                .then
+                .iter()
+                .any(|target| !spec.checks.contains_key(target))
         {
             report.error(
                 &format!("{path}.then"),
@@ -377,8 +390,12 @@ pub(super) fn validate_spec(
                 );
             }
         }
-        for (outcome, target) in [("asked", &step.on.asked), ("cap", &step.on.cap)] {
-            if outcome == "asked" && !agent {
+        for (outcome, target) in [
+            ("asked", &step.on.asked),
+            ("cap", &step.on.cap),
+            ("invalid", &step.on.invalid),
+        ] {
+            if matches!(outcome, "asked" | "invalid") && !agent {
                 continue;
             }
             if let Some(target) = target {
@@ -434,7 +451,11 @@ pub(super) fn validate_spec(
                 {
                     (
                         "checks",
-                        "auto-continue is off; a failed Codex judge retries once, then parks",
+                        if spec.route_defaults == crate::store::workflow::RouteDefaults::Park {
+                            "auto-continue is off; a failed Codex judge retries once, then parks"
+                        } else {
+                            "auto-continue is off; a failed Codex judge retries once, then follows on.invalid"
+                        },
                     )
                 } else {
                     (

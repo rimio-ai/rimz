@@ -39,7 +39,7 @@ fn tick_routes_check_timeout_and_workflow_deadline_before_far_backoff() {
             "{header}[checks.pr]\nsummary=\"Review the work\"\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='{timeout}'\n"
         );
         let (env, _) = fixture(&spec, PENDING);
-        let id = start(&env);
+        let id = start_legacy(&env);
         let value = tick_until(&env, &id, "parked");
         assert_eq!(
             value["record"]["park"]["reason"],
@@ -51,7 +51,7 @@ fn tick_routes_check_timeout_and_workflow_deadline_before_far_backoff() {
 #[test]
 fn tick_fires_a_deadline_granted_after_the_recheck_was_published() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env);
+    let id = start_legacy(&env);
     until(&env, &id, |v| v["record"]["recheck_at"].is_string());
     let deadline = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(2);
     success(command(

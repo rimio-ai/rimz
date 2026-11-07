@@ -109,7 +109,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         } else {
             assert_eq!(report.rows[0].runner, "condition");
             assert!(report.rows[0].edges.iter().any(|e| e.outcome == "invalid"
-                && e.target == "@user"
+                && e.target == "@failed"
                 && e.source == EdgeSource::Default));
         }
     }

@@ -5,6 +5,97 @@ const AT: &str = "2000-01-01T12:00:00Z";
 const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[checks.gate]\nelse='pending'\non={ready='later',pending='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[checks.later]\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
+fn active_break_resume_receipt_counts_the_destination_step_visits() {
+    let (env, mut record) = fixture("active", None, vec![]);
+    record.route_defaults = rimz::store::workflow::RouteDefaults::OnBreak;
+    record.node = "@break".into();
+    record.input = Some(json!({"outcome":"died", "edge":"invalid", "from":"build"}));
+    record.visits.insert(
+        "build".into(),
+        rimz::store::workflow::StepVisits {
+            total: 1,
+            outcomes: Vec::new(),
+        },
+    );
+    record.attempt = Some(
+        serde_json::from_value(json!({
+            "kind":"agent", "lifecycle":"stay", "seq":1, "node":"@break", "visit":1,
+            "started_at":record.entered_at, "host":{"pid":0,"start":null}
+        }))
+        .unwrap(),
+    );
+    save(&env, &record);
+    sealed_spec(
+        &env,
+        &record,
+        "[workflow]\nscope='worktree'\nstart='build'\non-break={agent='claude'}\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=2\nthen='@done'\n",
+    );
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "resume", record.id.as_str()])
+            .env("RIMZ_BIN", "/bin/true")
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        receipt.starts_with("resumed review#project at build · build 1 of 2 visits\n"),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn active_break_resume_receipts_its_source_instead_of_an_extension() {
+    for live in [true, false] {
+        for at in [None, Some("other")] {
+            let (env, mut record) = fixture("active", None, vec![]);
+            record.route_defaults = rimz::store::workflow::RouteDefaults::OnBreak;
+            record.node = "@break".into();
+            record.input = Some(json!({"outcome":"invalid","edge":"invalid","from":"gate"}));
+            if live {
+                record.attempt = Some(
+                    serde_json::from_value(json!({
+                        "kind":"agent", "lifecycle":"stay", "seq":1, "node":"@break",
+                        "visit":1, "started_at":record.entered_at,
+                        "host":{"pid":0,"start":null},
+                    }))
+                    .unwrap(),
+                );
+                record.next_seq = 2;
+            }
+            save(&env, &record);
+            sealed_spec(
+                &env,
+                &record,
+                "[workflow]\nscope='worktree'\nstart='gate'\non-break={agent='claude'}\n\
+                 [checks.gate]\nsleep='1h'\nthen='@done'\n\
+                 [checks.other]\nsleep='1h'\nthen='@done'\n",
+            );
+            let mut args = vec!["workflow", "resume", record.id.as_str()];
+            if let Some(at) = at {
+                args.extend(["--at", at]);
+            }
+            let target = at.unwrap_or("gate");
+            let receipt = success(command(&env, &args));
+            assert!(
+                receipt.starts_with(&format!("resumed review#project at {target}\n")),
+                "{receipt}"
+            );
+            let value = until(&env, record.id.as_str(), |value| {
+                value["record"]["node"] == target
+            });
+            let history = human(&env, &record, true);
+            assert!(
+                history.contains(&format!("{target} resume → {target} ·")),
+                "live={live}, at={at:?}: {history}"
+            );
+            let resumes = events(&value, "resume");
+            assert_eq!(resumes.len(), 1, "{value:#}");
+            assert_eq!(resumes[0]["node"], target, "{value:#}");
+        }
+    }
+}
+
+#[test]
 fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_writing() {
     for (state, node) in [("active", "build"), ("parked", "build"), ("parked", "gate")] {
         let (env, mut record) = fixture(state, (state == "parked").then_some("user"), vec![]);
@@ -329,7 +420,7 @@ fn cap_evidence_names_the_engine_route_that_entered_the_step() {
         ),
         "exit 7\n",
     );
-    let id = start(&env);
+    let id = start_legacy(&env);
     let value = settled(&env, &id, "parked");
     assert_eq!(value["record"]["park"]["reason"], "cap", "{value:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
@@ -348,7 +439,7 @@ fn cap_explains_each_visit_and_the_refused_visit_with_copyable_options() {
             .replace("max-visits=2", "max-visits=1"),
         "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
     );
-    let id = start(&env);
+    let id = start_legacy(&env);
     let parked = settled(&env, &id, "parked");
     assert_eq!(parked["record"]["park"]["reason"], "cap", "{parked:#}");
     success(
@@ -426,6 +517,7 @@ fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
+    keep_legacy_routes(&env, id);
     success(command(&env, &["workflow", "advance", id]));
     let value = until(&env, id, |value| {
         value["record"]["wait"]["outcome"] == "queued"

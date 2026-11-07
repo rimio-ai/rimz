@@ -83,7 +83,7 @@ fn decided(value: &Value) -> bool {
 #[test]
 fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     let room = room();
-    let (id, run) = room.launch();
+    let (id, run) = room.launch_legacy();
     opened_turn(&room, &id, &run);
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = until(&room.env, &id, decided);

@@ -55,30 +55,38 @@ pub(super) fn resume(
 ) -> Result<()> {
     let run = select(target, "resume", globals, at, extend)?;
     let spec = workflow::load_run(&run.paths.home, &run.record)?;
-    let resumed = run.record.state == RunState::Parked;
+    let resumed = run.record.state == RunState::Parked || run.record.node == "@break";
     let record = workflow::resume(&run.state, &run.record.id, at, extend)?;
+    let node = record
+        .attempt
+        .as_ref()
+        .filter(|attempt| attempt.node == "@break")
+        .and_then(|attempt| attempt.ending.as_ref()?.route.as_ref())
+        .map_or(record.node.as_str(), |verdict| verdict.target.as_str());
     let address = record.address().to_string();
     let now = jiff::Timestamp::now();
     let grant = record.visit_grant - run.record.visit_grant;
     let mut text = if resumed {
-        format!("resumed {address} at {}", record.node)
+        format!("resumed {address} at {node}")
     } else {
         format!("extended {address}")
     };
-    let step = spec.steps.get(&record.node);
+    let step = spec.steps.get(node);
     if resumed
         && let Some((_, used, max)) = step.and_then(|step| {
-            step.tripped_visit_bound(&record).or_else(|| {
+            let mut destination = record.clone();
+            destination.node = node.into();
+            step.tripped_visit_bound(&destination).or_else(|| {
                 step.visit_bounds(
-                    record.visits.get(&record.node),
-                    record.visit_bucket(),
-                    record.visit_grant,
+                    destination.visits.get(node),
+                    destination.visit_bucket(),
+                    destination.visit_grant,
                 )
                 .next()
             })
         })
     {
-        text.push_str(&format!(" · {} {used} of {max} visits", record.node));
+        text.push_str(&format!(" · {node} {used} of {max} visits"));
     }
     if grant > 0 {
         text.push_str(&if resumed {
@@ -104,10 +112,8 @@ pub(super) fn resume(
     )?;
     if !record.deadline_fired
         && let Some(deadline) = record.deadline.filter(|deadline| *deadline <= now)
+        && let Some(target) = spec.target(node, "deadline")
     {
-        let target = spec
-            .target(&record.node, "deadline")
-            .unwrap_or_else(|| "@user".into());
         writeln!(
             render::err(),
             "warning: deadline {} has already passed; {} — {}",

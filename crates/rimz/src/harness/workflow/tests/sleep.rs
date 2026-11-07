@@ -256,8 +256,8 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
         [
             ("then", "poll", EdgeSource::Explicit),
             ("sleeping", "@wait", EdgeSource::Default),
-            ("invalid", "@user", EdgeSource::Default),
-            ("deadline", "@user", EdgeSource::Default),
+            ("invalid", "@failed", EdgeSource::Default),
+            ("deadline", "@failed", EdgeSource::Default),
         ]
     );
 }

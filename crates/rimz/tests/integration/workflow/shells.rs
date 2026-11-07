@@ -108,7 +108,7 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
             .replace("on.fail='@user'", "on.fail='@wait'"),
     )
     .unwrap();
-    let id = start(&env);
+    let id = start_legacy(&env);
     let value = until(&env, &id, |v| {
         v["record"]["wait"]["outcome"] == "fail" && v["record"]["attempt"].is_null()
     });
@@ -144,7 +144,7 @@ fn shell_spawn_errors_are_invalid() {
             .replace("on.fail='@user'", "on.fail='@wait'"),
     )
     .unwrap();
-    let id = start(&env);
+    let id = start_legacy(&env);
     until(&env, &id, |v| {
         v["record"]["wait"]["outcome"] == "fail" && v["record"]["attempt"].is_null()
     });
@@ -174,7 +174,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
                 "timeout='1h'\n{edge}\n[checks.report]\nshell='true'\non={{pass='@done',fail='@user'}}\n"
             ),
         );
-        let id = start(&env);
+        let id = start_legacy(&env);
         let (value, child, descendant) = live_group(&env, &id, "pr");
         let state =
             rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
@@ -199,7 +199,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
 #[test]
 fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
     let (env, _) = shell_fixture(LIVE, "");
-    let id = start(&env);
+    let id = start_legacy(&env);
     let (_, child, descendant) = live_group(&env, &id, "pr");
     let deadline = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
     success(command(

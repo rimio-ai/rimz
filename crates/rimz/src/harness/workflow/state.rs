@@ -63,13 +63,20 @@ impl Transition<'_> {
         }
         // The successful case returned above.
         let reason = object.expect_err("failed judge evaluation");
-        let object = self.engine_object(json!({"outcome":failure, "reason":reason}));
+        let routed = self.record.check_retry > 0
+            && self.spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
+            && !matches!(failure, "canceled" | "limited");
+        let outcome = if routed { "invalid" } else { failure };
+        let mut object = self.engine_object(json!({"outcome":outcome, "reason":reason}));
+        if routed {
+            object["failure"] = json!(failure);
+        }
         self.close_wait();
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
                 origin: EvaluationOrigin::Engine,
-                outcome: failure.into(),
+                outcome: outcome.into(),
                 object: object.clone(),
                 digests: attempt.digests,
                 started_at: attempt.started_at,
@@ -94,7 +101,19 @@ impl Transition<'_> {
                 Ok(true)
             }
             _ => {
-                self.route("@user", object, ParkReason::Check)?;
+                if self.spec.route_defaults == crate::store::workflow::RouteDefaults::Park {
+                    self.route("@user", object, ParkReason::Check)?;
+                } else {
+                    let target = self.spec.engine_target(&self.record.node, "invalid");
+                    self.push(
+                        Some(seq),
+                        JournalEvent::Route {
+                            outcome: "invalid".into(),
+                            input: object.clone(),
+                        },
+                    );
+                    self.route(&target, object, ParkReason::Check)?;
+                }
                 Ok(false)
             }
         }
@@ -353,7 +372,7 @@ impl Transition<'_> {
     pub(super) fn route(
         &mut self,
         target: &str,
-        object: Value,
+        mut object: Value,
         reason: ParkReason,
     ) -> Result<(), TimeInputErr> {
         if self.record.state.is_terminal() {
@@ -375,6 +394,15 @@ impl Transition<'_> {
             });
             self.record.attempt = None;
             return Ok(());
+        }
+        if self.spec.is_break(target) {
+            object["edge"] = json!(match reason {
+                ParkReason::Cap => "cap",
+                ParkReason::Deadline => "deadline",
+                ParkReason::Timeout => "timeout",
+                _ => "invalid",
+            });
+            object["from"] = json!(self.record.node);
         }
         if target == "@wait" {
             self.merge_wait(&object, self.now, true)?;
@@ -417,7 +445,9 @@ impl Transition<'_> {
             }
         }
         self.record.attempt = None;
-        if sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold) {
+        if !self.spec.is_break(target)
+            && (sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold))
+        {
             return Ok(());
         }
         self.record.key = object
@@ -427,7 +457,7 @@ impl Transition<'_> {
         Ok(())
     }
 
-    fn engine_object(&self, mut object: Value) -> Value {
+    pub(super) fn engine_object(&self, mut object: Value) -> Value {
         if let Some(key) = &self.record.key {
             object["key"] = json!(key);
         }
@@ -596,6 +626,16 @@ impl Transition<'_> {
                 .iter()
                 .any(|stopped| stopped.kind == child.kind && stopped.handle == child.handle)
         });
+        if self.spec.is_break(&attempt.node) {
+            if let Some(run) = &attempt.run {
+                self.record.break_agents.push(run.handle.clone());
+            }
+            self.record
+                .break_agents
+                .extend(children.live.iter().map(|child| child.handle.clone()));
+            self.record.break_agents.sort();
+            self.record.break_agents.dedup();
+        }
         previous.children = Some(children);
         if ending.outcome != AttemptOutcome::Asked {
             previous.asked = None;
@@ -652,6 +692,29 @@ impl Transition<'_> {
             }
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
+            if self.spec.is_break(&attempt.node) && verdict.reason == ParkReason::User {
+                self.route(&verdict.target, verdict.object, verdict.reason)?;
+                self.push(
+                    None,
+                    JournalEvent::Resume {
+                        visit_grant: self.record.visit_grant,
+                        deadline: self.record.deadline,
+                    },
+                );
+                return Ok(());
+            }
+            if self.spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
+                && verdict.reason == ParkReason::Invalid
+                && attempt.node == self.record.node
+            {
+                self.push(
+                    Some(attempt.seq),
+                    JournalEvent::Route {
+                        outcome: "invalid".into(),
+                        input: verdict.object.clone(),
+                    },
+                );
+            }
             return self.route(&verdict.target, verdict.object, verdict.reason);
         }
         if let EndCause::Restart { continued } = ending.cause {
@@ -815,6 +878,7 @@ impl Transition<'_> {
             return Ok(false);
         }
         if self.record.held.is_none()
+            && !self.spec.is_break(&self.record.node)
             && !self.record.deadline_fired
             && let Some(deadline) = self.record.deadline
             && deadline <= self.now

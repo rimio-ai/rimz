@@ -1116,7 +1116,7 @@ fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
         for edge in &row.edges {
             match edge.outcome.as_str() {
                 "deadline" => assert!(footer.contains("deadline")),
-                "invalid" => assert!(footer.contains("cannot run")),
+                "invalid" => assert!(footer.contains("unrouted failure")),
                 "unknown" => assert!(text.contains("an unread term above it waits")),
                 "timeout" if edge.fires != Fireability::Never => {
                     assert!(text.contains(&format!("waits ≤3d, then {}", edge.target)));
