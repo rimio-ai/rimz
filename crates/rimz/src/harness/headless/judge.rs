@@ -17,17 +17,55 @@ use crate::proc::BoundedOutput;
 
 const WORKFLOW_SCHEMA: &str = r#"{"type":"object","properties":{"outcome":{"type":"string"},"reason":{"type":"string"},"recheck_at":{"type":"string"},"key":{}},"required":["outcome"]}"#;
 
+/// A loop judge's closed answer: one outcome word and its reason.
+pub(crate) const LOOP_ANSWER_SCHEMA: &str = r#"{"type":"object","properties":{"outcome":{"type":"string","enum":["pass","fail"]},"reason":{"type":"string"}},"required":["outcome","reason"],"additionalProperties":false}"#;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LoopOutcome {
+    Pass,
+    Fail,
+}
+
+/// A loop judge's decoded answer, its reason cut to a 4 KiB tail.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LoopAnswer {
+    pub outcome: LoopOutcome,
+    pub reason: String,
+}
+
+impl LoopAnswer {
+    /// Decodes a loop judge's object; any other shape is an `invalid` attempt.
+    pub(crate) fn from_value(value: Value) -> Result<Self, Failure> {
+        let mut answer = serde_json::from_value::<Self>(value).map_err(|error| {
+            Failure::new(
+                FailureKind::Invalid,
+                format!("invalid judge answer: {error}"),
+            )
+        })?;
+        let mut start = answer.reason.len().saturating_sub(4 * 1024);
+        while !answer.reason.is_char_boundary(start) {
+            start += 1;
+        }
+        answer.reason.drain(..start);
+        Ok(answer)
+    }
+}
+
 /// What a judge must answer: workflow's open outcome object, validated by the
 /// engine, or a loop's closed outcome word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Contract {
     Workflow,
+    Loop,
 }
 
 impl Contract {
     fn schema(self) -> &'static str {
         match self {
             Self::Workflow => WORKFLOW_SCHEMA,
+            Self::Loop => LOOP_ANSWER_SCHEMA,
         }
     }
 }
@@ -93,12 +131,25 @@ impl Failure {
             reset_at: None,
         }
     }
+
+    /// The failure of a judge whose `timeout` deadline ran out.
+    pub(crate) fn timed_out(timeout: Duration) -> Self {
+        Self::new(
+            FailureKind::Timeout,
+            format!(
+                "judge timed out after {}",
+                crate::harness::schedule::arm::duration_label(timeout)
+            ),
+        )
+    }
 }
 
 /// One judge process run to its end.
 pub(crate) struct Attempt {
     pub answer: Result<Value, Failure>,
     pub cost_usd: Option<f64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
     /// The process output, absent when the judge never ran to an exit.
     pub output: Option<BoundedOutput>,
 }
@@ -177,8 +228,12 @@ pub(crate) fn prepare(
 }
 
 impl Prepared {
-    fn model(&self) -> Option<&str> {
+    pub(crate) fn model(&self) -> Option<&str> {
         self.plan.request.identity.params.model.as_deref()
+    }
+
+    pub(crate) fn verdict_file(&self) -> &Path {
+        &self.headless.verdict_file
     }
 
     /// Runs one attempt. Launch refusals are `Err`; every process-level end is an
@@ -202,6 +257,8 @@ impl Prepared {
                 return Ok(Attempt {
                     answer: Err(Failure::new(kind, error.to_string())),
                     cost_usd: None,
+                    input_tokens: None,
+                    output_tokens: None,
                     output: None,
                 });
             }
@@ -226,6 +283,8 @@ impl Prepared {
         Ok(Attempt {
             answer,
             cost_usd: response.cost_usd,
+            input_tokens: response.input_tokens,
+            output_tokens: response.output_tokens,
             output: Some(output),
         })
     }
@@ -237,13 +296,7 @@ impl Prepared {
         error: Option<crate::agents::HeadlessError>,
     ) -> Result<Value, Failure> {
         if output.timed_out {
-            return Err(Failure::new(
-                FailureKind::Timeout,
-                format!(
-                    "judge timed out after {}",
-                    crate::harness::schedule::arm::duration_label(self.timeout)
-                ),
-            ));
+            return Err(Failure::timed_out(self.timeout));
         }
         if let Some(error) = &error
             && error.kind == HeadlessErrorKind::ProviderLimit

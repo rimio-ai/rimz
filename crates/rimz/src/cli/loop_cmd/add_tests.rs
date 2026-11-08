@@ -262,7 +262,7 @@ fn approved_watchdog_receipt_names_the_whole_guard() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no verdict counting as a fail"), "{text}");
+    assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no answer after one retry counting as a fail"), "{text}");
 }
 
 fn args(extra: &[&str]) -> AddArgs {

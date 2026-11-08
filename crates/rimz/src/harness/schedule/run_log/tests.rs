@@ -82,16 +82,20 @@ fn every_judge_reason_and_error_is_capped() {
     let row: LoopRunRecord = serde_json::from_value(serde_json::json!({
         "task": "guard", "at": "2026-01-01T00:00:00Z", "result": "check_skipped",
         "judge": [
-            {"profile": "haiku", "kind": "claude", "verdict": false, "reason": evidence, "error": evidence},
-            {"profile": "sonnet", "kind": "claude", "reason": evidence, "error": evidence}
+            {"profile": "haiku", "kind": "claude", "verdict": false, "reason": evidence, "error": evidence, "retry": evidence},
+            {"profile": "sonnet", "kind": "claude", "reason": evidence, "error": evidence, "retry": evidence}
         ]
     })).unwrap();
     let capped = serde_json::to_value(capped_record(&row)).unwrap();
     assert_eq!(capped["judge"].as_array().map(Vec::len), Some(2));
     for judge in capped["judge"].as_array().unwrap() {
-        for field in ["reason", "error"] {
+        for field in ["reason", "error", "retry"] {
             let text = judge[field].as_str().unwrap();
-            assert!(text.len() <= CHECK_OUTPUT_CAP && text.ends_with("tail"));
+            assert!(
+                text.len() <= CHECK_OUTPUT_CAP && text.ends_with("tail"),
+                "{field}: {} bytes",
+                text.len()
+            );
         }
     }
 }

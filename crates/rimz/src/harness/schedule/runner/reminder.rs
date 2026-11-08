@@ -86,9 +86,9 @@ pub(super) fn compose_check(name: &str, task: &LoadedTask, action_prompt: &str) 
         "run the task".to_owned()
     };
     let polarity = match entry.on.unwrap_or_default() {
-        CheckOn::Success => "on = success launches on pass: true and skips on pass: false",
-        CheckOn::Fail => "on = fail launches on pass: false and skips on pass: true",
-        CheckOn::Any => "on = any launches on either verdict",
+        CheckOn::Success => "on = success launches on outcome pass and skips on outcome fail",
+        CheckOn::Fail => "on = fail launches on outcome fail and skips on outcome pass",
+        CheckOn::Any => "on = any launches on either outcome",
     };
     let after_shell = if entry.guard().shell.is_some() {
         " after the shell check"
@@ -96,7 +96,7 @@ pub(super) fn compose_check(name: &str, task: &LoadedTask, action_prompt: &str) 
         ""
     };
     format!(
-        "This is a headless run with no pane and no user present: ask no questions and decide with what you have.\n\nThis is a read-only judge, not the task: change nothing in the checkout.\n\nThe rule {}{} guards this action{after_shell}: {action}. The evidence follows the prompt.\n\nThe guarded action will {action} with prompt: {}. For this task, {polarity}; a pass launches the action only when that polarity permits it.\n\nYour final answer is one JSON object {{\"pass\": <bool>, \"reason\": \"<one or two sentences>\"}} and nothing else. The reason is read by the launched agent and by the user in rimz loop show.",
+        "This is a headless run with no pane and no user present: ask no questions and decide with what you have.\n\nThis is a read-only judge, not the task: change nothing in the checkout.\n\nThe rule {}{} guards this action{after_shell}: {action}. The evidence follows the prompt.\n\nThe guarded action will {action} with prompt: {}. For this task, {polarity}.\n\nYour final answer is one JSON object {{\"outcome\": \"pass\" | \"fail\", \"reason\": \"<one or two sentences>\"}} and nothing else. The reason is read by the launched agent and by the user in rimz loop show.",
         span(name),
         trigger,
         verbatim(action_prompt.lines().next().unwrap_or(""))

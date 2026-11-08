@@ -106,8 +106,8 @@ pub use folder_trust::{
     folder_trust_rows, grant_folder_trust,
 };
 pub use headless::{
-    CHECK_VERDICT_SCHEMA, HeadlessError, HeadlessErrorKind, HeadlessForm, HeadlessRequest,
-    HeadlessResult, HeadlessVerdict,
+    HeadlessError, HeadlessErrorKind, HeadlessForm, HeadlessRequest, HeadlessResult,
+    HeadlessVerdict,
 };
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};

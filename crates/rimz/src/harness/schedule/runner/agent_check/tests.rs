@@ -61,14 +61,7 @@ fn chain_judge(
         "tier one reason"
     };
     let pass = plan.cwd.join("positive").exists() && !prompt.starts_with("tier-two");
-    std::fs::write(
-        &request.verdict_file,
-        serde_json::to_vec(&HeadlessVerdict {
-            pass,
-            reason: reason.into(),
-        })
-        .unwrap(),
-    )?;
+    std::fs::write(&request.verdict_file, answer(pass, reason))?;
     Ok(output(br#"{"type":"turn.completed","usage":{"input_tokens":123,"output_tokens":45,"cached_input_tokens":0}}"#, false))
 }
 
@@ -120,24 +113,61 @@ fn shell_polarity_short_circuits_or_feeds_two_judges_and_the_action() {
 }
 
 #[test]
-fn no_verdict_continues_to_the_next_judge_and_action() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let mut entry = chain_entry(root.path(), "printf shell-evidence; exit 1", CheckOn::Fail);
-    entry.judge[0].prompt = Some("no-answer".into());
-    let mut run = fire(entry, &catalog);
-    run.check_process = chain_judge;
-    let TaskFirePlan::Resident { prompt, .. } = run.prepare(&mut |_| Ok(())).unwrap() else {
-        panic!("no verdict must fail open")
-    };
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("judge-count")).unwrap_or_default(),
-        "2"
-    );
-    assert!(
-        prompt.contains("no verdict") && prompt.contains("tier two reason"),
-        "{prompt}"
-    );
+fn two_failed_attempts_continue_to_the_next_judge_whose_decline_still_declines() {
+    for on in [CheckOn::Fail, CheckOn::Success] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut entry = chain_entry(root.path(), "printf shell-evidence; exit 1", on);
+        entry.check = Some(TaskCheck::Shell(
+            if on == CheckOn::Fail {
+                "printf shell-evidence; exit 1"
+            } else {
+                "printf shell-evidence"
+            }
+            .into(),
+        ));
+        entry.judge[0].prompt = Some("no-answer".into());
+        let mut run = fire(entry, &catalog);
+        run.check_process = chain_judge;
+        let plan = run.prepare(&mut |_| Ok(())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("judge-count")).unwrap_or_default(),
+            "3",
+            "the first judge runs twice, then the second judge once"
+        );
+        let record = match plan {
+            TaskFirePlan::Resident { prompt, .. } => {
+                assert_eq!(
+                    on,
+                    CheckOn::Fail,
+                    "a second-tier fail fires under on = fail"
+                );
+                assert!(
+                    prompt.contains("no verdict") && prompt.contains("tier two reason"),
+                    "{prompt}"
+                );
+                run.finish(TaskFireEffect::Resident {
+                    checkout: root.path().to_owned(),
+                    leader: "worker".into(),
+                    handles: vec!["worker".into()],
+                    stopped: Vec::new(),
+                })
+                .unwrap()
+                .record
+            }
+            TaskFirePlan::Done(done) => {
+                assert_eq!(on, CheckOn::Success, "{:?}", done.record.result);
+                assert_eq!(done.record.result, LoopRunResult::CheckSkipped);
+                done.record
+            }
+            _ => panic!("unexpected plan"),
+        };
+        assert_eq!(record.judge.len(), 2);
+        assert_eq!(record.judge[0].verdict, None);
+        assert!(record.judge[0].retry.is_some(), "{:?}", record.judge[0]);
+        assert_eq!(record.judge[1].verdict, Some(false));
+        assert_eq!(record.judge[1].retry, None);
+    }
 }
 
 #[test]
@@ -453,10 +483,39 @@ fn output(stdout: &[u8], timed_out: bool) -> crate::proc::BoundedOutput {
     }
 }
 
+fn answer(pass: bool, reason: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "outcome": if pass { "pass" } else { "fail" },
+        "reason": reason,
+    }))
+    .unwrap()
+}
+
+/// Counts judge attempts in the checkout and returns this attempt's number.
+fn count_attempt(plan: &LaunchPlan) -> usize {
+    let path = plan.cwd.join("judge-attempts");
+    let count = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .parse::<usize>()
+        .unwrap_or(0)
+        + 1;
+    std::fs::write(path, count.to_string()).unwrap();
+    count
+}
+
+fn attempts(root: &Path) -> usize {
+    std::fs::read_to_string(root.join("judge-attempts"))
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or(0)
+}
+
+const USAGE: &[u8] = br#"{"type":"turn.completed","usage":{"input_tokens":123,"output_tokens":45,"cached_input_tokens":0}}"#;
+
 fn verdict(request: &HeadlessRequest, pass: bool) {
     assert_eq!(
         std::fs::read_to_string(&request.schema_file).unwrap(),
-        crate::agents::CHECK_VERDICT_SCHEMA
+        crate::harness::headless::judge::LOOP_ANSWER_SCHEMA
     );
     assert!(
         !request.verdict_file.exists(),
@@ -464,11 +523,7 @@ fn verdict(request: &HeadlessRequest, pass: bool) {
     );
     std::fs::write(
         &request.verdict_file,
-        serde_json::to_vec(&HeadlessVerdict {
-            pass,
-            reason: "There is actionable work.".into(),
-        })
-        .unwrap(),
+        answer(pass, "There is actionable work."),
     )
     .unwrap();
 }
@@ -481,10 +536,9 @@ fn pass(
     _: &dyn Fn() -> bool,
     _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
-    assert_eq!(
-        timeout,
-        Duration::from_secs(7),
-        "judge timeout, not task timeout"
+    assert!(
+        timeout <= Duration::from_secs(7) && timeout > Duration::from_secs(6),
+        "judge deadline, not task timeout: {timeout:?}"
     );
     assert!(plan.process().reminder.contains("### Judge"));
     assert!(!plan.process().reminder.contains("### Loop"));
@@ -512,33 +566,67 @@ fn fail(
     record_hold: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     let result = pass(adapter, plan, request, timeout, interrupted, record_hold)?;
-    std::fs::write(
-        &request.verdict_file,
-        r#"{"pass":false,"reason":"No actionable work."}"#,
-    )
-    .unwrap();
+    std::fs::write(&request.verdict_file, answer(false, "No actionable work.")).unwrap();
     Ok(result)
 }
 
 fn no_verdict(
     _: &crate::agents::AgentDefinition,
-    _: &LaunchPlan,
+    plan: &LaunchPlan,
     _: &HeadlessRequest,
     _: Duration,
     _: &dyn Fn() -> bool,
     _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
-    Ok(output(b"not json", false))
+    count_attempt(plan);
+    Ok(output(&[b"not json\n".as_slice(), USAGE].concat(), false))
+}
+
+/// The first attempt answers outside the outcome pair; the second declines.
+fn invalid_then_fail(
+    adapter: &crate::agents::AgentDefinition,
+    plan: &LaunchPlan,
+    request: &HeadlessRequest,
+    timeout: Duration,
+    interrupted: &dyn Fn() -> bool,
+    record_hold: &mut Option<CheckSignalGuard>,
+) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    if count_attempt(plan) == 2 {
+        return fail(adapter, plan, request, timeout, interrupted, record_hold);
+    }
+    std::fs::write(
+        &request.verdict_file,
+        br#"{"outcome":"maybe","reason":"unsure"}"#,
+    )?;
+    Ok(output(USAGE, false))
+}
+
+/// The first attempt passes but exits nonzero; the second passes cleanly.
+fn failed_exit_then_pass(
+    adapter: &crate::agents::AgentDefinition,
+    plan: &LaunchPlan,
+    request: &HeadlessRequest,
+    timeout: Duration,
+    interrupted: &dyn Fn() -> bool,
+    record_hold: &mut Option<CheckSignalGuard>,
+) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    let attempt = count_attempt(plan);
+    let mut result = pass(adapter, plan, request, timeout, interrupted, record_hold)?;
+    if attempt == 1 {
+        result.status = std::process::ExitStatus::from_raw(1 << 8);
+    }
+    Ok(result)
 }
 
 fn timeout(
     _: &crate::agents::AgentDefinition,
-    _: &LaunchPlan,
+    plan: &LaunchPlan,
     request: &HeadlessRequest,
     _: Duration,
     interrupted: &dyn Fn() -> bool,
     _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    count_attempt(plan);
     let ready = request.schema_file.with_file_name("descendant.ready");
     let mut command = Command::new("sh");
     command
@@ -694,8 +782,8 @@ fn interrupted_agent_check_cancels_before_any_action_without_throttle() {
 }
 
 #[test]
-fn agent_check_timeout_kills_the_group_and_fails_open() {
-    if with_action_hooks("agent_check_timeout_kills_the_group_and_fails_open") {
+fn agent_check_timeout_kills_the_group_and_acts_without_a_retry() {
+    if with_action_hooks("agent_check_timeout_kills_the_group_and_acts_without_a_retry") {
         return;
     }
     let root = tempfile::tempdir().unwrap();
@@ -715,8 +803,10 @@ fn agent_check_timeout_kills_the_group_and_fails_open() {
         .judge
         .remove(0);
     assert_eq!(judge.verdict, None);
+    assert_eq!(judge.retry, None, "a timeout is never retried");
+    assert_eq!(attempts(root.path()), 1);
     let error = judge.error.unwrap();
-    assert!(error.contains("timed out"), "judge error: {error}");
+    assert!(error.contains("timed out after 7s"), "judge error: {error}");
     let pid = error
         .lines()
         .find_map(|line| line.parse::<u32>().ok())
@@ -732,21 +822,33 @@ fn agent_check_timeout_kills_the_group_and_fails_open() {
 }
 
 #[test]
-fn agent_check_valid_verdict_obeys_fail_and_any_polarity() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    for (on, declines) in [(CheckOn::Fail, true), (CheckOn::Any, false)] {
+fn agent_check_outcome_words_obey_every_polarity() {
+    for (answer, on, fires) in [
+        ("pass", CheckOn::Fail, false),
+        ("pass", CheckOn::Success, true),
+        ("pass", CheckOn::Any, true),
+        ("fail", CheckOn::Fail, true),
+        ("fail", CheckOn::Success, false),
+        ("fail", CheckOn::Any, true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut entry = entry(root.path(), true);
         entry.on = Some(on);
         let mut fire = fire(entry, &catalog);
+        fire.check_process = if answer == "pass" { pass } else { fail };
         let plan = fire.prepare(&mut |_| Ok(()));
-        assert!(
-            matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::CheckSkipped)
-                == declines,
-            "polarity must apply to verdict: {plan:?}"
-        );
-        if !declines {
-            assert!(matches!(plan, Ok(TaskFirePlan::Resident { .. })));
+        let case = format!("outcome {answer} under {on:?}");
+        if fires {
+            assert!(
+                matches!(plan, Ok(TaskFirePlan::Resident { .. })),
+                "{case}: {plan:?}"
+            );
+        } else {
+            assert!(
+                matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::CheckSkipped),
+                "{case}: {plan:?}"
+            );
         }
     }
 }
@@ -861,13 +963,13 @@ fn agent_check_decline_records_reason_and_cost_in_both_ladders() {
 }
 
 #[test]
-fn agent_check_no_verdict_fails_open_under_every_polarity() {
-    if with_action_hooks("agent_check_no_verdict_fails_open_under_every_polarity") {
+fn agent_check_second_failure_acts_under_every_polarity() {
+    if with_action_hooks("agent_check_second_failure_acts_under_every_polarity") {
         return;
     }
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     for on in [CheckOn::Success, CheckOn::Fail, CheckOn::Any] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut entry = entry(root.path(), false);
         entry.on = Some(on);
         let mut fire = fire(entry, &catalog);
@@ -875,16 +977,470 @@ fn agent_check_no_verdict_fails_open_under_every_polarity() {
         let plan = fire.prepare(&mut |_| Ok(()));
         assert!(
             matches!(&plan, Ok(TaskFirePlan::Spawn(_))),
-            "no verdict must fire: {plan:?}"
+            "a second failure must act: {plan:?}"
         );
+        assert_eq!(attempts(root.path()), 2, "one retry after a dead judge");
         let record = fire
             .finish_error(&anyhow::anyhow!("later launch failed"))
             .record;
         let judge = &record.judge[0];
         assert!(judge.verdict.is_none());
+        assert!(judge.retry.is_some(), "{judge:?}");
+        assert_eq!(
+            (judge.input_tokens, judge.output_tokens),
+            (Some(246), Some(90)),
+            "usage sums both attempts"
+        );
         let error = judge.error.as_ref().unwrap();
         assert!(error.contains("not json") && error.contains("provider diagnostics"));
     }
+}
+
+#[test]
+fn agent_check_retried_answer_decides_and_declines_as_a_first_answer_does() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = fire(entry(root.path(), true), &catalog);
+    fire.check_process = invalid_then_fail;
+    let plan = fire.prepare(&mut |_| Ok(()));
+    let Ok(TaskFirePlan::Done(done)) = plan else {
+        panic!("the retried fail must decline under on = success: {plan:?}")
+    };
+    assert_eq!(done.record.result, LoopRunResult::CheckSkipped);
+    assert_eq!(attempts(root.path()), 2);
+    let judge = &done.record.judge[0];
+    assert_eq!(judge.verdict, Some(false));
+    assert_eq!(judge.reason.as_deref(), Some("No actionable work."));
+    assert!(
+        judge
+            .retry
+            .as_deref()
+            .is_some_and(|retry| retry.contains("maybe")),
+        "{judge:?}"
+    );
+    assert_eq!(judge.input_tokens, Some(246));
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let declines = super::super::super::launch_ledger::load_declines(&paths).unwrap();
+    assert_eq!(
+        declines["headless-guard"][root.path()].reason,
+        "No actionable work."
+    );
+    let assists: Vec<_> = assist_log::recent(&logs_dir(), None)
+        .into_iter()
+        .filter_map(|record| match record.assist {
+            Assist::JudgeDecline {
+                task,
+                checkout,
+                reason,
+                ..
+            } if task == "headless-guard" && checkout == root.path() => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        assists,
+        ["No actionable work."],
+        "the retried decline's assist"
+    );
+}
+
+/// The first attempt dies without an answer; the second ends as `second` says.
+fn dies_then(
+    plan: &LaunchPlan,
+    second: impl FnOnce() -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr>,
+) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    if count_attempt(plan) == 1 {
+        return Ok(output(&[b"not json\n".as_slice(), USAGE].concat(), false));
+    }
+    second()
+}
+
+#[test]
+fn a_refused_retry_keeps_the_first_attempts_spend_in_history() {
+    fn refused_retry(
+        _: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        _: &HeadlessRequest,
+        _: Duration,
+        _: &dyn Fn() -> bool,
+        _: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        dies_then(plan, || {
+            Err(agent_check::ProcessErr::BindGuard(
+                crate::sandbox::BindGuardErr::Init(std::io::Error::other("watch limit")),
+            ))
+        })
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = fire(entry(root.path(), false), &catalog);
+    fire.check_process = refused_retry;
+    let error = fire
+        .prepare(&mut |_| Ok(()))
+        .expect_err("a refused retry stops the fire");
+    assert_eq!(attempts(root.path()), 2);
+    let record = fire.finish_error(&error).record;
+    assert_eq!(record.result, LoopRunResult::Errored);
+    assert_eq!(record.judge.len(), 1, "{record:?}");
+    let judge = &record.judge[0];
+    assert_eq!(
+        (judge.input_tokens, judge.output_tokens),
+        (Some(123), Some(45))
+    );
+    assert_eq!(record.input_tokens, Some(123), "{record:?}");
+    assert!(
+        judge
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("not json")),
+        "{judge:?}"
+    );
+}
+
+#[test]
+fn agent_check_provider_error_and_io_error_are_retried() {
+    if with_action_hooks("agent_check_provider_error_and_io_error_are_retried") {
+        return;
+    }
+    fn provider_error(
+        adapter: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        request: &HeadlessRequest,
+        timeout: Duration,
+        interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        if count_attempt(plan) == 1 {
+            return Ok(output(
+                br#"{"is_error":true,"result":"internal server error"}"#,
+                false,
+            ));
+        }
+        pass(adapter, plan, request, timeout, interrupted, record_hold)
+    }
+    fn io_error(
+        adapter: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        request: &HeadlessRequest,
+        timeout: Duration,
+        interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        if count_attempt(plan) == 1 {
+            return Err(std::io::Error::other("judge pipe broke").into());
+        }
+        pass(adapter, plan, request, timeout, interrupted, record_hold)
+    }
+    for (agent, runner, first_error) in [
+        (
+            "claude",
+            provider_error as agent_check::ProcessRunner,
+            "internal server error",
+        ),
+        ("codex", io_error, "judge pipe broke"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut entry = entry(root.path(), false);
+        let Some(TaskCheck::Agent(judge)) = &mut entry.check else {
+            unreachable!()
+        };
+        judge.agent = agent.into();
+        let mut fire = fire(entry, &catalog);
+        fire.check_process = runner;
+        let plan = fire.prepare(&mut |_| Ok(()));
+        assert!(matches!(&plan, Ok(TaskFirePlan::Spawn(_))), "{plan:?}");
+        assert_eq!(attempts(root.path()), 2, "{first_error}");
+        let record = fire
+            .finish_error(&anyhow::anyhow!("later launch failed"))
+            .record;
+        let judge = &record.judge[0];
+        assert_eq!(judge.verdict, Some(true), "{judge:?}");
+        assert!(
+            judge
+                .retry
+                .as_deref()
+                .is_some_and(|retry| retry.contains(first_error)),
+            "{judge:?}"
+        );
+    }
+}
+
+#[test]
+fn an_interrupt_during_the_retry_cancels_the_fire() {
+    fn dies_then_interrupted(
+        _: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        _: &HeadlessRequest,
+        _: Duration,
+        _: &dyn Fn() -> bool,
+        _: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        dies_then(plan, || {
+            Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into())
+        })
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = fire(entry(root.path(), false), &catalog);
+    fire.check_process = dies_then_interrupted;
+    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
+    let TaskFirePlan::Done(done) = plan else {
+        panic!("an interrupted retry must cancel the fire: {plan:?}")
+    };
+    assert_eq!(done.record.result, LoopRunResult::Canceled);
+    assert_eq!(attempts(root.path()), 2);
+    assert_eq!(done.record.judge.len(), 1);
+    assert_eq!(
+        done.record.judge[0].input_tokens,
+        Some(123),
+        "{:?}",
+        done.record
+    );
+}
+
+#[test]
+fn agent_check_nonzero_exit_with_an_answer_is_retried() {
+    if with_action_hooks("agent_check_nonzero_exit_with_an_answer_is_retried") {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = fire(entry(root.path(), false), &catalog);
+    fire.check_process = failed_exit_then_pass;
+    let plan = fire.prepare(&mut |_| Ok(()));
+    assert!(matches!(&plan, Ok(TaskFirePlan::Spawn(_))), "{plan:?}");
+    assert_eq!(attempts(root.path()), 2, "a nonzero exit is a dead judge");
+    let record = fire
+        .finish_error(&anyhow::anyhow!("later launch failed"))
+        .record;
+    let judge = &record.judge[0];
+    assert_eq!(judge.verdict, Some(true));
+    assert!(
+        judge
+            .retry
+            .as_deref()
+            .is_some_and(|retry| retry.contains("exited 1")),
+        "{judge:?}"
+    );
+}
+
+/// Records the span each attempt gets, then dies without an answer after `JUDGE_DIES_AFTER`.
+fn dies_late(
+    _: &crate::agents::AgentDefinition,
+    plan: &LaunchPlan,
+    _: &HeadlessRequest,
+    timeout: Duration,
+    _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
+) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+    let spans = plan.cwd.join("judge-spans");
+    let mut recorded = std::fs::read_to_string(&spans).unwrap_or_default();
+    recorded.push_str(&format!("{}\n", timeout.as_millis()));
+    std::fs::write(&spans, recorded).unwrap();
+    let dies_after = std::fs::read_to_string(plan.cwd.join("judge-dies-after-ms"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    if count_attempt(plan) == 1 {
+        std::thread::sleep(Duration::from_millis(dies_after));
+    }
+    Ok(crate::proc::BoundedOutput {
+        status: std::process::ExitStatus::from_raw(1 << 8),
+        ..output(USAGE, false)
+    })
+}
+
+fn judge_spans(root: &Path) -> Vec<u128> {
+    std::fs::read_to_string(root.join("judge-spans"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| line.parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_late_death_leaves_the_retry_only_what_remains_of_the_judge_deadline() {
+    if with_action_hooks("a_late_death_leaves_the_retry_only_what_remains_of_the_judge_deadline") {
+        return;
+    }
+    for (dies_after_ms, attempts_run) in [(300, 2), (1_100, 1)] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("judge-dies-after-ms"),
+            dies_after_ms.to_string(),
+        )
+        .unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut entry = entry(root.path(), false);
+        let Some(TaskCheck::Agent(judge)) = &mut entry.check else {
+            unreachable!()
+        };
+        judge.timeout = Some("1s".into());
+        let mut fire = fire(entry, &catalog);
+        fire.check_process = dies_late;
+        let plan = fire.prepare(&mut |_| Ok(()));
+        assert!(matches!(&plan, Ok(TaskFirePlan::Spawn(_))), "{plan:?}");
+        assert_eq!(attempts(root.path()), attempts_run, "{dies_after_ms} ms");
+        let spans = judge_spans(root.path());
+        assert_eq!(spans[0], 1_000, "the first attempt gets the whole deadline");
+        let record = fire
+            .finish_error(&anyhow::anyhow!("later launch failed"))
+            .record;
+        let judge = &record.judge[0];
+        if attempts_run == 2 {
+            assert!(
+                spans[1] <= 1_000 - dies_after_ms as u128,
+                "the retry runs on the remainder: {spans:?}"
+            );
+            assert!(
+                judge
+                    .retry
+                    .as_deref()
+                    .is_some_and(|r| r.contains("check verdict")),
+                "{judge:?}"
+            );
+            continue;
+        }
+        assert_eq!(judge.retry, None, "no second attempt ran: {judge:?}");
+        let error = judge.error.as_deref().unwrap_or_default();
+        assert!(
+            error.starts_with("judge timed out after 1s") && error.contains("check verdict"),
+            "{judge:?}"
+        );
+    }
+}
+
+#[test]
+fn an_attempt_with_no_time_left_after_admission_spawns_nothing() {
+    fn no_time_left(
+        adapter: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        request: &HeadlessRequest,
+        _: Duration,
+        interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        count_attempt(plan);
+        // The host polls before it spawns, so a poll means a spawn was attempted.
+        let polled = || {
+            HOSTED.store(true, std::sync::atomic::Ordering::SeqCst);
+            interrupted()
+        };
+        agent_check::execute(adapter, plan, request, Duration::ZERO, &polled, record_hold)
+    }
+    static HOSTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if with_action_hooks("an_attempt_with_no_time_left_after_admission_spawns_nothing") {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = fire(entry(root.path(), false), &catalog);
+    fire.check_process = no_time_left;
+    let plan = fire.prepare(&mut |_| Ok(()));
+    assert!(matches!(&plan, Ok(TaskFirePlan::Spawn(_))), "{plan:?}");
+    assert!(
+        !HOSTED.load(std::sync::atomic::Ordering::SeqCst),
+        "no judge process was started"
+    );
+    assert_eq!(attempts(root.path()), 1, "a timeout is never retried");
+    let record = fire
+        .finish_error(&anyhow::anyhow!("later launch failed"))
+        .record;
+    let judge = &record.judge[0];
+    assert_eq!(judge.retry, None, "{judge:?}");
+    assert!(
+        judge
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("judge timed out after 7s")),
+        "{judge:?}"
+    );
+}
+
+#[test]
+fn agent_check_provider_limit_acts_without_a_retry() {
+    if with_action_hooks("agent_check_provider_limit_acts_without_a_retry") {
+        return;
+    }
+    fn limited(
+        _: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        _: &HeadlessRequest,
+        _: Duration,
+        _: &dyn Fn() -> bool,
+        _: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        count_attempt(plan);
+        Ok(output(
+            br#"{"is_error":true,"result":"quota exhausted"}"#,
+            false,
+        ))
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut entry = entry(root.path(), false);
+    let Some(TaskCheck::Agent(judge)) = &mut entry.check else {
+        unreachable!()
+    };
+    judge.agent = "claude".into();
+    let mut fire = fire(entry, &catalog);
+    fire.check_process = limited;
+    let plan = fire.prepare(&mut |_| Ok(()));
+    assert!(matches!(&plan, Ok(TaskFirePlan::Spawn(_))), "{plan:?}");
+    assert_eq!(
+        attempts(root.path()),
+        1,
+        "a provider limit is never retried"
+    );
+    let record = fire
+        .finish_error(&anyhow::anyhow!("later launch failed"))
+        .record;
+    let judge = &record.judge[0];
+    assert_eq!((judge.verdict, judge.retry.as_ref()), (None, None));
+    assert!(
+        judge
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("quota exhausted")),
+        "{judge:?}"
+    );
+}
+
+#[test]
+fn interrupt_between_attempts_cancels_without_a_second_attempt() {
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
+    static INTERRUPT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    fn dies_then_interrupts(
+        adapter: &crate::agents::AgentDefinition,
+        plan: &LaunchPlan,
+        request: &HeadlessRequest,
+        timeout: Duration,
+        interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
+    ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
+        assert!(!interrupted(), "no retry may start after the interrupt");
+        let output = no_verdict(adapter, plan, request, timeout, interrupted, record_hold)?;
+        INTERRUPT.get().unwrap().store(true, Ordering::SeqCst);
+        Ok(output)
+    }
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    INTERRUPT.set(Arc::clone(&host.interrupt)).unwrap();
+    let mut run = fire(entry(root.path(), true), &catalog);
+    run.throttle_host = host.host();
+    run.check_process = dies_then_interrupts;
+    let plan = run.prepare(&mut |_| Ok(())).unwrap();
+    let TaskFirePlan::Done(done) = plan else {
+        panic!("an interrupt must cancel the fire: {plan:?}")
+    };
+    assert_eq!(done.record.result, LoopRunResult::Canceled);
+    assert_eq!(attempts(root.path()), 1);
+    assert_eq!(done.record.judge.len(), 1);
 }
 
 #[test]
@@ -1072,11 +1628,7 @@ fn long_reason(
     let output = pass(adapter, plan, request, timeout, interrupted, record_hold)?;
     std::fs::write(
         &request.verdict_file,
-        serde_json::to_vec(&HeadlessVerdict {
-            pass: false,
-            reason: format!("{}tail", "界".repeat(5000)),
-        })
-        .unwrap(),
+        answer(false, &format!("{}tail", "界".repeat(5000))),
     )
     .unwrap();
     Ok(output)
@@ -1329,7 +1881,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
         request.identity.params.loop_task = Some("guard".into());
         request.headless = Some(HeadlessRequest {
             schema_open: false,
-            schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
             schema_file: state
                 .temp_unit_dir(Some("headless-test"))
                 .join("schema.json"),

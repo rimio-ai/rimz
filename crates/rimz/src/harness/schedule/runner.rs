@@ -2003,14 +2003,12 @@ impl<'a> TaskFire<'a> {
             if self.check_interrupted() {
                 return Ok(ControlFlow::Break(GuardStop::Interrupted));
             }
-            let started = Instant::now();
-            let (outcome, mut record) = match agent_check::run(self, judge, &dir, &root)? {
+            let (outcome, record) = match agent_check::run(self, tier, judge, &dir, &root)? {
                 ControlFlow::Continue(stage) => stage,
                 ControlFlow::Break((result, reason)) => {
                     return Ok(ControlFlow::Break(GuardStop::Gate(result, reason)));
                 }
             };
-            record.duration_ms = Some(elapsed_millis(started));
             let has_verdict = record.verdict.is_some();
             self.fired_guard.push(FiredCheck::Judge { tier, record });
             if outcome.interrupted || self.check_interrupted() {
@@ -3650,6 +3648,8 @@ static CHECK_SIGNALS: Mutex<CheckSignalState> = Mutex::new(CheckSignalState {
 /// Keep SIGTERM handled until an action's terminal record releases its run lock.
 pub struct CheckSignalGuard {
     cancellation: Option<signal_hook::SigId>,
+    /// A stop the judge's poll read after the judge had exited, so it kept its verdict.
+    stop_read: bool,
 }
 
 impl CheckSignalGuard {
@@ -3674,7 +3674,13 @@ impl CheckSignalGuard {
         let handler = register()?;
         state.active += 1;
         unhandled.store(false, Ordering::SeqCst);
-        Ok((handler, Self { cancellation: None }))
+        Ok((
+            handler,
+            Self {
+                cancellation: None,
+                stop_read: false,
+            },
+        ))
     }
 }
 

@@ -40,7 +40,7 @@ fn agent_check_rows_name_the_profile() {
     let action = TaskAction::Spawn("codex".into());
     assert_eq!(
         check_summary(&entry, Some(&action)).as_deref(),
-        Some("asks haiku (cap 5m); acts when it passes or gives no verdict")
+        Some("asks haiku (cap 5m); acts when it passes or gives no answer after one retry")
     );
     assert_eq!(
         task_run_rule(&entry, &action),
@@ -54,7 +54,7 @@ fn guard_value_single_judge_explains_no_verdict_on_failure() {
         toml::from_str("on = 'fail'\n[check]\nagent = 'haiku'\nprompt = 'q'").unwrap();
     assert_eq!(
         guard_value(&entry),
-        "asks haiku (cap 5m); acts when it fails or gives no verdict"
+        "asks haiku (cap 5m); acts when it fails or gives no answer after one retry"
     );
 }
 
@@ -67,7 +67,7 @@ fn guard_value_mixed_chain_explains_no_verdict_for_both_polarities() {
         assert_eq!(
             guard_value(&entry),
             format!(
-                "runs cargo test (cap 5m), then asks haiku (cap 5m); acts when both {expected}, a judge with no verdict counting as a {expected}"
+                "runs cargo test (cap 5m), then asks haiku (cap 5m); acts when both {expected}, a judge with no answer after one retry counting as a {expected}"
             )
         );
     }
@@ -81,7 +81,7 @@ fn guard_value_longer_chain_explains_no_verdict_for_all_stages() {
         assert_eq!(
             guard_value(&entry),
             format!(
-                "runs cargo test (cap 5m), then asks haiku (cap 5m), then asks codex (cap 5m); acts when all {expected}, a judge with no verdict counting as a {expected}"
+                "runs cargo test (cap 5m), then asks haiku (cap 5m), then asks codex (cap 5m); acts when all {expected}, a judge with no answer after one retry counting as a {expected}"
             )
         );
     }

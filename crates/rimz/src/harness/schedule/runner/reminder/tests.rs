@@ -95,8 +95,8 @@ fn check_reminder_orders_the_headless_rule_action_and_verdict_contract() {
         "`ci=failed` holds",
         "`claude`",
         "Repair CI.",
-        "on = fail",
-        "{\"pass\":",
+        "on = fail launches on outcome fail and skips on outcome pass",
+        "{\"outcome\": \"pass\" | \"fail\",",
         "rimz loop show",
     ]
     .map(|part| {
