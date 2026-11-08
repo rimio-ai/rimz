@@ -107,7 +107,7 @@ pub(super) fn spawn_pane_focus(
     input: Option<FocusNonce>,
 ) {
     let session_name = session_name.to_owned();
-    let input_at_ms = input.map(|_| clock.timestamp_at(clicked).as_millisecond().max(0) as u64);
+    let input_at_ms = input_at_ms(clock, clicked, input);
     let requested_at_ms = crate::utils::time::unix_now_ms();
     clock.focus(|| {
         std::thread::spawn(move || {
@@ -206,6 +206,16 @@ pub(super) fn spawn_pane_focus(
             }
         });
     });
+}
+
+/// The wall-clock instant of the keypress or click behind a user-input focus
+/// request, which pending-pick release compares with; repairs carry none.
+pub(super) fn input_at_ms(
+    clock: &super::clock::LoopClock,
+    clicked: Instant,
+    input: Option<FocusNonce>,
+) -> Option<u64> {
+    input.map(|_| clock.timestamp_at(clicked).as_millisecond().max(0) as u64)
 }
 
 pub(super) fn finish_focus_request(
