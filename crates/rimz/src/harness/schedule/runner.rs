@@ -34,6 +34,7 @@ use super::{
     backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
+    run_lock::file_name as run_lock_file_name,
     throttle,
 };
 use crate::agents::PermissionMode;
@@ -3363,15 +3364,6 @@ fn run_lock_runtime(root: &Path) -> Result<Option<RuntimePaths>> {
     }
     let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
     Ok(crate::store::Store::open_existing(state, runtime.clone()).map(|_| runtime))
-}
-
-/// The one spelling of a run lock's file name. `checkout` names the launch
-/// checkout of a fan-out fire, which locks per checkout.
-fn run_lock_file_name(name: &str, checkout: Option<&WorkspaceId>) -> String {
-    match checkout {
-        Some(checkout) => format!("loop-run-{name}-{checkout}.lock"),
-        None => format!("loop-run-{name}.lock"),
-    }
 }
 
 /// The task name a bare run lock file carries, `run_lock_file_name`'s inverse.
