@@ -241,7 +241,7 @@ struct AddArgs {
     /// Repeat cadence: `15m`, `day`, `weekday`, or `mon,wed,fri`.
     #[arg(long, conflicts_with_all = ["cron", "in_after", "signal"])]
     every: Option<String>,
-    /// Raw 5-field cron expression.
+    /// Five-field cron expression (names, steps, and `@daily`-style macros accepted).
     #[arg(long, conflicts_with_all = ["at", "every", "in_after", "signal"])]
     cron: Option<String>,
     /// Fire once after a duration such as `30m` or `3d`, rounded up to the next minute.

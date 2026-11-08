@@ -397,6 +397,27 @@ pub enum ScheduleErr {
     #[error("schedule `{name}` has an invalid cron expression `{value}`; expected 5 fields")]
     BadCron { name: String, value: String },
     #[error(
+        "schedule `{name}` has an invalid cron expression `{value}`: unknown {field} `{token}`"
+    )]
+    BadCronToken {
+        name: String,
+        value: String,
+        field: &'static str,
+        token: String,
+    },
+    #[error(
+        "schedule `{name}` has a cron expression `{value}` using `{form}`, which is not supported"
+    )]
+    UnsupportedCron {
+        name: String,
+        value: String,
+        form: String,
+    },
+    #[error(
+        "schedule `{name}` has a cron expression `{value}` that never fires: no selected month has the selected day of month"
+    )]
+    CronNeverFires { name: String, value: String },
+    #[error(
         "schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m` or a day mask like `weekday` or `mon,wed,fri`"
     )]
     BadEvery { name: String, value: String },
@@ -537,7 +558,7 @@ impl IntervalSpec {
 enum Schedule {
     Calendar(CalendarSpec),
     Interval(IntervalSpec),
-    RawCron(String),
+    Cron(CronSpec),
     Instant(Timestamp),
 }
 
@@ -545,7 +566,7 @@ impl Schedule {
     /// A short human description for listings.
     fn describe(&self) -> String {
         match self {
-            Schedule::RawCron(cron) => format!("cron `{cron}`"),
+            Schedule::Cron(cron) => format!("cron `{}`", cron.source),
             Schedule::Calendar(spec) => {
                 let days = if spec.weekdays.is_empty() {
                     "day".to_owned()
@@ -574,9 +595,7 @@ impl Schedule {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
             }
             Schedule::Calendar(spec) => calendar_due(spec, last_fire, now),
-            Schedule::RawCron(expr) => {
-                cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
-            }
+            Schedule::Cron(cron) => cron.due(last_fire, now),
             Schedule::Instant(at) => last_fire < *at && *at <= now.timestamp(),
         }
     }
@@ -590,7 +609,7 @@ impl Schedule {
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
                 .ok(),
             Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
-            Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
+            Schedule::Cron(cron) => cron.next_after(last_fire, now),
             Schedule::Instant(at) => (last_fire < *at).then_some(*at),
         }
     }
@@ -691,9 +710,9 @@ pub(super) fn trigger_clause(parsed: &ParsedTrigger, condition_predicate: &str) 
     Some(match &parsed.trigger {
         // `describe` prints a raw cron as a noun phrase, which no verb can follow.
         Trigger::Schedule(ParsedSchedule {
-            schedule: Schedule::RawCron(expr),
+            schedule: Schedule::Cron(cron),
             ..
-        }) => format!(" on the cron schedule {}", span(expr)),
+        }) => format!(" on the cron schedule {}", span(&cron.source)),
         Trigger::Schedule(_) => format!(" {}", verbatim(&parsed.describe())),
         Trigger::Signal { .. } => {
             let described = parsed.describe();
@@ -1097,10 +1116,7 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
                 name: name.to_owned(),
             });
         }
-        TimingFields::Cron(cron) => {
-            validate_cron_expr(name, cron)?;
-            Schedule::RawCron(cron.trim().to_owned())
-        }
+        TimingFields::Cron(cron) => Schedule::Cron(CronSpec::parse(name, cron)?),
         TimingFields::Every { every, at } => match parse_every(name, every)? {
             EverySpec::Interval(minutes) => {
                 if at.is_some() {
@@ -1438,16 +1454,275 @@ fn weekday_range(lo: Weekday, hi: Weekday) -> Vec<Weekday> {
     }
 }
 
-fn validate_cron_expr(name: &str, cron: &str) -> Result<(), ScheduleErr> {
-    let fields = cron.split_whitespace().count();
-    if fields == 5 {
-        Ok(())
-    } else {
-        Err(ScheduleErr::BadCron {
+/// A cron expression parsed once: each field's selected values as a bit set, beside the source
+/// text listings and stored rows keep.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CronSpec {
+    source: String,
+    minutes: u64,
+    hours: u64,
+    days: u64,
+    months: u64,
+    /// Sunday is bit 0, whether written `0` or `7`.
+    weekdays: u64,
+    /// Whether both day fields are anything but exactly `*`, when cron's OR rule matches a day
+    /// either field selects.
+    either_day: bool,
+}
+
+/// One cron field: its label in a refusal, its range, and the names it takes, the first
+/// standing for `min`.
+struct CronField {
+    label: &'static str,
+    min: u8,
+    max: u8,
+    names: &'static [&'static str],
+}
+
+const CRON_MONTH_NAMES: &[&str] = &[
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+const CRON_DAY_NAMES: &[&str] = &["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const CRON_FIELDS: [CronField; 5] = [
+    CronField {
+        label: "minute",
+        min: 0,
+        max: 59,
+        names: &[],
+    },
+    CronField {
+        label: "hour",
+        min: 0,
+        max: 23,
+        names: &[],
+    },
+    CronField {
+        label: "day-of-month",
+        min: 1,
+        max: 31,
+        names: &[],
+    },
+    CronField {
+        label: "month",
+        min: 1,
+        max: 12,
+        names: CRON_MONTH_NAMES,
+    },
+    CronField {
+        label: "day-of-week",
+        min: 0,
+        max: 7,
+        names: CRON_DAY_NAMES,
+    },
+];
+/// Days in each month, February counted with its leap day.
+const CRON_MONTH_DAYS: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+/// Eight years of days reach a 29 February from any date, across the 2100 gap as well.
+const CRON_SEARCH_DAYS: usize = 8 * 366;
+
+impl CronSpec {
+    fn parse(name: &str, cron: &str) -> Result<Self, ScheduleErr> {
+        let unsupported = |form: &str| ScheduleErr::UnsupportedCron {
             name: name.to_owned(),
             value: cron.to_owned(),
+            form: form.to_owned(),
+        };
+        let unknown = |field: &'static str, token: &str| ScheduleErr::BadCronToken {
+            name: name.to_owned(),
+            value: cron.to_owned(),
+            field,
+            token: token.to_owned(),
+        };
+        let source = cron.trim();
+        let expanded = if source.starts_with('@') && !source.contains(char::is_whitespace) {
+            if source.eq_ignore_ascii_case("@reboot") {
+                return Err(unsupported(source));
+            }
+            cron_macro(source).ok_or_else(|| unknown("expression", source))?
+        } else {
+            source
+        };
+        let fields: Vec<&str> = expanded.split_whitespace().collect();
+        let [minute, hour, day, month, weekday] = fields.as_slice() else {
+            return Err(ScheduleErr::BadCron {
+                name: name.to_owned(),
+                value: cron.to_owned(),
+            });
+        };
+        let mut sets = [0; 5];
+        for ((text, field), set) in [minute, hour, day, month, weekday]
+            .into_iter()
+            .zip(&CRON_FIELDS)
+            .zip(&mut sets)
+        {
+            *set = parse_cron_field(text, field).map_err(|token| {
+                unsupported_cron_form(token)
+                    .map_or_else(|| unknown(field.label, token), unsupported)
+            })?;
+        }
+        let [minutes, hours, days, months, weekdays] = sets;
+        if *day != "*" && *weekday == "*" && !cron_month_has_day(months, days) {
+            return Err(ScheduleErr::CronNeverFires {
+                name: name.to_owned(),
+                value: cron.to_owned(),
+            });
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            minutes,
+            hours,
+            days,
+            months,
+            weekdays: (weekdays | weekdays >> 7) & 0x7f,
+            either_day: *day != "*" && *weekday != "*",
         })
     }
+
+    fn matches_day(&self, date: jiff::civil::Date) -> bool {
+        let day = self.days & 1 << date.day() != 0;
+        let weekday = self.weekdays & 1 << date.weekday().to_sunday_zero_offset() != 0;
+        let day_matches = if self.either_day {
+            day || weekday
+        } else {
+            day && weekday
+        };
+        day_matches && self.months & 1 << date.month() != 0
+    }
+
+    fn matches(&self, now: &Zoned) -> bool {
+        self.matches_day(now.date())
+            && self.hours & 1 << now.hour() != 0
+            && self.minutes & 1 << now.minute() != 0
+    }
+
+    fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+        self.matches(now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
+    }
+
+    /// The first selected minute after `now` (or `now` itself while it is due), found day by
+    /// day and then minute by minute within the first day that holds one.
+    fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+        if self.due(last_fire, now) {
+            return Some(now.timestamp());
+        }
+        let zone = now.time_zone();
+        let from = (minute_bucket(now.timestamp()) + 1) * 60;
+        let mut date = now.date();
+        for _ in 0..CRON_SEARCH_DAYS {
+            let next = date.tomorrow().ok()?;
+            if self.matches_day(date) {
+                let start = date.to_zoned(zone.clone()).ok()?.timestamp().as_second();
+                let end = next.to_zoned(zone.clone()).ok()?.timestamp().as_second();
+                let found = (start.max(from)..end).step_by(60).find_map(|second| {
+                    let at = Timestamp::from_second(second).ok()?;
+                    self.matches(&at.to_zoned(zone.clone())).then_some(at)
+                });
+                if found.is_some() {
+                    return found;
+                }
+            }
+            date = next;
+        }
+        None
+    }
+}
+
+fn cron_macro(source: &str) -> Option<&'static str> {
+    Some(match source.to_ascii_lowercase().as_str() {
+        "@hourly" => "0 * * * *",
+        "@daily" => "0 0 * * *",
+        "@weekly" => "0 0 * * 0",
+        "@monthly" => "0 0 1 * *",
+        "@yearly" => "0 0 1 1 *",
+        _ => return None,
+    })
+}
+
+/// The values a field's comma list selects, or the item it cannot read.
+fn parse_cron_field<'a>(text: &'a str, field: &CronField) -> Result<u64, &'a str> {
+    text.split(',').try_fold(0, |set, item| {
+        parse_cron_item(item, field)
+            .map(|values| set | values)
+            .ok_or(item)
+    })
+}
+
+/// One item: `*`, a value, or a range, a range or `*` taking a `/n` step.
+fn parse_cron_item(item: &str, field: &CronField) -> Option<u64> {
+    let (range, step) = match item.split_once('/') {
+        Some((range, step)) => (
+            range,
+            Some(step.parse::<u8>().ok().filter(|step| *step > 0)?),
+        ),
+        None => (item, None),
+    };
+    let (lo, hi) = if range == "*" {
+        (field.min, field.max)
+    } else if let Some((lo, hi)) = range.split_once('-') {
+        (cron_value(lo, field)?, cron_value(hi, field)?)
+    } else if step.is_none() {
+        let value = cron_value(range, field)?;
+        (value, value)
+    } else {
+        return None;
+    };
+    (lo <= hi).then(|| {
+        (lo..=hi)
+            .step_by(step.unwrap_or(1).into())
+            .fold(0, |set, value| set | 1 << value)
+    })
+}
+
+fn cron_value(text: &str, field: &CronField) -> Option<u8> {
+    let value = match field
+        .names
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case(text))
+    {
+        Some(index) => field.min + u8::try_from(index).ok()?,
+        None => text.parse().ok()?,
+    };
+    (field.min..=field.max).contains(&value).then_some(value)
+}
+
+/// The unsupported form a refused item carries (`?`, `L`, `W`), read past day and month names.
+/// A word of letters alone (`wed` in the wrong field, `wednesday`) stays an unknown token
+/// unless it is exactly `L`, `W` or `LW`.
+fn unsupported_cron_form(item: &str) -> Option<&'static str> {
+    if item.contains('?') {
+        return Some("?");
+    }
+    let is_word = item.chars().all(|c| c.is_ascii_alphabetic());
+    if is_word
+        && !["l", "w", "lw"]
+            .iter()
+            .any(|form| form.eq_ignore_ascii_case(item))
+    {
+        return None;
+    }
+    item.split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|word| {
+            !CRON_DAY_NAMES
+                .iter()
+                .chain(CRON_MONTH_NAMES)
+                .any(|name| name.eq_ignore_ascii_case(word))
+        })
+        .flat_map(str::chars)
+        .find_map(|c| match c.to_ascii_uppercase() {
+            'L' => Some("L"),
+            'W' => Some("W"),
+            _ => None,
+        })
+}
+
+/// Whether some selected month has a selected day of month, February counting 29 days.
+fn cron_month_has_day(months: u64, days: u64) -> bool {
+    (1..=12u8)
+        .filter(|month| months & 1 << month != 0)
+        .any(|month| {
+            let length = CRON_MONTH_DAYS[usize::from(month - 1)];
+            days & ((1u64 << (length + 1)) - 2) != 0
+        })
 }
 
 fn format_minutes(minutes: u32) -> String {
@@ -1506,96 +1781,6 @@ fn calendar_next_after(
 
 fn minute_bucket(timestamp: Timestamp) -> i64 {
     timestamp.as_second().div_euclid(60)
-}
-
-fn cron_next_after(expr: &str, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
-    if cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp()) {
-        return Some(now.timestamp());
-    }
-    let start_bucket = minute_bucket(now.timestamp()) + 1;
-    let max_minutes = 60 * 24 * 60;
-    for offset in 0..=max_minutes {
-        let second = start_bucket.checked_add(offset)?.checked_mul(60)?;
-        let timestamp = Timestamp::from_second(second).ok()?;
-        let candidate = timestamp.to_zoned(now.time_zone().clone());
-        if cron_matches(expr, &candidate) {
-            return Some(timestamp);
-        }
-    }
-    None
-}
-
-fn cron_matches(expr: &str, now: &Zoned) -> bool {
-    let fields: Vec<&str> = expr.split_whitespace().collect();
-    let [minute, hour, day_of_month, month, day_of_week] = fields.as_slice() else {
-        return false;
-    };
-    let minute_match = cron_field_matches(minute, now.minute(), 0, 59);
-    let hour_match = cron_field_matches(hour, now.hour(), 0, 23);
-    let dom_match = cron_field_matches(day_of_month, now.day(), 1, 31);
-    let month_match = cron_field_matches(month, now.month(), 1, 12);
-    let dow_match = cron_dow_matches(day_of_week, now.weekday());
-    let dom_restricted = day_of_month.trim() != "*";
-    let dow_restricted = day_of_week.trim() != "*";
-    let day_match = match (dom_restricted, dow_restricted) {
-        (true, true) => dom_match || dow_match,
-        (true, false) => dom_match,
-        (false, true) => dow_match,
-        (false, false) => true,
-    };
-    minute_match && hour_match && month_match && day_match
-}
-
-fn cron_field_matches(expr: &str, value: i8, min: i8, max: i8) -> bool {
-    cron_field_matches_any(expr, &[value], min, max)
-}
-
-fn cron_field_matches_any(expr: &str, values: &[i8], min: i8, max: i8) -> bool {
-    expr.split(',').any(|part| {
-        let part = part.trim();
-        if part.is_empty() {
-            return false;
-        }
-        if part == "*" {
-            return true;
-        }
-        if let Some(step) = part.strip_prefix("*/") {
-            let Ok(step) = step.parse::<i8>() else {
-                return false;
-            };
-            return step > 0
-                && values
-                    .iter()
-                    .any(|value| (*value - min).rem_euclid(step) == 0);
-        }
-        if let Some((start, end)) = part.split_once('-') {
-            let Some(start) = parse_cron_value(start, min, max) else {
-                return false;
-            };
-            let Some(end) = parse_cron_value(end, min, max) else {
-                return false;
-            };
-            return start <= end && values.iter().any(|value| start <= *value && *value <= end);
-        }
-        parse_cron_value(part, min, max).is_some_and(|parsed| values.contains(&parsed))
-    })
-}
-
-fn parse_cron_value(raw: &str, min: i8, max: i8) -> Option<i8> {
-    let value: i8 = raw.trim().parse().ok()?;
-    (min..=max).contains(&value).then_some(value)
-}
-
-fn cron_dow_matches(expr: &str, day: jiff::civil::Weekday) -> bool {
-    match day {
-        jiff::civil::Weekday::Sunday => cron_field_matches_any(expr, &[0, 7], 0, 7),
-        jiff::civil::Weekday::Monday => cron_field_matches(expr, 1, 0, 7),
-        jiff::civil::Weekday::Tuesday => cron_field_matches(expr, 2, 0, 7),
-        jiff::civil::Weekday::Wednesday => cron_field_matches(expr, 3, 0, 7),
-        jiff::civil::Weekday::Thursday => cron_field_matches(expr, 4, 0, 7),
-        jiff::civil::Weekday::Friday => cron_field_matches(expr, 5, 0, 7),
-        jiff::civil::Weekday::Saturday => cron_field_matches(expr, 6, 0, 7),
-    }
 }
 
 #[cfg(test)]

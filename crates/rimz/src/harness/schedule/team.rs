@@ -23,7 +23,7 @@ pub enum TeamBindingErr {
         role: String,
         index: usize,
         #[source]
-        source: TeamBindingFailure,
+        source: Box<TeamBindingFailure>,
     },
 }
 
@@ -68,7 +68,7 @@ pub fn validate_launch(
             team: name.to_owned(),
             role: role.clone(),
             index: index + 1,
-            source,
+            source: Box::new(source),
         })?;
     }
     Ok(())
@@ -129,7 +129,7 @@ pub(crate) fn arm_member(
                 team: name.to_owned(),
                 role: role.to_owned(),
                 index: index + 1,
-                source,
+                source: Box::new(source),
             })?,
         ));
     }
@@ -139,7 +139,7 @@ pub(crate) fn arm_member(
             team: name.to_owned(),
             role: role.to_owned(),
             index,
-            source: source.into(),
+            source: Box::new(source.into()),
         })?;
     }
     Ok(count)

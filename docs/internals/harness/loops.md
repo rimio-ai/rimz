@@ -154,7 +154,7 @@ A `match` key compares a JSON string payload value to the raw text and any other
 | Absolute one-shot | `fire-at = "<RFC 3339>"`, written by `rimz loop add --in`, a bare `rimz loop add --at`, `rimz loop add --after-reset`, and `rimz wait --in` | the stamp is before the instant and the instant is at or before now; the task then removes itself whatever the fire's result |
 | Interval | `every = "15m"` | elapsed time since the last arm or fire reaches the interval |
 | Calendar | `every = "weekday"` plus `at = "07:00"` | the first tick at or after the wall-clock time on a matching day, at most once that day |
-| Raw cron | `cron = "*/15 * * * *"` | the in-process five-field matcher matches the current minute, and the last fire was in an earlier minute |
+| Raw cron | `cron = "*/15 * * * *"` | the expression `CronSpec::parse` read once into per-field bit sets matches the current minute, and the last fire was in an earlier minute; `next_after` searches day by day for 8 years (the span that reaches any 29 February), then minute by minute in the first matching day |
 | Poll-until | `every = "2m"` with `check`, `on`, an agent action, and `deadline` | the interval elapses, until the check trips the action or the deadline passes |
 
 The day mask accepts `day`, `weekday`, `weekend`, a range such as `mon-fri`, or a list such as `mon,wed,fri`. Calendar times, cron, `--in`, and `--until` evaluate in the configured `timezone`, or the system zone when it is unset.
@@ -174,7 +174,7 @@ The arming stamp sets the edge each shape reads. A calendar task first seen afte
 | `Unarmed` | neither a room host nor the external tick has stamped it; an unstamped `fire-at` row reads its instant instead |
 | `Due(t)` | the next occurrence is at or before now |
 | `Upcoming(t)` | the next occurrence is in the future |
-| `NoOccurrence` | parsed and armed, but no next time: a cron expression whose fields never match a real date, or any stamped condition row |
+| `NoOccurrence` | parsed and armed, but no next time: any stamped condition row (a cron whose day of month no selected month has fails to parse instead) |
 
 ## Host firing
 
