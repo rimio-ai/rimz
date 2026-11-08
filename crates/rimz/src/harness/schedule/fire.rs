@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use jiff::{Timestamp, Zoned};
 
@@ -840,13 +841,35 @@ fn fire_at_retry_due(instant: Option<Timestamp>, last_fire: Timestamp, now: Time
 /// holds the task's run lock and no attempt was recorded since. A `fire-at`
 /// row never fans out, so its runner locks under the bare name.
 fn runner_lost(runtime: &RuntimePaths, name: &str, task: &LoadedTask, stamp: Timestamp) -> bool {
+    let root = task.entry().resolved_root();
     super::run_lock::held(runtime, name).is_ok_and(|held| !held)
-        && !run_log::has_recorded_attempt_since(
-            &logs_dir(),
-            name,
-            &task.entry().resolved_root(),
-            stamp,
-        )
+        && !attempt_recorded_since((root.clone(), name.to_owned(), stamp), || {
+            run_log::has_recorded_attempt_since(&logs_dir(), name, &root, stamp)
+        })
+}
+
+/// The stamps whose runner recorded an attempt, by resolved root and task name.
+type RecordedAttempt = (PathBuf, String, Timestamp);
+
+/// A recorded attempt never un-records, so a row still listed after one (its
+/// removal failed) reads the machine-wide history once per stamp, not on every
+/// pass, and a rotation that drops the row cannot make it fire again.
+static RECORDED_ATTEMPTS: Mutex<BTreeSet<RecordedAttempt>> = Mutex::new(BTreeSet::new());
+
+/// Remembers a positive `scan` for `key` for the life of the process; a
+/// negative one is read again on the next call.
+fn attempt_recorded_since(key: RecordedAttempt, scan: impl FnOnce() -> bool) -> bool {
+    if RECORDED_ATTEMPTS
+        .lock()
+        .is_ok_and(|recorded| recorded.contains(&key))
+    {
+        return true;
+    }
+    let recorded = scan();
+    if recorded && let Ok(mut memo) = RECORDED_ATTEMPTS.lock() {
+        memo.insert(key);
+    }
+    recorded
 }
 
 fn watcher_missing(task: &LoadedTask, name: &str) -> bool {

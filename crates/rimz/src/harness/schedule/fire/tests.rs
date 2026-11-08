@@ -2355,6 +2355,32 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
     );
 }
 
+/// A recorded attempt is read from the history once per stamp; a missing one is
+/// read again, and a later stamp is a new question.
+#[test]
+fn a_recorded_attempt_is_remembered_per_stamp() {
+    let stamp = zdt(2026, 6, 24, 9, 0, 0).timestamp();
+    let key = |stamp| (PathBuf::from("/memo-root"), "memo-task".to_owned(), stamp);
+    let scans = &std::cell::Cell::new(0);
+    let scan = |found| {
+        move || {
+            scans.set(scans.get() + 1);
+            found
+        }
+    };
+
+    assert!(!attempt_recorded_since(key(stamp), scan(false)));
+    assert!(attempt_recorded_since(key(stamp), scan(true)));
+    assert!(
+        attempt_recorded_since(key(stamp), scan(false)),
+        "a recorded attempt never un-records, even when the history drops it"
+    );
+    assert_eq!(scans.get(), 2, "the remembered verdict reads no history");
+    let restamped = zdt(2026, 6, 24, 9, 5, 0).timestamp();
+    assert!(!attempt_recorded_since(key(restamped), scan(false)));
+    assert_eq!(scans.get(), 3);
+}
+
 /// A resident `fire-at` row whose launch is ledgered is left out of the pass,
 /// stamp and all, and fires on its first live sight once the ledger clears.
 #[test]
