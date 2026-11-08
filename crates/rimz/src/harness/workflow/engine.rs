@@ -639,6 +639,16 @@ impl Notice {
     }
 }
 
+/// The notice of a live message attempt whose host died before settling it: once another
+/// ending settles the attempt, no host is left to withdraw it.
+fn orphaned_notice(record: &RunRecord) -> Option<crate::ids::MessageId> {
+    let attempt = record.attempt.as_ref()?;
+    if crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref()) {
+        return None;
+    }
+    attempt.message.clone()
+}
+
 /// Queue a message step's notice, then follow `then`, or `on.undelivered` when no one agent took it.
 fn message_step(
     state: &StatePaths,
@@ -733,9 +743,14 @@ fn prepare(
     {
         return agent::prepare_end(&mut t, host, &guard);
     }
+    let orphan = orphaned_notice(&t.record);
     if t.bound()? {
         admission.capacity = None;
         persist(&mut t, &guard)?;
+        drop(guard);
+        if let Some(message) = orphan {
+            host.retire(&message)?;
+        }
         return Ok(
             if t.record.state != RunState::Active
                 || (t.record.wait.is_some() && !until::has_pending_verdict(&t.record))
@@ -1235,6 +1250,7 @@ pub fn cancel(
         return Ok(true);
     }
     t.record.restart = None;
+    let orphan = orphaned_notice(&t.record);
     if t.finish_script(
         Ending {
             outcome: AttemptOutcome::Canceled,
@@ -1247,6 +1263,10 @@ pub fn cancel(
         None,
     )? {
         persist(&mut t, &guard)?;
+        drop(guard);
+        if let Some(message) = orphan {
+            host.retire(&message)?;
+        }
         return Ok(true);
     }
     t.record.state = RunState::Canceled;
