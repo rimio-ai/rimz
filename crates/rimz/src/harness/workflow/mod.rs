@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::Store;
 use crate::agents::{AgentState, WorkflowAttemptRef};
 use crate::harness::schedule::takeover::OpenTurn;
+use crate::harness::schedule::when::head;
 use crate::ids::{EventId, RunId, WorkflowRunId};
 use crate::store::StoreErr;
 use crate::store::run::RunStatus;
@@ -33,19 +34,6 @@ pub use spec::{
     SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
 };
 pub use validate::{NodeRow, Validation, validate};
-
-fn head(path: &Path) -> Option<String> {
-    let output = crate::proc::run_bounded_git_output(
-        path,
-        &["rev-parse", "HEAD"],
-        std::time::Duration::from_secs(2),
-    )
-    .ok()?;
-    if output.timed_out || !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
-}
 
 pub struct ScopeRoots {
     pub checkout: PathBuf,

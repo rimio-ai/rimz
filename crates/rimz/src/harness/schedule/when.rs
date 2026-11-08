@@ -398,6 +398,107 @@ impl CiSource {
             &runtime.pr_state_path(),
         ))
     }
+
+    /// Why bare `ci` must not decide in `scope` under the commit fence, if it must not.
+    ///
+    /// Compares the CI SHA with the cached PR head, and that head with a fresh local HEAD read
+    /// after the cache. Settlement uses the PR head at `checked_at`, without re-reading under a
+    /// lock: a later commit or push is a new fact for the next evaluation.
+    pub(in crate::harness) fn ci_fence(&self, scope: &Path) -> Option<String> {
+        let (pr_head, ci_sha) = self.ci_commits(scope)?;
+        let local_head = head(scope);
+        let on_pr = local_head
+            .as_deref()
+            .filter(|local| *local != pr_head)
+            .and_then(|local| is_ancestor(scope, local, pr_head));
+        ci_unread(pr_head, ci_sha, local_head.as_deref(), on_pr)
+    }
+}
+
+/// The instant a forge reading must be probed at or after to decide, and the reason a key
+/// probed before it shows.
+#[derive(Clone, Copy)]
+pub(in crate::harness) struct Floor<'a> {
+    pub at: Timestamp,
+    pub stale: &'a str,
+}
+
+/// Each of `forge_keys` whose reading must not decide, with its reason: every key unless the
+/// last successful probe (`checked_at`) is at or after the floor, and bare `ci` when
+/// `ci_fence` holds it. `probe_unread` words a key no successful probe covers.
+pub(in crate::harness) fn forge_unread<'k>(
+    forge_keys: impl IntoIterator<Item = &'k str>,
+    checked_at: Option<Timestamp>,
+    floor: Floor<'_>,
+    ci_fence: Option<String>,
+    probe_unread: impl Fn(&str) -> String,
+) -> BTreeMap<String, String> {
+    let fresh = checked_at.is_some_and(|at| at >= floor.at);
+    forge_keys
+        .into_iter()
+        .filter_map(|key| {
+            let reason = match (fresh, checked_at) {
+                (false, Some(_)) => floor.stale.to_owned(),
+                (false, None) => probe_unread(key),
+                (true, _) if key == "ci" => ci_fence.clone()?,
+                (true, _) => return None,
+            };
+            Some((key.to_owned(), reason))
+        })
+        .collect()
+}
+
+pub(in crate::harness) fn ci_unread(
+    pr_head: &str,
+    ci_sha: Option<&str>,
+    local_head: Option<&str>,
+    on_pr: Option<bool>,
+) -> Option<String> {
+    if pr_head.is_empty() {
+        return None;
+    }
+    if let Some(local) = local_head.filter(|local| *local != pr_head)
+        && on_pr == Some(false)
+    {
+        return Some(format!(
+            "local HEAD {local:.7} is not on the PR, PR head {pr_head:.7}"
+        ));
+    }
+    let ci_sha = ci_sha.filter(|sha| !sha.is_empty() && *sha != pr_head)?;
+    Some(format!("read at {ci_sha:.7}, PR head {pr_head:.7}"))
+}
+
+/// The checkout's HEAD commit, read by `git rev-parse` within two seconds.
+pub(in crate::harness) fn head(path: &Path) -> Option<String> {
+    let output = crate::proc::run_bounded_git_output(
+        path,
+        &["rev-parse", "HEAD"],
+        std::time::Duration::from_secs(2),
+    )
+    .ok()?;
+    if output.timed_out || !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
+}
+
+/// `Some(false)` only on a definite exit 1; an unknown object (128), any other exit, a timeout,
+/// or a spawn error is `None`.
+fn is_ancestor(path: &Path, commit: &str, tip: &str) -> Option<bool> {
+    let output = crate::proc::run_bounded_git_output(
+        path,
+        &["merge-base", "--is-ancestor", "--", commit, tip],
+        std::time::Duration::from_secs(2),
+    )
+    .ok()?;
+    if output.timed_out {
+        return None;
+    }
+    match output.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
 }
 
 /// The stored kind-wide provider windows of every account, with the room's

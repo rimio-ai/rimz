@@ -12000,8 +12000,8 @@ reason = "Launch and stop admission publish the same PID/start-token ownership i
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::head"
-reason = "Agent attempt evidence and workflow CI fencing share one bounded checkout HEAD read."
+key = "harness::schedule::when::head"
+reason = "Workflow attempt evidence and the shared condition commit fence share one bounded checkout HEAD read."
 
 [[verdict]]
 kind = "item"
