@@ -14,7 +14,7 @@ But cron and a hand-rolled `while` loop only know one move: start a fresh proces
 
 When a task starts or wakes an agent, that turn runs in the room like any agent you started by hand: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` summarizes and `rimz loop logs` prints in full. A check-only task is a plain shell command, so it gets the run-log line and nothing else.
 
-The trigger is a clock or a signal. A clock repeats only when `--every` or `--cron` says so; a bare time (`--at 07:00` or `--in 30m`) fires once and the task removes itself. A signal subscription keeps listening until `--once` retires it.
+The trigger is a clock or a signal. A clock repeats only when `--every` or `--cron` says so; a bare time (`--at 07:00`, `--at 'fri 09:30'`, `--at '2026-12-24 18:00'`, or `--in 30m`) fires once and the task removes itself. A signal subscription keeps listening until `--once` retires it.
 
 ## Schedule a fresh turn
 
@@ -72,7 +72,7 @@ Know what a timer fire does before you install it. An `--agent` fire starts a ro
 
 Only clocks need a timekeeper. A signal task and a `rimz wait` watcher are fired by the process that emits the signal or runs the command, whether or not a room is open.
 
-Missed time is never made up in bulk. A task a clock has not seen before is armed rather than fired, so adding one sets nothing off; a task that was already armed and came due while nothing kept time fires once when a clock next sees it, then resumes its schedule. A week of missed 02:00 occurrences does not arrive as a week of fires.
+Missed time is never made up in bulk. A task a clock has not seen before is armed rather than fired, so adding one sets nothing off; a task that was already armed and came due while nothing kept time fires once when a clock next sees it, then resumes its schedule. A week of missed 02:00 occurrences does not arrive as a week of fires. A one-shot is the exception: its time is fixed when you add it, so it fires on the first clock that sees it at or past that time, however late, and its run says how late (`fired 2h 5m late`).
 
 ## Book a team after another branch merges
 
@@ -121,7 +121,7 @@ rimz wait --run 'gh run watch --exit-status'
 rimz wait --on fail --run 'cargo test'
 ```
 
-A timer has to be shorter than 24 hours. Everything else runs in a detached watcher with stdin closed, at the root of the checkout the wait was armed from, linked worktrees included; a polled `--check` or a `--file` watch samples once a second. When the trigger fires, the wake message names the command, its exit status, and the elapsed time, then points at a file holding the complete output rather than inlining it: `~/.rimz/ws/<workspace-dir>/out/<you>/<name>.output`, the same host path in a [scoped pane](./security.md#scoped-isolation) and outside one. `rimz gc` removes it 7 days after its last write once no watcher runs, and `rimz loop logs <name>` keeps the last 4 KiB in durable history.
+A timer can be any length (`rimz wait --in 2d`). Everything else runs in a detached watcher with stdin closed, at the root of the checkout the wait was armed from, linked worktrees included; a polled `--check` or a `--file` watch samples once a second. When the trigger fires, the wake message names the command, its exit status, and the elapsed time, then points at a file holding the complete output rather than inlining it: `~/.rimz/ws/<workspace-dir>/out/<you>/<name>.output`, the same host path in a [scoped pane](./security.md#scoped-isolation) and outside one. `rimz gc` removes it 7 days after its last write once no watcher runs, and `rimz loop logs <name>` keeps the last 4 KiB in durable history.
 
 A long command can check in rather than disappearing. Set `--check-in` to receive one still-running notice with the output file's line count and estimated tokens so far; the command keeps running and its exit verdict follows later. Without an explicit check-in, agents with cache keepalive enabled and a resolved lifetime above the ping margin and at least the keep-warm floor receive keepalive pings instead. Other agents still check in after 30 minutes. `rimz wait list` shows your own waits, with loop and team subscriptions on an `also woken by` line; from a user shell it shows the whole room. `rimz wait cancel <name>` drops any one row aimed at you, while `rimz wait cancel --all` drops only waits you armed with `rimz wait` and stops their watched commands, leaving subscriptions intact. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
 
@@ -424,7 +424,7 @@ Each task names one action (`--agent`, `--wait`, or a bare `--check`), carries a
 
 | Shape | Flags | Repeats? | Example |
 | --- | --- | --- | --- |
-| One-shot | a bare `--at HH:MM`, or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
+| One-shot | a bare `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
 | Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
 | Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
 | Raw cron | `--cron`, a five-field expression | per the expression | `--cron "*/15 * * * *"` |

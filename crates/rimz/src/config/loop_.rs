@@ -384,7 +384,9 @@ pub struct TaskEntry {
     pub once: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
-    /// The instant of an absolute one-shot, written by `rimz loop add --after-reset`.
+    /// The instant of an absolute one-shot, written by `rimz loop add --in`, a `rimz loop add
+    /// --at` without `--every`, `rimz loop add --after-reset`, and `rimz wait --in`. A scheduled
+    /// fire removes the row whatever its result; a manual run leaves it.
     #[serde(rename = "fire-at", skip_serializing_if = "Option::is_none")]
     pub fire_at: Option<Timestamp>,
     /// The provider whose windows the row's `window.*` terms read, recorded at add.

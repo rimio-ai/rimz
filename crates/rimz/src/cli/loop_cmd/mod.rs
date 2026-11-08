@@ -235,7 +235,7 @@ struct AddArgs {
     /// Poll-until deadline as a duration such as `30m`; resolves at add time.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
-    /// One-shot firing time, or calendar time paired with --every day masks.
+    /// One-shot time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `HH:MM` with --every.
     #[arg(long, conflicts_with_all = ["cron", "in_after", "signal"])]
     at: Option<String>,
     /// Repeat cadence: `15m`, `day`, `weekday`, or `mon,wed,fri`.
@@ -244,7 +244,7 @@ struct AddArgs {
     /// Raw 5-field cron expression.
     #[arg(long, conflicts_with_all = ["at", "every", "in_after", "signal"])]
     cron: Option<String>,
-    /// Fire once after a duration such as `30m`; resolves in the configured timezone.
+    /// Fire once after a duration such as `30m` or `3d`, rounded up to the next minute.
     #[arg(
         long = "in",
         value_name = "DUR",

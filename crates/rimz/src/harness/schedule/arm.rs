@@ -669,7 +669,9 @@ fn build_entry(
             None
         }
         DeliveryTrigger::Delay(delay) => {
-            entry.at = Some(super::delayed_at(delay).map_err(|err| ArmFailure::State(err.into()))?);
+            entry.fire_at = Some(
+                super::delayed_instant(delay, now).map_err(|err| ArmFailure::State(err.into()))?,
+            );
             Some(duration_label(delay))
         }
         DeliveryTrigger::Watch { spec, on, timeout } => {

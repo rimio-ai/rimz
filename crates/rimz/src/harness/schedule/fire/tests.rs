@@ -1865,6 +1865,12 @@ fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
         fire(late.timestamp()),
         "first sight past the instant fires"
     );
+    let days_late = zdt(2026, 6, 27, 8, 0, 0);
+    assert_eq!(
+        Tick::default().run(instant, &days_late),
+        fire(days_late.timestamp()),
+        "first sight three days past the instant fires"
+    );
     assert_eq!(
         Tick::default().run(instant, &early),
         arm(early.timestamp()),

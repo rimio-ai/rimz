@@ -4804,6 +4804,11 @@ fn loop_deliveries_always_persist_as_instances() {
     for name in ["recurring", "standing", "one-shot"] {
         assert!(instances.0[name].wait.is_some());
     }
+    let one_shot = &instances.0["one-shot"];
+    assert!(
+        one_shot.at.is_none() && one_shot.fire_at.is_some(),
+        "{one_shot:?}"
+    );
     let config = std::fs::read_to_string(loop_config_path(&env)).unwrap_or_default();
     assert!(!config.contains("[tasks."), "{config}");
     let (_, error) = loop_fail(
@@ -4820,6 +4825,64 @@ fn loop_deliveries_always_persist_as_instances() {
         ],
     );
     assert!(error.contains("--project"), "{error}");
+}
+
+#[test]
+fn loop_one_shots_store_an_absolute_instant() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let before = jiff::Timestamp::now();
+    for (name, trigger) in [
+        ("later", ["--in", "3d"]),
+        ("weekly", ["--at", "fri 09:30"]),
+        ("dated", ["--at", "2099-01-02 03:04"]),
+    ] {
+        let out = loop_ok(
+            &env,
+            &[
+                "loop", "add", name, "--check", "true", trigger[0], trigger[1],
+            ],
+        );
+        let entry = &read_loop_instances(&env).0[name];
+        assert!(entry.at.is_none(), "{name}: {entry:?}");
+        let fire_at = entry.fire_at.expect("a one-shot stores fire-at");
+        assert!(fire_at > before, "{name}: {fire_at}");
+        assert!(out.contains("trigger: fires once at 20"), "{name}: {out}");
+    }
+    let later = read_loop_instances(&env).0["later"].fire_at.unwrap();
+    let three_days = jiff::SignedDuration::from_secs(3 * 86_400);
+    assert!(
+        later >= before.checked_add(three_days).unwrap() && later.as_second() % 60 == 0,
+        "{later}"
+    );
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "past",
+            "--check",
+            "true",
+            "--at",
+            "2001-01-02 03:04",
+        ],
+    );
+    assert!(error.contains("in the past"), "{error}");
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "weekly",
+            "--check",
+            "true",
+            "--every",
+            "day",
+            "--at",
+            "fri 09:30",
+        ],
+    );
+    assert!(error.contains("--every <days> --at HH:MM"), "{error}");
 }
 
 #[test]
@@ -9382,6 +9445,13 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
         &env,
         &["loop", "add", "busy", "--check", "true", "--at", "07:00"],
     );
+    // A stored bare `at` row: `loop add --at` now writes `fire-at`, whose one scheduled
+    // attempt ends the row whatever its result.
+    let mut tasks = read_loop_instances(&env);
+    let busy = tasks.0.get_mut("busy").unwrap();
+    busy.fire_at = None;
+    busy.at = Some("07:00".to_owned());
+    write_loop_instances(&env, tasks);
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(25 * 60),

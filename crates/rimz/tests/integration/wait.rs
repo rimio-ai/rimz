@@ -604,7 +604,7 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
     tasks.0.insert("orphan-wait".into(), orphan);
     let mut subscription = root.clone();
     subscription.wait_meta = None;
-    subscription.at = None;
+    subscription.fire_at = None;
     subscription.signal = Some("ci.failed".into());
     subscription.team = Some("forge#main".parse().unwrap());
     tasks.0.insert("team-wake".into(), subscription.clone());
@@ -1265,7 +1265,14 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(tasks.0.len(), 1);
     let (name, entry) = tasks.0.iter().next().unwrap();
     assert!(name.starts_with("wait-"));
-    assert!(entry.at.is_some());
+    assert!(entry.at.is_none() && entry.fire_at.is_some());
+    assert_eq!(
+        entry
+            .wait_meta
+            .as_ref()
+            .and_then(|meta| meta.delay.as_deref()),
+        Some("5m")
+    );
     assert!(entry.signal.is_none());
     assert!(entry.deadline.is_none());
     assert!(entry.prompt.is_none());
@@ -1538,15 +1545,31 @@ fn wait_arm_refuses_a_plain_shell() {
 }
 
 #[test]
-fn wait_rejects_delays_the_minute_scheduler_cannot_represent() {
+fn wait_accepts_delays_of_a_day_or_more_as_an_absolute_instant() {
     let env = Env::new();
-    let output = agent_wait(&env)
-        .args(["wait", "--in", "1d"])
-        .output()
-        .expect("run wait with long delay");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--in must be less than 24h"), "{stderr}");
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let before = jiff::Timestamp::now();
+    let stdout = wait_ok(&env, &["wait", "--in", "2d"]);
+    assert!(stdout.contains("in 2d"), "{stdout}");
+    let tasks = wait_instances(&env);
+    let (_, entry) = tasks.0.iter().next().expect("armed wait row");
+    let fire_at = entry.fire_at.expect("a timer stores fire-at");
+    assert!(entry.at.is_none(), "{entry:?}");
+    assert!(
+        fire_at
+            >= before
+                .checked_add(jiff::SignedDuration::from_secs(2 * 86_400))
+                .unwrap(),
+        "{fire_at}"
+    );
+    assert_eq!(
+        entry
+            .wait_meta
+            .as_ref()
+            .and_then(|meta| meta.delay.as_deref()),
+        Some("2d")
+    );
 }
 
 #[test]
@@ -3153,7 +3176,7 @@ fn wait_cancel_before_watcher_start_prevents_command() {
     let name = receipt["name"].as_str().unwrap();
     let mut tasks = wait_instances(&env);
     let entry = tasks.0.get_mut(name).unwrap();
-    entry.at = None;
+    entry.fire_at = None;
     entry.watch = Some(rimz::config::WatchSpec::Command(
         "touch command-started".to_owned(),
     ));

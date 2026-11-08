@@ -1726,6 +1726,110 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
     }
 }
 
+#[test]
+fn a_scheduled_fire_at_fire_records_how_late_it_started() {
+    let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let at = Timestamp::from_second(1_800_000_000).unwrap();
+    let days_late = 2 * 86_400 + 3 * 3_600;
+    for (name, fire_at, mode, late_by, expected) in [
+        (
+            "days-late",
+            true,
+            LoopRunMode::Scheduled,
+            days_late,
+            Some(days_late as u64 * 1_000),
+        ),
+        (
+            "two-minutes",
+            true,
+            LoopRunMode::Scheduled,
+            120,
+            Some(120_000),
+        ),
+        ("on-time", true, LoopRunMode::Scheduled, 30, None),
+        ("manual-run", true, LoopRunMode::Manual, days_late, None),
+        ("bare-at", false, LoopRunMode::Scheduled, days_late, None),
+    ] {
+        let entry = TaskEntry {
+            check: Some("true".into()),
+            root: dir.path().to_path_buf(),
+            at: (!fire_at).then(|| "07:00".to_owned()),
+            fire_at: fire_at.then_some(at),
+            ..TaskEntry::default()
+        };
+        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
+        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+        let started = at
+            .checked_add(jiff::SignedDuration::from_secs(late_by))
+            .unwrap();
+        let mut fire = TaskFire::new(
+            name,
+            catalog.for_run(name).cloned().expect("loaded fixture"),
+            &catalog,
+            mode,
+            false,
+            started,
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap();
+        fire.context = Some(FireContext {
+            action: TaskAction::CheckOnly,
+            root: dir.path().to_path_buf(),
+            scope: None,
+        });
+        // A backlog serve moves the fire's clock; lateness keeps the construction instant.
+        fire.now = started
+            .checked_add(jiff::SignedDuration::from_secs(3_600))
+            .unwrap();
+        let finished = fire.record_gate(LoopRunResult::SurplusSkipped, "no surplus".to_owned());
+        assert_eq!(finished.record.late_ms, expected, "{name}");
+    }
+}
+
+#[test]
+fn a_late_fire_that_waited_in_the_throttle_keeps_the_two_figures_apart() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(41.0, 12.0);
+    host.on_sleep(|host| {
+        if host.elapsed_ms() == 2_000 {
+            host.set_pressure(3.0, 3.0);
+        }
+    });
+    let fire_at = Timestamp::now()
+        .checked_sub(jiff::SignedDuration::from_secs(180))
+        .unwrap();
+    let mut fire = throttled_fire(
+        "fixer",
+        TaskEntry {
+            fire_at: Some(fire_at),
+            ..resident_entry(root.path())
+        },
+        &catalog,
+        "cpu-pressure = 25\n",
+        &host,
+    );
+    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
+    assert!(matches!(plan, TaskFirePlan::Resident { .. }));
+    let done = fire
+        .finish(TaskFireEffect::Resident {
+            checkout: root.path().to_owned(),
+            leader: "fixer".to_owned(),
+            handles: vec!["@fixer".to_owned()],
+            stopped: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(done.record.throttle_wait_ms, Some(5_000));
+    let late = done.record.late_ms.expect("three minutes late");
+    assert!((180_000..181_000).contains(&late), "{late}");
+}
+
 fn skipped_fire<'a>(
     name: &str,
     catalog: &'a TaskCatalog,

@@ -8,6 +8,7 @@ use rimz::harness::schedule::arm::{
 
 struct AddTiming {
     at: Option<String>,
+    fire_at: Option<Timestamp>,
     deadline: Option<Timestamp>,
 }
 
@@ -91,7 +92,9 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
             )
         })
         .transpose()?;
-    entry.fire_at = after_reset.as_ref().map(|reset| reset.fire_at);
+    if let Some(reset) = &after_reset {
+        entry.fire_at = Some(reset.fire_at);
+    }
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
@@ -223,7 +226,9 @@ fn add_delivery(
                 at: timing.at,
                 every: args.every.clone(),
                 cron: args.cron.clone(),
-                fire_at: after_reset.as_ref().map(|reset| reset.fire_at),
+                fire_at: timing
+                    .fire_at
+                    .or(after_reset.as_ref().map(|reset| reset.fire_at)),
                 ..TaskEntry::default()
             },
         )?;
@@ -876,6 +881,7 @@ fn build_task_entry(
         dir: (!args.project && workspace.worktree_root != workspace.project_root)
             .then(|| workspace.worktree_root.clone()),
         at: timing.at,
+        fire_at: timing.fire_at,
         every: args.every.clone(),
         cron: args.cron.clone(),
         signal: args.signal.clone(),
@@ -1208,23 +1214,30 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
 
 fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     let deadline = args.until.as_deref().map(resolve_deadline).transpose()?;
-    let Some(raw) = args.in_after.as_deref() else {
-        return Ok(AddTiming {
-            at: args.at.clone(),
-            deadline,
-        });
-    };
-    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
-    if duration.is_zero() {
-        bail!("--in must be greater than zero");
-    }
-    if duration >= Duration::from_secs(24 * 60 * 60) {
-        bail!("--in must be less than 24h");
-    }
-    Ok(AddTiming {
-        at: Some(schedule::delayed_at(duration)?),
+    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    let mut timing = AddTiming {
+        at: None,
+        fire_at: None,
         deadline,
-    })
+    };
+    if let Some(raw) = args.in_after.as_deref() {
+        let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+        if duration.is_zero() {
+            bail!("--in must be greater than zero");
+        }
+        timing.fire_at = Some(schedule::delayed_instant(duration, now.timestamp())?);
+    } else if let Some(at) = args.at.as_deref() {
+        if args.every.is_none() {
+            timing.fire_at = Some(schedule::resolve_once_at(&args.name, at, &now)?);
+        } else if at.trim().contains(char::is_whitespace) {
+            bail!(
+                "--at with --every takes HH:MM; for a weekday time use --every <days> --at HH:MM, such as --every fri --at 09:30"
+            );
+        } else {
+            timing.at = Some(at.to_owned());
+        }
+    }
+    Ok(timing)
 }
 
 fn write_add_feedback(

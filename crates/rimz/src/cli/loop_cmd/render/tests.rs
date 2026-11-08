@@ -1876,6 +1876,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         mode: None,
         duration_ms: None,
         throttle_wait_ms: None,
+        late_ms: None,
         holder: None,
         run_lock: None,
         absorbed: 0,
@@ -2456,6 +2457,55 @@ fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_q
         record_note(&waited).as_deref(),
         Some("lane queued 3m · @fixer")
     );
+}
+
+#[test]
+fn a_late_one_shot_says_how_late_it_fired_beside_its_other_notes() {
+    let mut late = record(0, LoopRunResult::Launched);
+    late.late_ms = Some((2 * 86_400 + 3 * 3_600) * 1_000);
+    assert_eq!(record_note(&late).as_deref(), Some("fired 2d 3h late"));
+    late.throttle_wait_ms = Some(192_000);
+    late.target = Some("@fixer".into());
+    assert_eq!(
+        record_note(&late).as_deref(),
+        Some("fired 2d 3h late · queued 3m · @fixer")
+    );
+    late.late_ms = Some(5 * 60_000);
+    late.throttle_wait_ms = None;
+    assert_eq!(
+        record_note(&late).as_deref(),
+        Some("fired 5m late · @fixer")
+    );
+}
+
+#[test]
+fn show_runs_and_log_rows_say_how_late_a_one_shot_fired() {
+    let mut late = scheduled(10, LoopRunResult::Completed);
+    late.late_ms = Some((2 * 86_400 + 3 * 3_600) * 1_000);
+    let runs = runs_table(std::slice::from_ref(&late), 10);
+    assert!(runs.contains("fired 2d 3h late"), "{runs}");
+    let logs = logs_text(std::slice::from_ref(&late), 10, false);
+    assert!(
+        logs.lines().next().unwrap().contains(" · fired 2d 3h late"),
+        "{logs}"
+    );
+    let on_time = logs_text(&[scheduled(10, LoopRunResult::Completed)], 10, false);
+    assert!(!on_time.contains("late"), "{on_time}");
+
+    // A reused name's late fire keeps its own row beside an on-time one.
+    let records = [late.clone(), scheduled(20, LoopRunResult::Completed)];
+    let runs = runs_table(&records, 10);
+    assert_eq!(runs.matches("fired 2d 3h late").count(), 1, "{runs}");
+    assert!(!runs.contains("×2"), "{runs}");
+    for output in ["ok", ""] {
+        late.check = Some(check(Some(0), output));
+        let detail = last_run(std::slice::from_ref(&late));
+        let header = detail
+            .lines()
+            .find(|line| line.starts_with("LAST RUN"))
+            .unwrap_or_else(|| panic!("no LAST RUN for output {output:?}: {detail}"));
+        assert!(header.ends_with(" · fired 2d 3h late"), "{header}");
+    }
 }
 
 #[test]

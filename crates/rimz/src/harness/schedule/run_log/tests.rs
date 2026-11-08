@@ -247,6 +247,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         mode: None,
         duration_ms: None,
         throttle_wait_ms: None,
+        late_ms: None,
         holder: None,
         run_lock: None,
         absorbed: 0,
@@ -842,6 +843,22 @@ fn throttle_vocabulary_is_durable_snake_case() {
         LoopRunResult::CapacityHeld
     );
     assert_eq!(LoopRunResult::CapacityHeld.spawn_exit_code(), None);
+}
+
+#[test]
+fn late_ms_is_encoded_only_for_a_late_fire() {
+    let mut late = record("wait", 0, LoopRunResult::Launched);
+    assert!(
+        !serde_json::to_string(&late).unwrap().contains("late_ms"),
+        "on time"
+    );
+    late.late_ms = Some(183_600_000);
+    let encoded = serde_json::to_string(&late).unwrap();
+    assert!(encoded.contains(r#""late_ms":183600000"#), "{encoded}");
+    assert_eq!(
+        serde_json::from_str::<LoopRunRecord>(&encoded).unwrap(),
+        late
+    );
 }
 
 #[test]

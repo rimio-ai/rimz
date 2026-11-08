@@ -504,6 +504,9 @@ pub(super) fn render_record_detail(
     if let Some(signal) = &record.signal {
         write!(out, " · signal {}", signal.name.as_str())?;
     }
+    if let Some(late) = render::late_note(record) {
+        write!(out, " · {late}")?;
+    }
     writeln!(out)?;
     write_record_forensics(out, Some(entry), record, prose, Forensics::Summary)?;
     let is_cut = record.stages().next().is_some_and(|stage| {
