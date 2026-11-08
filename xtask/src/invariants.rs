@@ -625,6 +625,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "stall_nudge.rs",
         "run_timeout.rs",
         "schedule/fire.rs",
+        "schedule/run_lock.rs",
         "schedule/when.rs",
         "schedule/launch_ledger.rs",
         "schedule/throttle.rs",
