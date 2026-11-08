@@ -1635,7 +1635,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert_eq!(
         report["rows"],
         json!([{
-            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "summary": null, "do_background": false,
+            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "message": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
                 {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
@@ -1692,7 +1692,7 @@ fn validate_json_shape_errors_and_exit_status() {
             "warnings": [], "errors": [],
             "rows": [{
                 "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
-                "run":null, "shell":"printf shell", "agent":null, "summary":null, "do_background":false,
+                "run":null, "shell":"printf shell", "agent":null, "message":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"fail", "target":"@failed", "source":"explicit", "fires":"yes"},
                     {"outcome":"pass", "target":"@done", "source":"explicit", "fires":"yes"},
@@ -1733,7 +1733,7 @@ fn validate_json_shape_errors_and_exit_status() {
             json!({
                 "workflow":"review", "node":"merge", "kind":"step", "runner":runner,
                 "run":run, "shell":shell,
-                "agent":null, "summary":null, "do_background":false,
+                "agent":null, "message":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"then", "target":"pr", "source":"explicit", "fires":"yes"},
                     {"outcome":"cap", "target":"@failed", "source":"on-break", "fires":"yes"},

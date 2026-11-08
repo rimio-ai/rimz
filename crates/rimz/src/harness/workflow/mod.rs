@@ -108,6 +108,17 @@ pub trait AttemptHost {
         message: &crate::ids::MessageId,
         text: &str,
     ) -> Result<(), WorkflowErr>;
+    /// Queue a message step's notice for `target`'s next done boundary under `message`,
+    /// resolved as a shell in `scope` would; the inner error says why no one agent took it.
+    fn message(
+        &self,
+        scope: &Path,
+        target: &str,
+        message: &crate::ids::MessageId,
+        text: &str,
+    ) -> Result<Result<String, String>, WorkflowErr>;
+    /// Withdraw a message step's notice whose attempt ended before it settled.
+    fn retire(&self, message: &crate::ids::MessageId) -> Result<(), WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
     fn detach(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
 }

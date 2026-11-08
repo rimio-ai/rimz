@@ -280,7 +280,9 @@ pub(super) fn execute_step(
             Some(command_words(record, run, &mut digests).map_err(ChildError::Failed)?),
         ),
         spec::StepKind::Shell(shell) => (shell, None),
-        spec::StepKind::Agent(_) => unreachable!("agent steps use the attempt host"),
+        spec::StepKind::Agent(_) | spec::StepKind::Message(_) => {
+            unreachable!("advance sends agent and message steps to the attempt host")
+        }
     };
     // prepare publishes the live attempt before dispatching the command.
     let seq = record.attempt.as_ref().expect("prepared command step").seq;

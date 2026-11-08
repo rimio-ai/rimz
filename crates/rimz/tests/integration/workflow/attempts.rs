@@ -15,6 +15,7 @@ struct Room {
 
 mod capacity;
 mod keep;
+mod message;
 mod restart;
 mod subscribe;
 mod until;

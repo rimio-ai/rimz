@@ -706,7 +706,8 @@ impl Transition<'_> {
                     children: previous.children,
                     limited: previous.limited,
                     asked: previous.asked.clone(),
-                    reason,
+                    reason: reason.clone(),
+                    message: attempt.message.clone(),
                 },
             );
         }
@@ -771,6 +772,20 @@ impl Transition<'_> {
                 json!({"outcome":"deadline", "deadline":self.record.deadline}),
                 &self.spec.engine_target(&self.record.node, "deadline"),
                 ParkReason::Deadline,
+            );
+        }
+        if ending.outcome == AttemptOutcome::Died
+            && self
+                .spec
+                .steps
+                .get(&attempt.node)
+                .is_some_and(|step| matches!(step.kind(), Some(super::StepKind::Message(_))))
+        {
+            return self.engine_route(
+                "undelivered",
+                json!({"outcome":"undelivered", "reason":reason}),
+                &self.spec.engine_target(&attempt.node, "undelivered"),
+                ParkReason::Invalid,
             );
         }
         if ending.outcome == AttemptOutcome::Asked {
@@ -856,6 +871,30 @@ impl Transition<'_> {
         let attempt = self.record.attempt.take().expect("live command step");
         self.settle_step(attempt, ending, reason)?;
         Ok(true)
+    }
+
+    /// Settle a message attempt: the resolved target on delivery, the reason when undelivered.
+    pub(super) fn finish_message(
+        &mut self,
+        outcome: AttemptOutcome,
+        handle: Option<String>,
+        reason: Option<String>,
+    ) -> Result<(), TimeInputErr> {
+        let mut previous = self.previous_attempt(outcome);
+        previous.handle = handle;
+        self.record.prev_attempt = Some(previous);
+        // The caller checked the live attempt under this lock.
+        let attempt = self.record.attempt.take().expect("live message step");
+        self.settle_step(
+            attempt,
+            Ending {
+                outcome,
+                cause: EndCause::Lifecycle,
+                route: None,
+                reason: None,
+            },
+            reason,
+        )
     }
 
     pub(super) fn abandon_check(&mut self, outcome: &str) {

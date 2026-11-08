@@ -510,6 +510,7 @@ impl Row {
                         StepLifecycle::Until => "lifecycle until",
                     }
                 ),
+                Some(StepKind::Message(target)) => target.into(),
                 None => "invalid runner; see workflow validate".into(),
             };
             row.heading = format!("step  {runner}");

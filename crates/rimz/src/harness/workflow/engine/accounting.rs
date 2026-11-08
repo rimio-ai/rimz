@@ -180,7 +180,8 @@ fn diagnostic(record: &RunRecord, event: DiagEvent) {
     }
 }
 
-pub(super) fn step(record: &RunRecord) {
+/// One assist per step attempt; a message step names the agent it handed work to.
+pub(super) fn step(record: &RunRecord, handle: Option<String>) {
     let Some(attempt) = &record.attempt else {
         return;
     };
@@ -196,7 +197,7 @@ pub(super) fn step(record: &RunRecord) {
             step: record.node.clone(),
             visit,
             seq: attempt.seq,
-            handle: attempt.run.as_ref().map(|run| run.handle.clone()),
+            handle: handle.or_else(|| attempt.run.as_ref().map(|run| run.handle.clone())),
             run_id: attempt.run.as_ref().map(|run| run.run_id.clone()),
         },
     });

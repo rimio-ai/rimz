@@ -391,6 +391,17 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
     assert!(note(&host).contains("The previous attempt, the step `command`, ended normally."));
+
+    let text = OUTCOME_STEP.replace("start='watch'", "start='tell'");
+    let text = format!("{text}[steps.tell]\nmessage='@planner'\nthen='watch'\n");
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    answer(&state, &record, &host, json!({"outcome":"red"}));
+    let text = note(&host);
+    assert!(
+        text.contains("The previous attempt, `tell` messaged `@planner`, ended normally."),
+        "{text}"
+    );
 }
 
 #[test]

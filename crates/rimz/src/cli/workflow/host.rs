@@ -80,6 +80,40 @@ fn occupancy_snapshot(mut snapshot: SidebarSnapshot, excluded: &[String]) -> Sid
     snapshot
 }
 
+/// Queue an automated `@rimz` notice once under `message` for `agent`'s next done boundary,
+/// then send it now if the agent rests; `about_run` withdraws it once that run ends.
+fn queue_notice(
+    ctx: &Ctx,
+    agent: &AgentState,
+    notice: rimz::store::message::HarnessNotice,
+    about_run: Option<rimz::ids::RunId>,
+    message: &rimz::ids::MessageId,
+    text: &str,
+) -> Result<()> {
+    let mut record = rimz::message::synthetic::SyntheticMessage {
+        agent,
+        text: text.into(),
+        sender: rimz::store::message::MessageSender::Harness { notice },
+        gate: rimz::store::message::DeliveryGate::Done,
+        pane_id: None,
+    }
+    .record(&ctx.workspace)
+    .with_automated(true)
+    .with_about_run(about_run);
+    record.message_id = message.clone();
+    ctx.store
+        .queue_message_once(&record, &ctx.workspace.session_name)?;
+    rimz::message::synthetic::attempt_now(
+        &ctx.workspace,
+        &ctx.store,
+        message,
+        None,
+        rimz::store::writer::DeliveryFailureDisposition::Retry,
+        "workflow notice delivery deferred",
+    )?;
+    Ok(())
+}
+
 fn agent<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a AgentState> {
     run.agent_id
         .as_ref()
@@ -497,30 +531,14 @@ impl workflow::AttemptHost for Host<'_> {
             let snapshot = ctx.cached_snapshot()?;
             let root =
                 agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
-            let mut record = rimz::message::synthetic::SyntheticMessage {
-                agent: root,
-                text: text.into(),
-                sender: rimz::store::message::MessageSender::Harness {
-                    notice: rimz::store::message::HarnessNotice::Signal,
-                },
-                gate: rimz::store::message::DeliveryGate::Done,
-                pane_id: None,
-            }
-            .record(&ctx.workspace)
-            .with_automated(true)
-            .with_about_run(Some(attempt.run_id.clone()));
-            record.message_id = message.clone();
-            ctx.store
-                .queue_message_once(&record, &ctx.workspace.session_name)?;
-            rimz::message::synthetic::attempt_now(
-                &ctx.workspace,
-                &ctx.store,
+            queue_notice(
+                &ctx,
+                root,
+                rimz::store::message::HarnessNotice::Signal,
+                Some(attempt.run_id.clone()),
                 message,
-                None,
-                rimz::store::writer::DeliveryFailureDisposition::Retry,
-                "workflow signal delivery deferred",
-            )?;
-            Ok(())
+                text,
+            )
         })()
         .map_err(host_error)
     }
@@ -557,6 +575,72 @@ impl workflow::AttemptHost for Host<'_> {
                 .live
                 .retain(|child| seen.insert((child.kind.clone(), child.handle.clone())));
             Ok(result)
+        })()
+        .map_err(host_error)
+    }
+
+    fn message(
+        &self,
+        scope: &Path,
+        target: &str,
+        message: &rimz::ids::MessageId,
+        text: &str,
+    ) -> Result<std::result::Result<String, String>, WorkflowErr> {
+        (|| -> Result<_> {
+            let ctx = self.ctx()?;
+            let snapshot = ctx.cached_snapshot()?;
+            let living = rimz::address::addressable_agents(&snapshot)
+                .into_iter()
+                .filter(|agent| agent.ended_at.is_none())
+                .collect::<Vec<_>>();
+            let (queue, history) = ctx.store.list_messages_and_history()?;
+            if let Some(queued) = queue
+                .iter()
+                .chain(&history)
+                .find(|row| row.message_id == *message)
+            {
+                // A lost host already queued this notice; its target stands.
+                let handle = rimz::address::launch_row(
+                    snapshot.agents.iter(),
+                    &queued.kind,
+                    &queued.agent_id,
+                )
+                .map_or_else(
+                    || target.to_owned(),
+                    |agent| rimz::address::agent_handle(agent, &living, true),
+                );
+                return Ok(Ok(handle));
+            }
+            let channel = rimz::address::AddressContext {
+                channel: launcher::context::directory_channel(&ctx.workspace, scope),
+                origin: rimz::address::ChannelOrigin::Directory,
+            };
+            let agent = match rimz::address::resolve_agent(target, None, &channel, &living) {
+                Ok(agent) => agent,
+                Err(error) => return Ok(Err(error.to_string())),
+            };
+            queue_notice(
+                &ctx,
+                agent,
+                rimz::store::message::HarnessNotice::Wait,
+                None,
+                message,
+                text,
+            )?;
+            Ok(Ok(rimz::address::agent_handle(agent, &living, true)))
+        })()
+        .map_err(host_error)
+    }
+
+    fn retire(&self, message: &rimz::ids::MessageId) -> Result<(), WorkflowErr> {
+        (|| -> Result<_> {
+            let ctx = self.ctx()?;
+            ctx.store.retire_message(
+                message,
+                &ctx.workspace.session_name,
+                "workflow attempt ended",
+            )?;
+            Ok(())
         })()
         .map_err(host_error)
     }

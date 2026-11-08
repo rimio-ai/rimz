@@ -66,12 +66,16 @@ fn wait(minute: i64, outcome: &str, first: i64, last: i64, count: u64) -> Journa
 }
 
 fn history(journal: &[JournalEntry]) -> String {
-    let spec = toml::from_str(
+    history_of(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
          [checks.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
          [steps.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
+        journal,
     )
-    .unwrap();
+}
+
+fn history_of(spec: &str, journal: &[JournalEntry]) -> String {
+    let spec = toml::from_str(spec).unwrap();
     let record = waiting_record(0, 0, 1);
     let paths = paths::StatePaths::for_project_root(&record.project_root)
         .unwrap()
@@ -280,6 +284,7 @@ fn attempts_keep_individual_rows_and_their_detail_lines() {
             limited: None,
             asked: None,
             reason: None,
+            message: None,
         },
     });
     let text = history(&journal);
@@ -463,4 +468,40 @@ fn early_advances_do_not_add_a_waiting_line_count() {
     journal.push(wait(3, "pending", 0, 2, 3));
     assert_eq!(collapsed_history(&journal).len(), 1);
     assert!(!history(&journal).contains("pr wait"));
+}
+
+/// Journals `harness::workflow::tests::message` runs wrote for `TELL`, delivered and undelivered.
+const DELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.825083175Z","node":"tell","event":"attempt","outcome":"ended","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.818860072Z","ended_at":"2026-11-08T22:46:30.825083175Z","handle":"@planner","run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"limited":null,"asked":null,"reason":null,"message":"msg_06grqls0k849ljsn"}
+{"seq":null,"at":"2026-11-08T22:46:30.825083175Z","node":"tell","event":"terminal","state":"done"}"#;
+const UNDELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"attempt","outcome":"died","visit":1,"key":null,"routed_by":null,"digests":{"prompt":"84893a778be73583c7aef377b6ed232cccefb47cb89ea9052a636c9532fbbf7f","prompt.md":"5e383207c65159ba379ca0ca2a83d23f2d145626b4d9527af53b1a5441151549"},"started_at":"2026-11-08T22:46:30.83551457Z","ended_at":"2026-11-08T22:46:30.841509403Z","handle":null,"run_id":null,"head_start":null,"head_end":null,"code":null,"log":null,"cost_usd":null,"children":null,"limited":null,"asked":null,"reason":"no agent matches target `@planner`; run `rimz agents list` to see live agents","message":"msg_06grqls0mf1fmajg"}
+{"seq":null,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"route","outcome":"undelivered","input":{"outcome":"undelivered","reason":"no agent matches target `@planner`; run `rimz agents list` to see live agents"}}
+{"seq":null,"at":"2026-11-08T22:46:30.841509403Z","node":"tell","event":"terminal","state":"failed"}"#;
+
+#[test]
+fn a_message_attempt_names_its_target_or_why_none_took_it() {
+    let spec = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n\
+         [steps.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+    for (journal, detail) in [
+        (DELIVERED, "    to @planner · ended"),
+        (
+            UNDELIVERED,
+            "    to — · no agent matches target `@planner`; run `rimz agents list` to see live agents",
+        ),
+    ] {
+        let journal = journal
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect::<Vec<JournalEntry>>();
+        let text = history_of(spec, &journal);
+        let lines = text.lines().collect::<Vec<_>>();
+        let attempt = lines
+            .iter()
+            .position(|line| line.contains("#1 tell attempt"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(lines[attempt + 1], detail, "{text}");
+        assert!(
+            !text.contains("exit ") && !text.contains("HEAD") && !text.contains("reason:"),
+            "{text}"
+        );
+    }
 }

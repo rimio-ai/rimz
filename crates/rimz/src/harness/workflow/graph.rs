@@ -7,7 +7,16 @@ use crate::config::CapacityWait;
 use crate::store::workflow::RouteDefaults;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
-const STEP_TRIGGERS: [&str; 6] = ["then", "asked", "invalid", "cap", "capacity", "deadline"];
+const STEP_TRIGGERS: [&str; 7] = [
+    "then",
+    "undelivered",
+    "asked",
+    "invalid",
+    "cap",
+    "capacity",
+    "deadline",
+];
+const FAILURE_EDGES: [&str; 5] = ["timeout", "invalid", "undelivered", "cap", "deadline"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -220,7 +229,12 @@ impl WorkflowSpec {
                     .map(|edge| edge.target)
             };
         }
+        let message = self
+            .steps
+            .get(node)
+            .is_some_and(|step| matches!(step.kind(), Some(StepKind::Message(_))));
         let outcome = match outcome {
+            "died" if message => "undelivered",
             "ended" | "died" | "canceled" | "limited" | "timeout" => "then",
             other => other,
         };
@@ -287,10 +301,7 @@ impl WorkflowSpec {
                         } else if !self.is_break(node)
                             && self.route_defaults == RouteDefaults::OnBreak
                             && self.workflow.on_break.is_some()
-                            && matches!(
-                                outcome.as_str(),
-                                "timeout" | "invalid" | "cap" | "deadline"
-                            )
+                            && FAILURE_EDGES.contains(&outcome.as_str())
                         {
                             EdgeSource::OnBreak
                         } else {
@@ -377,17 +388,24 @@ impl WorkflowSpec {
                 })
                 .collect::<BTreeMap<_, _>>()
         };
-        if self.route_defaults == RouteDefaults::OnBreak
-            && let Some(step) = self.steps.get(node)
-            && matches!(step.kind(), Some(StepKind::Agent(_)))
-        {
-            edges.insert(
-                "invalid".into(),
-                (
-                    step.on.invalid.clone().unwrap_or_default(),
-                    step.on.invalid.is_some(),
-                ),
-            );
+        if let Some(step) = self.steps.get(node) {
+            let failure = match step.kind() {
+                Some(StepKind::Agent(_)) if self.route_defaults == RouteDefaults::OnBreak => {
+                    Some(("invalid", &step.on.invalid))
+                }
+                Some(StepKind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
+                _ => None,
+            };
+            if let Some((outcome, route)) = failure {
+                let fallback = match self.route_defaults {
+                    RouteDefaults::OnBreak => String::new(),
+                    RouteDefaults::Park => "@user".into(),
+                };
+                edges.insert(
+                    outcome.into(),
+                    (route.clone().unwrap_or(fallback), route.is_some()),
+                );
+            }
         }
         if !self.is_break(node) {
             edges.insert(
@@ -411,9 +429,7 @@ impl WorkflowSpec {
                 None => "@failed",
             };
             for (outcome, (route, explicit)) in &mut edges {
-                if !*explicit
-                    && matches!(outcome.as_str(), "timeout" | "invalid" | "cap" | "deadline")
-                {
+                if !*explicit && FAILURE_EDGES.contains(&outcome.as_str()) {
                     *route = target.into();
                 }
             }

@@ -391,6 +391,12 @@ expression: value
             }
           ]
         },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "notes": {
           "type": [
             "boolean",
@@ -505,6 +511,12 @@ expression: value
           ]
         },
         "invalid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "undelivered": {
           "type": [
             "string",
             "null"

@@ -358,7 +358,9 @@ fn attempt_superseded(
     }
     match (&next.event, outcome) {
         (JournalEvent::Resume { .. }, AttemptOutcome::Canceled) => true,
-        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Died) => outcome == "invalid",
+        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Died) => {
+            outcome == "invalid" || outcome == "undelivered"
+        }
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Canceled) => outcome == "deadline",
         (

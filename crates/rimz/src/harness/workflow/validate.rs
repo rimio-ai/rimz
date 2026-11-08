@@ -18,6 +18,7 @@ pub struct NodeRow {
     pub run: Option<String>,
     pub shell: Option<String>,
     pub agent: Option<String>,
+    pub message: Option<String>,
     pub do_background: bool,
     pub edges: Vec<Edge>,
 }
@@ -223,6 +224,7 @@ pub(super) fn validate_spec(
             run: check.run.clone(),
             shell: check.shell.clone(),
             agent: check.agent.clone(),
+            message: None,
             do_background: do_background(check.agent.as_deref(), definitions).unwrap_or(false),
             edges,
         });
@@ -281,10 +283,11 @@ pub(super) fn validate_spec(
             }
         }
         if step.kind().is_none() {
-            report.error(&path, "set exactly one of agent, run, or shell");
+            report.error(&path, "set exactly one of agent, run, shell, or message");
         }
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
         let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
+        let message = matches!(step.kind(), Some(StepKind::Message(_)));
         if agent && !at_break && step.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
@@ -306,6 +309,13 @@ pub(super) fn validate_spec(
             && shell.trim().is_empty()
         {
             report.error(&format!("{path}.shell"), "set a nonempty shell command");
+        }
+        if let Some(StepKind::Message(target)) = step.kind() {
+            if let Err(error) = message_target(target) {
+                report.error(&format!("{path}.message"), error);
+            }
+            report.prompt(dir, &path, step.prompt_file.as_deref());
+            message_then(&mut report, spec, &path, &step.then);
         }
         let layout = if let Some(StepKind::Agent(agent)) = step.kind() {
             report.prompt(dir, &path, step.prompt_file.as_deref());
@@ -334,13 +344,14 @@ pub(super) fn validate_spec(
         {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
-        if step.then.is_empty() {
+        if !message && step.then.is_empty() {
             report.error(
                 &format!("{path}.then"),
                 "then must name a check or a nonempty list of checks",
             );
         }
         if !at_break
+            && !message
             && step
                 .then
                 .iter()
@@ -351,7 +362,7 @@ pub(super) fn validate_spec(
                 "then must name a check, never a step or @done",
             );
         }
-        if step.lifecycle() != StepLifecycle::Until && step.then.len() > 1 {
+        if !message && step.lifecycle() != StepLifecycle::Until && step.then.len() > 1 {
             report.warnings.push(issue(
                 &format!("{path}.then"),
                 concat!(
@@ -372,7 +383,7 @@ pub(super) fn validate_spec(
                 "an until step cannot use a sleep as its turn-end check; use lifecycle = \"turn\"",
             );
         }
-        for pair in step.then.windows(2) {
+        for pair in step.then.windows(2).filter(|_| !message) {
             if !spec.edges(&pair[0]).iter().any(|edge| {
                 edge.outcome != "deadline"
                     && edge.target == pair[1]
@@ -406,8 +417,11 @@ pub(super) fn validate_spec(
             ("asked", &step.on.asked),
             ("cap", &step.on.cap),
             ("invalid", &step.on.invalid),
+            ("undelivered", &step.on.undelivered),
         ] {
-            if matches!(outcome, "asked" | "invalid") && !agent {
+            if (matches!(outcome, "asked" | "invalid") && !agent)
+                || (outcome == "undelivered" && !message)
+            {
                 continue;
             }
             if let Some(target) = target {
@@ -431,12 +445,14 @@ pub(super) fn validate_spec(
             runner: match step.kind() {
                 Some(StepKind::Run(_)) => "run",
                 Some(StepKind::Shell(_)) => "shell",
-                _ => "agent",
+                Some(StepKind::Message(_)) => "message",
+                Some(StepKind::Agent(_)) | None => "agent",
             }
             .into(),
             run: step.run.clone(),
             shell: step.shell.clone(),
             agent: step.agent.clone(),
+            message: step.message.clone(),
             do_background: do_background.unwrap_or(false),
             edges: spec.edges(node),
         });
@@ -453,7 +469,7 @@ pub(super) fn validate_spec(
                             && edge.source == EdgeSource::Default
                             && matches!(
                                 edge.outcome.as_str(),
-                                "timeout" | "invalid" | "cap" | "deadline"
+                                "timeout" | "invalid" | "undelivered" | "cap" | "deadline"
                             )
                     })
                     .map(move |edge| {
@@ -527,23 +543,22 @@ pub(super) fn validate_spec(
     }
     for (node, step) in &spec.steps {
         if let Some(visits) = step.max_visits
-            && matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)))
+            && never_waits(step)
             && cycles_to(spec, node, |name| {
-                spec.steps.get(name).is_some_and(|step| {
-                    matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)))
-                }) || (spec.checks.contains_key(name)
-                    && !spec
-                        .edges(name)
-                        .iter()
-                        .any(|edge| edge.outcome != "deadline" && edge.target == "@wait"))
+                spec.steps.get(name).is_some_and(never_waits)
+                    || (spec.checks.contains_key(name)
+                        && !spec
+                            .edges(name)
+                            .iter()
+                            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait"))
             })
         {
             report.warnings.push(issue(
                 &format!("steps.{node}"),
                 format!(
-                    "cycle through command steps never waits and can spend all {visits} visits \
-                     in one advance; route it through a check that can wait (@wait) \
-                     if that is not intended"
+                    "cycle through command or message steps never waits and can spend all \
+                     {visits} visits in one advance; route it through a check that can wait \
+                     (@wait) if that is not intended"
                 ),
             ));
         }
@@ -753,6 +768,50 @@ impl Validation {
             self.error(&format!("{path}.prompt-file"), err);
         }
     }
+}
+
+/// Command and message steps finish within one advance.
+fn never_waits(step: &spec::Step) -> bool {
+    matches!(
+        step.kind(),
+        Some(StepKind::Run(_) | StepKind::Shell(_) | StepKind::Message(_))
+    )
+}
+
+/// A message step names one living agent: `@handle` or `@handle#channel`, never a person.
+fn message_target(target: &str) -> Result<(), String> {
+    if !target.starts_with('@') || target.contains(':') {
+        return Err(format!(
+            "message must be an agent address such as @planner or @planner#feat-x, not {target}"
+        ));
+    }
+    let (selector, _) =
+        crate::address::parse_selector(target).map_err(|error| error.to_string())?;
+    match selector.as_str() {
+        "user" => Err("@user is not an agent; a message step hands work to an agent".into()),
+        "me" => Err("@me names the caller, and a workflow run has none; name the agent".into()),
+        _ => Ok(()),
+    }
+}
+
+/// A message step's `then` names exactly one target: any node, `@done`, or `@failed`.
+fn message_then(report: &mut Validation, spec: &WorkflowSpec, path: &str, then: &[String]) {
+    let path = format!("{path}.then");
+    let [target] = then else {
+        report.error(
+            &path,
+            "a message step's then names exactly one node, @done, or @failed",
+        );
+        return;
+    };
+    if matches!(target.as_str(), "@wait" | "@user") {
+        report.error(
+            &path,
+            "a message step's then names a node, @done, or @failed",
+        );
+        return;
+    }
+    report.target(spec, &path, target);
 }
 
 fn step_layout(

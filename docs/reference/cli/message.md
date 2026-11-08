@@ -174,7 +174,7 @@ Read plan.md when the planner finishes.
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message remains queued past five minutes with a receiver not working, or twenty minutes with a busy receiver, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent | `@rimz` |
-| `WAIT` | A [`rimz wait`](./wait.md) delivery, or a loop `--wait` delivery not triggered by a signal | `@rimz` |
+| `WAIT` | A [`rimz wait`](./wait.md) delivery, a loop `--wait` delivery not triggered by a signal, or a workflow [message step](./workflow.md#run-a-workflow) | `@rimz` |
 | `CACHE_KEEPALIVE` | A facts-only prompt-cache ping for a sleeping agent | `@rimz` |
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery, or a signal a workflow step [subscribes](./workflow.md#run-a-workflow) to | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |

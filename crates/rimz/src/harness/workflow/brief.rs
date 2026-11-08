@@ -73,10 +73,17 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
         arrival.push(visits);
     }
     if let Some(previous) = &record.prev_attempt {
-        let who = previous.handle.as_ref().map_or_else(
-            || format!("the step {}", span(&previous.step)),
-            |handle| format!("{} in {}", verbatim(handle), span(&previous.step)),
-        );
+        let messaged = spec
+            .steps
+            .get(&previous.step)
+            .is_some_and(|step| matches!(step.kind(), Some(super::StepKind::Message(_))));
+        let who = match &previous.handle {
+            None => format!("the step {}", span(&previous.step)),
+            Some(handle) if messaged => {
+                format!("{} messaged {}", span(&previous.step), span(handle))
+            }
+            Some(handle) => format!("{} in {}", verbatim(handle), span(&previous.step)),
+        };
         let ended = match previous.outcome {
             AttemptOutcome::Ended => "ended normally",
             AttemptOutcome::Died => "died",

@@ -31,6 +31,10 @@ pub(super) struct FakeHost {
     forwards: RefCell<Vec<(crate::ids::MessageId, String)>>,
     forward_calls: Cell<usize>,
     forward_error: Cell<bool>,
+    pub(super) messages: RefCell<Vec<(String, crate::ids::MessageId, String)>>,
+    pub(super) message_answer: RefCell<Result<Result<String, String>, String>>,
+    pub(super) on_message: RefCell<Option<Box<dyn Fn()>>>,
+    pub(super) retired: RefCell<Vec<crate::ids::MessageId>>,
 }
 
 impl FakeHost {
@@ -68,6 +72,10 @@ impl FakeHost {
             forwards: RefCell::new(Vec::new()),
             forward_calls: Cell::new(0),
             forward_error: Cell::new(false),
+            messages: RefCell::new(Vec::new()),
+            message_answer: RefCell::new(Ok(Ok("@planner".into()))),
+            on_message: RefCell::new(None),
+            retired: RefCell::new(Vec::new()),
         }
     }
 }
@@ -190,6 +198,31 @@ impl AttemptHost for FakeHost {
         Ok(())
     }
 
+    fn message(
+        &self,
+        _: &std::path::Path,
+        target: &str,
+        message: &crate::ids::MessageId,
+        text: &str,
+    ) -> Result<Result<String, String>, WorkflowErr> {
+        self.messages
+            .borrow_mut()
+            .push((target.into(), message.clone(), text.into()));
+        let callback = self.on_message.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        self.message_answer
+            .borrow()
+            .clone()
+            .map_err(WorkflowErr::Refused)
+    }
+
+    fn retire(&self, message: &crate::ids::MessageId) -> Result<(), WorkflowErr> {
+        self.retired.borrow_mut().push(message.clone());
+        Ok(())
+    }
+
     fn detach(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
         if let Some(callback) = self.on_detach.borrow_mut().take() {
             callback();
@@ -212,6 +245,7 @@ mod commands;
 mod conditions;
 mod graph;
 mod inspection;
+mod message;
 mod sleep;
 mod tolerance;
 mod turns;
@@ -961,13 +995,13 @@ fn validation_rejects_each_invalid_spec() {
             "step no runner",
             VALID.replace("agent = \"claude\"", ""),
             "steps.build",
-            "set exactly one of agent, run, or shell",
+            "set exactly one of agent, run, shell, or message",
         ),
         (
             "step two runners",
             format!("{command}agent='claude'\n"),
             "steps.build",
-            "set exactly one of agent, run, or shell",
+            "set exactly one of agent, run, shell, or message",
         ),
         (
             "agent prompt required",
@@ -1090,16 +1124,20 @@ fn validation_warns_only_for_bounded_command_cycles_that_never_wait() {
             report
                 .warnings
                 .iter()
-                .filter(|issue| issue.message.contains("cycle through command steps"))
+                .filter(|issue| {
+                    issue
+                        .message
+                        .contains("cycle through command or message steps")
+                })
                 .map(|issue| (issue.path.clone(), issue.message.clone()))
                 .collect::<Vec<_>>(),
         );
         let mut step_warnings = Vec::new();
         for (node, visits) in warnings {
             let message = format!(
-                "example: steps.{node}: cycle through command steps never waits and can spend \
-                 all {visits} visits in one advance; route it through a check that can wait \
-                 (@wait) if that is not intended"
+                "example: steps.{node}: cycle through command or message steps never waits and \
+                 can spend all {visits} visits in one advance; route it through a check that can \
+                 wait (@wait) if that is not intended"
             );
             step_warnings.push((format!("steps.{node}"), message));
         }

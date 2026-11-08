@@ -2343,7 +2343,8 @@ path = "crates/rimz/src/harness"
 # Verdict::freshen and Verdict.unread share the loop forge-freshness hold with CLI condition displays (+1).
 # headless::judge::Failure::timed_out words a loop judge's spent deadline as the core's own timeout (+1).
 # headless::judge::FailureKind::from_label reads workflow's journaled failure labels back; it had sat in slack that trunk's schedule::resolve_once_at has since taken (+1).
-surface-budget = 1107
+# Workflow steps carry `share`, `message`, and `undelivered`, with `Step::subscriptions` and `Step::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack (+3).
+surface-budget = 1110
 
 [[verdict]]
 kind = "item"
@@ -11483,7 +11484,7 @@ reason = "Workflow validation and execution share one check-kind decision."
 [[verdict]]
 kind = "item"
 key = "harness::workflow::spec::StepKind"
-reason = "Workflow validation and execution share one agent/run/shell step decision."
+reason = "Workflow validation and execution share one agent/run/shell/message step decision."
 
 [[verdict]]
 kind = "item"
@@ -11493,7 +11494,7 @@ reason = "Workflow validation, admission, schema, and CLI share the workflow and
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Step::kind"
-reason = "Workflow validation and execution share one agent/run/shell step decision."
+reason = "Workflow validation and execution share one agent/run/shell/message step decision."
 
 [[verdict]]
 kind = "item"
