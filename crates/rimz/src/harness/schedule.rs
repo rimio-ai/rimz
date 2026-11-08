@@ -35,6 +35,7 @@ pub mod launch_ledger;
 mod launch_ledger_store;
 mod overlay_store;
 pub mod pending;
+mod run_lock;
 pub mod run_log;
 pub mod runner;
 pub mod signal;
