@@ -2338,7 +2338,8 @@ path = "crates/rimz/src/harness"
 # workflow::condition_now shares live read-only condition answers with CLI inspection (+1).
 # ConfiguredValues and SeatPolicy::configured_values expose declared settings to the CLI (+2).
 # budget::remove_ledger drops an agent override when reset has no launch cap (+1).
-surface-budget = 1091
+# headless::judge shares one judge attempt, its failure classes, the retry rule, and exit wording between loop and workflow (+7).
+surface-budget = 1098
 
 [[verdict]]
 kind = "item"

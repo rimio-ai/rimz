@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use super::WorkflowSpec;
 use super::spec::RESERVED_OUTCOMES;
 use crate::disk::paths::WorkflowPaths;
+use crate::harness::headless::judge::FailureKind;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
     JournalEvent, Key, LiveAttempt, Park, ParkReason, PreviousAttempt, RunRecord, RunState,
@@ -78,10 +79,11 @@ impl Transition<'_> {
         }
         // The successful case returned above.
         let reason = object.expect_err("failed judge evaluation");
-        let disposition = match failure {
-            "canceled" => JudgeFailure::Canceled,
-            "limited" => JudgeFailure::Limited,
-            _ if self.record.check_retry == 0 => JudgeFailure::Retry,
+        let kind = FailureKind::from_label(failure);
+        let disposition = match kind {
+            Some(FailureKind::Canceled) => JudgeFailure::Canceled,
+            Some(FailureKind::Limited) => JudgeFailure::Limited,
+            Some(kind) if kind.retry_owed(self.record.check_retry > 0) => JudgeFailure::Retry,
             _ if self.spec.route_defaults == crate::store::workflow::RouteDefaults::Park => {
                 JudgeFailure::Park
             }
