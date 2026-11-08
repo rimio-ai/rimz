@@ -491,6 +491,10 @@ fn schedule_of(entry: &TaskEntry) -> Schedule {
     parse_schedule("m", entry).expect("parse").schedule
 }
 
+fn cron(expr: &str) -> Schedule {
+    schedule_of(&entry(None, None, Some(expr)))
+}
+
 #[test]
 fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
     use jiff::civil::Weekday::{Saturday, Sunday, Thursday, Tuesday};
@@ -831,7 +835,7 @@ fn parse_schedule_accepts_every_timing_form() {
     );
     assert_eq!(
         schedule_of(&entry(None, None, Some("0 7 * * 1-5"))),
-        Schedule::RawCron("0 7 * * 1-5".to_owned())
+        cron("0 7 * * 1-5")
     );
     // Only a bare `at` is a one-shot; a repeat cadence always outlives its fire.
     for (at, every, cron, once) in [
@@ -1256,8 +1260,8 @@ fn obsolete_ci_finished_subscription_is_rejected_with_replacement() {
 #[test]
 fn schedule_due_at_occurrence_edges() {
     let interval = Schedule::Interval(IntervalSpec::new(15));
-    let quarter_hour = Schedule::RawCron("*/15 * * * *".to_owned());
-    let weekday_cron = Schedule::RawCron("0 7 * * 1-5".to_owned());
+    let quarter_hour = cron("*/15 * * * *");
+    let weekday_cron = cron("0 7 * * 1-5");
     let every_wed = schedule_of(&entry(Some("07:30"), Some("wed"), None));
     let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
     let daily = schedule_of(&entry(Some("07:30"), None, None));
@@ -1305,8 +1309,8 @@ fn schedule_due_at_occurrence_edges() {
 #[test]
 fn schedule_next_after_reports_the_following_occurrence() {
     let interval = Schedule::Interval(IntervalSpec::new(15));
-    let quarter_hour = Schedule::RawCron("*/15 * * * *".to_owned());
-    let yearly = Schedule::RawCron("0 0 1 1 *".to_owned());
+    let quarter_hour = cron("*/15 * * * *");
+    let yearly = cron("0 0 1 1 *");
     let every_mon = schedule_of(&entry(Some("07:30"), Some("mon"), None));
     let daily = schedule_of(&entry(Some("07:30"), None, None));
 
@@ -1346,8 +1350,8 @@ fn schedule_next_after_reports_the_following_occurrence() {
     );
     assert_eq!(
         next(&yearly, &jan_second, 60),
-        None,
-        "cron gives up past the search cap"
+        Some(zdt(2027, 1, 1, 0, 0, 0).timestamp()),
+        "a yearly cron reports next year's occurrence"
     );
 }
 
@@ -1418,8 +1422,7 @@ impl Timing {
 #[test]
 fn task_timing_state_precedence_and_classification() {
     use TaskTimingState::{
-        Blocked, Disabled, Due, Invalid, Listening, NoOccurrence, Paused, Unarmed, Upcoming,
-        Watching,
+        Blocked, Disabled, Due, Invalid, Listening, Paused, Unarmed, Upcoming, Watching,
     };
 
     let now = zdt(2026, 6, 24, 8, 10, 0);
@@ -1465,6 +1468,13 @@ fn task_timing_state_precedence_and_classification() {
         Paused(after(&now, 5 * 60))
     );
     assert_eq!(overlay(Timing::fired(0, &now)), Invalid);
+    // A hand-written row whose cron the parser refuses reads invalid as compiled.
+    let refused = TaskShape::compile("task", &entry(None, None, Some("0 9 * * L")));
+    let fired = Timing::fired(0, &now);
+    assert_eq!(
+        TaskTiming::evaluate(&refused.trigger, fired.source, fired.last_fire, None, &now).state(),
+        Invalid
+    );
 
     assert_eq!(Timing::default().state(&interval, &now), Unarmed);
     assert_eq!(
@@ -1503,14 +1513,13 @@ fn task_timing_state_precedence_and_classification() {
             .state(&interval, &now),
         Upcoming(after(&now, 10 * 60)),
     );
-    // A sparse cron expression outside the bounded search has no computable
-    // occurrence.
+    // A sparse cron expression still has a computable occurrence.
     assert_eq!(
         Timing::fired(60, &zdt(2026, 1, 2, 0, 0, 0)).state(
             &entry(None, None, Some("0 0 1 1 *")),
             &zdt(2026, 1, 2, 0, 0, 0)
         ),
-        NoOccurrence,
+        Upcoming(zdt(2027, 1, 1, 0, 0, 0).timestamp()),
     );
 
     // Every schedule variant reaches Due through `next_after`, agreeing with the
@@ -1687,4 +1696,175 @@ fn legacy_once_calendar_fires_on_its_time_of_day_after_a_missed_midnight() {
         once.due(armed, &zdt(2026, 6, 25, 8, 0, 0)),
         "after its time, at once"
     );
+}
+
+#[test]
+fn cron_accepts_names_stepped_ranges_and_macros() {
+    let wed_0900 = zdt(2026, 6, 24, 9, 0, 0);
+    let sat_0900 = zdt(2026, 6, 27, 9, 0, 0);
+    let due = |expr: &str, now: &Zoned| cron(expr).due(before(now, 60), now);
+    assert!(due("0 9 * * mon-fri", &wed_0900), "a day-name range");
+    assert!(!due("0 9 * * mon-fri", &sat_0900), "off the range");
+    assert!(due("0 9 * * WED", &wed_0900), "names are case-insensitive");
+    assert!(
+        due("0 9 * jan-jul/2 *", &zdt(2026, 7, 1, 9, 0, 0)),
+        "a stepped name range"
+    );
+    assert!(
+        !due("0 9 * jan-jul/2 *", &zdt(2026, 6, 1, 9, 0, 0)),
+        "off the step"
+    );
+    assert!(
+        due("0 9 1 jul *", &zdt(2026, 7, 1, 9, 0, 0)),
+        "a month name"
+    );
+    assert!(
+        due("0-30/10 * * * *", &zdt(2026, 6, 24, 9, 20, 0)),
+        "a stepped range"
+    );
+    assert!(
+        !due("0-30/10 * * * *", &zdt(2026, 6, 24, 9, 40, 0)),
+        "past the range"
+    );
+    assert!(
+        due("0 9 * * 5-7", &zdt(2026, 6, 28, 9, 0, 0)),
+        "7 is Sunday in a range"
+    );
+    for (macro_, equivalent) in [
+        ("@hourly", "0 * * * *"),
+        ("@daily", "0 0 * * *"),
+        ("@weekly", "0 0 * * 0"),
+        ("@monthly", "0 0 1 * *"),
+        ("@yearly", "0 0 1 1 *"),
+        ("@DAILY", "0 0 * * *"),
+    ] {
+        let start = zdt(2026, 6, 24, 9, 30, 0);
+        assert_eq!(
+            cron(macro_).next_after(start.timestamp(), &start),
+            cron(equivalent).next_after(start.timestamp(), &start),
+            "{macro_}"
+        );
+        assert_eq!(cron(macro_).describe(), format!("cron `{macro_}`"));
+    }
+    let sunday = zdt(2026, 6, 28, 0, 0, 0);
+    assert!(due("@weekly", &sunday), "weekly fires Sunday 00:00");
+}
+
+#[test]
+fn cron_refuses_unsupported_forms_and_unknown_tokens() {
+    let parse = |expr: &str| parse_schedule("m", &entry(None, None, Some(expr))).map(|_| ());
+    for (expr, form) in [
+        ("0 0 L * *", "L"),
+        ("0 0 ? * 1", "?"),
+        ("0 0 15W * *", "W"),
+        ("0 0 * * 5L", "L"),
+        ("0 0 LW * *", "L"),
+        ("0 0 lw * *", "L"),
+        ("0 0 * * L-3", "L"),
+        ("@reboot", "@reboot"),
+    ] {
+        let error = parse(expr).unwrap_err();
+        assert_eq!(
+            error,
+            ScheduleErr::UnsupportedCron {
+                name: "m".to_owned(),
+                value: expr.to_owned(),
+                form: form.to_owned(),
+            },
+            "{expr}"
+        );
+        assert!(error.to_string().contains("not supported"), "{error}");
+    }
+    for (expr, field, token) in [
+        ("60 * * * *", "minute", "60"),
+        ("5-1 * * * *", "minute", "5-1"),
+        ("*/0 * * * *", "minute", "*/0"),
+        ("0 0 * mon *", "month", "mon"),
+        ("0 0 * * jan", "day-of-week", "jan"),
+        ("5/15 * * * *", "minute", "5/15"),
+        ("0 0 * * 1#2", "day-of-week", "1#2"),
+        ("0 0 1,,2 * *", "day-of-month", ""),
+        ("@annually", "expression", "@annually"),
+        ("0 9 * * wednesday", "day-of-week", "wednesday"),
+        ("0 9 * july *", "month", "july"),
+        ("0 9 * april *", "month", "april"),
+    ] {
+        let error = parse(expr).unwrap_err();
+        assert_eq!(
+            error,
+            ScheduleErr::BadCronToken {
+                name: "m".to_owned(),
+                value: expr.to_owned(),
+                field,
+                token: token.to_owned(),
+            },
+            "{expr}"
+        );
+        assert!(error.to_string().contains(&format!("`{token}`")), "{error}");
+    }
+}
+
+#[test]
+fn cron_that_can_never_fire_is_refused_and_a_leap_day_is_found() {
+    let parse = |expr: &str| parse_schedule("m", &entry(None, None, Some(expr))).map(|_| ());
+    for expr in ["0 0 30 2 *", "0 0 31 4,6,9,11 *"] {
+        let error = parse(expr).unwrap_err();
+        assert_eq!(
+            error,
+            ScheduleErr::CronNeverFires {
+                name: "m".to_owned(),
+                value: expr.to_owned()
+            }
+        );
+        assert!(error.to_string().contains("never fires"), "{error}");
+    }
+    assert!(
+        parse("0 0 31 2 1").is_ok(),
+        "both day fields fire on the weekday"
+    );
+    let leap = cron("0 0 29 2 *");
+    let next = |now: Zoned| leap.next_after(now.timestamp(), &now);
+    assert_eq!(
+        next(zdt(2026, 11, 8, 0, 0, 0)),
+        Some(zdt(2028, 2, 29, 0, 0, 0).timestamp())
+    );
+    assert_eq!(
+        next(zdt(2097, 3, 1, 0, 0, 0)),
+        Some(zdt(2104, 2, 29, 0, 0, 0).timestamp()),
+        "2100 is no leap year"
+    );
+}
+
+/// A minute walk with the matcher's semantics, as the search ran before it went day by day.
+fn brute_force_next(schedule: &Schedule, now: &Zoned) -> Option<Timestamp> {
+    let start = now.timestamp().as_second().div_euclid(60) + 1;
+    (0..60 * 24 * 60).find_map(|offset| {
+        let at = Timestamp::from_second((start + offset) * 60).ok()?;
+        schedule
+            .due(now.timestamp(), &at.to_zoned(now.time_zone().clone()))
+            .then_some(at)
+    })
+}
+
+#[test]
+fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
+    let new_york = "America/New_York";
+    for (expr, now) in [
+        ("*/15 * * * *", zoned_in("UTC", (2026, 6, 24), (8, 14, 12))),
+        // Spring forward: 02:30 does not exist on 2027-03-14.
+        ("30 2 * * *", zoned_in(new_york, (2027, 3, 13), (12, 0, 0))),
+        // Fall back: 01:00 happens twice on Sunday 2026-11-01.
+        ("0 1 * * 0", zoned_in(new_york, (2026, 10, 31), (12, 0, 0))),
+        ("0 1 * * 0", zoned_in(new_york, (2026, 11, 1), (1, 30, 0))),
+        ("0 0 1 * mon", zoned_in("UTC", (2026, 6, 24), (8, 0, 0))),
+    ] {
+        let schedule = cron(expr);
+        let next = schedule.next_after(now.timestamp(), &now);
+        assert_eq!(next, brute_force_next(&schedule, &now), "{expr} from {now}");
+        let at = next.expect("an occurrence within 60 days");
+        assert!(
+            schedule.due(now.timestamp(), &at.to_zoned(now.time_zone().clone())),
+            "{expr}"
+        );
+    }
 }

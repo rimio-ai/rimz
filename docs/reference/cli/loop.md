@@ -79,7 +79,7 @@ With `--each-worktree`, each RimZ-owned checkout has its own condition and `--fo
 | After a window reset | `--after-reset 5h\|7d` | Fires once at the next reset of the task provider's window, then the task removes itself; see [after a reset](#after-a-reset). |
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
 | Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
-| Raw cron | `--cron "<5 fields>"` | Per the expression. |
+| Raw cron | `--cron "<expression>"` | Per the expression. |
 | Poll-until | `--every <DUR> --until <DUR>` with `--check` or `--judge`, plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
 | Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
@@ -91,7 +91,7 @@ The trigger values follow these rules:
 | `--at` | Alone, a one-shot time: 24-hour `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM` (such as `fri 09:30`). It resolves at add time to the first matching instant after now, so an `HH:MM` at or before the current minute fires tomorrow; a dated time in the past is refused. With `--every`, 24-hour `HH:MM` only. |
 | `--every` interval | An integer with `s`, `m`, `h`, or `d`, rounded up to whole minutes. `0` is refused, and an interval cannot take `--at`. |
 | `--every` days | `day`, `weekday`, `weekend`, a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
-| `--cron` | Five whitespace-separated fields. |
+| `--cron` | Five whitespace-separated fields (minute, hour, day of month, month, day of week). Each field is `*`, a value, a range `a-b`, a step `*/n` or `a-b/n`, or a comma list of these. Months take `jan` to `dec` and days take `sun` to `sat`, case-insensitive and usable as range ends, and day `7` is Sunday as well as `0`. `@hourly`, `@daily`, `@weekly`, `@monthly`, or `@yearly` stands for the whole expression. When both day fields are other than `*`, a day either one selects fires. `L`, `W`, `?`, `#`, `@reboot`, an out-of-range or reversed value, and an expression whose day of month no selected month has (`0 0 30 2 *`) are refused, naming the token or form. |
 | `--in` | A [duration](../cli.md#durations) in `s`, `m`, `h`, or `d`, greater than zero. It resolves at add time to a one-shot instant, rounded up to the next minute. |
 | `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check` or `--judge`, `--every`, and `--agent` or `--wait`; refused with `--in` or `--stay`. |
 
