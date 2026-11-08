@@ -191,6 +191,46 @@ pub enum UnreadReason {
     PrFactsUnavailable { branch: Option<String> },
 }
 
+/// A `team.stage` condition key: the scope checkout's board, or with `[branch]` the board of the
+/// checkout on that branch. Every reader of a `team.stage` term parses it here.
+#[derive(Clone, Copy)]
+pub(in crate::harness) struct TeamStageKey<'a> {
+    branch: Option<&'a str>,
+}
+
+impl<'a> TeamStageKey<'a> {
+    const NAME: &'static str = "team.stage";
+
+    fn parse(key: &'a str) -> Option<Self> {
+        let rest = key.strip_prefix(Self::NAME)?;
+        if rest.is_empty() {
+            return Some(Self { branch: None });
+        }
+        let branch = rest.strip_prefix('[')?.strip_suffix(']')?;
+        Some(Self {
+            branch: Some(branch),
+        })
+    }
+
+    pub(in crate::harness) fn branch(self) -> Option<&'a str> {
+        self.branch
+    }
+
+    /// The board's stage. A branch reads the checkout on it from the cached `git worktree list`
+    /// rows, primary and linked alike, and reads nothing when no checkout is on that branch.
+    fn read(self, scope: &Path) -> Option<String> {
+        let checkout = match self.branch {
+            None => scope.to_path_buf(),
+            Some(branch) => crate::worktree::checkout_on_branch_cached(scope, branch)
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, branch, "listing checkouts for team.stage");
+                    None
+                })?,
+        };
+        crate::harness::scratch::board_stage(&checkout).map(|stage| stage.name)
+    }
+}
+
 /// The condition keys read from the room's forge cache. This is the one place
 /// that names them: the parser, the probe scopes, and the no-room hint ask it.
 #[derive(Clone, Copy)]
@@ -674,8 +714,8 @@ pub fn evaluate(
     let mut readings = BTreeMap::new();
     for term in expr.terms() {
         readings.entry(term.key.clone()).or_insert_with(|| {
-            if term.key == "team.stage" {
-                return crate::harness::scratch::board_stage(scope).map(|stage| stage.name);
+            if let Some(key) = TeamStageKey::parse(&term.key) {
+                return key.read(scope);
             }
             if let Some(key) = ForgeKey::parse(&term.key) {
                 return ci_source
@@ -754,26 +794,45 @@ impl WhenTerm {
         ForgeKey::parse(&self.key).is_some()
     }
 
-    /// The emitted selector for this scope's reading, excluding branch and window terms.
-    pub(in crate::harness) fn wake_selector(&self) -> Option<super::signal::SignalSelector> {
+    /// The parsed key of a `team.stage` term, with or without a branch selector.
+    pub(in crate::harness) fn team_stage(&self) -> Option<TeamStageKey<'_>> {
+        TeamStageKey::parse(&self.key)
+    }
+
+    /// The emitted selector for this term's reading and its explicit matches, excluding forge
+    /// branch and window terms. A branch stage matches any `board`, so the scope's default board
+    /// does not narrow it to the scope's own flips.
+    pub(in crate::harness) fn wake_subscription(
+        &self,
+    ) -> Option<(super::signal::SignalSelector, BTreeMap<String, String>)> {
         use super::signal::SignalSelector;
-        if self.key == "team.stage" {
-            // This fixed stage key satisfies the signal-name grammar.
-            return Some(SignalSelector::Exact(
-                self.key.parse().expect("team.stage is a valid signal name"),
+        if let Some(key) = TeamStageKey::parse(&self.key) {
+            let matches = key
+                .branch()
+                .map(|_| ("board".to_owned(), "*".to_owned()))
+                .into_iter()
+                .collect();
+            return Some((
+                SignalSelector::Exact(
+                    TeamStageKey::NAME
+                        .parse()
+                        .expect("team.stage is a valid signal name"),
+                ),
+                matches,
             ));
         }
         let key = ForgeKey::parse(&self.key)?;
         if key.branch().is_some() {
             return None;
         }
-        match key {
-            ForgeKey::Ci(_) => Some(SignalSelector::Family("ci".into())),
+        let family = match key {
+            ForgeKey::Ci(_) => "ci",
             ForgeKey::Pr(_)
             | ForgeKey::PrQueue(_)
             | ForgeKey::PrMergeable(_)
-            | ForgeKey::PrReview(_) => Some(SignalSelector::Family("pr".into())),
-        }
+            | ForgeKey::PrReview(_) => "pr",
+        };
+        Some((SignalSelector::Family(family.into()), BTreeMap::new()))
     }
 
     pub(in crate::harness) fn comparison_evidence(&self, reading: Option<&str>) -> String {
@@ -979,7 +1038,7 @@ impl WhenExpr {
     pub fn scope_checkout_key(&self) -> Option<&str> {
         self.terms()
             .find(|term| {
-                term.key == "team.stage"
+                TeamStageKey::parse(&term.key).is_some_and(|key| key.branch().is_none())
                     || ForgeKey::parse(&term.key).is_some_and(|key| key.branch().is_none())
             })
             .map(|term| term.key.as_str())
@@ -1161,8 +1220,15 @@ impl Parser<'_> {
     fn key(&mut self) -> Result<String, WhenError> {
         let mut key = self.word()?;
         let forge_keys = ForgeKey::all(None).map(ForgeKey::name);
-        if key != "team.stage" && window_span(&key).is_none() && ForgeKey::parse(&key).is_none() {
-            let keys = ["team.stage"]
+        let branch_keys = std::iter::once(TeamStageKey::NAME)
+            .chain(forge_keys)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if key != TeamStageKey::NAME
+            && window_span(&key).is_none()
+            && ForgeKey::parse(&key).is_none()
+        {
+            let keys = [TeamStageKey::NAME]
                 .into_iter()
                 .chain(forge_keys)
                 .chain(["window.5h.left", "window.7d.left"])
@@ -1171,23 +1237,16 @@ impl Parser<'_> {
                 .map(|name| format!("did you mean {name}? "))
                 .unwrap_or_default();
             return Err(self.error(format!(
-                "{suggestion}unknown key; keys: {}; {} also accept [branch]",
+                "{suggestion}unknown key; keys: {}; {branch_keys} also accept [branch]",
                 keys.join(", "),
-                forge_keys.join(", ")
             )));
         }
         if !self.take("[") {
             return Ok(key);
         }
-        if ForgeKey::parse(&key).is_none() {
-            let fix = if window_span(&key).is_some() {
-                format!("{key}>=40")
-            } else {
-                "team.stage=unknown".to_owned()
-            };
+        if window_span(&key).is_some() {
             return Err(self.error(format!(
-                "{key} cannot take a branch selector; only {} take one; use {fix}",
-                forge_keys.join(", ")
+                "{key} cannot take a branch selector; only {branch_keys} take one; use {key}>=40"
             )));
         }
         let fix = format!("{key}[branch]=unknown");
@@ -1270,7 +1329,7 @@ impl Parser<'_> {
             while self.take(",") {
                 values.push(self.word()?);
             }
-            if key == "team.stage"
+            if TeamStageKey::parse(&key).is_some()
                 && let Some(stages) = self.stages
             {
                 for value in &values {

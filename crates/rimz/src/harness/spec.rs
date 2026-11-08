@@ -2247,7 +2247,13 @@ fn prepare_team<'a>(
             Some(&stages),
         )
         .map_err(|error| refuse(error.to_string()))?;
-        if !expr.terms().all(|term| term.key == "team.stage") {
+        if expr
+            .terms()
+            .any(|term| term.team_stage().is_some_and(|key| key.branch().is_some()))
+        {
+            return Err(refuse("a team's condition reads its own board; use `team.stage` without a branch selector".into()));
+        }
+        if !expr.terms().all(|term| term.team_stage().is_some()) {
             return Err(refuse("only `team.stage` is admitted; replace forge/window conditions with a team stage condition".into()));
         }
     }

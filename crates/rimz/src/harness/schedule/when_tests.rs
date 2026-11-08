@@ -108,6 +108,7 @@ fn scope_checkout_keys_include_nested_terms_but_not_named_branches_or_windows() 
             Some("pr.queue"),
         ),
         ("!(pr[topic]=open || team.stage=Done)", Some("team.stage")),
+        ("team.stage[topic]=Done && ci[topic]=passed", None),
         (
             "ci[topic]=passed && pr[topic]=merged && pr.queue[topic]=none",
             None,
@@ -878,6 +879,10 @@ fn grammar_and_canonical_display() {
         ),
         (vec![" window.5h.left >= 40 "], "window.5h.left>=40"),
         (
+            vec!["team.stage[feat/x] = Done,unknown"],
+            "team.stage[feat/x]=Done,unknown",
+        ),
+        (
             vec!["window.7d.left<10 || !window.5h.left>90"],
             "window.7d.left<10 || !window.5h.left>90",
         ),
@@ -924,6 +929,14 @@ fn refusals_name_clause_position_and_fix() {
         assert!(error.contains("position"), "{error}");
         assert!(error.contains(hint), "{input}: {error}");
     }
+    let error = WhenExpr::parse(&["agent=idle".to_owned()])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error
+            .contains("team.stage, ci, pr, pr.queue, pr.mergeable, pr.review also accept [branch]"),
+        "{error}"
+    );
     assert!(WhenExpr::parse(&[]).is_err());
 }
 
@@ -1148,7 +1161,7 @@ fn branch_selector_refusals_suggest_parseable_fixes() {
         "ci[feat/x=passed",
         "pr[feat x]=merged",
         "pr[a[b]]=merged",
-        "team.stage[b]=Done",
+        "team.stage[]=Done",
         "window.5h.left[b]>=40",
     ] {
         let error = WhenExpr::parse(&["ci=passed".to_owned(), input.to_owned()])
@@ -1163,9 +1176,9 @@ fn branch_selector_refusals_suggest_parseable_fixes() {
             WhenExpr::parse(&[fix.to_owned()]).is_ok(),
             "{input}: {error}"
         );
-        if input.starts_with("team") || input.starts_with("window") {
+        if input.starts_with("window") {
             assert!(
-                error.contains("only ci, pr, pr.queue, pr.mergeable, pr.review"),
+                error.contains("only team.stage, ci, pr, pr.queue, pr.mergeable, pr.review"),
                 "{error}"
             );
         }
@@ -1281,6 +1294,76 @@ fn loop_freshness_holds_forge_keys_probed_before_the_fire_stamp_or_without_a_sou
 }
 
 #[test]
+fn team_stage_branch_reads_the_board_of_the_checkout_on_that_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let linked = dir.path().join("linked");
+    let git = |cwd: &Path, args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args([
+                "-c",
+                "user.email=rimz@example.test",
+                "-c",
+                "user.name=RimZ Test",
+            ])
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["commit", "--allow-empty", "-m", "base"]);
+    git(
+        &repo,
+        &["worktree", "add", "-b", "feat/x", linked.to_str().unwrap()],
+    );
+    for (checkout, stage) in [(&repo, "Plan"), (&linked, "Review")] {
+        std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+        std::fs::write(
+            checkout.join(".rimz/team/blackboard.md"),
+            format!("Stage: {stage}\n"),
+        )
+        .unwrap();
+    }
+    let read = |input: &str| {
+        let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
+        let verdict = evaluate(&expr, &repo, None, None, None, &no_windows());
+        (verdict.ok, verdict.readings.into_values().next().flatten())
+    };
+    assert_eq!(
+        read("team.stage[feat/x]=Review"),
+        (true, Some("Review".to_owned()))
+    );
+    assert_eq!(
+        read("team.stage[main]=Plan"),
+        (true, Some("Plan".to_owned()))
+    );
+    assert_eq!(read("team.stage=Plan"), (true, Some("Plan".to_owned())));
+    assert_eq!(read("team.stage[gone]=unknown"), (true, None));
+    let expr = WhenExpr::parse(&["team.stage[feat/x]=Review".to_owned()]).unwrap();
+    let (selector, matches) = expr.terms().next().unwrap().wake_subscription().unwrap();
+    assert_eq!(
+        (selector.to_string(), matches),
+        (
+            "team.stage".to_owned(),
+            BTreeMap::from([("board".to_owned(), "*".to_owned())])
+        ),
+        "a branch stage wakes on team.stage signals from any checkout"
+    );
+    let bare = WhenExpr::parse(&["team.stage=Review".to_owned()]).unwrap();
+    assert_eq!(
+        bare.terms().next().unwrap().wake_subscription().unwrap().1,
+        BTreeMap::new(),
+        "the bare key keeps the scope's default board"
+    );
+}
+
+#[test]
 fn loop_commit_fence_holds_bare_ci_only_on_a_fresh_true_verdict() {
     // No git checkout exists here, so local HEAD is unknown and only the CI SHA can fence.
     let scope = Path::new("/rimz-no-such-checkout");
@@ -1335,4 +1418,16 @@ fn loop_commit_fence_holds_bare_ci_only_on_a_fresh_true_verdict() {
             None => assert_eq!(verdict, raw, "{label}"),
         }
     }
+}
+
+#[test]
+fn team_stage_branch_values_take_the_stage_name_check() {
+    let stages = BTreeSet::from(["Review".to_owned()]);
+    assert!(
+        WhenExpr::parse_with_stages(&["team.stage[b]=Review".to_owned()], Some(&stages)).is_ok()
+    );
+    let error = WhenExpr::parse_with_stages(&["team.stage[b]=Reveiw".to_owned()], Some(&stages))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("did you mean Review?"), "{error}");
 }

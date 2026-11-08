@@ -360,7 +360,8 @@ A condition derives these subscriptions from all its cases, including negated te
 | `ci` | `ci.*` for the run's checkout |
 | `pr`, `pr.queue`, `pr.mergeable`, `pr.review` | `pr.*` for the run's checkout |
 | `team.stage` | `team.stage` for the run's board |
-| Branch-selector terms such as `ci[main]`, and `window.*` | None; recheck time and the minute tick only |
+| `team.stage[branch]` | `team.stage` for any board |
+| Forge branch-selector terms such as `ci[main]`, and `window.*` | None; recheck time and the minute tick only |
 
 For a run, shell, or agent check, declare the signals that should re-run it:
 

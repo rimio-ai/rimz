@@ -387,8 +387,7 @@ impl Check {
             subscriptions.extend(
                 expression
                     .terms()
-                    .filter_map(|term| term.wake_selector())
-                    .map(|selector| (selector, BTreeMap::new())),
+                    .filter_map(|term| term.wake_subscription()),
             );
         }
         Ok(subscriptions)
