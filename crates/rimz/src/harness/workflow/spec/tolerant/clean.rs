@@ -296,6 +296,12 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 "a command step has no occupancy to take over",
             );
             ignore(
+                &mut step.share,
+                &format!("{path}.share"),
+                ignored,
+                "a command step launches no agent to share a checkout",
+            );
+            ignore(
                 &mut step.throttle,
                 &format!("{path}.throttle"),
                 ignored,

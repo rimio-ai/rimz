@@ -412,6 +412,12 @@ expression: value
             "null"
           ]
         },
+        "share": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "shell": {
           "type": [
             "string",

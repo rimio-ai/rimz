@@ -983,6 +983,12 @@ fn validation_rejects_each_invalid_spec() {
             "steps.build.shell",
             "set a nonempty shell command",
         ),
+        (
+            "takeover and share",
+            format!("{VALID}takeover=true\nshare=true\n"),
+            "steps.build.share",
+            "takeover stops an idle occupant; share launches beside it",
+        ),
     ];
     let mut missed = Vec::new();
     for (label, text, path, message) in cases

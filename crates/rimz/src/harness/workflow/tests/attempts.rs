@@ -2022,6 +2022,35 @@ fn eviction_failure_is_a_counted_died_attempt() {
 }
 
 #[test]
+fn sharing_step_launches_beside_any_occupant_without_reading_or_stopping_it() {
+    let (_dir, state, record) = setup(&format!("{STEP}share=true\n"));
+    let host = FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Blocked(vec![(
+        "sweeper".into(),
+        crate::harness::schedule::takeover::OpenTurn::Working,
+    )]);
+    let live = advance_ok(&state, &record.id, &host);
+    assert!(live.wait.is_none(), "{live:#?}");
+    assert_eq!(host.launched.borrow().len(), 1);
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    restart(&state, &record.id, None, &host).unwrap();
+    let restarted = advance_ok(&state, &record.id, &host);
+    assert!(restarted.wait.is_none(), "{restarted:#?}");
+    assert_eq!(host.launched.borrow().len(), 2);
+    assert_eq!(
+        (host.occupancies.get(), host.evictions.get()),
+        (0, 0),
+        "a sharing step never reads occupancy or stops an occupant"
+    );
+    assert!(
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .iter()
+            .all(|row| !matches!(row.event, JournalEvent::Wait { .. }))
+    );
+}
+
+#[test]
 fn timeout_deadline_and_cancel_stop_before_settlement() {
     let cleared = Rc::new(RefCell::new(Vec::new()));
     for cause in ["timeout", "deadline", "cancel"] {
