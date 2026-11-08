@@ -312,4 +312,19 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             );
         }
     }
+    for (subscribe, demanded) in [
+        ("subscribe=['ci.failed']", true),
+        (
+            "subscribe=[{signal='ci.failed', match={branch='main'}}]",
+            false,
+        ),
+        ("subscribe=['review.ready']", false),
+    ] {
+        let text = format!(
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='stay'\nprompt-file='prompts/build.md'\nthen=['done']\n{subscribe}\n[checks.done]\nrun='true'\non.ok='@done'\n"
+        );
+        let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+        let expected = demanded.then(std::collections::BTreeSet::new);
+        assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
+    }
 }

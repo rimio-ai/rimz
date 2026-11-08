@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use super::super::{
-    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, StepKind, WorkflowSpec, duration,
+    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, StepKind, Wake, WorkflowSpec, duration,
     parse_deadline, parse_window,
 };
 use super::ignored_issue;
@@ -126,23 +126,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 "field is not supported by this check kind",
             );
         }
-        if let Some(wakes) = &mut check.wake {
-            let wake_path = format!("{path}.wake");
-            *wakes = std::mem::take(wakes)
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, wake)| match wake.subscription() {
-                    Ok(_) => Some(wake),
-                    Err(error) => {
-                        let index = indices
-                            .get(&wake_path)
-                            .map_or(index, |indices| indices[index]);
-                        ignored.push(ignored_issue(&format!("{wake_path}.{index}"), error));
-                        None
-                    }
-                })
-                .collect();
-        }
+        subscriptions(&mut check.wake, &format!("{path}.wake"), indices, ignored);
         let outcomes = check
             .cases
             .iter()
@@ -350,6 +334,20 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 "a command step takes no prompt; it reads context.json",
             );
         }
+        if !matches!(step.kind(), Some(StepKind::Agent(_))) || step.lifecycle().is_turn() {
+            ignore(
+                &mut step.subscribe,
+                &format!("{path}.subscribe"),
+                ignored,
+                "only a staying agent step receives signals; a turn ends where they would land",
+            );
+        }
+        subscriptions(
+            &mut step.subscribe,
+            &format!("{path}.subscribe"),
+            indices,
+            ignored,
+        );
         if matches!(step.kind(), Some(StepKind::Agent(_))) && !step.lifecycle().is_turn() {
             ignore(
                 &mut step.timeout,
@@ -459,6 +457,30 @@ fn sanitize<T, E: Display>(
     if let Some(error) = value.as_ref().and_then(|value| validate(value).err()) {
         ignore(value, path, ignored, error);
     }
+}
+
+/// Drop each entry that names no valid subscription, warning at its original index.
+fn subscriptions(
+    entries: &mut Option<Vec<Wake>>,
+    path: &str,
+    indices: &BTreeMap<String, Vec<usize>>,
+    ignored: &mut Vec<Issue>,
+) {
+    let Some(entries) = entries else {
+        return;
+    };
+    *entries = std::mem::take(entries)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| match entry.subscription() {
+            Ok(_) => Some(entry),
+            Err(error) => {
+                let index = indices.get(path).map_or(index, |indices| indices[index]);
+                ignored.push(ignored_issue(&format!("{path}.{index}"), error));
+                None
+            }
+        })
+        .collect();
 }
 
 fn ignore<T>(value: &mut Option<T>, path: &str, ignored: &mut Vec<Issue>, reason: impl Display) {

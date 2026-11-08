@@ -485,6 +485,46 @@ impl workflow::AttemptHost for Host<'_> {
         .map_err(host_error)
     }
 
+    fn forward(
+        &self,
+        attempt: &AttemptRun,
+        message: &rimz::ids::MessageId,
+        text: &str,
+    ) -> Result<(), WorkflowErr> {
+        (|| -> Result<_> {
+            let ctx = self.ctx()?;
+            let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            let snapshot = ctx.cached_snapshot()?;
+            let root =
+                agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
+            let mut record = rimz::message::synthetic::SyntheticMessage {
+                agent: root,
+                text: text.into(),
+                sender: rimz::store::message::MessageSender::Harness {
+                    notice: rimz::store::message::HarnessNotice::Signal,
+                },
+                gate: rimz::store::message::DeliveryGate::Done,
+                pane_id: None,
+            }
+            .record(&ctx.workspace)
+            .with_automated(true)
+            .with_about_run(Some(attempt.run_id.clone()));
+            record.message_id = message.clone();
+            ctx.store
+                .queue_message_once(&record, &ctx.workspace.session_name)?;
+            rimz::message::synthetic::attempt_now(
+                &ctx.workspace,
+                &ctx.store,
+                message,
+                None,
+                rimz::store::writer::DeliveryFailureDisposition::Retry,
+                "workflow signal delivery deferred",
+            )?;
+            Ok(())
+        })()
+        .map_err(host_error)
+    }
+
     fn detach(&self, attempt: &AttemptRun) -> Result<Children, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;

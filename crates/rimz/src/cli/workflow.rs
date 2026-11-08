@@ -250,7 +250,12 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             ..
         } => {
             let ctx = super::ctx::Ctx::open(globals)?;
-            Ok(workflow::wake(ctx.store.paths(), &signal)?)
+            let state = ctx.store.paths();
+            Ok(workflow::wake(
+                state,
+                &signal,
+                &Host::new(state, globals, None),
+            )?)
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),

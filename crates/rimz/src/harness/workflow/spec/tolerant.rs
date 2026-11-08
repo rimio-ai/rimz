@@ -56,9 +56,7 @@ pub(super) fn parse(
         if path.len() > 4 && path[0] == "checks" && path[2] == "on" && path[4] == "to" {
             path.truncate(4);
         }
-        if path.len() >= 4
-            && path[0] == "checks"
-            && path[2] == "wake"
+        if subscription_entry(&path)
             && let Some(table) = at(&value, &path[..4]).and_then(toml::Value::as_table)
         {
             let signal = table.get("signal").map_or_else(
@@ -98,7 +96,7 @@ pub(super) fn parse(
             invalid_routes.push((original_path(&path, &indices), source));
             continue;
         }
-        if path.len() > 4 && path[0] == "checks" && path[2] == "wake" {
+        if path.len() > 4 && subscription_entry(&path) {
             path.truncate(4);
         }
         if path.len() > 3 && path[0] == "steps" && path[2] == "max-visits-per-outcome" {
@@ -113,6 +111,15 @@ pub(super) fn parse(
         }
         ignored.push(ignored_issue(&dotted, source.message()));
     }
+}
+
+/// Whether `path` lies inside one entry of a check's `wake` or a step's `subscribe` list.
+fn subscription_entry(path: &[String]) -> bool {
+    path.len() >= 4
+        && matches!(
+            (path[0].as_str(), path[2].as_str()),
+            ("checks", "wake") | ("steps", "subscribe")
+        )
 }
 
 fn ignored_path(path: &serde_ignored::Path<'_>) -> Vec<String> {
@@ -137,9 +144,7 @@ fn ignored_path(path: &serde_ignored::Path<'_>) -> Vec<String> {
 
 fn original_path(path: &[String], indices: &BTreeMap<String, Vec<usize>>) -> String {
     let mut parts = path.to_vec();
-    if parts.len() >= 4
-        && parts[0] == "checks"
-        && parts[2] == "wake"
+    if subscription_entry(&parts)
         && let Some(index) = indices
             .get(&parts[..3].join("."))
             .and_then(|indices| indices.get(parts[3].parse::<usize>().ok()?))
@@ -179,7 +184,7 @@ fn missing_required(value: &toml::Value, path: &[String]) -> Option<&'static str
         [] => &["workflow"],
         ["workflow"] => &["scope", "start"],
         ["checks", _, "cases", _] => &["when", "outcome"],
-        ["checks", _, "wake", _] => &["signal"],
+        ["checks", _, "wake", _] | ["steps", _, "subscribe", _] => &["signal"],
         _ => &[],
     };
     let table = at(value, path)?.as_table()?;
@@ -200,7 +205,9 @@ fn optional(value: &toml::Value, path: &[String]) -> bool {
         ["checks", _, "when", ..] => at(value, &path[..2])
             .and_then(toml::Value::as_table)
             .is_none_or(|check| !check.contains_key("sleep")),
-        ["checks", _, "wake", _, "signal", ..] => false,
+        ["checks", _, "wake", _, "signal", ..] | ["steps", _, "subscribe", _, "signal", ..] => {
+            false
+        }
         _ => true,
     }
 }

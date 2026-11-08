@@ -322,6 +322,7 @@ fn held_verdict(
             }
             JournalEvent::Wait { .. }
             | JournalEvent::Wake { .. }
+            | JournalEvent::Signal { .. }
             | JournalEvent::VisitsReset { .. }
             | JournalEvent::Resume { .. }
             | JournalEvent::Attempt { .. } => {}
@@ -341,7 +342,7 @@ fn attempt_superseded(
     let Some(next) = following.iter().find(|entry| {
         !matches!(
             entry.event,
-            JournalEvent::Wait { .. } | JournalEvent::Wake { .. }
+            JournalEvent::Wait { .. } | JournalEvent::Wake { .. } | JournalEvent::Signal { .. }
         )
     }) else {
         return false;

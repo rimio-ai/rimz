@@ -69,6 +69,11 @@ enum HistoryKey<'a> {
         node: &'a str,
         signal: &'a str,
     },
+    Signal {
+        node: &'a str,
+        seq: Option<u64>,
+        signal: &'a str,
+    },
 }
 
 fn history_key(entry: &records::JournalEntry) -> Option<HistoryKey<'_>> {
@@ -86,6 +91,11 @@ fn history_key(entry: &records::JournalEntry) -> Option<HistoryKey<'_>> {
         }),
         records::JournalEvent::Wake { signal } => Some(HistoryKey::Wake {
             node: &entry.node,
+            signal,
+        }),
+        records::JournalEvent::Signal { signal, .. } => Some(HistoryKey::Signal {
+            node: &entry.node,
+            seq: entry.seq,
             signal,
         }),
         _ => None,
@@ -253,6 +263,25 @@ impl History<'_> {
             writeln!(out, "{indent}{line}")?;
         }
         Ok(())
+    }
+
+    /// The leader of the attempt `entry` belongs to: its journaled row once it ended,
+    /// else the live session.
+    fn leader(&self, entry: &records::JournalEntry) -> Option<&str> {
+        let ended = self.journal.iter().find_map(|row| match &row.event {
+            JournalEvent::Attempt { handle, .. }
+                if row.seq == entry.seq && row.node == entry.node =>
+            {
+                handle.as_deref()
+            }
+            _ => None,
+        });
+        ended.or_else(|| {
+            let attempt = self.record.session_attempt()?;
+            (Some(attempt.seq) == entry.seq)
+                .then(|| attempt.run.as_ref().map(|run| run.handle.as_str()))
+                .flatten()
+        })
     }
 
     fn holding(&self) -> Result<bool> {
@@ -523,6 +552,11 @@ impl History<'_> {
                 )?,
                 JournalEvent::Terminal { state } => writeln!(out, "terminal {}", state.as_str())?,
                 JournalEvent::Wake { signal } => writeln!(out, "wake {signal}{note}")?,
+                JournalEvent::Signal { signal, .. } => writeln!(
+                    out,
+                    "signal {signal} → {}{note}",
+                    self.leader(entry).unwrap_or("—")
+                )?,
             }
         }
         Ok(())
