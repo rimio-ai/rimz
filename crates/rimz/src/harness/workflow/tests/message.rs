@@ -171,6 +171,7 @@ fn a_lost_message_host_retries_the_same_notice_id() {
     let mut lost = published.clone();
     lost.attempt.as_mut().unwrap().host.pid = u32::MAX;
     super::attempts::update(&state, &lost);
+    fs::write(record.spec_dir.join("prompt.md"), "Build it again").unwrap();
     *host.message_answer.borrow_mut() = Ok(Ok("@planner".into()));
     let retry = std::rc::Rc::new(FakeHost::new());
     *host.on_message.borrow_mut() = Some(Box::new({
@@ -214,6 +215,23 @@ fn a_lost_message_host_retries_the_same_notice_id() {
     assert_eq!(
         attempt_rows(&paths),
         vec![(AttemptOutcome::Ended, Some("@planner".into()), Some(id))]
+    );
+    assert!(
+        retry.messages.borrow()[0]
+            .2
+            .contains("\n\nBuild it again\n\n")
+    );
+    let digests = records::journal(&paths)
+        .unwrap()
+        .into_iter()
+        .find_map(|row| match row.event {
+            JournalEvent::Attempt { digests, .. } => Some(digests),
+            _ => None,
+        });
+    assert_eq!(
+        digests.unwrap()["prompt.md"],
+        super::super::script::digest(b"Build it again"),
+        "the retry's digests describe the text it sent"
     );
     assert_eq!(ended.visits["tell"].total, 1, "a retry is the same visit");
 }

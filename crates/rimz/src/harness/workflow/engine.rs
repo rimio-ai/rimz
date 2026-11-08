@@ -769,12 +769,11 @@ fn prepare(
             && let Some(step) = spec.steps.get(&t.record.node)
         {
             // A lost message host re-sends under the same id, which the queue takes once.
-            let text = Notice::text(&t.record, paths, step, &mut BTreeMap::new());
-            t.record
-                .attempt
-                .as_mut()
-                .expect("live message attempt")
-                .host = agent::identity();
+            let mut digests = BTreeMap::new();
+            let text = Notice::text(&t.record, paths, step, &mut digests);
+            let attempt = t.record.attempt.as_mut().expect("live message attempt");
+            attempt.host = agent::identity();
+            attempt.digests = digests;
             persist(&mut t, &guard)?;
             return Ok(
                 Notice::of(t.record, spec, text).map_or(Decision::Again, |notice| {
