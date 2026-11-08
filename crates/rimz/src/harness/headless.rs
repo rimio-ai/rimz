@@ -16,6 +16,8 @@ use crate::harness::plan::{self, LaunchAvailability, LaunchFinalizeOptions, Perm
 use crate::harness::spec::AgentCell;
 use crate::store::writer::LaunchLogin;
 
+pub(crate) mod judge;
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum HeadlessErr {
     #[error(transparent)]
@@ -34,6 +36,8 @@ pub(crate) enum HeadlessErr {
     Wire(#[from] crate::harness::launch::ExecWireErr),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     #[error("{0}")]
     Refused(String),
 }
@@ -189,6 +193,21 @@ fn diag_sink(state: &StatePaths) -> crate::diag::DiagSink {
         session,
         None,
     )
+}
+
+/// A headless process's nonzero end in words: its exit code, else its signal.
+pub(crate) fn exit_failure(label: &str, status: std::process::ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+
+    if let Some(code) = status.code() {
+        return format!("{label} exited {code}");
+    }
+    if let Some(raw) = status.signal() {
+        let signal = nix::sys::signal::Signal::try_from(raw)
+            .map_or_else(|_| format!("signal {raw}"), |signal| signal.to_string());
+        return format!("{label} killed by {signal}");
+    }
+    format!("{label} {status}")
 }
 
 #[derive(Debug, thiserror::Error)]

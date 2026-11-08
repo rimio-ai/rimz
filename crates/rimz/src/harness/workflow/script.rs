@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::{WorkflowSpec, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
+use crate::harness::headless::exit_failure;
 use crate::harness::schedule::runner::{self, CheckEcho, WatchDeadline};
 use crate::store::workflow::{self, RunRecord, RunState};
 
@@ -47,20 +48,6 @@ impl Evaluation {
 
 pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-fn exit_failure(label: &str, status: std::process::ExitStatus) -> String {
-    use std::os::unix::process::ExitStatusExt;
-
-    if let Some(code) = status.code() {
-        return format!("{label} exited {code}");
-    }
-    if let Some(raw) = status.signal() {
-        let signal = nix::sys::signal::Signal::try_from(raw)
-            .map_or_else(|_| format!("signal {raw}"), |signal| signal.to_string());
-        return format!("{label} killed by {signal}");
-    }
-    format!("{label} {status}")
 }
 
 fn command_words(
