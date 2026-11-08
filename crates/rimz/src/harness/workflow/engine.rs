@@ -354,6 +354,7 @@ enum Decision {
     End(Box<RunRecord>),
     Push(Box<RunRecord>),
     Evict(Box<RunRecord>),
+    Message(Box<Notice>),
     Admit(Box<(u64, String, throttle::Run)>),
 }
 
@@ -436,6 +437,12 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 }
                 return Ok(());
             }
+            Decision::Message(notice) => {
+                if message_step(state, &paths, &spec, *notice, host)? {
+                    continue;
+                }
+                return Ok(());
+            }
         };
         // prepare publishes an attempt before returning Evaluate.
         let seq = record
@@ -513,7 +520,9 @@ fn command_step(
     spec: &WorkflowSpec,
     record: &RunRecord,
 ) -> Result<bool> {
-    let result = script::execute_step(state, paths, spec, record, || accounting::step(record));
+    let result = script::execute_step(state, paths, spec, record, || {
+        accounting::step(record, None)
+    });
     let head_end = super::head(&record.scope.path);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
@@ -578,6 +587,113 @@ fn command_step(
     Ok(t.record.state == RunState::Active)
 }
 
+/// A published message attempt, ready to queue its notice off-lock.
+struct Notice {
+    record: RunRecord,
+    seq: u64,
+    target: String,
+    message: crate::ids::MessageId,
+    text: std::result::Result<String, String>,
+}
+
+impl Notice {
+    /// The send for the record's live message attempt, or `None` when it is not one.
+    fn of(
+        record: RunRecord,
+        spec: &WorkflowSpec,
+        text: std::result::Result<String, String>,
+    ) -> Option<Self> {
+        let attempt = record.attempt.as_ref()?;
+        let Some(spec::StepKind::Message(target)) = spec.steps.get(&attempt.node)?.kind() else {
+            return None;
+        };
+        Some(Self {
+            seq: attempt.seq,
+            message: attempt.message.clone()?,
+            target: target.into(),
+            record,
+            text,
+        })
+    }
+
+    /// The WAIT notice body: the run's line, then the step's composed prompt.
+    fn text(
+        record: &RunRecord,
+        paths: &WorkflowPaths,
+        step: &spec::Step,
+        digests: &mut BTreeMap<String, String>,
+    ) -> std::result::Result<String, String> {
+        let header = format!(
+            "Workflow `{}` step `{}` sends you this message (run {id}; `rimz workflow show {id}`).",
+            record.workflow,
+            record.node,
+            id = record.id,
+        );
+        let prompt =
+            agent::compose(record, paths, step, digests).map_err(|error| error.to_string())?;
+        Ok(if prompt.is_empty() {
+            header
+        } else {
+            format!("{header}\n\n{prompt}")
+        })
+    }
+}
+
+/// Queue a message step's notice, then follow `then`, or `on.undelivered` when no one agent took it.
+fn message_step(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &WorkflowSpec,
+    notice: Notice,
+    host: &dyn AttemptHost,
+) -> Result<bool> {
+    let result = match notice.text {
+        Ok(text) => host.message(
+            &notice.record.scope.path,
+            &notice.target,
+            &notice.message,
+            &text,
+        )?,
+        Err(reason) => Err(reason),
+    };
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut t = Transition {
+        record: workflow::load(paths)?,
+        spec,
+        paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    if !t.current(notice.seq) {
+        // A lost host's retry delivers under the same id, so only another ending withdraws it.
+        let delivered = workflow::journal(paths)?.iter().any(|entry| {
+            entry.seq == Some(notice.seq)
+                && matches!(
+                    entry.event,
+                    JournalEvent::Attempt {
+                        outcome: AttemptOutcome::Ended,
+                        ..
+                    }
+                )
+        });
+        drop(guard);
+        if result.is_ok() && !delivered {
+            host.retire(&notice.message)?;
+        }
+        return Ok(false);
+    }
+    let handle = result.as_ref().ok().cloned();
+    match result {
+        Ok(handle) => t.finish_message(AttemptOutcome::Ended, Some(handle), None)?,
+        Err(reason) => t.finish_message(AttemptOutcome::Died, None, Some(reason))?,
+    }
+    persist(&mut t, &guard)?;
+    accounting::step(&notice.record, handle);
+    Ok(t.record.state == RunState::Active)
+}
+
 fn prepare(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -633,6 +749,23 @@ fn prepare(
     if let Some(attempt) = &t.record.attempt {
         if crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref()) {
             return Ok(Decision::Stop);
+        }
+        if attempt.message.is_some()
+            && let Some(step) = spec.steps.get(&t.record.node)
+        {
+            // A lost message host re-sends under the same id, which the queue takes once.
+            let text = Notice::text(&t.record, paths, step, &mut BTreeMap::new());
+            t.record
+                .attempt
+                .as_mut()
+                .expect("live message attempt")
+                .host = agent::identity();
+            persist(&mut t, &guard)?;
+            return Ok(
+                Notice::of(t.record, spec, text).map_or(Decision::Again, |notice| {
+                    Decision::Message(Box::new(notice))
+                }),
+            );
         }
         let reason = format!("lost command-step host {}", attempt.host.pid);
         t.finish_script(
@@ -782,6 +915,9 @@ fn prepare(
     let prompt = agent_step.map(|step| {
         agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
     });
+    let notice = step
+        .filter(|step| matches!(step.kind(), Some(spec::StepKind::Message(_))))
+        .map(|step| Notice::text(&t.record, paths, step, &mut digests));
     let head_start = if step.is_none() && kind == AttemptKind::Script {
         None
     } else {
@@ -831,6 +967,7 @@ fn prepare(
         asked_ms: 0,
         judged: None,
         push: None,
+        message: notice.is_some().then(crate::ids::MessageId::new),
         child: None,
         run: None,
         head_start,
@@ -860,6 +997,13 @@ fn prepare(
     }
     persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
+    if let Some(text) = notice {
+        return Ok(
+            Notice::of(t.record, spec, text).map_or(Decision::Again, |notice| {
+                Decision::Message(Box::new(notice))
+            }),
+        );
+    }
     if let Some(mut prompt) = prompt {
         if let Some(reason) = launch_error {
             prompt = Err(reason);
@@ -1166,6 +1310,12 @@ pub fn restart(
     {
         let kind = if spec.checks.contains_key(&step) {
             "a check"
+        } else if spec
+            .steps
+            .get(&step)
+            .is_some_and(|step| matches!(step.kind(), Some(spec::StepKind::Message(_))))
+        {
+            "a message step"
         } else {
             "a command step"
         };
@@ -1250,6 +1400,7 @@ pub fn restart(
             asked_ms: 0,
             judged: None,
             push: None,
+            message: None,
         });
         t.record.state = RunState::Active;
         t.record.park = None;

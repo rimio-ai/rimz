@@ -318,6 +318,9 @@ pub struct LiveAttempt {
     pub judged: Option<TurnEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub push: Option<PushBack>,
+    /// A message step's notice id, minted before the queue so a retry never queues twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<MessageId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -721,6 +724,8 @@ pub enum JournalEvent {
         asked: Option<Asked>,
         #[serde(default)]
         reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<MessageId>,
     },
     VisitsReset {
         step: String,

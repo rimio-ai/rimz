@@ -525,6 +525,21 @@ fn durable_record_round_trip_and_json_shape() {
     });
     let decoded: JournalEntry = serde_json::from_value(signal.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), signal);
+    assert!(encoded.get("message").is_none() && value["attempt"].get("message").is_none());
+    let message = crate::ids::MessageId::new();
+    let mut sent = encoded.clone();
+    sent["handle"] = json!("@planner");
+    sent["message"] = json!(message);
+    let decoded: JournalEntry = serde_json::from_value(sent.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), sent);
+    let mut attempt = value["attempt"].clone();
+    attempt["message"] = json!(message);
+    let decoded: LiveAttempt = serde_json::from_value(attempt.clone()).unwrap();
+    assert_eq!(decoded.message, Some(message));
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap()["message"],
+        attempt["message"]
+    );
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();

@@ -17,21 +17,20 @@ pub(super) fn compose(
     step: &super::super::Step,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
-    let prompt = if record.node == "@break" && step.prompt_file.is_none() {
-        break_prompt(record, paths)?
-    } else {
-        let prompt_file = step.prompt_file.as_deref().ok_or_else(|| {
-            WorkflowErr::Refused(format!(
-                "steps.{}.prompt-file: an agent step requires prompt-file",
-                record.node
-            ))
-        })?;
+    let mut parts = Vec::new();
+    if record.node == "@break" && step.prompt_file.is_none() {
+        parts.push(break_prompt(record, paths)?);
+    } else if let Some(prompt_file) = step.prompt_file.as_deref() {
         let file = spec::confined_file(&record.spec_dir, prompt_file)?;
         let prompt = std::fs::read_to_string(file)?;
         digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
-        prompt
-    };
-    let mut parts = vec![prompt];
+        parts.push(prompt);
+    } else if !matches!(step.kind(), Some(spec::StepKind::Message(_))) {
+        return Err(WorkflowErr::Refused(format!(
+            "steps.{}.prompt-file: an agent step requires prompt-file",
+            record.node
+        )));
+    }
     match paths.signs(Some(&record.node)).canonicalize() {
         Ok(path) => {
             if !path.starts_with(paths.work.canonicalize()?) {
@@ -423,7 +422,7 @@ pub(super) fn launch(
         Ok(run) => {
             t.record.attempt.as_mut().expect("current launch").run = Some(run);
             persist(&mut t, &guard)?;
-            accounting::step(&t.record);
+            accounting::step(&t.record, None);
             if t.record
                 .attempt
                 .as_ref()

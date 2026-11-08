@@ -1160,6 +1160,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         ("lifecycle", "'stay'"),
         ("window", "'5h.left>=40'"),
         ("on.asked", "'@done'"),
+        ("on.undelivered", "'@done'"),
         ("prompt-file", "'missing.md'"),
     ] {
         cases.push((
@@ -1173,6 +1174,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                 "lifecycle" => "steps.build.lifecycle",
                 "window" => "steps.build.window",
                 "on.asked" => "steps.build.on.asked",
+                "on.undelivered" => "steps.build.on.undelivered",
                 _ => "steps.build.prompt-file",
             },
         ));
@@ -1215,6 +1217,31 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             "steps.build.subscribe",
         ));
     }
+    let message = acyclic.replace(
+        "agent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
+        "message='@planner'",
+    );
+    for (field, value, path) in [
+        ("notes", "true", "steps.build.notes"),
+        ("limit", "{max-parallel=1}", "steps.build.limit"),
+        ("takeover", "true", "steps.build.takeover"),
+        ("share", "true", "steps.build.share"),
+        ("throttle", "'on'", "steps.build.throttle"),
+        ("capacity-wait", "'1h'", "steps.build.capacity-wait"),
+        ("on.capacity", "'@done'", "steps.build.on.capacity"),
+        ("lifecycle", "'stay'", "steps.build.lifecycle"),
+        ("window", "'5h.left>=40'", "steps.build.window"),
+        ("on.asked", "'@done'", "steps.build.on.asked"),
+        ("on.invalid", "'@done'", "steps.build.on.invalid"),
+        ("keep", "true", "steps.build.keep"),
+        ("subscribe", "['ci.failed']", "steps.build.subscribe"),
+        ("timeout", "'1h'", "steps.build.timeout"),
+    ] {
+        cases.push((
+            message.replace("then='after'", &format!("{field}={value}\nthen='after'")),
+            path,
+        ));
+    }
     let actual = cases
         .iter()
         .map(|(text, path)| {
@@ -1234,6 +1261,11 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "window" => step.window.is_none(),
                             "max-visits" => step.max_visits.is_none(),
                             "max-visits-per-outcome" => step.max_visits_per_outcome.is_none(),
+                            "notes" => step.notes.is_none(),
+                            "limit" => step.limit.is_none(),
+                            "keep" => step.keep.is_none(),
+                            "on.invalid" => step.on.invalid.is_none(),
+                            "on.undelivered" => step.on.undelivered.is_none(),
                             "takeover" => step.takeover.is_none(),
                             "share" => step.share.is_none(),
                             "subscribe" => step.subscribe.is_none(),

@@ -26,6 +26,7 @@ pub(super) fn render(name: &str, node: &str) -> Result<()> {
             Some(StepKind::Run(_)) => "run",
             Some(StepKind::Shell(_)) => "shell",
             Some(StepKind::Agent(_)) => "agent",
+            Some(StepKind::Message(_)) => "message",
             None => "invalid runner",
         };
         ("step", runner, &step.summary)
@@ -240,6 +241,7 @@ fn step_facts(facts: &mut render::KeyVals, step: &Step) {
     field(facts, "run", step.run.as_ref());
     field(facts, "shell", step.shell.as_ref());
     field(facts, "agent", step.agent.as_ref());
+    field(facts, "message", step.message.as_ref());
     field(facts, "prompt-file", step.prompt_file.as_ref());
     field(
         facts,

@@ -44,7 +44,7 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     (dir, state, record)
 }
 
-fn update(state: &StatePaths, record: &RunRecord) {
+pub(super) fn update(state: &StatePaths, record: &RunRecord) {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     records::write(&state.workflow(&record.id), record, &guard).unwrap();
 }
@@ -55,7 +55,7 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
     records::load(&state.workflow(id)).unwrap()
 }
 
-fn on_break_setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
+pub(super) fn on_break_setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let (dir, state, record) = setup(text);
     let mut value = serde_json::to_value(record).unwrap();
     value["route_defaults"] = json!("on_break");
@@ -743,10 +743,17 @@ fn legacy_run_keeps_its_omitted_lifecycle_after_record_upgrade() {
     let spec = super::spec::load_run(&paths.home, &record).unwrap();
     assert_eq!(spec.steps["build"].lifecycle(), StepLifecycle::Turn);
     assert_eq!(spec.steps["build"].timeout.as_deref(), Some("1h"));
-    assert!(
+    assert!(matches!(
+        spec.steps["build"].kind(),
+        Some(super::spec::StepKind::Agent(_))
+    ));
+    assert_eq!(
         spec.edges("build")
             .iter()
-            .any(|edge| edge.outcome == "asked")
+            .map(|edge| edge.outcome.as_str())
+            .collect::<Vec<_>>(),
+        ["then", "asked", "cap", "capacity", "deadline"],
+        "a definition without the new keys keeps trunk's edges"
     );
     let validation = super::super::validate::validate_spec(
         record.spec_dir.as_path(),

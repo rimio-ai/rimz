@@ -475,6 +475,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     "sleep" => "sleep",
                     "run" => row.run.as_deref().unwrap_or("—"),
                     "shell" => row.shell.as_deref().unwrap_or("—"),
+                    "message" => "message",
                     _ => row.agent.as_deref().unwrap_or("—"),
                 }),
                 render::cell(if row.agent.is_none() {

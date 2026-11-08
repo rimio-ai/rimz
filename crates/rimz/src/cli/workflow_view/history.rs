@@ -378,12 +378,19 @@ impl History<'_> {
                             ended_at.duration_since(*started_at).as_secs().max(0) as u64
                         )
                     )?;
-                    if self
-                        .spec
-                        .steps
-                        .get(&entry.node)
-                        .is_some_and(|step| step.agent.is_some())
-                    {
+                    let step = self.spec.steps.get(&entry.node);
+                    let message = step.is_some_and(|step| step.message.is_some());
+                    if message {
+                        match (handle, reason) {
+                            (Some(handle), _) => {
+                                writeln!(out, "    to {handle} · {}", outcome.as_str())?
+                            }
+                            (None, Some(reason)) => {
+                                self.prose(out, &format!("to — · {reason}"), "    ")?
+                            }
+                            (None, None) => writeln!(out, "    to — · {}", outcome.as_str())?,
+                        }
+                    } else if step.is_some_and(|step| step.agent.is_some()) {
                         writeln!(
                             out,
                             "    {} HEAD {} → {} cost {}",
@@ -410,7 +417,7 @@ impl History<'_> {
                     if let Some(text) = started_past_limit {
                         writeln!(out, "    {text}; started anyway: manual starts do not wait")?;
                     }
-                    if let Some(reason) = reason {
+                    if let Some(reason) = reason.as_ref().filter(|_| !message) {
                         self.prose(out, &format!("reason: {reason}"), "    ")?;
                     }
                     if let Some(children) = children {

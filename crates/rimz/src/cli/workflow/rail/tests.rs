@@ -1121,10 +1121,19 @@ fn multiline_commands_stay_on_one_rail_line() {
 
 #[test]
 fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
+    let told = LAND.replace("on.pass = 'triage'\non.fail = '@done'\n[steps.triage]", "on.pass = 'tell'\non.fail = 'stand'\n[steps.tell]\nmessage = '@planner'\nthen = 'triage'\n[steps.stand]\nagent = 'claude'\nlifecycle = 'stay'\nprompt-file = 'prompt.md'\nsubscribe = ['ci.failed']\nthen = 'ruled'\n[steps.triage]");
+    assert_ne!(told, LAND);
+    for text in [LAND, &told] {
+        land_rail_agrees(text);
+    }
+}
+
+fn land_rail_agrees(text: &str) {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("land");
     std::fs::create_dir(&dir).unwrap();
-    std::fs::write(dir.join("workflow.toml"), LAND).unwrap();
+    std::fs::write(dir.join("workflow.toml"), text).unwrap();
+    std::fs::write(dir.join("prompt.md"), "Stand by").unwrap();
     let spec = rimz::harness::workflow::load(&dir).unwrap();
     let report = rimz::harness::workflow::validate(&dir, &Default::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -1151,6 +1160,9 @@ fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
             "○"
         };
         assert!(text.contains(&format!("{glyph} {}", row.node)), "{text}");
+        if let Some(target) = &row.message {
+            assert!(text.contains(&format!("step  {target}")), "{text}");
+        }
         for edge in &row.edges {
             match edge.outcome.as_str() {
                 "deadline" => assert_eq!(edge.source, EdgeSource::OnBreak),

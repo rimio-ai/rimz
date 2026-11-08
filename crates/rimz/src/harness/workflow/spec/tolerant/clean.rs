@@ -260,7 +260,14 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             );
         }
         limit(&mut step.limit, &format!("{path}.limit"), ignored);
-        if matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_))) {
+        let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
+        let message = matches!(step.kind(), Some(StepKind::Message(_)));
+        if command || message {
+            let runner = if message {
+                "a message step"
+            } else {
+                "a command step"
+            };
             ignore(
                 &mut step.notes,
                 &format!("{path}.notes"),
@@ -271,19 +278,19 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 &mut step.limit,
                 &format!("{path}.limit"),
                 ignored,
-                "a command step has no turn to count",
+                format!("{runner} has no turn to count"),
             );
             ignore(
                 &mut step.takeover,
                 &format!("{path}.takeover"),
                 ignored,
-                "a command step has no occupancy to take over",
+                format!("{runner} has no occupancy to take over"),
             );
             ignore(
                 &mut step.share,
                 &format!("{path}.share"),
                 ignored,
-                "a command step launches no agent to share a checkout",
+                format!("{runner} launches no agent to share a checkout"),
             );
             ignore(
                 &mut step.throttle,
@@ -313,13 +320,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 &mut step.window,
                 &format!("{path}.window"),
                 ignored,
-                "windows gate provider usage, which a command step does not use",
-            );
-            ignore(
-                &mut step.on.asked,
-                &format!("{path}.on.asked"),
-                ignored,
-                "a command cannot ask; its outcome goes to prev_attempt",
+                format!("windows gate provider usage, which {runner} does not use"),
             );
             ignore(
                 &mut step.on.invalid,
@@ -327,11 +328,40 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 ignored,
                 "launch failure routing is only for agent steps",
             );
+        }
+        if command {
+            ignore(
+                &mut step.on.asked,
+                &format!("{path}.on.asked"),
+                ignored,
+                "a command cannot ask; its outcome goes to prev_attempt",
+            );
             ignore(
                 &mut step.prompt_file,
                 &format!("{path}.prompt-file"),
                 ignored,
                 "a command step takes no prompt; it reads context.json",
+            );
+        }
+        if message {
+            ignore(
+                &mut step.on.asked,
+                &format!("{path}.on.asked"),
+                ignored,
+                "a message step cannot ask; a missing target follows on.undelivered",
+            );
+            ignore(
+                &mut step.timeout,
+                &format!("{path}.timeout"),
+                ignored,
+                "a message step finishes once the message is queued",
+            );
+        } else {
+            ignore(
+                &mut step.on.undelivered,
+                &format!("{path}.on.undelivered"),
+                ignored,
+                "only a message step can go undelivered",
             );
         }
         if !matches!(step.kind(), Some(StepKind::Agent(_))) || step.lifecycle().is_turn() {

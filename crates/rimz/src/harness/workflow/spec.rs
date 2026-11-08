@@ -196,6 +196,7 @@ pub struct StepEdges {
     pub cap: Option<String>,
     pub capacity: Option<String>,
     pub invalid: Option<String>,
+    pub undelivered: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -450,6 +451,7 @@ pub struct Step {
     pub agent: Option<String>,
     pub run: Option<String>,
     pub shell: Option<String>,
+    pub message: Option<String>,
     pub lifecycle: Option<crate::store::workflow::StepLifecycle>,
     pub keep: Option<bool>,
     pub notes: Option<bool>,
@@ -578,6 +580,7 @@ pub enum StepKind<'a> {
     Agent(&'a str),
     Run(&'a str),
     Shell(&'a str),
+    Message(&'a str),
 }
 
 impl Step {
@@ -657,10 +660,11 @@ impl Step {
     }
 
     pub fn kind(&self) -> Option<StepKind<'_>> {
-        match (&self.agent, &self.run, &self.shell) {
-            (Some(agent), None, None) => Some(StepKind::Agent(agent)),
-            (None, Some(run), None) => Some(StepKind::Run(run)),
-            (None, None, Some(shell)) => Some(StepKind::Shell(shell)),
+        match (&self.agent, &self.run, &self.shell, &self.message) {
+            (Some(agent), None, None, None) => Some(StepKind::Agent(agent)),
+            (None, Some(run), None, None) => Some(StepKind::Run(run)),
+            (None, None, Some(shell), None) => Some(StepKind::Shell(shell)),
+            (None, None, None, Some(target)) => Some(StepKind::Message(target)),
             _ => None,
         }
     }
@@ -766,6 +770,7 @@ fn parse_with_defaults(
                 },
                 run: None,
                 shell: None,
+                message: None,
                 keep: None,
                 notes: None,
                 window: None,
@@ -819,7 +824,10 @@ fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
             };
             for (outcome, route) in on {
                 if kind == "steps"
-                    && !matches!(outcome.as_str(), "asked" | "cap" | "capacity" | "invalid")
+                    && !matches!(
+                        outcome.as_str(),
+                        "asked" | "cap" | "capacity" | "invalid" | "undelivered"
+                    )
                 {
                     continue;
                 }
