@@ -99,7 +99,7 @@ The trigger values follow these rules:
 
 ### After a reset
 
-`--after-reset <5h|7d>` fires once at the next reset of that window of the task's provider, the `--agent` or `--wait` kind. Add reads the window from the provider's cache and writes its reset instant to the row as `fire-at`; a window that has not started fires on the next scheduler tick instead. An instant that passed before any clock saw the task, or while it was paused, fires on the first tick it is live. The task gets one attempt: a fire, a gate skip, an overlap, a check skip, or an error all remove it, while `rimz loop run` by hand leaves it.
+`--after-reset <5h|7d>` fires once at the next reset of that window of the task's provider, the `--agent` or `--wait` kind. Add reads the window from the provider's cache and writes its reset instant to the row as `fire-at`; a window that has not started fires on the next scheduler tick instead. An instant that passed before any clock saw the task, or while it was paused, fires on the first tick it is live. The task gets one recorded attempt: a fire, a gate skip, an overlap, a check skip, or an error all remove it, while `rimz loop fire` leaves it. A fire whose runner never started, or exited before it recorded anything, leaves the task in place and is dispatched again once five minutes pass with no runner holding its lock.
 
 Add refuses what a [window condition](#conditions) refuses, and also a window the provider is not enforcing (use the other span), a window with no reset time, and `--surplus` or `--surplus-after` on the provider's longest window, whose gate is always closed at its reset. `--after-reset` requires `--agent` or `--wait`, conflicts with `--at`, `--every`, `--cron`, `--in`, `--signal`, `--when`, and `--until`, and is refused with `--project`. Listings describe the task as `once at <YYYY-MM-DD HH:MM>` in the configured zone and show that instant as its next fire.
 
@@ -498,7 +498,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `skipped` whose last answered guard stage failed or is absent, or a sibling signal | Neutral. |
 | `skipped` by a workflow fire whose scope already has an active or parked run (`workflow_skipped` in JSON); condition tasks with a recorded launch are silent instead | Neutral. |
 | `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, `overlapped`, `deferred`, `canceled`, `expired`, `target gone` | Neutral. |
-| `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
+| `start failed` — the fire left no run behind: either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts
 

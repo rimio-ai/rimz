@@ -2,6 +2,8 @@
 //! claims it and the clock pass that probes it. Read-only: it belongs to the
 //! sidebar import graph and never claims or writes a lock.
 
+use crate::RuntimePaths;
+use crate::disk::lease::{self, LeaseState};
 use crate::ids::WorkspaceId;
 
 /// The one spelling of a run lock's file name. `checkout` names the launch
@@ -11,4 +13,11 @@ pub(super) fn file_name(name: &str, checkout: Option<&WorkspaceId>) -> String {
         Some(checkout) => format!("loop-run-{name}-{checkout}.lock"),
         None => format!("loop-run-{name}.lock"),
     }
+}
+
+/// Whether a process holds task `name`'s bare run lock, through the same
+/// gated lease probe the runner's own probes use.
+pub(super) fn held(runtime: &RuntimePaths, name: &str) -> std::io::Result<bool> {
+    let path = runtime.lock_path(file_name(name, None));
+    Ok(matches!(lease::probe(&path)?, LeaseState::Held(_)))
 }

@@ -660,6 +660,30 @@ pub(super) fn has_scheduled_row_since(
     checkout: Option<&Path>,
     since: Timestamp,
 ) -> bool {
+    has_scheduled_row_where(state_root, task, root, checkout, since, |_| true)
+}
+
+/// Whether a runner recorded a scheduled attempt since `since`: any scheduled
+/// row but `start failed`, which the pass writes for a runner that never ran.
+pub(super) fn has_recorded_attempt_since(
+    state_root: &Path,
+    task: &str,
+    root: &Path,
+    since: Timestamp,
+) -> bool {
+    has_scheduled_row_where(state_root, task, root, None, since, |result| {
+        result != LoopRunResult::StartFailed
+    })
+}
+
+fn has_scheduled_row_where(
+    state_root: &Path,
+    task: &str,
+    root: &Path,
+    checkout: Option<&Path>,
+    since: Timestamp,
+    counts: impl Fn(LoopRunResult) -> bool,
+) -> bool {
     let mut found = false;
     crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         if record.task == task
@@ -667,6 +691,7 @@ pub(super) fn has_scheduled_row_since(
             && checkout.is_none_or(|checkout| record.checkout.as_deref() == Some(checkout))
             && record.mode == Some(LoopRunMode::Scheduled)
             && record.at >= since
+            && counts(record.result)
         {
             found = true;
         }
