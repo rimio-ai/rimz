@@ -709,7 +709,7 @@ fn prepare(
             {
                 // A confirmed stop admits only this launch; later visits read occupancy afresh.
                 launch_error = launch_error.or(error);
-            } else if launch_error.is_none() {
+            } else if launch_error.is_none() && !step.share.unwrap_or_default() {
                 match host.occupancy(
                     &t.record.scope.path,
                     &t.record.project_root,

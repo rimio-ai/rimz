@@ -387,6 +387,12 @@ pub(super) fn validate_spec(
                 );
             }
         }
+        if step.takeover == Some(true) && step.share == Some(true) {
+            report.error(
+                &format!("{path}.share"),
+                "choose takeover or share: takeover stops an idle occupant; share launches beside it",
+            );
+        }
         if agent && let Some(target) = &step.on.capacity {
             report.target(spec, &format!("{path}.on.capacity"), target);
             if matches!(target.as_str(), "@user" | "@wait") {

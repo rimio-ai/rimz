@@ -1145,6 +1145,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
     }
     for (field, value) in [
         ("takeover", "false"),
+        ("share", "true"),
         ("throttle", "'on'"),
         ("capacity-wait", "'1h'"),
         ("on.capacity", "'@done'"),
@@ -1157,6 +1158,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             command.replace("then='after'", &format!("{field}={value}\nthen='after'")),
             match field {
                 "takeover" => "steps.build.takeover",
+                "share" => "steps.build.share",
                 "throttle" => "steps.build.throttle",
                 "capacity-wait" => "steps.build.capacity-wait",
                 "on.capacity" => "steps.build.on.capacity",
@@ -1213,6 +1215,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "max-visits" => step.max_visits.is_none(),
                             "max-visits-per-outcome" => step.max_visits_per_outcome.is_none(),
                             "takeover" => step.takeover.is_none(),
+                            "share" => step.share.is_none(),
                             "throttle" => step.throttle.is_none(),
                             "capacity-wait" => step.capacity_wait.is_none(),
                             "on.capacity" => step.on.capacity.is_none(),

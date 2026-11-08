@@ -520,6 +520,9 @@ impl Row {
             if step.takeover == Some(true) {
                 row.details.push("takes over".into());
             }
+            if step.share == Some(true) {
+                row.details.push("shares the checkout".into());
+            }
             if let Some(window) = &step.window {
                 row.details.push(format!("window {window}"));
             }

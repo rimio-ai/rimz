@@ -448,6 +448,7 @@ pub struct Step {
     pub prompt_file: Option<String>,
     pub window: Option<String>,
     pub takeover: Option<bool>,
+    pub share: Option<bool>,
     #[schemars(with = "Option<String>")]
     pub throttle: Option<crate::config::ThrottleSwitch>,
     #[schemars(with = "Option<String>")]
@@ -721,6 +722,7 @@ fn parse_with_defaults(
                 notes: None,
                 window: None,
                 takeover: None,
+                share: None,
                 throttle: None,
                 capacity_wait: None,
                 limit: None,

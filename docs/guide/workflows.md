@@ -226,6 +226,16 @@ Here an until step must name `ruled` as its `then` check. A `settled` answer sta
 
 An agent step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
+A step that only reads the checkout, such as a reviewer, does not need it to itself. Set `share = true` and it launches beside whoever is there, idle or mid-turn, and never stops anyone. A sharing agent still occupies the checkout, so a later step without `share` waits for it to leave. `share` and `takeover` exclude each other.
+
+```toml
+[steps.review]
+agent = "reviewer"
+prompt-file = "prompts/review.md"
+share = true
+then = "verdict"
+```
+
 When a loop starts the run automatically, its agent steps also wait for [capacity](./loops.md#limit-agent-starts), before stopping any occupant. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. On an agent step, set `capacity-wait = "6h"` to give up after six hours, or leave the default `forever`. Giving up ends the run as failed unless `on.capacity` names `@done` or another node. It cannot park at `@user` or `@wait`. A window or occupancy wait restarts this clock, and the run deadline still applies. `throttle = "off"` skips the machine turn, stagger, resource limits, and capacity check, not the machine caps or workflow and step limits below. Runs you start with `rimz workflow run` or `rimz loop fire`, and runs detached by removing their loop task, skip capacity waits but still count and restart any applicable workflow or step stagger, never machine stagger. Command steps, checks, and an already-open staying session never ask for admission.
 
 A judge runs headless, with no pane, and [the judge section](#let-a-model-decide) covers what it may touch.
@@ -270,7 +280,7 @@ max-visits = 3
 
 Route the green outcome to `merge`, and let the `pr` check decide whether the PR merged or still needs to wait. Select exactly one of `agent`, `run`, or `shell` on a step. `run` passes words literally, without a shell; a quoted word with spaces stays one argument, and files named by slash-containing words must stay inside the workflow directory. Use `shell` instead for `sh -c` syntax and arbitrary paths. Both command kinds require an explicit `timeout`, so a hung command cannot hold the run.
 
-The child runs in the checkout, in its own process group, with no stdin, the room's workspace environment, `RIMZ_WORKFLOW_DIR`, `RIMZ_WORKFLOW_RUN`, and `RIMZ_WORKFLOW_DEFINITION`. Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no agent to leave the checkout, and takes no prompt. `prompt-file`, `lifecycle`, `window`, `takeover`, `on.asked`, and `on.invalid` belong only to agent steps; command steps read `context.json` instead. Signs and the run's `--prompt` compose only agent prompts.
+The child runs in the checkout, in its own process group, with no stdin, the room's workspace environment, `RIMZ_WORKFLOW_DIR`, `RIMZ_WORKFLOW_RUN`, and `RIMZ_WORKFLOW_DEFINITION`. Both output streams go to `work/<seq>.step.log`. It opens no pane, waits for no agent to leave the checkout, and takes no prompt. `prompt-file`, `lifecycle`, `window`, `takeover`, `share`, `on.asked`, and `on.invalid` belong only to agent steps; command steps read `context.json` instead. Signs and the run's `--prompt` compose only agent prompts.
 
 Exit 0 records `ended`; another exit or a signal records `died`. A spawn or log-open failure also records `died`, with a reason. The step timeout stops the group and records `timeout`. These outcomes follow `then`, with the original routed input unchanged and the outcome in `prev_attempt`. A run deadline stops the group, records `canceled`, and follows `on.deadline`; `workflow cancel` stops the group and ends the run. If the host dies, the next advance stops any survivor, records `canceled`, and follows `then`, without repeating the action. A child that already exited keeps its exit outcome even if a bound became due before settlement.
 
