@@ -235,6 +235,33 @@ fn a_cancel_while_the_notice_is_queued_retires_it() {
 }
 
 #[test]
+fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
+    for deadline in [false, true] {
+        let (_dir, state, record) = super::attempts::on_break_setup(TELL);
+        let paths = state.workflow(&record.id);
+        let host = FakeHost::new();
+        *host.message_answer.borrow_mut() = Err("store unavailable".into());
+        assert!(advance(&state, &record.id, &host).is_err());
+        let mut lost = records::load(&paths).unwrap();
+        let id = lost.attempt.as_ref().unwrap().message.clone().unwrap();
+        lost.attempt.as_mut().unwrap().host.pid = u32::MAX;
+        if deadline {
+            lost.deadline = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
+        }
+        super::attempts::update(&state, &lost);
+        let ender = FakeHost::new();
+        if deadline {
+            advance(&state, &record.id, &ender).unwrap();
+        } else {
+            assert!(cancel(&state, &record.id, &ender, None).unwrap());
+        }
+        assert!(ender.messages.borrow().is_empty(), "deadline={deadline}");
+        assert_eq!(*ender.retired.borrow(), vec![id], "deadline={deadline}");
+        assert_eq!(attempt_rows(&paths)[0].0, AttemptOutcome::Canceled);
+    }
+}
+
+#[test]
 fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
     let (_home, dir) = fixture();
     let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[checks.done]\nrun='true'\non.ok='@done'\n";
