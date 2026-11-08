@@ -21,6 +21,7 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
     let verdicts = one(Verdict {
         ok: true,
         readings: BTreeMap::new(),
+        unread: Default::default(),
     });
     let mut record = super::super::launch_ledger::CapacityRecord {
         since: Some(now.timestamp()),
@@ -67,6 +68,7 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
         &one(Verdict {
             ok: false,
             readings: BTreeMap::new(),
+            unread: Default::default(),
         }),
     );
     assert!(
@@ -216,6 +218,40 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
         "holding decline must suppress the helper"
     );
     assert_eq!(scopes.len(), 1, "another checkout remains eligible");
+    // A stale pass carries the clock, so the decline's `since` still matches it.
+    let (_, _, held) = plan(
+        &BTreeMap::new(),
+        &BTreeMap::from([(key.clone(), tasks[NAME].clone())]),
+        &BTreeMap::from([(key.clone(), since)]),
+        &BTreeMap::new(),
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &clocks,
+        &BTreeMap::from([(
+            key.clone(),
+            Verdict {
+                ok: false,
+                readings: BTreeMap::new(),
+                unread: BTreeMap::from([(
+                    "ci".into(),
+                    "probed before the last fire or first sight".into(),
+                )]),
+            },
+        )]),
+    );
+    assert_eq!(held, clocks);
+    assert!(
+        !scoped_tasks(
+            &tasks,
+            &BTreeMap::new(),
+            &Default::default(),
+            &owned,
+            &declines,
+            &held,
+            now
+        )
+        .contains_key(&key),
+        "the decline still holds after a stale pass"
+    );
     clocks.get_mut(&key).unwrap().since = now;
     assert!(
         scoped_tasks(
@@ -693,6 +729,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
             Verdict {
                 ok: true,
                 readings: BTreeMap::new(),
+                unread: Default::default(),
             },
         );
     }
@@ -762,6 +799,7 @@ fn worktree_holds_have_independent_clocks() {
                     Verdict {
                         ok: minute >= 20 || scope.checkout.as_ref() == Some(&owned[0]),
                         readings: BTreeMap::new(),
+                        unread: Default::default(),
                     },
                 )
             })
@@ -818,7 +856,7 @@ fn condition_write_failure_preserves_clock_fires() {
         (
             "condition".to_owned(),
             loaded(TaskEntry {
-                when: Some(vec!["!ci=failed".to_owned()]),
+                when: Some(vec!["!team.stage=Done".to_owned()]),
                 ..entry
             }),
         ),
@@ -1033,6 +1071,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
                 &one(Verdict {
                     ok: true,
                     readings: BTreeMap::new(),
+                    unread: Default::default(),
                 }),
             );
             assert_eq!(states[NAME].since, now.timestamp(), "{change}");
@@ -1073,6 +1112,7 @@ fn condition_tick(
                 one(Verdict {
                     ok,
                     readings: BTreeMap::new(),
+                    unread: Default::default(),
                 })
             })
             .unwrap_or_default(),
@@ -1100,6 +1140,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         let verdicts = one(Verdict {
             ok: true,
             readings: BTreeMap::new(),
+            unread: Default::default(),
         });
         let (_, mut stamps, mut states) = plan(
             &BTreeMap::new(),
@@ -1295,6 +1336,272 @@ fn condition_false_then_true_rearms() {
     let (actions, _, states) = condition_tick(None, Some(prior), None, Some(true), false, &now);
     assert_eq!(actions, vec![(NAME.to_owned(), Action::Fire)]);
     assert!(states[NAME].fired);
+}
+
+#[test]
+fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires() {
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let prior = seconds_before(now.timestamp(), 60);
+    let state = condition_state(None, seconds_before(now.timestamp(), 120), false);
+    let tasks = one(loaded(TaskEntry {
+        check: Some("true".into()),
+        when: Some(vec!["team.stage=Done".to_owned()]),
+        ..TaskEntry::default()
+    }));
+    let tick = |ok: bool, unread: &[(&str, &str)]| {
+        plan(
+            &BTreeMap::new(),
+            &tasks,
+            &one(prior),
+            &BTreeMap::new(),
+            &now,
+            &one(state.clone()),
+            &one(Verdict {
+                ok,
+                readings: BTreeMap::new(),
+                unread: unread
+                    .iter()
+                    .map(|(key, reason)| ((*key).to_owned(), (*reason).to_owned()))
+                    .collect(),
+            }),
+        )
+    };
+    for ok in [false, true] {
+        let (actions, stamps, states) =
+            tick(ok, &[("ci", "probed before the last fire or first sight")]);
+        assert!(actions.is_empty(), "ok={ok}");
+        assert_eq!(stamps, one(prior), "ok={ok}");
+        assert_eq!(states, one(state.clone()), "ok={ok}");
+    }
+    let (actions, stamps, states) = tick(true, &[]);
+    assert_eq!(actions, vec![(NAME.to_owned(), Action::Fire)]);
+    assert_eq!(stamps, one(now.timestamp()));
+    assert_eq!(states[NAME].since, state.since);
+    assert!(states[NAME].fired);
+}
+
+#[test]
+fn forge_conditions_hold_until_a_successful_probe_at_or_after_the_fire_stamp() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let stamp = seconds_before(now.timestamp(), 60);
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        check: Some("true".into()),
+        when: Some(vec!["!ci=failed".to_owned()]),
+        ..TaskEntry::default()
+    };
+    let scope = entry.run_dir().to_string_lossy().into_owned();
+    let held = WhenState {
+        fingerprint: Some(("!ci=failed".into(), None, entry.run_dir())),
+        since: seconds_before(now.timestamp(), 120),
+        fired: false,
+    };
+    let tasks = one(loaded(entry));
+    let probe = |at: Timestamp, ok: bool| {
+        write_temp_then_rename_cache(
+            &runtime.pr_state_path(),
+            &serde_json::json!({
+                "path_repos": {&scope: "repo"},
+                "repos": {"repo": {"ok": ok, "refreshed_at_ms": at.as_millisecond()}},
+                "branch_ci": {&scope: "passing"},
+            }),
+        )
+        .unwrap();
+        Some(CiSource::read(&runtime))
+    };
+    let tick = |source: Option<CiSource>| {
+        write_temp_then_rename_cache(&state_path(&runtime), &one(stamp)).unwrap();
+        write_temp_then_rename_cache(&when_state_path(&runtime), &one(held.clone())).unwrap();
+        fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            source.as_ref(),
+        )
+    };
+    for (label, source) in [
+        ("no source", None),
+        (
+            "probed before the stamp",
+            probe(seconds_before(stamp, 1), true),
+        ),
+        ("latest probe failed", probe(now.timestamp(), false)),
+    ] {
+        assert!(tick(source).is_empty(), "{label}");
+        assert_eq!(last_stamps(&runtime), one(stamp), "{label}");
+        assert_eq!(last_when_states(&runtime), one(held.clone()), "{label}");
+    }
+    assert_eq!(tick(probe(stamp, true)), vec![NAME]);
+    let states = last_when_states(&runtime);
+    assert_eq!(states[NAME].since, held.since);
+    assert!(states[NAME].fired);
+}
+
+#[test]
+fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "--allow-empty", "-qm", "initial"]);
+    let checkout = temp.path().join("lane");
+    git(
+        &repo,
+        &["worktree", "add", "-qb", "lane", checkout.to_str().unwrap()],
+    );
+    // Discovery reports git's resolved path, which keys the probe and the fire stamp.
+    let checkout = checkout.canonicalize().unwrap();
+    let marker = crate::worktree::WorktreeMarker {
+        version: 4,
+        name: "lane".into(),
+        branch: "lane".into(),
+        base_branch: Some("main".into()),
+        from_pr: None,
+        base_ref: "main".into(),
+        repo_root: repo.clone(),
+        worktree_path: checkout.clone(),
+        created_at: Timestamp::now(),
+    };
+    let git_dir = PathBuf::from(git(&checkout, &["rev-parse", "--absolute-git-dir"]));
+    std::fs::write(
+        git_dir.join("rimz-worktree.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&repo), &repo).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0).timestamp();
+    let stamp = seconds_before(now, 60);
+    let task = loaded(TaskEntry {
+        root: repo.clone(),
+        check: Some("true".into()),
+        when: Some(vec!["ci=unknown".to_owned()]),
+        each_worktree: true,
+        ..TaskEntry::default()
+    });
+    write_temp_then_rename_cache(
+        &state_path(&runtime),
+        &BTreeMap::from([(scope_key(NAME, &checkout), stamp)]),
+    )
+    .unwrap();
+    let lane = checkout.to_string_lossy().into_owned();
+    let inspect = |probed: Timestamp| {
+        write_temp_then_rename_cache(
+            &runtime.pr_state_path(),
+            &serde_json::json!({
+                "path_repos": {&lane: "repo"},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": probed.as_millisecond()}},
+                "branch_ci": {},
+            }),
+        )
+        .unwrap();
+        let rows = super::super::fanout::inspect(
+            NAME,
+            &task,
+            &runtime,
+            &Default::default(),
+            Some(&CiSource::read(&runtime)),
+            now,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        rows.into_iter().next().unwrap().state
+    };
+    // `ci=unknown` matches the `None` an unread key reads, so only the hold keeps it waiting.
+    let super::super::fanout::CheckoutState::Waiting { verdict } =
+        inspect(seconds_before(stamp, 1))
+    else {
+        panic!("a probe before the fire stamp holds the checkout");
+    };
+    assert_eq!(
+        verdict.unread,
+        BTreeMap::from([(
+            "ci".into(),
+            "probed before the last fire or first sight".into()
+        )])
+    );
+    assert!(matches!(
+        inspect(stamp),
+        super::super::fanout::CheckoutState::Ready { .. }
+    ));
+}
+
+#[test]
+fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let stamp = seconds_before(now.timestamp(), 60);
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        check: Some("true".into()),
+        when: Some(vec!["!ci=failed".to_owned()]),
+        ..TaskEntry::default()
+    };
+    let scope = entry.run_dir().to_string_lossy().into_owned();
+    let fingerprint = Some(("!ci=failed".into(), None, entry.run_dir()));
+    let tasks = one(loaded(entry));
+    // The CI verdict describes another commit than the PR head, so the fence holds `ci`.
+    write_temp_then_rename_cache(
+        &runtime.pr_state_path(),
+        &serde_json::json!({
+            "path_repos": {&scope: "repo"},
+            "repos": {"repo": {"ok": true, "refreshed_at_ms": now.timestamp().as_millisecond()}},
+            "branch_ci": {&scope: "passing"},
+            "states": {&scope: {
+                "state": "open", "ci": "passing", "ci_sha": "aaaaaaa1",
+                "open": {"head": "bbbbbbb2"},
+            }},
+        }),
+    )
+    .unwrap();
+    let source = CiSource::read(&runtime);
+    let spawns = |fired: bool| {
+        let state = WhenState {
+            fingerprint: fingerprint.clone(),
+            since: seconds_before(now.timestamp(), 120),
+            fired,
+        };
+        write_temp_then_rename_cache(&state_path(&runtime), &one(stamp)).unwrap();
+        write_temp_then_rename_cache(&when_state_path(&runtime), &one(state.clone())).unwrap();
+        let before = crate::proc::testkit::spawn_count();
+        let fires = fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            Some(&source),
+        );
+        let spawned = crate::proc::testkit::spawn_count() - before;
+        assert!(fires.is_empty(), "fired={fired}");
+        assert_eq!(last_when_states(&runtime), one(state), "fired={fired}");
+        spawned
+    };
+    assert_eq!(spawns(true), 0, "a fired task runs no fence git read");
+    assert!(
+        spawns(false) > 0,
+        "before its first fire the fence still reads git"
+    );
 }
 
 #[test]

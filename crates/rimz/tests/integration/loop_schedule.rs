@@ -1242,6 +1242,12 @@ fn condition_tick_observes_board_and_records_evidence() {
     assert!(!read_loop_instances(&env).0.contains_key("ready"));
 }
 
+/// A successful forge probe stamp that no fire stamp in a test postdates, so the room cache's
+/// readings stay fresh under the loop condition floor.
+fn fresh_probe_ms() -> i64 {
+    Timestamp::now().as_millisecond() + 3_600_000
+}
+
 #[test]
 fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
     let env = Env::new();
@@ -1256,9 +1262,14 @@ fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
         std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
         std::fs::write(
             runtime.lane_path("pr-state.json"),
-            json!({"states": {env.project_root.to_string_lossy().to_string(): {
-                "state": "open", "number": 91, "open": facts,
-            }}})
+            json!({
+                "branch_ci": {},
+                "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": fresh_probe_ms()}},
+                "states": {env.project_root.to_string_lossy().to_string(): {
+                    "state": "open", "number": 91, "open": facts,
+                }},
+            })
             .to_string(),
         )
         .unwrap();
@@ -3356,8 +3367,13 @@ fn resident_takeover_case(case: Takeover) {
     if symlinked {
         std::fs::write(
             runtime.lane_path("pr-state.json"),
-            json!({"states": {launch_cwd.to_string_lossy().to_string(): {"state": "open"}}})
-                .to_string(),
+            json!({
+                "branch_ci": {},
+                "path_repos": {launch_cwd.to_string_lossy().to_string(): "repo"},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": fresh_probe_ms()}},
+                "states": {launch_cwd.to_string_lossy().to_string(): {"state": "open"}},
+            })
+            .to_string(),
         )
         .unwrap();
     }
@@ -12893,6 +12909,7 @@ fn branch_conditions_show_distinct_live_readings() {
         json!({
             "branch_ci": {},
             "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"},
+            "repos": {"repo": {"ok": true, "refreshed_at_ms": fresh_probe_ms()}},
             "branches": {"repo": {"a": {"pr": {"state": "merged"}}, "b": {"pr": {"state": "open"}}}}
         })
         .to_string(),
@@ -12938,7 +12955,7 @@ fn explain_reports_live_terms_truth_and_leaves_inputs_unchanged() {
     );
     let cache = runtime.lane_path("pr-state.json");
     std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-    let bytes = json!({"branch_ci": {env.project_root.to_string_lossy().to_string(): "passing"}, "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"}, "branches": {"repo": {"a": {"pr": {"state": "merged"}}}}}).to_string();
+    let bytes = json!({"branch_ci": {env.project_root.to_string_lossy().to_string(): "passing"}, "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"}, "repos": {"repo": {"ok": true, "refreshed_at_ms": fresh_probe_ms()}}, "branches": {"repo": {"a": {"pr": {"state": "merged"}}}}}).to_string();
     std::fs::write(&cache, &bytes).unwrap();
     for (condition, code, truth) in [
         ("pr[a]=merged && ci=passed", 0, "true"),
@@ -12996,7 +13013,7 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
         "{text}"
     );
     assert!(
-        text.contains("  ci=unknown   ✓ readings paused (room closed)"),
+        text.contains("  ci=unknown   ? readings paused (room closed)"),
         "{text}"
     );
     assert!(text.contains("  window.5h.left>=40   ? not read"), "{text}");
@@ -13130,11 +13147,11 @@ fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
             "checked_at": null,
             "terms": [
                 {"term": "ci=unknown", "key": "ci", "negated": false,
-                 "reading": null, "met": true, "unread": "readings paused (room closed)"},
+                 "reading": null, "met": false, "unread": "readings paused (room closed)"},
                 {"term": "window.5h.left>=40", "key": "window.5h.left", "negated": false,
                  "reading": null, "met": false, "unread": "not read"},
                 {"term": "pr=open", "key": "pr", "negated": true,
-                 "reading": null, "met": true, "unread": "readings paused (room closed)"}
+                 "reading": null, "met": false, "unread": "readings paused (room closed)"}
             ]
         })
     );

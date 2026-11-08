@@ -180,19 +180,34 @@ fn lifecycle_kind_follows_the_stored_row() {
 #[test]
 fn condition_count_projects_the_stored_timing_without_reading_again() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
-    for (expression, readings, expected) in [
+    for (expression, readings, unread, expected) in [
         (
             "pr=merged && !ci=failed && ci!=unknown",
             vec![("pr", None), ("ci", None)],
+            vec![],
             Some((1, 3, 2)),
         ),
         (
             "pr=merged && !!ci=passed",
             vec![("pr", Some("merged")), ("ci", Some("passed"))],
+            vec![],
             Some((2, 2, 0)),
         ),
-        ("pr=merged || ci=passed", vec![], None),
-        ("!(pr=merged && ci=passed)", vec![], None),
+        // A stale probe reads `None`, which `ci=unknown` and `!ci=failed` would match.
+        (
+            "ci=unknown",
+            vec![("ci", None)],
+            vec!["ci"],
+            Some((0, 1, 1)),
+        ),
+        (
+            "!ci=failed",
+            vec![("ci", None)],
+            vec!["ci"],
+            Some((0, 1, 1)),
+        ),
+        ("pr=merged || ci=passed", vec![], vec![], None),
+        ("!(pr=merged && ci=passed)", vec![], vec![], None),
     ] {
         let entry = TaskEntry {
             when: Some(vec![expression.into()]),
@@ -207,14 +222,24 @@ fn condition_count_projects_the_stored_timing_without_reading_again() {
             .map(|(key, value)| (key.to_owned(), value.map(str::to_owned)))
             .collect();
         let verdict = when::Verdict {
-            ok: expr.leaves().all(|(term, negated)| {
-                term.matches(
-                    readings
-                        .get(&term.key)
-                        .and_then(|v: &Option<String>| v.as_deref()),
-                ) != negated
-            }),
+            ok: unread.is_empty()
+                && expr.leaves().all(|(term, negated)| {
+                    term.matches(
+                        readings
+                            .get(&term.key)
+                            .and_then(|v: &Option<String>| v.as_deref()),
+                    ) != negated
+                }),
             readings,
+            unread: unread
+                .into_iter()
+                .map(|key| {
+                    (
+                        key.to_owned(),
+                        "probed before the last fire or first sight".to_owned(),
+                    )
+                })
+                .collect(),
         };
         let timing = TaskTiming::evaluate(
             &parsed,
@@ -275,6 +300,7 @@ fn true_condition_without_hold_is_due() {
         &when::Verdict {
             ok: true,
             readings: Default::default(),
+            unread: Default::default(),
         },
         None,
         now.timestamp(),

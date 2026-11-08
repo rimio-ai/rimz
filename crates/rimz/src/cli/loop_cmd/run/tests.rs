@@ -35,6 +35,7 @@ fn manual_condition_notice_only_warns_when_unmet_and_counts_conjunctions() {
                 &schedule::when::Verdict {
                     ok,
                     readings: BTreeMap::from([("team.stage".into(), None), ("ci".into(), None)]),
+                    unread: Default::default(),
                 },
                 None,
                 now,

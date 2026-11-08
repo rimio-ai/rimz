@@ -571,7 +571,9 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                         .readings
                         .get(&term.key)
                         .and_then(|value| value.as_deref());
-                    if term.matches(reading) == negated && !short.contains(&term.key.as_str()) {
+                    let unmet =
+                        verdict.unread.contains_key(&term.key) || term.matches(reading) == negated;
+                    if unmet && !short.contains(&term.key.as_str()) {
                         short.push(term.key.as_str());
                     }
                 }
@@ -752,7 +754,9 @@ fn write_worktrees(
                 .get(&term.key)
                 .and_then(|value| value.as_deref())
             else {
-                let reason = if term.reads_forge() {
+                let reason = if let Some(reason) = verdict.unread.get(&term.key) {
+                    reason.clone()
+                } else if term.reads_forge() {
                     source
                         .as_ref()
                         .and_then(|source| source.unread_reason(&term.key, &row.condition.checkout))
@@ -1636,7 +1640,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let mut condition = Vec::new();
     if !args.json && !entry.each_worktree {
-        condition::write_show(&mut condition, entry, &timing)?;
+        condition::write_show(&mut condition, &args.name, entry, &timing)?;
     }
     let subscriptions = if !args.json || entry.each_worktree {
         load_subscriptions(&root, &now_zoned, |entry| {
