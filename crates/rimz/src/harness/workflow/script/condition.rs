@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -11,6 +10,9 @@ use crate::harness::schedule::{
     when::{self, CiSource, WhenExpr, WindowReadings},
 };
 use crate::store::workflow::{RunRecord, Wait};
+
+#[cfg(test)]
+use crate::harness::schedule::when::ci_unread;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaseMark {
@@ -68,21 +70,9 @@ pub(super) fn reading(
         (record.entered_at, "probed before this check was entered"),
         |held| (held.entered_at, "probed before this session started"),
     );
-    let ci_unread = source
-        .ci_commits(&record.scope.path)
-        .filter(|_| readings.contains_key("ci") && checked_at.is_some_and(|at| at >= entered_at))
-        .and_then(|(pr_head, ci_sha)| {
-            // Compare ci_sha with the cached PR head, and that head with fresh local HEAD.
-            // Read HEAD after the cache. Settlement uses the PR head at checked_at, without
-            // re-reading under the lock: a later commit or push is a new fact for the next
-            // evaluation here, or after a step returns to this check.
-            let local_head = super::super::head(&record.scope.path);
-            let on_pr = local_head
-                .as_deref()
-                .filter(|local| *local != pr_head)
-                .and_then(|local| is_ancestor(&record.scope.path, local, pr_head));
-            ci_unread(pr_head, ci_sha, local_head.as_deref(), on_pr)
-        });
+    let ci_unread = (readings.contains_key("ci") && checked_at.is_some_and(|at| at >= entered_at))
+        .then(|| source.ci_fence(&record.scope.path))
+        .flatten();
     let reads_forge = expressions
         .iter()
         .flat_map(WhenExpr::terms)
@@ -114,15 +104,19 @@ fn answer(
         .filter(|term| term.reads_forge())
         .map(|term| term.key.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let forge_fresh = checked_at.is_some_and(|at| at >= entered_at);
-    let ci_unread = ci_unread.filter(|_| forge_fresh && forge_keys.contains("ci"));
-    if !forge_fresh {
-        for key in &forge_keys {
-            readings.insert((*key).into(), None);
-        }
-    }
-    if ci_unread.is_some() {
-        readings.insert("ci".into(), None);
+    let floor = when::Floor {
+        at: entered_at,
+        stale: stale_reason,
+    };
+    let forge_unread = when::forge_unread(
+        forge_keys.iter().copied(),
+        checked_at,
+        floor,
+        ci_unread,
+        &unread,
+    );
+    for key in forge_unread.keys() {
+        readings.insert(key.clone(), None);
     }
     let cases = check.condition_cases();
     let mut object = json!({"outcome":check.fallback_outcome(), "readings":readings});
@@ -143,14 +137,11 @@ fn answer(
                         .map(|(key, _)| {
                             let reason = if !forge_keys.contains(key.as_str()) {
                                 "not read".into()
-                            } else if checked_at.is_some_and(|at| at < entered_at) {
-                                stale_reason.into()
-                            } else if key == "ci"
-                                && let Some(reason) = &ci_unread
-                            {
-                                reason.clone()
                             } else {
-                                unread(key)
+                                forge_unread
+                                    .get(key)
+                                    .cloned()
+                                    .unwrap_or_else(|| unread(key))
                             };
                             format!("{key} ({reason})")
                         })
@@ -257,45 +248,6 @@ pub fn unread_reasons(object: &Value) -> BTreeMap<String, String> {
         reasons.insert((*key).to_owned(), reason.to_owned());
     }
     reasons
-}
-
-fn ci_unread(
-    pr_head: &str,
-    ci_sha: Option<&str>,
-    local_head: Option<&str>,
-    on_pr: Option<bool>,
-) -> Option<String> {
-    if pr_head.is_empty() {
-        return None;
-    }
-    if let Some(local) = local_head.filter(|local| *local != pr_head)
-        && on_pr == Some(false)
-    {
-        return Some(format!(
-            "local HEAD {local:.7} is not on the PR, PR head {pr_head:.7}"
-        ));
-    }
-    let ci_sha = ci_sha.filter(|sha| !sha.is_empty() && *sha != pr_head)?;
-    Some(format!("read at {ci_sha:.7}, PR head {pr_head:.7}"))
-}
-
-/// `Some(false)` only on a definite exit 1; an unknown object (128), any other exit, a timeout,
-/// or a spawn error is `None`.
-fn is_ancestor(path: &Path, commit: &str, tip: &str) -> Option<bool> {
-    let output = crate::proc::run_bounded_git_output(
-        path,
-        &["merge-base", "--is-ancestor", "--", commit, tip],
-        std::time::Duration::from_secs(2),
-    )
-    .ok()?;
-    if output.timed_out {
-        return None;
-    }
-    match output.status.code() {
-        Some(0) => Some(true),
-        Some(1) => Some(false),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
