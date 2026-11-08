@@ -132,7 +132,7 @@ esac"#,
         };
         std::fs::write(
             &self.clients,
-            format!("human|%3|{client_input_s}|focused\n"),
+            format!("human|%3|{client_input_s}|root||focused\n"),
         )
         .unwrap();
     }
@@ -156,7 +156,7 @@ esac"#,
 
     fn clear_input(&self) {
         self.tty_input_at(1);
-        std::fs::write(&self.clients, "human|%3|1|focused\n").unwrap();
+        std::fs::write(&self.clients, "human|%3|1|root||focused\n").unwrap();
     }
 
     fn short_hold(&self) {
@@ -809,7 +809,7 @@ fn counted_terminal_input_keeps_holding_after_the_viewer_leaves() {
     );
     let first = fixture.record();
     assert_eq!(first.status, MessageStatus::Queued);
-    std::fs::write(&fixture.clients, "human|%4|1|\n").unwrap();
+    std::fs::write(&fixture.clients, "human|%4|1|root||\n").unwrap();
     run_success(
         fixture
             .command()
@@ -842,7 +842,7 @@ fn counted_terminal_input_keeps_holding_after_the_viewer_leaves() {
 #[test]
 fn terminal_advance_with_an_unfocused_client_does_not_hold_delivery() {
     let fixture = Fixture::new(false);
-    std::fs::write(&fixture.clients, "human|%3|1|attached\n").unwrap();
+    std::fs::write(&fixture.clients, "human|%3|1|root||attached\n").unwrap();
     run_success(
         fixture.command().args(["message", "@claude", "go"]),
         "unfocused terminal input",
@@ -856,7 +856,7 @@ fn terminal_advance_seen_elsewhere_is_consumed_without_a_hold() {
     let fixture = Fixture::new(false);
     let input_s = u64::try_from(jiff::Timestamp::now().as_second()).unwrap();
     fixture.tty_input_at(input_s);
-    std::fs::write(&fixture.clients, format!("human|%4|{input_s}|\n")).unwrap();
+    std::fs::write(&fixture.clients, format!("human|%4|{input_s}|root||\n")).unwrap();
     run_success(
         fixture.command().args(["message", "@claude", "go"]),
         "unviewed input",
@@ -914,7 +914,10 @@ fn terminal_record_failures_send_without_falling_back_to_the_client_clock() {
         }
         std::fs::write(
             &fixture.clients,
-            format!("human|%3|{}|\n", jiff::Timestamp::now().as_second() + 1),
+            format!(
+                "human|%3|{}|root||\n",
+                jiff::Timestamp::now().as_second() + 1
+            ),
         )
         .unwrap();
         run_success(fixture.command().args(["message", "@claude", "go"]), case);

@@ -140,7 +140,7 @@ case "$1" in
   -V) printf 'tmux 3.8\n' ;;
   list-clients)
     if [ "$RIMZ_TEST_POPUP_VIEW_FAIL" = 1 ]; then exit 1; fi
-    printf 'human|%%7|1|attached,focused\n' ;;
+    printf 'human|%%7|1|root||attached,focused\n' ;;
   display-popup)
     if [ -f "$RIMZ_TEST_POPUP_TYPING" ]; then
       cp "$RIMZ_TEST_POPUP_TYPING" "$RIMZ_TEST_POPUP_DURING"
