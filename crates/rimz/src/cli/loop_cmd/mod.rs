@@ -286,7 +286,8 @@ struct AddArgs {
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Launch worktree or wait channel; with --stay, created or reused when the task fires.
+    /// Fresh worktree prefix for each fire of an --agent or check task; with --stay, the
+    /// resident's worktree, created or reused when the task fires; with --wait, the target channel.
     #[arg(long)]
     worktree: Option<String>,
     /// Permission posture for the supervised turn: auto, ask, or yolo.

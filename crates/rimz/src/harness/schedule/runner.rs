@@ -2078,7 +2078,10 @@ impl<'a> TaskFire<'a> {
             .transpose()?;
         let mut request = SupervisedRunRequest::new(spec, prompt, permission_mode, managed_launch);
         request.login = LaunchLogin::from(self.entry.account.clone());
-        request.worktree.clone_from(&self.entry.worktree);
+        // A fresh-worktree row fires at the project root until its per-fire tree exists.
+        if let Some(crate::config::TaskWorktree::Named(name)) = self.entry.task_worktree() {
+            request.worktree = Some(name.to_owned());
+        }
         request.system_prompt_file = system_prompt_file;
         request.effort.clone_from(&self.entry.effort);
         request.fast = self.entry.fast;
@@ -2900,7 +2903,7 @@ fn resolve_managed_spawn_state(
 ) -> Result<ManagedLaunchState> {
     let adapter = find_definition(&resolved.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
-    if entry.worktree.is_some() {
+    if entry.task_worktree().is_some() {
         let applicability = adapter.resolve_managed_launch(
             &workspace.worktree_root,
             &std::collections::BTreeMap::new(),

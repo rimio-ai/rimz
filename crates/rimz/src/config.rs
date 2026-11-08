@@ -108,7 +108,8 @@ pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
     CapacityWait, CapacityWaitErr, CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy,
-    TaskCheck, TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
+    TaskCheck, TaskEntry, TaskTarget, TaskWorktree, Tasks, ThrottleSwitch, WatchSpec,
+    has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::{MultiplexerConfig, MuxStatusBar};

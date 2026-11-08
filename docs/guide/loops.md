@@ -43,16 +43,16 @@ rimz loop add deps --agent claude --worktree deps --every mon --at 09:00 \
 
 ```console
 added loop task `deps`
-action: launches a fresh claude pane in /home/you/code/app
+action: launches a fresh claude pane in a fresh worktree `deps-<time>` per fire, branched from trunk
 trigger: fires every Mon at 09:00
 next fire: 2026-09-07 09:00 (in 2d)
 live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
-The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), and it fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it. Without a room, `rimz loop list` says `waits for room` beside the clock's trigger and tells you whether the timer is active.
+The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), runs at that project's root even when you add it from a linked worktree unless `--worktree` gives it a fresh worktree per fire, and fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it. Without a room, `rimz loop list` says `waits for room` beside the clock's trigger and tells you whether the timer is active.
 
-That one command replaces a cron entry, the guard script around it, and the terminal you would have left open to watch it. It runs Claude in an isolated [worktree](./worktrees.md) every Monday at 09:00, and if a bump breaks the build the agent stops and asks instead of forcing it through: the question reaches you like any other waiting card.
+That one command replaces a cron entry, the guard script around it, and the terminal you would have left open to watch it. Every Monday at 09:00 it runs Claude in a fresh [worktree](./worktrees.md) branched from trunk, and if a bump breaks the build the agent stops and asks instead of forcing it through: the question reaches you like any other waiting card.
 
 A scheduled turn takes the launch flags you already use with [`rimz agents`](./fleet.md), so `--worktree`, `--effort`, `--system-prompt-file`, and a [permission mode](./fleet.md#set-a-permission-mode) shape it the same way; `--timeout` caps the turn and its verify commands. Unsupported `--effort` and `--fast` [save with a warning](../reference/cli/loop.md#actions) and launch without the setting. The task keeps the requested value, and each fire warns again. OpenCode effort saves silently; the fire checks it against the chosen model's variants, or warns and skips effort when no model is set ([OpenCode details](../internals/agents/adapter_opencode.md#model-selection)). The `--agent` value is a kind, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), or a kind with its permission-mode suffix, like `codex-yolo`. What the agent does with the turn is bounded only by the prompt: a one-line check, or the whole [fleet that works nights](#a-fleet-that-works-nights).
 
@@ -199,14 +199,14 @@ If a newer trigger makes the current work obsolete, use `--overlap replace`. Rim
 
 A CI event can arrive before your team finishes review. Subscribing only to that event misses the later moment when both are ready. A condition reads their current state in either order and can require it to stay true before opening a PR.
 
-From the team's worktree, with its room open:
+A launching task reads conditions at the project root, so name the team's branch, here `feat-x`, with its room open:
 
 ```sh
-rimz loop add open-pr --when 'team.stage=Done && ci=passed' --for 30m --once --agent claude --prompt 'Open the pull request for this worktree.'
+rimz loop add open-pr --when 'team.stage[feat-x]=Done && ci[feat-x]=passed' --for 30m --once --agent claude --prompt 'Open the pull request for the feat-x branch.'
 rimz loop show open-pr
 ```
 
-The receipt names the checkout being observed. The sidebar checks its board and CI each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task; `rimz loop list` and `rimz loop watch` keep showing it as `▸ running` until that run ends. The room's sidebar probes that checkout while the task is live, even after its agent panes close; removing the task releases that probe. Without a room sidebar, or until the sidebar probes the forge again after a fire, the task holds rather than reading CI as unknown ([forge freshness](../reference/cli/loop.md#forge-freshness)). Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
+`team.stage[feat-x]` reads the board of the local checkout on `feat-x`, and `ci[feat-x]` that branch's CI. The sidebar checks both each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task; `rimz loop list` and `rimz loop watch` keep showing it as `▸ running` until that run ends. The room's sidebar keeps probing the branch while the task is live, even with no checkout for it; removing the task releases that probe. Without a room sidebar, or until the sidebar probes the forge again after a fire, the task holds rather than reading CI as unknown ([forge freshness](../reference/cli/loop.md#forge-freshness)). Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
 
 When your next turn depends on several branches landing, name them directly instead of keeping their checkouts open:
 
@@ -234,7 +234,7 @@ rimz loop add ci-green --check "gh run watch --exit-status" --on success \
     --until 30m --every 2m --wait @planner --prompt "CI is green; merge"
 ```
 
-A fire runs the check before its agent action, in the task's `dir` when set. Otherwise it runs at the root of the checkout the task was added from, linked worktrees included; project tasks default to the canonical project root. Scheduled condition agent tasks first look at capacity and leave the guard for a later retry while capacity is unavailable. `--on fail` (the default) fires the agent action on a non-zero exit or a timeout, `--on success` on a zero exit, and a check that spends no tokens is the whole point: the agent's turn is the exception, not the schedule.
+A fire runs the check before its agent action, at the project root, or in the fire's fresh worktree when the task has `--worktree`, so the guard reads the tree the agent will work in. A `--wait` check runs at the root of the checkout the wait was armed from, linked worktrees included, and a task stored with `dir` by an earlier version keeps that directory. Scheduled condition agent tasks first look at capacity and leave the guard for a later retry while capacity is unavailable. `--on fail` (the default) fires the agent action on a non-zero exit or a timeout, `--on success` on a zero exit, and a check that spends no tokens is the whole point: the agent's turn is the exception, not the schedule.
 
 When the guard fires, RimZ appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence. That adds a rung to the escalation ladder: the script handles the routine, the agent handles the failure, and you hear about it only when the agent itself gets stuck. The turn runs like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you.
 
@@ -338,7 +338,7 @@ Use [workflow and step limits](./workflows.md#limit-one-workflow-or-step) when o
 
 Pressure numbers differ from one machine to the next, and inside a container they may be the host's. Read what `rimz loop show <task>` reports under a normal load before you pick a limit.
 
-Use `check` to ask your own script whether the provider has capacity. It runs in the task's run directory (`dir` or the task root), or the selected checkout for an `each-worktree` fire, with the room pin and `RIMZ_START_KIND`, `RIMZ_START_ACCOUNT` (empty if unresolved), `RIMZ_START_AGENTS`, and `RIMZ_START_TASK`. A task's `worktree` is not created yet, so its check still runs in the task's run directory. `RIMZ_WORKTREE_PATH` names the check's directory. Each distinct kind/account group is checked once, with its agent count. Exit `0` allows the start; `75` means no capacity; any other exit, signal, failure to start, or timeout holds the start as an error. Holds are reused for 60 seconds per kind/account, except that a queued fire retries with a changed `check` or `check-timeout` as soon as it reaches the check again; permission to start is always checked fresh. The script holds the turn, not the queue lock. Capacity holds for one provider kind let other kinds pass, including past other starts queued behind that hold; a held turn never does. While a check is configured, `rimz doctor` shows the latest check errors and points to `[throttle] check` to fix them.
+Use `check` to ask your own script whether the provider has capacity. It runs in the task's run directory (`dir` or the task root), or the selected checkout for an `each-worktree` fire, with the room pin and `RIMZ_START_KIND`, `RIMZ_START_ACCOUNT` (empty if unresolved), `RIMZ_START_AGENTS`, and `RIMZ_START_TASK`. A task's `worktree` or fresh worktree is not created yet, so its check still runs in the task's run directory. `RIMZ_WORKTREE_PATH` names the check's directory. Each distinct kind/account group is checked once, with its agent count. Exit `0` allows the start; `75` means no capacity; any other exit, signal, failure to start, or timeout holds the start as an error. Holds are reused for 60 seconds per kind/account, except that a queued fire retries with a changed `check` or `check-timeout` as soon as it reaches the check again; permission to start is always checked fresh. The script holds the turn, not the queue lock. Capacity holds for one provider kind let other kinds pass, including past other starts queued behind that hold; a held turn never does. While a check is configured, `rimz doctor` shows the latest check errors and points to `[throttle] check` to fix them.
 
 Reasons name the cause: `queued: 1 start ahead`, `6 of 6 agents open (@builder, @reviewer, +4)`, `2 of 2 automated agents open (@builder, @reviewer)`, `next start in 12s`, or `cpu pressure 72% ≥ 60%`. A check's exit `75` reads `claude: no capacity (your check)`; an error reads `capacity check failing: claude exit 2` with its first stderr line when present. Failing check groups lead joined reasons, and a start queued only behind provider holds carries its blocking cause's reason rather than a queue count. A start behind a failing check, disk-floor breach, or unreadable agent count carries the first blocking waiting start's needs-a-fix reason, even in a mixed queue or behind a held turn. The blocker can belong to another room; inheriting its reason does not let other starts pass a mixed queue barrier.
 
@@ -367,7 +367,7 @@ A standing task writes a `[tasks.<name>]` entry to `~/.rimz/loop.toml`: per-mach
 agent = "claude"
 prompt = "Check for outdated dependencies. Open a PR for the safe minor and patch bumps, and list any majors that need review."
 root = "/home/you/code/app"
-worktree = "deps"
+fresh-worktree = "deps"
 at = "09:00"
 every = "mon"
 ```
@@ -397,7 +397,7 @@ tests — check
   │ make: *** No rule to make target 'test'.  Stop.
 ✗ check failed (exit 2) in 304ms
 $ rimz loop show tests
-tests · routine · worktree probe · every 1h · next in 59m
+tests · routine · every 1h · next in 59m
   ✗ failing · last run 0s ago, failed (exit 2) in 304ms
 
 LAST RUN — ✗ failed (exit 2) · 0s ago · 304ms · manual
@@ -405,7 +405,6 @@ LAST RUN — ✗ failed (exit 2) · 0s ago · 304ms · manual
 
   action:  run check · make test
   root:    ~/room · room open
-  dir:     ~/room-worktrees/probe
   source:  machine — ~/.rimz/loop.toml
   strikes: 1/3
 ```

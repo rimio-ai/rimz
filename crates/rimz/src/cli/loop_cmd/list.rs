@@ -366,6 +366,8 @@ pub(super) struct TaskRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    fresh_worktree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<Owner>,
     you: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -696,12 +698,12 @@ fn load(
             row.held = tickets.remove(name).unwrap_or_default();
             row.refresh_attention(count, now);
             row.worktree_here = here
-                && workspace.is_some_and(|workspace| match task.entry().worktree.as_deref() {
-                    Some(name) => {
+                && workspace.is_some_and(|workspace| match task.entry().task_worktree() {
+                    Some(rimz::config::TaskWorktree::Named(name)) => {
                         rimz::worktree::worktree_path(&root, &config.agents.worktree, name)
                             .is_ok_and(|path| path == workspace.worktree_root)
                     }
-                    None => run_dir == workspace.worktree_root,
+                    _ => run_dir == workspace.worktree_root,
                 });
             row.launched_count = launched_count(task.entry(), name, &ledger, &workflow_ledger);
             row.attach_workflow_runs(
@@ -850,6 +852,7 @@ impl TaskRow {
             action,
             dir,
             worktree,
+            fresh_worktree: entry.fresh_worktree.clone(),
             owner,
             you: false,
             next_at: timing.next_timestamp(),
@@ -980,6 +983,7 @@ impl TaskRow {
             action: None,
             dir: None,
             worktree: None,
+            fresh_worktree: None,
             owner: None,
             you: false,
             next_at: None,

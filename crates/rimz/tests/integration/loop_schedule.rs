@@ -1184,8 +1184,8 @@ fn condition_tick_observes_board_and_records_evidence() {
     let board = scope.join(".rimz/team/blackboard.md");
     std::fs::create_dir_all(root_board.parent().unwrap()).unwrap();
     std::fs::create_dir_all(board.parent().unwrap()).unwrap();
-    std::fs::write(&root_board, "Stage: Done\n").unwrap();
-    std::fs::write(&board, "Stage: Review\n").unwrap();
+    std::fs::write(&root_board, "Stage: Review\n").unwrap();
+    std::fs::write(&board, "Stage: Done\n").unwrap();
     let receipt = loop_ok(
         &env,
         &[
@@ -1202,7 +1202,18 @@ fn condition_tick_observes_board_and_records_evidence() {
         ],
     );
     assert!(
-        receipt.contains(&format!("scope: {}", canonical(&scope).display())),
+        receipt.contains(&format!(
+            "scope: {}",
+            canonical(&env.project_root).display()
+        )),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains(&format!(
+            "note: runs at the project root {}, not {}",
+            canonical(&env.project_root).display(),
+            canonical(&scope).display()
+        )),
         "{receipt}"
     );
     assert!(
@@ -1210,7 +1221,8 @@ fn condition_tick_observes_board_and_records_evidence() {
         "{receipt}"
     );
     let instances = read_loop_instances(&env);
-    assert_eq!(instances.0["ready"].run_dir(), canonical(&scope));
+    assert_eq!(instances.0["ready"].dir, None);
+    assert_eq!(instances.0["ready"].run_dir(), canonical(&env.project_root));
     assert_eq!(instances.0["ready"].once, Some(true));
     loop_ok(&env, &["loop", "tick"]);
     let armed = rimz::harness::schedule::last_stamps(&env.runtime_paths());
@@ -1228,8 +1240,8 @@ fn condition_tick_observes_board_and_records_evidence() {
         shown.contains("waiting · 0 of 1 met") && shown.contains("team.stage=Done   ✗ Review"),
         "{shown}"
     );
-    std::fs::write(&root_board, "Stage: Review\n").unwrap();
-    std::fs::write(&board, "Stage: Done\n").unwrap();
+    std::fs::write(&root_board, "Stage: Done\n").unwrap();
+    std::fs::write(&board, "Stage: Review\n").unwrap();
     loop_ok(&env, &["loop", "tick"]);
     wait_for_loop_run_records(&env, "ready record and once-instance removal", |records| {
         !records.is_empty() && !read_loop_instances(&env).0.contains_key("ready")
@@ -1476,33 +1488,64 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
 fn resident_subscriptions_require_a_usable_scope_at_add() {
     let env = Env::new();
     env.install_agent_hooks("claude");
+    let argv = |signal| {
+        [
+            "loop",
+            "add",
+            "resident",
+            "--agent",
+            "claude",
+            "--stay",
+            "--every",
+            "1h",
+            "--subscribe",
+            signal,
+            "--prompt",
+            "watch",
+        ]
+    };
     for (signal, fix) in [
         ("ci.failed", "--each-worktree"),
         ("pr.conflicted", "--each-worktree"),
         ("team.stage", "team layout"),
     ] {
-        let (_, error) = loop_fail(
-            &env,
-            &[
-                "loop",
-                "add",
-                "resident",
-                "--agent",
-                "claude",
-                "--stay",
-                "--every",
-                "1h",
-                "--subscribe",
-                signal,
-                "--prompt",
-                "watch",
-            ],
-        );
+        let (_, error) = loop_fail(&env, &argv(signal));
         assert!(
             error.contains("--subscribe") && error.contains(fix),
             "{error}"
         );
     }
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let linked = env.home_root.join("linked");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap()
+        ]
+    ));
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .args(argv("ci.failed"))
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && error.contains(
+                "--subscribe ci.failed needs a checkout scope; use --each-worktree with --when, or --worktree <name>"
+            )
+            && !error.contains("--root"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -8747,7 +8790,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
 }
 
 #[test]
-fn loop_check_runs_in_the_arming_worktree() {
+fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_their_dir() {
     let env = Env::new();
     env.record(&env.project_root);
     if !init_git_repo(&env.project_root) {
@@ -8763,18 +8806,12 @@ fn loop_check_runs_in_the_arming_worktree() {
         .expect("run git worktree add");
     assert!(add.success(), "git worktree add failed");
     let linked = canonical(&linked);
+    let root = canonical(&env.project_root);
+    let probe = "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\"";
     let output = env
         .rimz()
         .current_dir(&linked)
-        .args([
-            "loop",
-            "add",
-            "where",
-            "--check",
-            "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\"",
-            "--every",
-            "15m",
-        ])
+        .args(["loop", "add", "where", "--check", probe, "--every", "15m"])
         .output()
         .expect("add check from linked worktree");
     assert!(
@@ -8782,34 +8819,57 @@ fn loop_check_runs_in_the_arming_worktree() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("action: runs check in {}", linked.display()))
+        receipt.contains(&format!("action: runs check in {}", root.display())),
+        "{receipt}"
+    );
+    assert!(
+        receipt.lines().any(|line| line
+            == format!(
+                "note: runs at the project root {}, not {}; pass --worktree <prefix> for a fresh worktree per fire",
+                root.display(),
+                linked.display()
+            )),
+        "{receipt}"
     );
     let stored: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = &stored.tasks.0["where"];
-    let root = canonical(&env.project_root);
     assert_eq!(entry.root, root);
-    assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
+    assert_eq!(entry.dir, None);
 
     loop_ok(&env, &["loop", "fire", "where"]);
     let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].result, LoopRunResult::Completed);
     assert_eq!(records[0].root.as_deref(), Some(root.as_path()));
-    let check = records[0].check.as_ref().unwrap();
-    assert_eq!(check.code, Some(0));
+    let workspace_id = WorkspaceId::from_project_root(&root);
     assert_eq!(
-        check.output,
+        records[0].check.as_ref().unwrap().output,
+        format!("{0}\n{0}\n{0}\n{workspace_id}\n", root.display())
+    );
+
+    let mut config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
+    config.push_str(&format!(
+        "\n[tasks.legacy]\nroot = {root:?}\ndir = {linked:?}\ncheck = {probe:?}\nevery = \"15m\"\n"
+    ));
+    std::fs::write(loop_config_path(&env), config).unwrap();
+    loop_ok(&env, &["loop", "fire", "legacy"]);
+    let records = read_loop_run_records(&env);
+    let record = records.last().unwrap();
+    assert_eq!(record.task, "legacy");
+    assert_eq!(record.result, LoopRunResult::Completed);
+    assert_eq!(record.root.as_deref(), Some(root.as_path()));
+    assert_eq!(
+        record.check.as_ref().unwrap().output,
         format!(
-            "{0}\n{0}\n{1}\n{2}\n",
+            "{0}\n{0}\n{1}\n{workspace_id}\n",
             linked.display(),
-            root.display(),
-            WorkspaceId::from_project_root(&root)
+            root.display()
         )
     );
-    let shown = loop_ok(&env, &["loop", "show", "where"]);
+    let shown = loop_ok(&env, &["loop", "show", "legacy"]);
     assert!(
         shown
             .lines()
@@ -8867,6 +8927,118 @@ fn loop_check_runs_in_the_arming_worktree() {
     assert_eq!(
         record.check.as_ref().unwrap().output,
         format!("{0}\n{0}\n", root.display())
+    );
+}
+
+#[test]
+fn check_task_worktree_stores_a_fresh_prefix_listed_as_a_pattern() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let receipt = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "nightly",
+            "--check",
+            "true",
+            "--worktree",
+            "night",
+            "--every",
+            "1h",
+        ],
+    );
+    assert!(
+        receipt.lines().any(|line| line
+            == "action: runs check in a fresh worktree `night-<time>` per fire, branched from trunk"),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("note:"), "{receipt}");
+    let stored: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = &stored.tasks.0["nightly"];
+    assert_eq!(entry.fresh_worktree.as_deref(), Some("night"));
+    assert_eq!(
+        (entry.worktree.as_deref(), entry.dir.as_deref()),
+        (None, None)
+    );
+    let listing: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let row = listing["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .find(|row| row["name"] == "nightly")
+        .unwrap();
+    assert_eq!(row["fresh_worktree"], "night", "{row}");
+    assert_eq!(row["worktree"], "night-*", "{row}");
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "nightly", "--json"])).unwrap();
+    assert_eq!(shown["fresh_worktree"], "night", "{shown}");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let linked = env.home_root.join("linked");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap()
+        ]
+    ));
+    let linked = canonical(&linked);
+    let root = canonical(&env.project_root);
+    let pwd_file = env.home_root.join("guard-pwd");
+    let guard = format!("pwd -P > {:?}; exit 1", pwd_file.display().to_string());
+    for (name, extra) in [("guarded", vec![]), ("seated", vec!["--stay"])] {
+        let mut argv = vec![
+            "loop", "add", name, "--agent", "claude", "--prompt", "repair", "--every", "1h",
+        ];
+        argv.extend(extra);
+        if name == "guarded" {
+            argv.extend(["--check", guard.as_str(), "--on", "success"]);
+        }
+        let output = env
+            .rimz()
+            .current_dir(&linked)
+            .args(&argv)
+            .output()
+            .expect("add agent task from linked worktree");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stored: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    for name in ["guarded", "seated"] {
+        let entry = &stored.tasks.0[name];
+        assert_eq!(entry.root, root, "{name}");
+        assert_eq!(entry.dir, None, "{name}");
+        assert_eq!(entry.run_dir(), root, "{name}");
+    }
+
+    loop_ok(&env, &["loop", "fire", "guarded"]);
+    assert_eq!(last_loop_record(&env).result, LoopRunResult::CheckSkipped);
+    assert_eq!(
+        std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
+        root.display().to_string()
     );
 }
 
@@ -12193,7 +12365,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--every",
                 "15m",
             ],
-            "`check-flags` uses --check without an agent action, so --worktree, --mode, --effort, --no-fast, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
+            "`check-flags` uses --check without an agent action, so --mode, --effort, --no-fast, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
         ),
         (
             vec![
@@ -13255,6 +13427,50 @@ fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
         error.contains("clause 1, position") && error.contains("did you mean passed?"),
         "{error}"
     );
+}
+
+#[test]
+fn explain_from_a_linked_worktree_reads_the_project_root() {
+    let env = Env::new();
+    if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let linked = env.home_root.join("linked");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap()
+        ]
+    ));
+    for (checkout, stage) in [(&env.project_root, "Plan"), (&linked, "Done")] {
+        std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+        std::fs::write(
+            checkout.join(".rimz/team/blackboard.md"),
+            format!("Stage: {stage}\n"),
+        )
+        .unwrap();
+    }
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .args(["loop", "explain", "team.stage=Done"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(&format!(
+            "scope: {}\n",
+            canonical(&env.project_root).display()
+        )),
+        "{text}"
+    );
+    assert!(text.contains("now: false"), "{text}");
 }
 
 #[test]

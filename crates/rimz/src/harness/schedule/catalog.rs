@@ -66,8 +66,10 @@ pub fn worktree_pins(
     let root = entry.resolved_root();
     let mut paths = vec![root.clone()];
     let needs_run_dir = !entry.each_worktree
-        && (entry.worktree.is_none()
-            || entry.check.is_some()
+        && (!matches!(
+            entry.task_worktree(),
+            Some(crate::config::TaskWorktree::Named(_))
+        ) || entry.check.is_some()
             || !entry.judge.is_empty()
             || entry.when.is_some()
             || entry.watch.is_some());

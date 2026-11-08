@@ -397,6 +397,7 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
         on: Some(CheckOn::Success),
         root: PathBuf::from("/repo"),
         dir: Some(PathBuf::from("/linked")),
+        fresh_worktree: Some("nightly".to_owned()),
         every: Some("weekday".to_owned()),
         at: Some("07:00".to_owned()),
         budget: Some("$5.00".to_owned()),
@@ -420,6 +421,11 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
     };
 
     let toml = toml::to_string(&loop_config).expect("toml");
+    assert!(toml.contains("fresh-worktree = \"nightly\""), "{toml}");
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap()["fresh-worktree"],
+        "nightly"
+    );
     let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
     assert_eq!(toml_round.tasks.0["ci"], entry);
     let mut legacy_toml: toml::Value = toml::from_str(&toml).expect("toml value");

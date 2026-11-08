@@ -131,6 +131,7 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
         provider_kind.as_deref(),
         after_reset.as_ref(),
     )?;
+    write_linked_add_note(&mut out, &entry, task_action, &workspace)?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -440,7 +441,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 let expr = schedule::when::WhenExpr::parse(&args.when)?;
                 if let Some(key) = expr.scope_checkout_key() {
                     bail!(
-                        "--stay --worktree cannot use --when key `{key}`; it reads the scope checkout, not the destination; use a branch-qualified condition such as pr[<branch>]=merged, a window condition, or a clock trigger"
+                        "--stay --worktree cannot use --when key `{key}`; it reads the project root, not the destination; use a branch-qualified condition such as pr[<branch>]=merged, a window condition, or a clock trigger"
                     );
                 }
             }
@@ -888,13 +889,9 @@ fn resolve_resident_action(
     for signal in &args.subscribe {
         let selector = schedule::parse_signal_selector(&args.name, signal, None)?;
         match arm::default_signal_match_key(&selector, &BTreeMap::new()) {
-            Some("path")
-                if !args.each_worktree
-                    && args.worktree.is_none()
-                    && workspace.worktree_root == workspace.project_root =>
-            {
+            Some("path") if !args.each_worktree && args.worktree.is_none() => {
                 bail!(
-                    "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --root <worktree>"
+                    "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --worktree <name>"
                 );
             }
             Some("instance") if team.is_none() => {
@@ -1031,8 +1028,6 @@ fn build_task_entry(
         }),
         overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
-        dir: (!args.project && workspace.worktree_root != workspace.project_root)
-            .then(|| workspace.worktree_root.clone()),
         at: timing.at,
         fire_at: timing.fire_at,
         every: args.every.clone(),
@@ -1070,7 +1065,7 @@ fn build_task_entry(
             entry.agent = args.agent.clone();
             entry.verify = args.verify.clone();
             entry.max_attempts = args.max_attempts;
-            entry.worktree = args.worktree.clone();
+            entry.fresh_worktree = fresh_worktree_prefix(args)?;
             entry.mode = mode;
             entry.effort = args.effort.clone();
             entry.fast = fast_switch(args);
@@ -1080,10 +1075,28 @@ fn build_task_entry(
             entry.system_prompt_file = args.system_prompt_file.clone();
         }
         AddTaskAction::Deliver { .. } => unreachable!("deliveries use the shared domain builder"),
-        AddTaskAction::CheckOnly => {}
-        AddTaskAction::Workflow(name) => entry.workflow = Some(name),
+        AddTaskAction::CheckOnly => entry.fresh_worktree = fresh_worktree_prefix(args)?,
+        AddTaskAction::Workflow(name) => {
+            // A workflow task keeps the checkout it was added from: its runs and its
+            // workflow ledger are keyed on that checkout, as on trunk.
+            entry.dir = (!args.project && workspace.worktree_root != workspace.project_root)
+                .then(|| workspace.worktree_root.clone());
+            entry.workflow = Some(name);
+        }
     }
     Ok((entry, resolved_for_preflight))
+}
+
+/// A fresh-worktree prefix names every fire's tree, so it follows `rimz worktree new`'s rule.
+fn fresh_worktree_prefix(args: &AddArgs) -> Result<Option<String>> {
+    if let Some(prefix) = &args.worktree
+        && rimz::worktree::parse_requested_name(prefix).is_err()
+    {
+        bail!(
+            "--worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+        );
+    }
+    Ok(args.worktree.clone())
 }
 
 fn throttle_switch(args: &AddArgs) -> Option<rimz::config::ThrottleSwitch> {
@@ -1320,9 +1333,6 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
         return Ok(());
     }
     let mut flags = Vec::new();
-    if kind.is_check_only() && args.worktree.is_some() {
-        flags.push("--worktree");
-    }
     if args.mode.is_some() {
         flags.push("--mode");
     }
@@ -1395,6 +1405,40 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     Ok(timing)
 }
 
+/// Where each fire of a launching or check-only task runs, as its receipt names it.
+fn fire_place(entry: &TaskEntry) -> String {
+    match entry.task_worktree() {
+        Some(rimz::config::TaskWorktree::Fresh { prefix }) => {
+            format!("a fresh worktree `{prefix}-<time>` per fire, branched from trunk")
+        }
+        _ => entry.run_dir().display().to_string(),
+    }
+}
+
+/// The receipt line for a launching or check-only task added from a linked
+/// worktree without `--worktree`: it runs at the project root, not there.
+fn write_linked_add_note(
+    out: &mut impl Write,
+    entry: &TaskEntry,
+    action: &TaskAction,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<()> {
+    let launches = matches!(action, TaskAction::Spawn(_)) && !entry.stay;
+    if !(launches || matches!(action, TaskAction::CheckOnly))
+        || entry.fresh_worktree.is_some()
+        || workspace.worktree_root == workspace.project_root
+    {
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "note: runs at the project root {}, not {}; pass --worktree <prefix> for a fresh worktree per fire",
+        workspace.project_root.display(),
+        workspace.worktree_root.display()
+    )?;
+    Ok(())
+}
+
 fn write_add_feedback(
     out: &mut impl Write,
     entry: &TaskEntry,
@@ -1455,7 +1499,7 @@ fn write_add_feedback(
             writeln!(
                 out,
                 "action: launches a fresh {agent} pane{account} in {}",
-                entry.root.display()
+                fire_place(entry)
             )?;
         }
         TaskAction::Deliver(target) => {
@@ -1466,7 +1510,7 @@ fn write_add_feedback(
             )?;
         }
         TaskAction::CheckOnly => {
-            writeln!(out, "action: runs check in {}", entry.run_dir().display())?;
+            writeln!(out, "action: runs check in {}", fire_place(entry))?;
         }
         TaskAction::Workflow(name) => writeln!(out, "action: starts workflow {name}")?,
     }
