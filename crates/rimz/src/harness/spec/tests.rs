@@ -254,6 +254,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
         "window.5h.left>10",
         "team.stage=Missing",
         "team.stage!=",
+        "team.stage[feat]=Plan",
     ] {
         for at_role in [true, false] {
             let setting = format!("keep-warm = {{ while = '{value}' }}");

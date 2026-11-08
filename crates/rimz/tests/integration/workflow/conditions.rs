@@ -311,4 +311,9 @@ fn condition_stage_admission_uses_the_run_project_and_validation_warns_without_o
             .unwrap()
             .contains("stage names were not checked")
     }));
+    let spec = spec.replace("team.stage=", "team.stage[feat]=");
+    let (env, _) = fixture(&spec, "");
+    let output = command(&env, &["workflow", "run", "review"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no team defines stage Imaginary"));
 }

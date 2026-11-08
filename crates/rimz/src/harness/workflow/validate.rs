@@ -701,7 +701,7 @@ impl Validation {
         }
         if !expressions
             .iter()
-            .any(|(_, expression)| expression.terms().any(|term| term.key == "team.stage"))
+            .any(|(_, expression)| expression.terms().any(|term| term.team_stage().is_some()))
         {
             return;
         }

@@ -1683,9 +1683,26 @@ pub(crate) fn discover_owned_cached(repo_root: &Path) -> Result<Vec<ManagedWorkt
     discover_owned_cached_at(repo_root, Instant::now())
 }
 
+/// The checkout whose branch is `branch`, primary or linked, owned or not, from the same
+/// 60-second rows as [`discover_owned_cached`].
+pub(crate) fn checkout_on_branch_cached(repo_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    Ok(worktree_rows_cached_at(repo_root, Instant::now())?
+        .into_iter()
+        .find(|row| row.branch.as_deref() == Some(branch))
+        .map(|row| row.path))
+}
+
 fn discover_owned_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<ManagedWorktree>> {
+    owned_worktrees(&worktree_rows_cached_at(repo_root, now)?)
+}
+
+fn worktree_rows_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<WorktreeRow>> {
     let Some(git_dir) = git_admin_dir_from_checkout_metadata(repo_root)? else {
-        return discover_owned(repo_root);
+        ensure_repo(repo_root)?;
+        return Ok(parse_worktree_list(&git_stdout(
+            repo_root,
+            ["worktree", "list", "--porcelain"],
+        )?));
     };
     let common = std::fs::read_to_string(git_dir.join("commondir"))
         .map(|text| git_dir.join(text.trim()))
@@ -1693,30 +1710,27 @@ fn discover_owned_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<Manage
     let stamp = std::fs::metadata(common.join("worktrees"))
         .ok()
         .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
-    let rows = {
-        let mut cache = OWNED_WORKTREE_ROWS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let fresh = cache.get(repo_root).is_some_and(|cached| {
-            cached.stamp == stamp
-                && now.saturating_duration_since(cached.observed_at) < OWNED_WORKTREE_ROWS_TTL
-        });
-        if !fresh {
-            ensure_repo(repo_root)?;
-            let rows =
-                parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
-            cache.insert(
-                repo_root.to_path_buf(),
-                OwnedWorktreeRows {
-                    stamp,
-                    observed_at: now,
-                    rows,
-                },
-            );
-        }
-        cache[repo_root].rows.clone()
-    };
-    owned_worktrees(&rows)
+    let mut cache = OWNED_WORKTREE_ROWS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let fresh = cache.get(repo_root).is_some_and(|cached| {
+        cached.stamp == stamp
+            && now.saturating_duration_since(cached.observed_at) < OWNED_WORKTREE_ROWS_TTL
+    });
+    if !fresh {
+        ensure_repo(repo_root)?;
+        let rows =
+            parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+        cache.insert(
+            repo_root.to_path_buf(),
+            OwnedWorktreeRows {
+                stamp,
+                observed_at: now,
+                rows,
+            },
+        );
+    }
+    Ok(cache[repo_root].rows.clone())
 }
 
 pub fn status(

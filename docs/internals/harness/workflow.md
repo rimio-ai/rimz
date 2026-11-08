@@ -443,9 +443,10 @@ A step's subscriptions come from its `subscribe` list (`Step::subscriptions`); t
 | Checkout `ci` | `ci.*` |
 | Checkout `pr`, `pr.queue`, `pr.mergeable`, or `pr.review` | `pr.*` |
 | Stage | `team.stage` |
-| Branch-selector or `window.*` | nothing |
+| Stage with a branch selector | `team.stage` with `board = "*"` |
+| Forge branch-selector or `window.*` | nothing |
 
-Negated terms derive the same selectors. At match time, never persisted, and for checks and steps alike (`engine::delivers`), `ci` and `pr` selectors add `path = scope.path` unless `path` or `branch` is explicit, and `team.stage` adds the board `crates/rimz/src/harness/scratch.rs::durable_board_path` resolves for the scope unless `team`, `instance`, or `board` is explicit. Other families stay room-wide. A checkout relink therefore follows its new archive, and project scope matches the project root. A check with no subscriptions runs only on its recheck time and the tick. A matched wake still clears a hold's or a judge limit's backoff.
+Negated terms derive the same selectors. At match time, never persisted, and for checks and steps alike (`engine::delivers`), `ci` and `pr` selectors add `path = scope.path` unless `path` or `branch` is explicit, and `team.stage` adds the board `crates/rimz/src/harness/scratch.rs::durable_board_path` resolves for the scope unless `team`, `instance`, or `board` is explicit; the branch form's explicit `board = "*"` keeps it room-wide, since its board lives in another checkout. Other families stay room-wide. A checkout relink therefore follows its new archive, and project scope matches the project root. A check with no subscriptions runs only on its recheck time and the tick. A matched wake still clears a hold's or a judge limit's backoff.
 
 ### Supervised-run edges
 
