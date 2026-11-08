@@ -6272,6 +6272,94 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     assert!(!loop_arming_path(&env).exists());
 }
 
+fn write_fire_at_row(env: &Env, name: &str) {
+    write_loop_instances(
+        env,
+        Tasks(BTreeMap::from([(
+            name.into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                check: Some("true".into()),
+                fire_at: Some(Timestamp::now() - SignedDuration::from_mins(30)),
+                ..TaskEntry::default()
+            },
+        )])),
+    );
+}
+
+fn tick_with_missing_runner(env: &Env) {
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
+        .output()
+        .expect("rimz loop tick");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn start_failures(env: &Env, name: &str) -> usize {
+    read_loop_run_records(env)
+        .iter()
+        .filter(|record| record.task == name && record.result == LoopRunResult::StartFailed)
+        .count()
+}
+
+/// A `fire-at` row whose runner never started keeps its row, is not dispatched
+/// again within the five-minute grace, and is retried once the grace passes.
+#[test]
+fn external_tick_retries_a_fire_at_start_failure_after_the_grace() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_fire_at_row(&env, "stranded");
+
+    tick_with_missing_runner(&env);
+    assert_eq!(start_failures(&env, "stranded"), 1);
+    assert!(read_loop_instances(&env).0.contains_key("stranded"));
+
+    tick_with_missing_runner(&env);
+    assert_eq!(start_failures(&env, "stranded"), 1, "within the grace");
+
+    let stale = Timestamp::now() - SignedDuration::from_mins(6);
+    write_loop_fire_state(&env, BTreeMap::from([("stranded".to_owned(), stale)]));
+    tick_with_missing_runner(&env);
+    assert_eq!(
+        start_failures(&env, "stranded"),
+        2,
+        "retried past the grace"
+    );
+    assert!(read_loop_instances(&env).0.contains_key("stranded"));
+    assert!(!loop_strikes_path(&env).exists());
+    assert!(!loop_arming_path(&env).exists());
+}
+
+/// A scheduled runner that finds its `fire-at` row paused exits without a
+/// record; the row waits and is dispatched again once live past the grace.
+#[test]
+fn a_paused_fire_at_runner_records_nothing_and_is_retried_once_live() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_fire_at_row(&env, "raced");
+    loop_ok(&env, &["loop", "pause", "raced", "--for", "2h"]);
+
+    loop_ok(&env, &["loop", "run", "raced"]);
+    assert!(read_loop_run_records(&env).is_empty());
+    assert!(read_loop_instances(&env).0.contains_key("raced"));
+
+    let stale = Timestamp::now() - SignedDuration::from_mins(6);
+    write_loop_fire_state(&env, BTreeMap::from([("raced".to_owned(), stale)]));
+    tick_with_missing_runner(&env);
+    assert_eq!(start_failures(&env, "raced"), 0, "carried while paused");
+
+    loop_ok(&env, &["loop", "enable", "raced"]);
+    tick_with_missing_runner(&env);
+    assert_eq!(start_failures(&env, "raced"), 1, "dispatched once live");
+    assert!(read_loop_instances(&env).0.contains_key("raced"));
+}
+
 #[cfg(unix)]
 #[test]
 fn loop_spawn_home_cwd_refusal_names_the_loop_fix() {

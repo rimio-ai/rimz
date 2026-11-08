@@ -6,7 +6,7 @@
 //! `rimz loop run <name>` helper, so a hot tick does not spawn the same
 //! occurrence twice.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +35,9 @@ enum Action {
 
 pub(super) const WATCH_LOST_GRACE_SECS: i64 = 30;
 const RESIDENT_RETRY_SECS: i64 = 5 * 60;
+/// How long a stamped `fire-at` row's runner may hold no lock and record
+/// nothing before the pass dispatches the row again.
+const FIRE_AT_RETRY_SECS: i64 = 5 * 60;
 const WORKFLOW_TICK_SECS: i64 = 60;
 const BACKLOG_TICK_SECS: i64 = 60;
 
@@ -454,6 +457,21 @@ fn fire_tasks(
             }
         })
         .collect();
+    let lost_runners = tasks
+        .iter()
+        .filter(|(name, task)| {
+            state.get(*name).is_some_and(|stamp| {
+                fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
+                    && ArmState::resolve(
+                        arming.get(&task.key(name)),
+                        task.source(),
+                        now.timestamp(),
+                    ) == ArmState::Live
+                    && runner_lost(runtime, name, task, *stamp)
+            })
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
     let (mut actions, mut next_state, next_when) = plan(
         &capacity,
         &tasks,
@@ -462,6 +480,7 @@ fn fire_tasks(
         now,
         &when_states,
         &verdicts,
+        &lost_runners,
     );
     // Declined scopes must still fold false/true edges before suppressing helpers.
     let eligible = scoped_tasks(
@@ -652,6 +671,10 @@ type PlannedTasks = (
     BTreeMap<String, WhenState>,
 );
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the planner takes each durable input and reading explicitly, so tests drive them"
+)]
 fn plan(
     capacity: &BTreeMap<String, super::launch_ledger::CapacityRecord>,
     tasks: &BTreeMap<String, LoadedTask>,
@@ -660,6 +683,7 @@ fn plan(
     now: &Zoned,
     when_states: &BTreeMap<String, WhenState>,
     verdicts: &BTreeMap<String, Verdict>,
+    lost_runners: &BTreeSet<String>,
 ) -> PlannedTasks {
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
@@ -772,6 +796,15 @@ fn plan(
                 actions.push((name.clone(), Action::Fire));
                 next_state.insert(name.clone(), now.timestamp());
             }
+            // A stamped instant is never due again, so a runner lost before it
+            // recorded the attempt would leave the row listed and dead.
+            Some(last_fire)
+                if fire_at_retry_due(instant, last_fire, now.timestamp())
+                    && lost_runners.contains(name) =>
+            {
+                actions.push((name.clone(), Action::Fire));
+                next_state.insert(name.clone(), now.timestamp());
+            }
             Some(last_fire)
                 if matches!(&parsed.trigger, Trigger::Watch(_))
                     && now.timestamp().duration_since(last_fire).as_secs()
@@ -787,6 +820,33 @@ fn plan(
         }
     }
     (actions, next_state, next_when)
+}
+
+fn fire_at(task: &LoadedTask) -> Option<Timestamp> {
+    match &task.trigger().as_ref().ok()?.trigger {
+        Trigger::Schedule(schedule) => schedule.schedule.instant(),
+        Trigger::Condition { .. } | Trigger::Signal { .. } | Trigger::Watch(_) => None,
+    }
+}
+
+/// Whether a `fire-at` row was dispatched at or after its instant, at least
+/// the retry grace ago.
+fn fire_at_retry_due(instant: Option<Timestamp>, last_fire: Timestamp, now: Timestamp) -> bool {
+    instant.is_some_and(|at| last_fire >= at)
+        && now.duration_since(last_fire).as_secs() >= FIRE_AT_RETRY_SECS
+}
+
+/// Whether the runner dispatched at `stamp` is gone without a record: nothing
+/// holds the task's run lock and no attempt was recorded since. A `fire-at`
+/// row never fans out, so its runner locks under the bare name.
+fn runner_lost(runtime: &RuntimePaths, name: &str, task: &LoadedTask, stamp: Timestamp) -> bool {
+    super::run_lock::held(runtime, name).is_ok_and(|held| !held)
+        && !run_log::has_recorded_attempt_since(
+            &logs_dir(),
+            name,
+            &task.entry().resolved_root(),
+            stamp,
+        )
 }
 
 fn watcher_missing(task: &LoadedTask, name: &str) -> bool {

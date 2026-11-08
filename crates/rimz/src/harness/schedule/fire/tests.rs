@@ -49,6 +49,7 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
                 &tick,
                 &states,
                 &verdicts,
+                &BTreeSet::new(),
             )
             .0,
         );
@@ -70,6 +71,7 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
             readings: BTreeMap::new(),
             unread: Default::default(),
         }),
+        &BTreeSet::new(),
     );
     assert!(
         cleared.is_empty(),
@@ -83,7 +85,8 @@ fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() 
             &BTreeMap::new(),
             &tick,
             &cleared,
-            &verdicts
+            &verdicts,
+            &BTreeSet::new(),
         )
         .0,
         [(NAME.into(), Action::Fire)],
@@ -237,6 +240,7 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
                 )]),
             },
         )]),
+        &BTreeSet::new(),
     );
     assert_eq!(held, clocks);
     assert!(
@@ -648,6 +652,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &now,
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         let (actions, _, _) = plan(
             &BTreeMap::new(),
@@ -657,6 +662,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &now,
             &BTreeMap::new(),
             &verdicts,
+            &BTreeSet::new(),
         );
         if ledger.is_empty() {
             assert_eq!(actions.len(), 1);
@@ -741,6 +747,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
         &now,
         &states,
         &verdicts,
+        &BTreeSet::new(),
     );
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].1, Action::Fire);
@@ -783,6 +790,7 @@ fn worktree_holds_have_independent_clocks() {
         &now,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeSet::new(),
     );
     for (minute, expected) in [
         (0, vec![]),
@@ -812,6 +820,7 @@ fn worktree_holds_have_independent_clocks() {
             &tick,
             &states,
             &verdicts,
+            &BTreeSet::new(),
         );
         assert!(actions.iter().all(|(_, action)| *action == Action::Fire));
         assert_eq!(
@@ -1073,6 +1082,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
                     readings: BTreeMap::new(),
                     unread: Default::default(),
                 }),
+                &BTreeSet::new(),
             );
             assert_eq!(states[NAME].since, now.timestamp(), "{change}");
             assert_eq!(states[NAME].fired, should_fire, "{change}");
@@ -1116,6 +1126,7 @@ fn condition_tick(
                 })
             })
             .unwrap_or_default(),
+        &BTreeSet::new(),
     )
 }
 
@@ -1150,6 +1161,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             &now,
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         for (minute, second, expected) in [
             (0, 0, true),
@@ -1167,6 +1179,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
                 &tick,
                 &states,
                 &verdicts,
+                &BTreeSet::new(),
             );
             assert_eq!(
                 actions,
@@ -1364,6 +1377,7 @@ fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires
                     .map(|(key, reason)| ((*key).to_owned(), (*reason).to_owned()))
                     .collect(),
             }),
+            &BTreeSet::new(),
         )
     };
     for ok in [false, true] {
@@ -1873,6 +1887,7 @@ fn until(stamp: Timestamp) -> Arming {
 struct Tick {
     state: Option<Timestamp>,
     arming: Option<Arming>,
+    lost: bool,
 }
 
 impl Tick {
@@ -1891,6 +1906,11 @@ impl Tick {
         }
     }
 
+    /// A task whose dispatched runner holds no run lock and recorded nothing.
+    fn lost(self) -> Self {
+        Self { lost: true, ..self }
+    }
+
     /// The task's action this tick and the stamp carried into the next one.
     fn run(self, task: &LoadedTask, now: &Zoned) -> (Option<Action>, Option<Timestamp>) {
         let (actions, next, _) = plan(
@@ -1904,6 +1924,11 @@ impl Tick {
             now,
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &if self.lost {
+                BTreeSet::from([NAME.to_owned()])
+            } else {
+                BTreeSet::new()
+            },
         );
         (
             actions.first().map(|(_, action)| *action),
@@ -1985,6 +2010,7 @@ fn plan_arms_fires_and_carries_each_task_state() {
         &now,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeSet::new(),
     );
     assert!(actions.is_empty());
     assert!(next.is_empty());
@@ -2194,10 +2220,35 @@ fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
         fire(at.timestamp()),
         "fires at the instant"
     );
+    let stamped = || Tick::armed(at.timestamp());
+    let grace = zdt(2026, 6, 24, 8, 5, 0);
+    let in_grace = zdt(2026, 6, 24, 8, 4, 59);
     assert_eq!(
-        Tick::armed(at.timestamp()).run(instant, &late),
+        stamped().run(instant, &grace),
         carry(at.timestamp()),
-        "never again once stamped"
+        "not again while its runner is live"
+    );
+    assert_eq!(
+        stamped().lost().run(instant, &in_grace),
+        carry(at.timestamp()),
+        "not again within the grace, even with no runner"
+    );
+    assert_eq!(
+        stamped().lost().run(instant, &grace),
+        fire(grace.timestamp()),
+        "a lost runner past the grace fires again and stamps now"
+    );
+    assert_eq!(
+        armed().lost().run(instant, &zdt(2026, 6, 24, 7, 59, 59)),
+        carry(early.timestamp()),
+        "a stamp before the instant is armed, not a lost runner"
+    );
+    let hourly = &task("/repo", "1h");
+    let half_hour_ago = seconds_before(grace.timestamp(), 1_800);
+    assert_eq!(
+        Tick::armed(half_hour_ago).lost().run(hourly, &grace),
+        carry(half_hour_ago),
+        "a periodic row waits for its next occurrence"
     );
 
     let pause_end = zdt(2026, 6, 24, 9, 0, 0);
@@ -2213,6 +2264,17 @@ fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
         fire(woke.timestamp()),
         "paused through the instant fires at the pause end"
     );
+    let stranded_paused = || stamped().lost().held(until(pause_end.timestamp()));
+    assert_eq!(
+        stranded_paused().run(instant, &zdt(2026, 6, 24, 8, 30, 0)),
+        carry(at.timestamp()),
+        "a lost runner past the grace is carried while paused"
+    );
+    assert_eq!(
+        stranded_paused().run(instant, &woke),
+        fire(woke.timestamp()),
+        "and fires at the first live tick after the pause"
+    );
     assert_eq!(
         Tick::default()
             .held(until(pause_end.timestamp()))
@@ -2220,6 +2282,136 @@ fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
         (None, None),
         "first sight past the instant while paused waits unstamped"
     );
+}
+
+/// The pass reads a stamped `fire-at` row's runner past the grace: a held run
+/// lock or a recorded attempt keeps it carried, and only a `start failed` row
+/// since the stamp leaves it lost.
+#[test]
+fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
+    const STRANDED: &str = "stranded-fire-at";
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    std::fs::create_dir_all(&runtime.locks_dir).unwrap();
+    let now = zdt(2026, 6, 24, 9, 0, 0);
+    let stamp = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
+    let task = LoadedTask::new(
+        STRANDED,
+        TaskEntry {
+            agent: Some("claude".to_owned()),
+            prompt: Some("do it".to_owned()),
+            root: root.path().to_path_buf(),
+            fire_at: Some(seconds_before(stamp, 60)),
+            ..TaskEntry::default()
+        },
+        TaskSource::Config,
+    );
+    let tasks = BTreeMap::from([(STRANDED.to_owned(), task.clone())]);
+    let pass = || {
+        write_temp_then_rename_cache(
+            &state_path(&runtime),
+            &BTreeMap::from([(STRANDED.to_owned(), stamp)]),
+        )
+        .unwrap();
+        let fired = fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        );
+        (fired, last_stamps(&runtime)[STRANDED])
+    };
+    let record = |result| {
+        let _ = run_log::record_transition(
+            &task,
+            &LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0),
+        );
+    };
+
+    let lock = runtime.lock_path(super::super::run_lock::file_name(STRANDED, None));
+    let crate::disk::lease::LeaseAttempt::Acquired(held) =
+        crate::disk::lease::claim(&lock, |_| Ok(())).unwrap()
+    else {
+        panic!("the test's run lock is free");
+    };
+    assert_eq!(pass(), (vec![], stamp), "a held run lock is a live runner");
+    drop(held);
+
+    record(LoopRunResult::StartFailed);
+    assert_eq!(
+        pass(),
+        (vec![STRANDED.to_owned()], now.timestamp()),
+        "a start failure since the stamp leaves the runner lost"
+    );
+
+    record(LoopRunResult::Delivered);
+    assert_eq!(
+        pass(),
+        (vec![], stamp),
+        "a recorded attempt since the stamp is not retried"
+    );
+}
+
+/// A resident `fire-at` row whose launch is ledgered is left out of the pass,
+/// stamp and all, and fires on its first live sight once the ledger clears.
+#[test]
+fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    let now = zdt(2026, 6, 24, 9, 0, 0);
+    let stamp = seconds_before(now.timestamp(), 600);
+    let tasks = one(loaded(TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("do it".to_owned()),
+        root: root.path().to_path_buf(),
+        stay: true,
+        fire_at: Some(seconds_before(stamp, 60)),
+        ..TaskEntry::default()
+    }));
+    let ledger = super::super::launch_ledger::path(&paths);
+    crate::disk::atomic::write_temp_then_rename(
+        &ledger,
+        &one(BTreeMap::from([(
+            root.path().to_owned(),
+            super::super::launch_ledger::LaunchRecord {
+                destination: None,
+                at: stamp,
+                leader: "otter".into(),
+            },
+        )])),
+    )
+    .unwrap();
+    write_temp_then_rename_cache(&state_path(&runtime), &one(stamp)).unwrap();
+    let pass = || {
+        fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        )
+    };
+
+    assert!(
+        pass().is_empty(),
+        "a launched resident row is not dispatched"
+    );
+    assert!(
+        !last_stamps(&runtime).contains_key(NAME),
+        "and its stamp is dropped"
+    );
+    std::fs::remove_file(&ledger).unwrap();
+    assert_eq!(
+        pass(),
+        vec![NAME],
+        "it fires on first live sight once cleared"
+    );
+    assert_eq!(last_stamps(&runtime)[NAME], now.timestamp());
 }
 
 #[test]

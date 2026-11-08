@@ -2332,7 +2332,8 @@ impl<'a> TaskFire<'a> {
         if let Some(at) = at {
             record.at = at;
         }
-        // A `fire-at` row gets one scheduled attempt, whatever its result.
+        // A recorded scheduled attempt ends a `fire-at` row, whatever its
+        // result; a dispatch that never records is retried by the clock pass.
         if self.mode == LoopRunMode::Scheduled
             && self.entry.fire_at.is_some()
             && let Err(err) = self.remove_schedule()
