@@ -597,6 +597,8 @@ a wait --check true
 target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" wait --check true
 ```
 
+The room drains the fed SessionStart asynchronously, so the first command run right after the feed can still refuse with `the calling agent has not registered a real session yet`. Retry it after a few seconds.
+
 To feed a provider other than the stub's own (`--source codex`), run plain `sandbox in` with `RIMZ_AGENT_PID` set to the stub's pid from its card: `--as` binds the feed to the stub's own row. `hooks feed` returns before the drainer applies the event, so poll the read until `last_activity` moves rather than reading once.
 
 A feed from another provider records its ask, and `rz asks --json` shows it, but the card shows only for an agent of that provider's kind. To check that provider's card, give the room a stub of that kind. Copy the room's Claude stub to `$ROOT/home/bin/<kind>` and make its `--version` print a version the adapter accepts. Then install that provider's hooks with `rz hooks install <kind>`, launch the stub with `rz agents launch <kind> --isolation host -w probe`, and feed through the handle `sandbox in` lists for it (`@opencode#probe`), not the petname the launch prints.
