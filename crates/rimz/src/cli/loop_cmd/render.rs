@@ -2166,6 +2166,7 @@ fn write_last_run(
     let record = &records[idx];
     if record.mode != Some(LoopRunMode::Manual)
         && record.signal.is_none()
+        && record.late_ms.is_none()
         && record.run_id.is_none()
     {
         let mut summary = record.clone();
@@ -2383,6 +2384,9 @@ fn write_log_records(
             )?;
             if let Some(exit) = run_report::detail_exit_segment(record) {
                 write!(out, " · {exit}")?;
+            }
+            if let Some(late) = late_note(record) {
+                write!(out, " · {late}")?;
             }
         }
         for note in row.fire_notes() {
@@ -3061,6 +3065,7 @@ struct RunRowKey<'a> {
     target: Option<&'a str>,
     skipped: bool,
     waited: bool,
+    late_ms: Option<u64>,
 }
 
 impl<'a> RunRowKey<'a> {
@@ -3076,6 +3081,7 @@ impl<'a> RunRowKey<'a> {
             target: record.target.as_deref(),
             skipped: skipped > 0,
             waited: waited > 0,
+            late_ms: record.late_ms,
         }
     }
 }
@@ -3521,11 +3527,28 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
     let queued = record
         .throttle_wait_ms
         .map(|waited| format!("queued {}", format_duration_ms(waited)));
-    let note = match (queued, note) {
-        (Some(queued), Some(note)) => Some(format!("{queued} · {note}")),
-        (queued, note) => queued.or(note),
+    let notes = [late_note(record), queued, note]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    checkout_note(
+        record.checkout.as_deref(),
+        (!notes.is_empty()).then(|| notes.join(" · ")),
+    )
+}
+
+/// `fired 2d 3h late` for a one-shot no clock saw at its instant.
+pub(super) fn late_note(record: &LoopRunRecord) -> Option<String> {
+    let late = record.late_ms?;
+    let minutes = late / 60_000;
+    let label = match (minutes / 1_440, minutes / 60 % 24, minutes % 60) {
+        (0, 0, _) => format_duration_ms(late),
+        (0, hours, 0) => format!("{hours}h"),
+        (0, hours, minutes) => format!("{hours}h {minutes}m"),
+        (days, 0, _) => format!("{days}d"),
+        (days, hours, _) => format!("{days}d {hours}h"),
     };
-    checkout_note(record.checkout.as_deref(), note)
+    Some(format!("fired {label} late"))
 }
 
 fn checkout_note(checkout: Option<&Path>, note: Option<String>) -> Option<String> {

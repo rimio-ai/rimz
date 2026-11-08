@@ -388,6 +388,12 @@ pub enum ScheduleErr {
     EveryNeedsAt { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
     BadTime { name: String, value: String },
+    #[error(
+        "schedule `{name}` has an invalid one-shot time `{value}`; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
+    )]
+    BadOnceAt { name: String, value: String },
+    #[error("schedule `{name}` has a one-shot time `{value}` in the past")]
+    PastOnceAt { name: String, value: String },
     #[error("schedule `{name}` has an invalid cron expression `{value}`; expected 5 fields")]
     BadCron { name: String, value: String },
     #[error(
@@ -964,17 +970,82 @@ impl TaskTiming {
     }
 }
 
-pub fn delayed_at(duration: Duration) -> anyhow::Result<String> {
-    let mut target = Timestamp::now()
-        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
-        .checked_add(duration)
-        .context("resolving --in against the configured clock")?;
-    if target.second() != 0 || target.subsec_nanosecond() != 0 {
-        target = target
-            .checked_add(Duration::from_secs((60 - target.second()) as u64))
-            .context("rounding --in to the next scheduler minute")?;
+/// The instant a one-shot `--in` fires: `delay` after `now`, rounded up to the next whole
+/// minute, so its `once at` label names the minute the scheduler fires it.
+pub fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timestamp> {
+    const MINUTE: i128 = 60_000_000_000;
+    let target = now
+        .checked_add(delay)
+        .context("resolving --in against the clock")?
+        .as_nanosecond();
+    let rounded = target.div_euclid(MINUTE) * MINUTE
+        + if target.rem_euclid(MINUTE) == 0 {
+            0
+        } else {
+            MINUTE
+        };
+    Timestamp::from_nanosecond(rounded).context("rounding --in to the next scheduler minute")
+}
+
+/// Resolve a one-shot `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`) to the first
+/// matching instant strictly after `now`, in `now`'s zone. A dated time at or before `now` is
+/// refused as in the past.
+pub fn resolve_once_at(name: &str, raw: &str, now: &Zoned) -> Result<Timestamp, ScheduleErr> {
+    let bad = || ScheduleErr::BadOnceAt {
+        name: name.to_owned(),
+        value: raw.to_owned(),
+    };
+    let trimmed = raw.trim();
+    let (day, time) = match trimmed.split_once(' ') {
+        Some((day, time)) => (Some(day), time),
+        None => (None, trimmed),
+    };
+    if time.starts_with(char::is_whitespace) {
+        return Err(bad());
     }
-    Ok(format!("{:02}:{:02}", target.hour(), target.minute()))
+    let time = time.parse::<ClockTime>().map_err(|_| bad())?;
+    let at = |date: jiff::civil::Date| {
+        date.at(time.hour() as i8, time.minute() as i8, 0, 0)
+            .to_zoned(now.time_zone().clone())
+            .map(|zoned| zoned.timestamp())
+            .map_err(|_| bad())
+    };
+    let Some(day) = day else {
+        let today = at(now.date())?;
+        if today > now.timestamp() {
+            return Ok(today);
+        }
+        return at(now.date().tomorrow().map_err(|_| bad())?);
+    };
+    if let Some(weekday) = parse_weekday(day) {
+        let mut date = now.date();
+        loop {
+            if date.weekday() == weekday {
+                let candidate = at(date)?;
+                if candidate > now.timestamp() {
+                    return Ok(candidate);
+                }
+            }
+            date = date.tomorrow().map_err(|_| bad())?;
+        }
+    }
+    let is_iso_date = day.len() == 10
+        && day.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        });
+    let date: jiff::civil::Date = is_iso_date
+        .then(|| day.parse().ok())
+        .flatten()
+        .ok_or_else(bad)?;
+    let candidate = at(date)?;
+    if candidate <= now.timestamp() {
+        return Err(ScheduleErr::PastOnceAt {
+            name: name.to_owned(),
+            value: raw.to_owned(),
+        });
+    }
+    Ok(candidate)
 }
 
 /// Validate a schedule name: non-empty and limited to a filesystem- and

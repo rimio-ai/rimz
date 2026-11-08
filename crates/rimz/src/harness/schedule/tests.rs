@@ -1535,3 +1535,156 @@ fn task_timing_state_precedence_and_classification() {
         assert!(matches!(timing.state(&entry, &now), Due(_)), "{label}");
     }
 }
+
+fn zoned_in(
+    tz: &str,
+    (year, month, day): (i16, i8, i8),
+    (hour, minute, second): (i8, i8, i8),
+) -> Zoned {
+    date(year, month, day)
+        .at(hour, minute, second, 0)
+        .in_tz(tz)
+        .expect("zoned test time")
+}
+
+#[test]
+fn once_at_resolves_to_the_first_matching_instant_after_now() {
+    for tz in ["UTC", "America/New_York"] {
+        // Wednesday 2026-11-04, 14:01:20.
+        let now = zoned_in(tz, (2026, 11, 4), (14, 1, 20));
+        let at = |ymd, hm: (i8, i8)| zoned_in(tz, ymd, (hm.0, hm.1, 0)).timestamp();
+        for (raw, expected, label) in [
+            (
+                "14:00",
+                at((2026, 11, 5), (14, 0)),
+                "earlier today is tomorrow",
+            ),
+            (
+                "14:01",
+                at((2026, 11, 5), (14, 1)),
+                "the same minute is tomorrow",
+            ),
+            ("14:02", at((2026, 11, 4), (14, 2)), "later today is today"),
+            (
+                "2026-11-10 09:30",
+                at((2026, 11, 10), (9, 30)),
+                "a future date",
+            ),
+            (
+                "wed 15:00",
+                at((2026, 11, 4), (15, 0)),
+                "today with the time ahead",
+            ),
+            (
+                "Wednesday 14:00",
+                at((2026, 11, 11), (14, 0)),
+                "today with it passed",
+            ),
+            ("fri 09:00", at((2026, 11, 6), (9, 0)), "another day"),
+            ("14:02 ", at((2026, 11, 4), (14, 2)), "a trailing space"),
+            (" fri 09:00", at((2026, 11, 6), (9, 0)), "a leading space"),
+        ] {
+            assert_eq!(
+                resolve_once_at("m", raw, &now),
+                Ok(expected),
+                "{tz} {raw}: {label}"
+            );
+        }
+        for raw in ["2026-11-04 14:01", "2025-01-01 00:00"] {
+            assert_eq!(
+                resolve_once_at("m", raw, &now),
+                Err(ScheduleErr::PastOnceAt {
+                    name: "m".to_owned(),
+                    value: raw.to_owned()
+                }),
+                "{tz} {raw}"
+            );
+        }
+        for raw in [
+            "7am",
+            "24:00",
+            "2026-11-10T09:30",
+            "2026-11-10  09:30",
+            "funday 09:00",
+            "",
+        ] {
+            let error = resolve_once_at("m", raw, &now).unwrap_err();
+            assert_eq!(
+                error,
+                ScheduleErr::BadOnceAt {
+                    name: "m".to_owned(),
+                    value: raw.to_owned()
+                },
+                "{tz} {raw:?}"
+            );
+            let message = error.to_string();
+            for form in ["`HH:MM`", "`YYYY-MM-DD HH:MM`", "`<weekday> HH:MM`"] {
+                assert!(message.contains(form), "{message}");
+            }
+        }
+    }
+
+    let new_york = "America/New_York";
+    // Spring forward: 02:30 on 2027-03-14 does not exist and resolves past the gap.
+    let spring = resolve_once_at("m", "02:30", &zoned_in(new_york, (2027, 3, 13), (12, 0, 0)))
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::get(new_york).unwrap());
+    assert_eq!(
+        (spring.date(), spring.hour(), spring.minute()),
+        (date(2027, 3, 14), 3, 30)
+    );
+    // Fall back: 01:30 on 2026-11-01 happens twice; the first (EDT) wins.
+    assert_eq!(
+        resolve_once_at(
+            "m",
+            "sun 01:30",
+            &zoned_in(new_york, (2026, 10, 31), (12, 0, 0))
+        ),
+        Ok("2026-11-01T05:30:00Z".parse().unwrap())
+    );
+}
+
+#[test]
+fn delayed_instant_rounds_up_to_the_next_whole_minute() {
+    let now = zdt(2026, 11, 4, 14, 1, 20).timestamp();
+    let minute = |day, hour, minute| Ok(zdt(2026, 11, day, hour, minute, 0).timestamp());
+    let delayed = |delay| delayed_instant(delay, now).map_err(|error| error.to_string());
+    assert_eq!(delayed(Duration::from_secs(30 * 60)), minute(4, 14, 32));
+    assert_eq!(delayed(Duration::from_secs(41)), minute(4, 14, 3));
+    assert_eq!(
+        delayed(Duration::from_secs(40)),
+        minute(4, 14, 2),
+        "a sum on the minute stays"
+    );
+    assert_eq!(delayed(Duration::from_secs(3 * 86_400)), minute(7, 14, 2));
+    assert_eq!(
+        delayed_instant(
+            Duration::from_secs(30 * 60),
+            zdt(2026, 11, 4, 14, 0, 0).timestamp()
+        )
+        .map_err(|error| error.to_string()),
+        minute(4, 14, 30),
+        "an exact minute stays"
+    );
+}
+
+/// A stored bare `at` row keeps its calendar meaning: a clock down across its
+/// minute and midnight fires it at its time of day on the next day it sees, and
+/// a clock back after that minute fires it at once.
+#[test]
+fn legacy_once_calendar_fires_on_its_time_of_day_after_a_missed_midnight() {
+    let once = schedule_of(&entry(Some("07:00"), None, None));
+    let armed = zdt(2026, 6, 24, 6, 0, 0).timestamp();
+    assert!(
+        !once.due(armed, &zdt(2026, 6, 25, 6, 30, 0)),
+        "before its time of day"
+    );
+    assert!(
+        once.due(armed, &zdt(2026, 6, 25, 7, 0, 0)),
+        "a day late, at its time"
+    );
+    assert!(
+        once.due(armed, &zdt(2026, 6, 25, 8, 0, 0)),
+        "after its time, at once"
+    );
+}

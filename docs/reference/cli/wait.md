@@ -27,7 +27,7 @@ Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or `--run`. With
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | `--label <TEXT>` | all triggers | Short description of 1 to 60 characters after trimming, on one line. |
-| `--in <DURATION>` | timer | Fire once after this delay. Greater than zero and less than `24h`. |
+| `--in <DURATION>` | timer | Fire once after this delay. Greater than zero. |
 | `--pid <PID>` | process | Fire once this existing process is gone. `1` to `2147483647`. |
 | `--run <COMMAND>` | command | Run the command in a detached watcher and fire on its exit. |
 | `--check <CMD>` | check | Poll a shell command until it succeeds (or fails with `--on fail`). |
@@ -48,7 +48,7 @@ Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the works
 $ rimz wait --run 'cargo test'
 armed wait-solid-pixel: watch: cargo test → @coder (check-in 30m)
 @coder · 2 waits
-  wait-bold-comet   pending · fires in 28m         once at 14:32
+  wait-bold-comet   pending · fires in 28m         once at 2026-11-08 14:32
   wait-solid-pixel  watching 0s · check-in in 30m  cargo test
 ```
 
@@ -71,7 +71,7 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `--every requires --check` | An interval on another trigger. |
 | `--check-in requires --pid, --check, --file, or --run` | `--check-in` with `--in`. |
 | `<flag> must be greater than zero` | Zero for `--in`, `--check-in`, or `--every`. |
-| `<flag> must be less than 24h` | `24h` or more for `--in`, `--check-in`, or `--every`. |
+| `<flag> must be less than 24h` | `24h` or more for `--check-in` or `--every`. |
 | `--file <path> is a directory; watch a file` | The path names a directory. |
 | `cannot watch PID <PID>: permission denied; choose a process owned by your user` | The caller may not signal that process. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
@@ -84,7 +84,7 @@ A failed arm leaves no wait row. A sandboxed wait may refuse before any write wh
 
 ### Timer: `--in`
 
-A timer fires once. RimZ adds the delay to the current time in the configured timezone and rounds up to the next whole minute, so `rimz wait --in 30m` armed at 14:01:20 fires at 14:32. The list shows it as `once at 14:32` with the state `due 14:32`. Firing needs a clock: the room's sidebar host, or the [loop timer](./loop.md#timer) when no room is open.
+A timer fires once. RimZ adds the delay to the current time and rounds up to the next whole minute, so `rimz wait --in 30m` armed at 14:01:20 fires at 14:32. The list shows it as `once at 2026-11-08 14:32` (the date and time in the configured timezone) with the state `due 14:32`. A timer no clock saw at its minute fires on the first clock that sees it, however late. Firing needs a clock: the room's sidebar host, or the [loop timer](./loop.md#timer) when no room is open.
 
 ### Existing process: `--pid`
 
@@ -191,7 +191,7 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 
 ## List pending waits
 
-`rimz wait list` (alias `ls`, or bare `rimz wait`) shows your own waits from an agent pane. Its header is `<handle> · N waits`, or `<handle> · no waits`. Each self wait has its name, state, and trigger, without terminal-width clipping. Lost watches come first, then watches past check-in, then longest elapsed first, with names breaking ties. A label replaces the watch's subject; otherwise the trigger is the PID, command, check, or file subject, or `once at HH:MM` for a timer. A worktree suffix (`· in <worktree>`) appears only when the row belongs to a different checkout from the reading command.
+`rimz wait list` (alias `ls`, or bare `rimz wait`) shows your own waits from an agent pane. Its header is `<handle> · N waits`, or `<handle> · no waits`. Each self wait has its name, state, and trigger, without terminal-width clipping. Lost watches come first, then watches past check-in, then longest elapsed first, with names breaking ties. A label replaces the watch's subject; otherwise the trigger is the PID, command, check, or file subject, or `once at YYYY-MM-DD HH:MM` for a timer. A worktree suffix (`· in <worktree>`) appears only when the row belongs to a different checkout from the reading command.
 
 | Row | Displayed state |
 | --- | --- |

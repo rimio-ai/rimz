@@ -117,6 +117,10 @@ pub struct LoopRunRecord {
     /// How long the start throttle held the run before admitting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throttle_wait_ms: Option<u64>,
+    /// How far past its `fire-at` instant a scheduled one-shot started, present only when no
+    /// clock saw the instant (two minutes or more).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<RunLockInfo>,
     /// The lock tenure held by this fire, including when the stop ladder writes its record.
@@ -201,6 +205,7 @@ impl LoopRunRecord {
             mode: Some(mode),
             duration_ms: Some(duration_ms),
             throttle_wait_ms: None,
+            late_ms: None,
             holder: None,
             run_lock: None,
             error: None,

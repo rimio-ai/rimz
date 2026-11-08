@@ -206,15 +206,16 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
     if args.check_in.is_some() && args.in_after.is_some() {
         bail!("--check-in requires --pid, --check, --file, or --run");
     }
-    for (name, duration) in [
-        ("--in", args.in_after),
-        ("--check-in", args.check_in),
-        ("--every", args.every),
+    for (name, duration, capped) in [
+        ("--in", args.in_after, false),
+        ("--check-in", args.check_in, true),
+        ("--every", args.every, true),
     ] {
         if duration.is_some_and(|duration| duration.is_zero()) {
             bail!("{name} must be greater than zero");
         }
-        if duration.is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60)) {
+        if capped && duration.is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60))
+        {
             bail!("{name} must be less than 24h");
         }
     }

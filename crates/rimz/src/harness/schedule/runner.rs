@@ -160,6 +160,10 @@ pub struct PreparedDelivery {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one plan per fire, moved once to its caller; boxing the finished record buys nothing"
+)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
@@ -417,6 +421,10 @@ pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The lateness a `fire-at` fire records: an on-time fire lands within one 60 s clock tick plus
+/// spawn time, so two minutes or more means no clock saw the instant.
+const LATE_FIRE_MS: u64 = 120_000;
+
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
 pub struct TaskFire<'a> {
     name: String,
@@ -449,6 +457,8 @@ pub struct TaskFire<'a> {
     check_interrupts: Option<throttle::Interrupts>,
     throttle_turn: Option<throttle::Turn>,
     throttle_wait: Option<Duration>,
+    /// How far past its `fire-at` instant a scheduled one-shot started, taken at construction.
+    late_ms: Option<u64>,
     resident_groups: Vec<throttle::StartGroup>,
     fired_guard: Vec<FiredCheck>,
     pending: Option<PendingEffect>,
@@ -477,6 +487,11 @@ impl<'a> TaskFire<'a> {
         let action = task.action().cloned().map_err(Clone::clone)?;
         let entry = task.entry().clone();
         let ephemeral = task.is_ephemeral();
+        let late_ms = entry
+            .fire_at
+            .filter(|_| mode == LoopRunMode::Scheduled)
+            .and_then(|at| u64::try_from(now.duration_since(at).as_millis()).ok())
+            .filter(|late| *late >= LATE_FIRE_MS);
         Ok(Self {
             name,
             task,
@@ -508,6 +523,7 @@ impl<'a> TaskFire<'a> {
             check_interrupts: None,
             throttle_turn: None,
             throttle_wait: None,
+            late_ms,
             fired_guard: Vec::new(),
             pending: None,
             finished: false,
@@ -2263,6 +2279,7 @@ impl<'a> TaskFire<'a> {
         record.throttle_wait_ms = self
             .throttle_wait
             .map(|waited| u64::try_from(waited.as_millis()).unwrap_or(u64::MAX));
+        record.late_ms = self.late_ms;
         if self.entry.stay || self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
         }

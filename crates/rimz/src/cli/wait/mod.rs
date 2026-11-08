@@ -54,7 +54,7 @@ struct WaitArgs {
     /// Short description, one line of 1–60 characters after trimming.
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
     label: Option<String>,
-    /// Wait out this duration once (less than 24h).
+    /// Wait out this duration once.
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
     /// Wait for this existing process to disappear; its exit status is not available.
