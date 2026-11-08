@@ -101,6 +101,13 @@ pub trait AttemptHost {
         push: &crate::store::workflow::PushBack,
         text: &str,
     ) -> Result<Pushed, WorkflowErr>;
+    /// Queue a subscribed signal for the leader's next done boundary under `message`.
+    fn forward(
+        &self,
+        run: &AttemptRun,
+        message: &crate::ids::MessageId,
+        text: &str,
+    ) -> Result<(), WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
     fn detach(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
 }

@@ -6,6 +6,7 @@
 
 mod agent_check;
 mod prompt;
+pub(in crate::harness) use prompt::signal_details;
 pub use prompt::signal_subject;
 mod reminder;
 

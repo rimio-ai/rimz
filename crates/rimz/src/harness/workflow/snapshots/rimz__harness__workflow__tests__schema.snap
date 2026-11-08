@@ -424,6 +424,15 @@ expression: value
             "null"
           ]
         },
+        "subscribe": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "summary": {
           "type": [
             "string",

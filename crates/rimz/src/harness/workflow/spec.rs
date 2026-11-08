@@ -49,9 +49,17 @@ impl WorkflowSpec {
         node == "@break" && self.route_defaults == RouteDefaults::OnBreak
     }
 
-    /// `Some(empty)` demands checkout facts; `None` means no condition or wake needs them.
+    /// `Some(empty)` demands checkout facts; `None` means no condition, wake or subscription needs
+    /// them.
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
+        for step in self.steps.values() {
+            for (selector, matches) in step.subscriptions()? {
+                if schedule::arm::default_signal_match_key(&selector, &matches) == Some("path") {
+                    branches.get_or_insert_with(BTreeSet::new);
+                }
+            }
+        }
         for check in self.checks.values() {
             if !matches!(check.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
                 for wake in check.wake.iter().flatten() {
@@ -449,6 +457,7 @@ pub struct Step {
     pub window: Option<String>,
     pub takeover: Option<bool>,
     pub share: Option<bool>,
+    pub(super) subscribe: Option<Vec<Wake>>,
     #[schemars(with = "Option<String>")]
     pub throttle: Option<crate::config::ThrottleSwitch>,
     #[schemars(with = "Option<String>")]
@@ -572,6 +581,45 @@ pub enum StepKind<'a> {
 }
 
 impl Step {
+    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
+        self.subscribe
+            .iter()
+            .flatten()
+            .map(Wake::subscription)
+            .collect()
+    }
+
+    /// Each subscription's selector beside the scope a forward resolves it to, in definition order.
+    pub fn subscription_labels(&self) -> Result<Vec<(String, String)>, SpecErr> {
+        Ok(self
+            .subscriptions()?
+            .into_iter()
+            .map(|(selector, matches)| {
+                let scope = match schedule::arm::default_signal_match_key(&selector, &matches) {
+                    Some("path") => Some("for this checkout"),
+                    Some("instance") if !matches.contains_key("board") => {
+                        Some("for this checkout's team board")
+                    }
+                    _ => None,
+                };
+                let filter = (!matches.is_empty()).then(|| {
+                    let pairs = matches
+                        .iter()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>();
+                    format!("where {}", pairs.join(", "))
+                });
+                let label = match (scope, filter) {
+                    (Some(scope), Some(filter)) => format!("{scope} {filter}"),
+                    (Some(scope), None) => scope.into(),
+                    (None, Some(filter)) => filter,
+                    (None, None) => "anywhere in the room".into(),
+                };
+                (selector.to_string(), label)
+            })
+            .collect())
+    }
+
     pub fn lifecycle(&self) -> StepLifecycle {
         self.lifecycle.unwrap_or(match self.kind() {
             Some(StepKind::Agent(_)) => StepLifecycle::Until,
@@ -723,6 +771,7 @@ fn parse_with_defaults(
                 window: None,
                 takeover: None,
                 share: None,
+                subscribe: None,
                 throttle: None,
                 capacity_wait: None,
                 limit: None,

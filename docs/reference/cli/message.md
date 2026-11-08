@@ -176,7 +176,7 @@ Read plan.md when the planner finishes.
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent | `@rimz` |
 | `WAIT` | A [`rimz wait`](./wait.md) delivery, or a loop `--wait` delivery not triggered by a signal | `@rimz` |
 | `CACHE_KEEPALIVE` | A facts-only prompt-cache ping for a sleeping agent | `@rimz` |
-| `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery | `@rimz` |
+| `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery, or a signal a workflow step [subscribes](./workflow.md#run-a-workflow) to | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
 
 Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED` notice per message. `--wait` senders get neither; the wait reports failures directly. A queued notice does not expire or resend the message. Unmet `--schedule`, `--after`, and `--when` conditions suppress queued notices. Notices go to the sender's live card and appear in `rimz message list --system`.

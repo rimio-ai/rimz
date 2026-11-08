@@ -270,7 +270,7 @@ pub fn signal_subject(
 
 /// The lines under the verdict: nothing for a built-in family, whose agent
 /// can ask the CLI, and every top-level field for a custom one.
-fn signal_details(signal: &Signal) -> Vec<String> {
+pub(in crate::harness) fn signal_details(signal: &Signal) -> Vec<String> {
     if !signal.name.is_reserved() {
         return signal
             .payload

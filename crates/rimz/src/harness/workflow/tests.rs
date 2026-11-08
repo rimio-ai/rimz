@@ -28,6 +28,9 @@ pub(super) struct FakeHost {
     push_calls: RefCell<Vec<crate::ids::MessageId>>,
     push_error: Cell<bool>,
     on_push: RefCell<Option<Box<dyn Fn()>>>,
+    forwards: RefCell<Vec<(crate::ids::MessageId, String)>>,
+    forward_calls: Cell<usize>,
+    forward_error: Cell<bool>,
 }
 
 impl FakeHost {
@@ -62,6 +65,9 @@ impl FakeHost {
             push_calls: RefCell::new(Vec::new()),
             push_error: Cell::new(false),
             on_push: RefCell::new(None),
+            forwards: RefCell::new(Vec::new()),
+            forward_calls: Cell::new(0),
+            forward_error: Cell::new(false),
         }
     }
 }
@@ -166,6 +172,22 @@ impl AttemptHost for FakeHost {
             .entry(push.message.clone())
             .or_insert_with(|| text.into());
         Ok(Pushed { queued: true })
+    }
+
+    fn forward(
+        &self,
+        _: &AttemptRun,
+        message: &crate::ids::MessageId,
+        text: &str,
+    ) -> Result<(), WorkflowErr> {
+        self.forward_calls.set(self.forward_calls.get() + 1);
+        if self.forward_error.get() {
+            return Err(WorkflowErr::Refused("leader left the room".into()));
+        }
+        self.forwards
+            .borrow_mut()
+            .push((message.clone(), text.into()));
+        Ok(())
     }
 
     fn detach(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {

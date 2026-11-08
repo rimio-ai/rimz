@@ -336,7 +336,7 @@ A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held c
 
 A condition reading `window.*` requires `provider = "claude"` (an agent kind, not a profile) and accepts an optional `account = "work"`. An unknown provider or a provider without a window term warns and is ignored; an account without a remaining provider does too. Window terms still require a provider after ignoring. `team.stage` values are checked against the project's effective teams plus `Done`; validation outside a workspace warns that stage names were not checked.
 
-A waiting check without `recheck_at` runs again about once a minute. A signal matching the current check's subscription clears `recheck_at` and runs it at once. A check with no subscription gets only its recheck time and the minute tick; signals never wake a step.
+A waiting check without `recheck_at` runs again about once a minute. A signal matching the current check's subscription clears `recheck_at` and runs it at once. A check with no subscription gets only its recheck time and the minute tick. A signal never wakes a step, but a staying step can [receive one as a message](#hand-signals-to-a-staying-agent).
 
 A condition derives these subscriptions from all its cases, including negated terms:
 
@@ -358,6 +358,22 @@ wake = ["ci.failed", { signal = "deploy.finished", match = { env = "prod" } }]
 ```
 
 Each entry is a selector string or a table with a required string `signal` and optional `match`; unknown table keys warn and are ignored. Selectors and match values use the [loop signal grammar](../reference/cli/loop.md#signals). `ci` and `pr` default to the run's checkout `path`, unless the entry explicitly matches `path` or `branch`. `team.stage` defaults to the run's current board, unless the entry matches `team`, `instance`, or `board`; relinking the checkout changes which board wakes it. Other families, such as `review.ready`, are room-wide unless given match filters. For example, `{ signal = "ci.failed", match = { path = "*" } }` accepts any checkout. Project-scoped runs use the project root for these defaults. An invalid selector or match, an agent lifecycle selector, or a team selector other than exact `team.stage` warns and drops only that entry, keeping the others.
+
+### Hand signals to a staying agent
+
+A check's `wake` re-runs a script; it tells the agent nothing. A fixer that stays open across turns often needs the news itself: CI failed again, a reviewer asked for changes. Without a subscription it learns only when the check sends the run back. `subscribe` on a `stay` or `until` agent step delivers each matching signal to that step's agent as a message:
+
+```toml
+[steps.fix]
+summary = "Keep the PR green"
+agent = "claude"
+prompt-file = "prompts/fix.md"
+lifecycle = "until"
+then = "pr"
+subscribe = ["ci.failed", { signal = "review.changes", match = { repo = "acme/app" } }]
+```
+
+Entries take the same forms and the same checkout and board defaults as `wake`, and an invalid entry drops alone the same way. Each match is queued for the agent as a `Type: SIGNAL` message from `@rimz` at its next turn boundary, sent at once when it is resting. The message opens with the signal's subject and payload details, as a loop's signal delivery does, then names the workflow, the step and the run, so the agent can run `rimz workflow show <run>`. A forward moves the run nowhere: when the current check also subscribes to the same signal, both take effect. Subscriptions last while the step's agent does; a message still queued when its attempt ends is canceled rather than delivered. The agent's launch brief lists what it subscribes to, and `rimz workflow show --history` prints one `signal` row per forward. `subscribe` on a turn or command step warns and is ignored, since a turn ends where the message would land.
 
 A check that can wait must have a `timeout`, except a sleep, which has its own duration. The timeout starts each time the run enters the check and runs across every wait there. When it passes, the run follows `on.timeout` or on-break; legacy runs park by default. Here each return from `sweep` starts a new two days.
 

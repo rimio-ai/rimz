@@ -560,7 +560,7 @@ Content:
 | `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |
 | `WAIT` | A timer, command, watch, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping ([policy](#prompt-cache-keepalive)) | `@rimz` |
-| `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
+| `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a staying workflow step's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |
 | `STAGE` | A prose-only stage-open delivery from a flip or a resume or registration re-wake | `@rimz` |
 | The notice name, upper-cased | A harness notice this binary does not know (`HarnessNotice::Other`) | `@rimz` |
 

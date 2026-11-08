@@ -102,6 +102,16 @@ pub(super) fn render(name: &str, node: &str) -> Result<()> {
         wakes.push("the minute tick".into());
         facts.push("wakes on", render::cell(wakes.join(", ")));
     }
+    if let Some(step) = step {
+        let receives = step
+            .subscription_labels()?
+            .into_iter()
+            .map(|(selector, scope)| format!("{selector} {scope}"))
+            .collect::<Vec<_>>();
+        if !receives.is_empty() {
+            facts.push("receives", render::cell(receives.join(", ")));
+        }
+    }
     facts.render(&mut out)?;
     let edges = spec.edges(node);
     if let Some(check) = check

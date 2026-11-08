@@ -560,7 +560,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
             (after, questions)
         }
         lifecycle @ (StepLifecycle::Stay | StepLifecycle::Until) => {
-            let after = if lifecycle == StepLifecycle::Stay {
+            let mut after = if lifecycle == StepLifecycle::Stay {
                 format!(
                     "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check {check}."
                 )
@@ -579,6 +579,11 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                     "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
                 )
             };
+            if let Some(subscriptions) = subscriptions(step) {
+                after.push_str(&format!(
+                    " You subscribe to {subscriptions}. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
+                ));
+            }
             (
                 after,
                 "The user may answer in this pane later; a question goes in your final message."
@@ -586,4 +591,18 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
             )
         }
     }
+}
+
+fn subscriptions(step: &Step) -> Option<String> {
+    let mut labels = step
+        .subscription_labels()
+        .ok()?
+        .into_iter()
+        .map(|(selector, scope)| format!("{} {scope}", span(&selector)))
+        .collect::<Vec<_>>();
+    let last = labels.pop()?;
+    Some(match labels.is_empty() {
+        true => last,
+        false => format!("{}, and {last}", labels.join(", ")),
+    })
 }

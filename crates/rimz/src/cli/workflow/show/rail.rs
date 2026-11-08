@@ -150,6 +150,19 @@ impl View<'_> {
                     ));
                     self.cases(row)?;
                 }
+                if let Some(step) = self.spec.steps.get(&row.name) {
+                    let receives = step
+                        .subscriptions()?
+                        .into_iter()
+                        .map(|(selector, _)| selector.to_string())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    if !receives.is_empty() {
+                        row.heading
+                            .push_str(&format!(" · receives {}", receives.join(" ")));
+                    }
+                }
             }
         }
         writeln!(out)?;

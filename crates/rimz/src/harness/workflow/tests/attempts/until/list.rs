@@ -109,6 +109,7 @@ fn listed_second_check_waits_resamples_and_uses_its_own_close_delay() {
                     source: crate::store::event::SignalSource::Cli,
                     watch: None,
                 },
+                &host,
             )
             .unwrap();
             assert!(

@@ -1479,7 +1479,110 @@ pub(crate) fn reassign_task(
     Ok(reassigned)
 }
 
-pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
+/// Fill a run's checkout and board defaults into one subscription before it is matched.
+fn delivers(
+    record: &RunRecord,
+    (selector, mut matches): (
+        crate::harness::schedule::signal::SignalSelector,
+        BTreeMap<String, String>,
+    ),
+    signal: &Signal,
+) -> bool {
+    match arm::default_signal_match_key(&selector, &matches) {
+        Some("path") => {
+            matches.insert(
+                "path".into(),
+                record.scope.path.to_string_lossy().into_owned(),
+            );
+        }
+        Some("instance") if !matches.contains_key("board") => {
+            matches.insert(
+                "board".into(),
+                crate::harness::scratch::durable_board_path(&record.scope.path)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        _ => {}
+    }
+    resolve_subscription(&selector, &matches, signal) == SignalResolution::Deliver
+}
+
+/// A subscribed signal bound for a live staying session's leader.
+struct Forward {
+    step: String,
+    seq: u64,
+    run: workflow::AttemptRun,
+    message: crate::ids::MessageId,
+}
+
+impl Forward {
+    /// The journal row the forward is recorded by, keyed to the session's step and seq.
+    fn entry(&self, signal: &Signal) -> workflow::JournalEntry {
+        workflow::JournalEntry {
+            seq: Some(self.seq),
+            at: Timestamp::now(),
+            node: self.step.clone(),
+            event: JournalEvent::Signal {
+                signal: signal.name.as_str().into(),
+                message: self.message.clone(),
+            },
+        }
+    }
+
+    /// Queue the journaled forward off-lock; a failure leaves the journal row and warns.
+    fn send(&self, host: &dyn AttemptHost, record: &RunRecord, signal: &Signal) {
+        let text = forward_text(record, &self.step, signal);
+        if let Err(error) = host.forward(&self.run, &self.message, &text) {
+            tracing::warn!(
+                run = %record.id, step = %self.step, %error,
+                "could not forward a subscribed signal to the step leader"
+            );
+        }
+    }
+}
+
+/// The live staying session a subscribed signal goes to.
+fn subscriber(spec: &WorkflowSpec, record: &RunRecord, signal: &Signal) -> Result<Option<Forward>> {
+    let Some(attempt) = record.session_attempt() else {
+        return Ok(None);
+    };
+    let (Some(step), Some(run)) = (spec.steps.get(&attempt.node), &attempt.run) else {
+        return Ok(None);
+    };
+    if attempt.lifecycle.is_turn() || attempt.ending.is_some() {
+        return Ok(None);
+    }
+    let subscribed = step
+        .subscriptions()?
+        .into_iter()
+        .any(|subscription| delivers(record, subscription, signal));
+    Ok(subscribed.then(|| Forward {
+        step: attempt.node.clone(),
+        seq: attempt.seq,
+        run: run.clone(),
+        message: crate::ids::MessageId::new(),
+    }))
+}
+
+/// The SIGNAL notice a subscribed step's leader receives.
+fn forward_text(record: &RunRecord, step: &str, signal: &Signal) -> String {
+    let subject = crate::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
+    let mut lines = vec![if subject.is_empty() {
+        signal.name.to_string()
+    } else {
+        format!("{} {subject}", signal.name)
+    }];
+    lines.extend(crate::harness::schedule::runner::signal_details(signal));
+    lines.push(format!(
+        "Workflow `{}` step `{step}` subscribes to this signal (run {id}; `rimz workflow show {id}`).",
+        record.workflow,
+        id = record.id,
+    ));
+    lines.join("\n")
+}
+
+pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Result<()> {
     for record in workflow::list(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
@@ -1489,33 +1592,22 @@ pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
                 return Ok(());
             }
             let spec = spec::load_run(&paths.home, &current)?;
-            let Some(check) = spec.checks.get(&current.node) else {
-                return Ok(());
+            let woken = match spec.checks.get(&current.node) {
+                Some(check) => check
+                    .subscriptions()?
+                    .into_iter()
+                    .any(|subscription| delivers(&current, subscription, signal)),
+                None => false,
             };
-            let subscribed = check
-                .subscriptions()?
-                .into_iter()
-                .any(|(selector, mut matches)| {
-                    match arm::default_signal_match_key(&selector, &matches) {
-                        Some("path") => {
-                            matches.insert(
-                                "path".into(),
-                                current.scope.path.to_string_lossy().into_owned(),
-                            );
-                        }
-                        Some("instance") if !matches.contains_key("board") => {
-                            matches.insert(
-                                "board".into(),
-                                crate::harness::scratch::durable_board_path(&current.scope.path)
-                                    .to_string_lossy()
-                                    .into_owned(),
-                            );
-                        }
-                        _ => {}
-                    }
-                    resolve_subscription(&selector, &matches, signal) == SignalResolution::Deliver
-                });
-            if !subscribed {
+            let forward = subscriber(&spec, &current, signal)?;
+            let entry = forward.as_ref().map(|forward| forward.entry(signal));
+            if !woken {
+                let (Some(forward), Some(entry)) = (forward, entry) else {
+                    return Ok(());
+                };
+                workflow::append(&paths, &entry, &guard)?;
+                drop(guard);
+                forward.send(host, &current, signal);
                 return Ok(());
             }
             let mut t = Transition {
@@ -1541,8 +1633,12 @@ pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
                     signal: signal.name.as_str().into(),
                 },
             );
+            t.entries.extend(entry);
             persist(&mut t, &guard)?;
             drop(guard);
+            if let Some(forward) = forward {
+                forward.send(host, &t.record, signal);
+            }
             spawn(&t.record)
         })();
         if let Err(error) = result {

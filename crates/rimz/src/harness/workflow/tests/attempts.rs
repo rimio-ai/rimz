@@ -23,6 +23,7 @@ mod keep;
 mod reached;
 mod restart;
 mod stops;
+mod subscribe;
 mod until;
 
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {

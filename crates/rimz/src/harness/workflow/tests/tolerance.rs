@@ -766,6 +766,14 @@ fn required_fields_refuse_at_the_exact_dotted_path() {
             format!("{SIMPLE}wake=[5,{{signal=5,match={{a=1}}}}]\n"),
             "checks.pick.wake.1.signal",
         ),
+        (
+            format!("{VALID}subscribe=[{{match={{path='*'}}}}]\n"),
+            "steps.build.subscribe.0.signal",
+        ),
+        (
+            format!("{VALID}subscribe=[5,{{signal=5,match={{a=1}}}}]\n"),
+            "steps.build.subscribe.1.signal",
+        ),
     ]
     .map(|(text, expected)| {
         let path = match loaded(&text) {
@@ -1194,6 +1202,18 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         "{signal='review.ready',match={env=42}}",
     ] {
         cases.push((format!("{SIMPLE}wake=[{wake}]\n"), "checks.pick.wake.0"));
+        cases.push((
+            acyclic
+                .replace("lifecycle = \"turn\"", "lifecycle='stay'")
+                .replace("then='after'", &format!("subscribe=[{wake}]\nthen='after'")),
+            "steps.build.subscribe.0",
+        ));
+    }
+    for definition in [&command, &acyclic] {
+        cases.push((
+            definition.replace("then='after'", "subscribe=['ci.failed']\nthen='after'"),
+            "steps.build.subscribe",
+        ));
     }
     let actual = cases
         .iter()
@@ -1216,6 +1236,8 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "max-visits-per-outcome" => step.max_visits_per_outcome.is_none(),
                             "takeover" => step.takeover.is_none(),
                             "share" => step.share.is_none(),
+                            "subscribe" => step.subscribe.is_none(),
+                            "subscribe.0" => step.subscribe.as_ref().is_some_and(Vec::is_empty),
                             "throttle" => step.throttle.is_none(),
                             "capacity-wait" => step.capacity_wait.is_none(),
                             "on.capacity" => step.on.capacity.is_none(),

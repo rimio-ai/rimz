@@ -770,6 +770,11 @@ pub enum JournalEvent {
     Wake {
         signal: String,
     },
+    /// A signal a staying step subscribes to, queued for its leader as `message`.
+    Signal {
+        signal: String,
+        message: MessageId,
+    },
 }
 
 pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {

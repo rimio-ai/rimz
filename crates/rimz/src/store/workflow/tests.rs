@@ -519,6 +519,12 @@ fn durable_record_round_trip_and_json_shape() {
         (Some(&Value::Null), Some(&Value::Null))
     );
     assert_eq!(encoded.get("routed_by"), Some(&Value::Null));
+    let signal = json!({
+        "event":"signal", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"build",
+        "signal":"ci.failed", "message":crate::ids::MessageId::new()
+    });
+    let decoded: JournalEntry = serde_json::from_value(signal.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), signal);
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
