@@ -586,8 +586,10 @@ fn signal_names(mut signals: Vec<String>) -> String {
 }
 
 pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
-    if let Some(name) = &entry.worktree {
-        return Some(name.clone());
+    match entry.task_worktree() {
+        Some(rimz::config::TaskWorktree::Named(name)) => return Some(name.to_owned()),
+        Some(rimz::config::TaskWorktree::Fresh { prefix }) => return Some(format!("{prefix}-*")),
+        None => {}
     }
     (entry.wait.is_some() || entry.dir.is_some()).then(|| {
         entry

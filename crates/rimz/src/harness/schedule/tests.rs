@@ -702,6 +702,74 @@ fn workflow_rejects_action_and_node_owned_fields() {
 }
 
 #[test]
+fn fresh_worktree_prefix_must_be_a_worktree_name() {
+    for prefix in ["", "v1.2", "a b"] {
+        let entry: TaskEntry = toml::from_str(&format!(
+            "fresh-worktree={prefix:?}\nroot='/r'\nagent='claude'"
+        ))
+        .unwrap();
+        let error = TaskAction::from_entry("task", &entry).unwrap_err();
+        assert_eq!(
+            error,
+            TaskActionErr::InvalidFreshWorktree {
+                name: "task".to_owned(),
+                prefix: prefix.to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "loop task `task` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+            )
+        );
+    }
+    let entry: TaskEntry =
+        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\nagent='claude'").unwrap();
+    assert!(TaskAction::from_entry("task", &entry).is_ok());
+}
+
+#[test]
+fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
+    for (fields, field) in [
+        ("agent='claude'\nstay=true", "stay"),
+        ("agent='claude'\nstay=true\neach-worktree=true", "stay"),
+        ("agent='claude'\neach-worktree=true", "each-worktree"),
+        ("wait={kind='codex', session='s', handle='@x'}", "wait"),
+        ("workflow='review'", "workflow"),
+        ("agent='claude'\nworktree='lane'", "worktree"),
+        ("check='true'\ndir='/tmp/elsewhere'", "dir"),
+    ] {
+        let entry: TaskEntry =
+            toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
+        let error = TaskAction::from_entry("task", &entry).unwrap_err();
+        assert!(
+            matches!(&error, TaskActionErr::FreshWorktreeField { field: got, .. } if *got == field),
+            "{fields}: {error:?}"
+        );
+        assert!(
+            error.to_string().starts_with(&format!(
+                "loop task `task` sets `fresh-worktree` with `{field}`; "
+            )),
+            "{error}"
+        );
+    }
+    let error = TaskAction::from_entry(
+        "task",
+        &toml::from_str("fresh-worktree='p'\ncheck='true'\ndir='/d'").unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "loop task `task` sets `fresh-worktree` with `dir`; remove `dir`; a fresh-worktree task runs its guard and turn in the fire's tree"
+    );
+    for fields in ["agent='claude'", "check='true'"] {
+        let entry: TaskEntry =
+            toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
+        assert!(TaskAction::from_entry("task", &entry).is_ok(), "{fields}");
+    }
+}
+
+#[test]
 fn judges_require_explicit_polarity_and_an_action() {
     for key in ["judge", "check"] {
         let entry: TaskEntry = toml::from_str(&format!(

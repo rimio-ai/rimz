@@ -1803,11 +1803,14 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         struct ShowJson<'a> {
             #[serde(flatten)]
             facts: serde_json::Value,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            fresh_worktree: Option<&'a str>,
             worktrees: Vec<WorktreeJson<'a>>,
             capacity_wait: Option<list::CapacityWaitView>,
         }
         let json = ShowJson {
             facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
+            fresh_worktree: view.entry.fresh_worktree.as_deref(),
             worktrees: worktrees_json(&view),
             capacity_wait: (!view.entry.each_worktree)
                 .then(|| {

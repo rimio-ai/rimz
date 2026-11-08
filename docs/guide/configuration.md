@@ -1032,7 +1032,7 @@ Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project ta
 
 Every task you write here does one thing: `agent` runs one agent cell on a calendar, interval, cron, or one-shot schedule.
 
-`check` guards that run. It is a shell command RimZ runs first: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. `check-timeout` caps it, else `timeout`, else five minutes. The output flows to any judges and then the agent's prompt when it fires. It runs in the task's `dir` when one is set, and at `root` otherwise; `rimz loop add` fills `dir` with the worktree you ran it from.
+`check` guards that run. It is a shell command RimZ runs first: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. `check-timeout` caps it, else `timeout`, else five minutes. The output flows to any judges and then the agent's prompt when it fires. It runs at `root`, or in the fire's fresh worktree when the task sets `fresh-worktree = "<prefix>"` (what `rimz loop add --worktree <prefix>` writes), so the guard reads the tree the agent works in. A `dir`, which `rimz loop add` wrote with the worktree you ran it from in earlier versions and `--wait` still writes, keeps the check in that directory, and `worktree` on an agent task without `stay` still reuses one named worktree every fire; new adds write neither.
 
 When the guard also needs judgment, add `judge` beside `check`. The profile must resolve to one Claude or Codex agent, with exactly one of `prompt` and `prompt-file`, an action, and explicit `on` on the task:
 

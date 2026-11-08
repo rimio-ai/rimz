@@ -1142,7 +1142,8 @@ upward-dependencies = [
 # Room keymap vocabulary, parser, action commands, and resolver serve mux and CLI (+14).
 # Typed key directions, split directions, palette modes, and mode-change classification
 # keep both backend compilers exhaustive (+3).
-surface-budget = 291
+# TaskWorktree and TaskEntry::task_worktree are the one reader of a task's worktree placement (+2).
+surface-budget = 293
 
 [[verdict]]
 kind = "item"
@@ -1393,6 +1394,11 @@ reason = "Room-start and account-list warnings share invalid-label keys, effects
 kind = "item"
 key = "config::loop_::Guard"
 reason = "Borrowed loop guard projection shared with scheduling and the binary's CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::TaskWorktree"
+reason = "A task's named or fresh-per-fire worktree, read by add, list, scheduling and throttle."
 
 [[verdict]]
 kind = "item"

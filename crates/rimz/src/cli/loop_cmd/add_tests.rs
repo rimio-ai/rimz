@@ -47,7 +47,7 @@ fn resident_named_worktree_refuses_fanout_and_scope_reading_conditions() {
         );
         if key != "--each-worktree" {
             assert!(
-                error.contains("scope") && error.contains("pr[<branch>]"),
+                error.contains("project root") && error.contains("pr[<branch>]"),
                 "{error}"
             );
         }
@@ -263,6 +263,66 @@ fn approved_watchdog_receipt_names_the_whole_guard() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no answer after one retry counting as a fail"), "{text}");
+}
+
+#[test]
+fn check_only_worktree_is_a_fresh_prefix_and_receipts_name_the_fire_tree() {
+    let argv = ["--check", "true", "--every", "1h", "--worktree", "nightly"];
+    let check_args = args(&argv);
+    assert_eq!(
+        validate_add_args(&check_args).unwrap(),
+        TaskActionKind::CheckOnly
+    );
+    reject_unsupported_action_flags(&check_args, TaskActionKind::CheckOnly).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let (entry, _) =
+        build_task_entry(&check_args, AddTaskAction::CheckOnly, &workspace, None).unwrap();
+    assert_eq!(entry.fresh_worktree.as_deref(), Some("nightly"));
+    assert_eq!(entry.worktree, None);
+    assert_eq!(entry.dir, None);
+    for prefix in ["", "v1.2"] {
+        let bad = args(&["--check", "true", "--every", "1h", "--worktree", prefix]);
+        let error = build_task_entry(&bad, AddTaskAction::CheckOnly, &workspace, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!(
+                "--worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+            )
+        );
+    }
+
+    for (toml, expected) in [
+        (
+            "check='true'\nevery='1h'\nfresh-worktree='nightly'",
+            "action: runs check in a fresh worktree `nightly-<time>` per fire, branched from trunk",
+        ),
+        (
+            "agent='codex'\nprompt='fix'\nevery='1h'\nfresh-worktree='nightly'\naccount='work'",
+            "action: launches a fresh codex pane on account `work` in a fresh worktree `nightly-<time>` per fire, branched from trunk",
+        ),
+        (
+            "check='true'\nevery='1h'\nroot='/repo'",
+            "action: runs check in /repo",
+        ),
+    ] {
+        let entry: TaskEntry = toml::from_str(toml).unwrap();
+        let shape = schedule::TaskShape::compile("task", &entry);
+        let mut out = Vec::new();
+        write_add_feedback(
+            &mut out,
+            &entry,
+            shape.trigger().as_ref().unwrap(),
+            shape.action().unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.lines().any(|line| line == expected), "{text}");
+    }
 }
 
 fn args(extra: &[&str]) -> AddArgs {

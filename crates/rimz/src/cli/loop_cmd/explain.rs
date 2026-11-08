@@ -27,7 +27,6 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
         args.provider.is_none() && expr.terms().any(|term| term.key.starts_with("window."));
     let entry = TaskEntry {
         root: workspace.project_root.clone(),
-        dir: (workspace.worktree_root != workspace.project_root).then_some(workspace.worktree_root),
         provider: args.provider.map(rimz::ids::AgentKind::new_unchecked),
         account: args.account,
         ..Default::default()

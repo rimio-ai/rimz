@@ -156,6 +156,16 @@ pub enum TaskActionErr {
         field: &'static str,
         hint: &'static str,
     },
+    #[error("loop task `{name}` sets `fresh-worktree` with `{field}`; {hint}")]
+    FreshWorktreeField {
+        name: String,
+        field: &'static str,
+        hint: &'static str,
+    },
+    #[error(
+        "loop task `{name}` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+    )]
+    InvalidFreshWorktree { name: String, prefix: String },
     #[error("loop task `{name}` needs `agent`, `wait`, or `check`")]
     MissingAction { name: String },
     #[error(
@@ -211,6 +221,15 @@ impl TaskAction {
                     });
                 }
             }
+        }
+        if let Some(prefix) = &entry.fresh_worktree {
+            if crate::worktree::parse_requested_name(prefix).is_err() {
+                return Err(TaskActionErr::InvalidFreshWorktree {
+                    name: name.to_owned(),
+                    prefix: prefix.clone(),
+                });
+            }
+            Self::refuse_fresh_worktree_companions(name, entry)?;
         }
         let guard = entry.guard();
         if entry.workflow.is_some() {
@@ -311,6 +330,53 @@ impl TaskAction {
                 name: name.to_owned(),
             }),
         }
+    }
+
+    fn refuse_fresh_worktree_companions(
+        name: &str,
+        entry: &TaskEntry,
+    ) -> Result<(), TaskActionErr> {
+        for (set, field, hint) in [
+            (
+                entry.stay,
+                "stay",
+                "remove `fresh-worktree`; a resident's worktree is `worktree`",
+            ),
+            (
+                entry.each_worktree,
+                "each-worktree",
+                "remove `fresh-worktree`; a fan-out runs in each matching owned worktree",
+            ),
+            (
+                entry.wait.is_some(),
+                "wait",
+                "remove `fresh-worktree`; a wait delivers to a live session and launches nothing",
+            ),
+            (
+                entry.workflow.is_some(),
+                "workflow",
+                "remove `fresh-worktree`; a workflow's steps place their own agents",
+            ),
+            (
+                entry.worktree.is_some(),
+                "worktree",
+                "keep one; `fresh-worktree` creates a new tree each fire, `worktree` reuses one",
+            ),
+            (
+                entry.dir.is_some(),
+                "dir",
+                "remove `dir`; a fresh-worktree task runs its guard and turn in the fire's tree",
+            ),
+        ] {
+            if set {
+                return Err(TaskActionErr::FreshWorktreeField {
+                    name: name.to_owned(),
+                    field,
+                    hint,
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn subject(&self) -> &str {

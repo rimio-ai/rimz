@@ -1159,6 +1159,44 @@ fn spawn_reminder_names_the_configured_default_timeout() {
 }
 
 #[test]
+fn a_hand_written_named_worktree_row_reuses_that_tree_on_every_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("repair".to_owned()),
+        every: Some("1h".to_owned()),
+        root: dir.path().to_owned(),
+        worktree: Some("x".to_owned()),
+        ..TaskEntry::default()
+    };
+    for _ in 0..2 {
+        let fire = TaskFire::new(
+            "legacy",
+            LoadedTask::new("legacy", entry.clone(), catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap();
+        let request = fire
+            .compile_spawn_request(
+                "claude".to_owned(),
+                "repair".to_owned(),
+                ManagedLaunchState::Unsupported,
+            )
+            .unwrap();
+        assert_eq!(request.worktree.as_deref(), Some("x"));
+        assert_eq!(fire.launch_checkout(), dir.path());
+    }
+}
+
+#[test]
 fn spawn_timeout_prefers_task_then_config_then_builtin() {
     use LoopRunMode::{Manual, Scheduled};
     let task = Duration::from_secs(30);

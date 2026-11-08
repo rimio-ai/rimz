@@ -342,8 +342,12 @@ pub struct TaskEntry {
     /// Directory for check/watch commands; the arming worktree, or `root` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
+    /// A resident's seat; on a legacy agent row, the named tree each fire reuses or creates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// The name prefix of the fresh worktree each fire of an agent or check task creates.
+    #[serde(rename = "fresh-worktree", skip_serializing_if = "Option::is_none")]
+    pub fresh_worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -407,6 +411,15 @@ pub struct TaskEntry {
     pub overlap_limit: Option<usize>,
 }
 
+/// Where a task's worktree comes from: one named tree, or a fresh one per fire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskWorktree<'a> {
+    /// A resident's seat, or a legacy agent row's reused tree.
+    Named(&'a str),
+    /// A fresh tree per fire, named `<prefix>-<yyyymmdd-hhmmss>`.
+    Fresh { prefix: &'a str },
+}
+
 /// The ordered guard chain, including a judge from a legacy `check` table.
 pub struct Guard<'a> {
     pub shell: Option<&'a str>,
@@ -421,6 +434,14 @@ impl TaskEntry {
 
     pub fn is_condition_workflow(&self) -> bool {
         self.workflow.is_some() && self.when.is_some()
+    }
+
+    /// The task's worktree placement; the one reader of `worktree` and `fresh_worktree`.
+    pub fn task_worktree(&self) -> Option<TaskWorktree<'_>> {
+        if let Some(prefix) = self.fresh_worktree.as_deref() {
+            return Some(TaskWorktree::Fresh { prefix });
+        }
+        self.worktree.as_deref().map(TaskWorktree::Named)
     }
 
     pub fn guard(&self) -> Guard<'_> {

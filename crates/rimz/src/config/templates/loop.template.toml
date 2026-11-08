@@ -23,7 +23,7 @@
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h firing time in the configured timezone
 ## every = "weekday"                   # "day", "weekday", "weekend", or "mon,wed,fri"
-## worktree = "main"                   # optional channel to host the transient pane
+## fresh-worktree = "morning"          # optional prefix: a fresh worktree from trunk each fire
 ##
 ## [tasks.pr_watch]
 ## agent = "codex"                     # kind, profile, or virtual single-agent cell
@@ -44,7 +44,7 @@
 ## prompt = "tests are failing; fix the next failure"
 ## root = "/home/you/code/app"
 ## every = "15m"
-## check = "cargo test"                # shell runs in task dir (project root when absent), then judges, then the agent
+## check = "cargo test"                # shell runs at the project root (or the fire's fresh worktree), then judges, then the agent
 ## check-timeout = "10m"               # shell cap; otherwise timeout, else 5m; a killed check fails
 ## on = "fail"                         # every answered stage must fail; explicit on required with a judge
 ## [tasks.watchdog.judge]               # or ordered [[tasks.watchdog.judge]] tables
