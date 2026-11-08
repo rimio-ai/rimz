@@ -74,6 +74,7 @@ pub fn inspect(
         Default::default()
     };
     let clocks = fire::last_when_states(runtime);
+    let stamps = fire::last_stamps(runtime);
     let declines = if entry.stay {
         launch_ledger::load_declines_room(runtime, Some(&root))?
     } else {
@@ -93,6 +94,7 @@ pub fn inspect(
                 at: launch.at,
             },
             None => {
+                let key = fire::scope_key(name, &checkout);
                 let verdict = when::evaluate(
                     expr,
                     &checkout,
@@ -100,9 +102,17 @@ pub fn inspect(
                     entry.provider.as_ref(),
                     entry.account.as_ref(),
                     &windows,
+                )
+                .freshen(
+                    expr,
+                    &checkout,
+                    ci_source,
+                    stamps.get(&key).copied(),
+                    Some(now),
+                    true,
                 );
                 let clock = clocks
-                    .get(&fire::scope_key(name, &checkout))
+                    .get(&key)
                     .filter(|clock| clock.matches_condition(expr, *hold, &entry.run_dir()));
                 let since = clock.map_or(now, |clock| clock.since);
                 if !verdict.ok {

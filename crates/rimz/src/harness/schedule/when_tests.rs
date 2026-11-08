@@ -1196,3 +1196,143 @@ fn refusals_suggest_nearby_keys_values_and_stages() {
         }
     }
 }
+
+#[test]
+fn loop_freshness_holds_forge_keys_probed_before_the_fire_stamp_or_without_a_source() {
+    let scope = Path::new("/checkout");
+    let fired = Timestamp::from_millisecond(10_000).unwrap();
+    let source = |ok: bool, at: i64| {
+        CiSource(
+            serde_json::from_value(serde_json::json!({
+                "branch_ci": {},
+                "path_repos": {"/checkout": "repo"},
+                "repos": {"repo": {"ok": ok, "refreshed_at_ms": at}},
+                "states": {"/checkout": {"state": "open", "ci": "passing"}},
+            }))
+            .unwrap(),
+        )
+    };
+    let unsupported = CiSource(
+        serde_json::from_value(serde_json::json!({
+            "branch_ci": {},
+            "path_repos": {"/checkout": UNSUPPORTED_REPO_KEY},
+            "repos": {},
+            "states": {},
+        }))
+        .unwrap(),
+    );
+    let expr = WhenExpr::parse(&["!ci=failed && pr=open".into()]).unwrap();
+    for (source, fired_at, reason) in [
+        (None, Some(fired), Some("no sidebar source")),
+        (
+            Some(unsupported),
+            None,
+            Some("no supported forge for this checkout"),
+        ),
+        (
+            Some(source(true, 9_999)),
+            Some(fired),
+            Some("probed before the last fire or first sight"),
+        ),
+        (
+            Some(source(false, 10_001)),
+            Some(fired),
+            Some("forge lookup failing"),
+        ),
+        (Some(source(true, 10_000)), Some(fired), None),
+        (Some(source(true, 10_001)), Some(fired), None),
+        (Some(source(true, 1)), None, None),
+    ] {
+        let verdict = evaluate(&expr, scope, source.as_ref(), None, None, &no_windows()).freshen(
+            &expr,
+            scope,
+            source.as_ref(),
+            fired_at,
+            None,
+            true,
+        );
+        let label = format!("{fired_at:?}, {reason:?}");
+        match reason {
+            Some(reason) => {
+                assert!(!verdict.ok, "{label}");
+                assert_eq!(
+                    verdict.unread,
+                    BTreeMap::from([("ci".into(), reason.into()), ("pr".into(), reason.into())]),
+                    "{label}"
+                );
+                assert_eq!(verdict.readings["ci"], None, "{label}");
+                assert_eq!(verdict.readings["pr"], None, "{label}");
+            }
+            None => {
+                assert!(verdict.ok, "{label}");
+                assert!(verdict.unread.is_empty(), "{label}");
+                assert_eq!(verdict.readings["ci"].as_deref(), Some("passed"), "{label}");
+            }
+        }
+    }
+    let stage = WhenExpr::parse(&["!team.stage=Done".into()]).unwrap();
+    let verdict = evaluate(&stage, scope, None, None, None, &no_windows());
+    assert_eq!(
+        verdict
+            .clone()
+            .freshen(&stage, scope, None, Some(fired), None, true),
+        verdict
+    );
+}
+
+#[test]
+fn loop_commit_fence_holds_bare_ci_only_on_a_fresh_true_verdict() {
+    // No git checkout exists here, so local HEAD is unknown and only the CI SHA can fence.
+    let scope = Path::new("/rimz-no-such-checkout");
+    let fired = Timestamp::from_millisecond(10_000).unwrap();
+    let source = |ci_sha: Option<&str>| {
+        CiSource(
+            serde_json::from_value(serde_json::json!({
+                "branch_ci": {},
+                "path_repos": {"/rimz-no-such-checkout": "repo"},
+                "repos": {"repo": {"ok": true, "refreshed_at_ms": 10_000}},
+                "states": {"/rimz-no-such-checkout": {
+                    "state": "open", "ci": "failing", "ci_sha": ci_sha,
+                    "open": {"head": "bbbbbbb2"},
+                }},
+            }))
+            .unwrap(),
+        )
+    };
+    for (clause, ci_sha, fenced) in [
+        (
+            "ci=failed",
+            Some("aaaaaaa1"),
+            Some("read at aaaaaaa, PR head bbbbbbb"),
+        ),
+        (
+            "!ci=passed",
+            Some("aaaaaaa1"),
+            Some("read at aaaaaaa, PR head bbbbbbb"),
+        ),
+        ("ci=failed", Some("bbbbbbb2"), None),
+        ("ci=failed", None, None),
+        ("ci=passed", Some("aaaaaaa1"), None),
+        ("pr=open", Some("aaaaaaa1"), None),
+    ] {
+        let source = source(ci_sha);
+        let expr = WhenExpr::parse(&[clause.into()]).unwrap();
+        let raw = evaluate(&expr, scope, Some(&source), None, None, &no_windows());
+        let verdict = raw
+            .clone()
+            .freshen(&expr, scope, Some(&source), Some(fired), None, true);
+        let label = format!("{clause}, {ci_sha:?}");
+        match fenced {
+            Some(reason) => {
+                assert!(!verdict.ok, "{label}");
+                assert_eq!(
+                    verdict.unread,
+                    BTreeMap::from([("ci".into(), reason.into())]),
+                    "{label}"
+                );
+                assert_eq!(verdict.readings["ci"], None, "{label}");
+            }
+            None => assert_eq!(verdict, raw, "{label}"),
+        }
+    }
+}

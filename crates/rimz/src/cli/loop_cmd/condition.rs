@@ -13,6 +13,7 @@ pub(super) struct RoomReadings<'a> {
     source: Option<CiSource>,
     windows: WindowReadings<'a>,
     states: BTreeMap<String, when::WhenState>,
+    stamps: BTreeMap<String, Timestamp>,
 }
 
 impl<'a> RoomReadings<'a> {
@@ -23,6 +24,7 @@ impl<'a> RoomReadings<'a> {
             states: runtime
                 .map(schedule::fire::last_when_states)
                 .unwrap_or_default(),
+            stamps: runtime.map(schedule::fire::last_stamps).unwrap_or_default(),
         }
     }
 
@@ -48,6 +50,14 @@ impl<'a> RoomReadings<'a> {
             entry.provider.as_ref(),
             entry.account.as_ref(),
             &self.windows,
+        )
+        .freshen(
+            expr,
+            scope,
+            self.source.as_ref(),
+            self.stamps.get(name).copied(),
+            Some(now),
+            true,
         );
         timing.with_condition(&verdict, self.states.get(name), now)
     }
@@ -63,15 +73,18 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
 }
 
 pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
-    read(entry, expr).verdict
+    read(entry, expr, None).verdict
 }
 
-fn read(entry: &TaskEntry, expr: &WhenExpr) -> Reading {
+/// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
+/// stamp when it has one.
+fn read(entry: &TaskEntry, expr: &WhenExpr, fired_at: Option<Timestamp>) -> Reading {
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
     let room_open = render::room_open(&root);
     let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
-    let windows = WindowReadings::new(runtime.as_ref(), Timestamp::now());
+    let now = Timestamp::now();
+    let windows = WindowReadings::new(runtime.as_ref(), now);
     let verdict = when::evaluate(
         expr,
         &entry.run_dir(),
@@ -79,6 +92,14 @@ fn read(entry: &TaskEntry, expr: &WhenExpr) -> Reading {
         entry.provider.as_ref(),
         entry.account.as_ref(),
         &windows,
+    )
+    .freshen(
+        expr,
+        &entry.run_dir(),
+        source.as_ref(),
+        fired_at,
+        Some(now),
+        true,
     );
     Reading {
         verdict,
@@ -88,7 +109,7 @@ fn read(entry: &TaskEntry, expr: &WhenExpr) -> Reading {
 }
 
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
-    let reading = read(entry, expr);
+    let reading = read(entry, expr, None);
     let scope = entry.run_dir();
     let checked_at = if expr.reads_forge() {
         reading
@@ -107,14 +128,21 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
                 .get(&term.key)
                 .and_then(|value| value.as_deref());
             let unread = value.is_none().then(|| {
-                term_unread_reason(term, &scope, reading.room_open, reading.source.as_ref())
+                term_unread_reason(
+                    term,
+                    &scope,
+                    reading.room_open,
+                    reading.source.as_ref(),
+                    &reading.verdict,
+                )
             });
             serde_json::json!({
                 "term": term.to_string(),
                 "key": term.key,
                 "negated": negated,
                 "reading": value,
-                "met": term.matches(value) != negated,
+                "met": !reading.verdict.unread.contains_key(&term.key)
+                    && term.matches(value) != negated,
                 "unread": unread,
             })
         })
@@ -177,6 +205,7 @@ pub(super) fn write_receipt(
                 .readings(&verdict)
                 .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
                 .collect(),
+            unread: verdict.unread.keys().cloned().collect(),
         }
     };
     writeln!(out, "scope: {}", entry.run_dir().display())?;
@@ -201,6 +230,7 @@ pub(super) fn write_no_room_hint(
 
 pub(super) fn write_show(
     out: &mut impl Write,
+    name: &str,
     entry: &TaskEntry,
     timing: &schedule::TaskTiming,
 ) -> Result<()> {
@@ -211,7 +241,9 @@ pub(super) fn write_show(
     else {
         return Ok(());
     };
-    let verdict = reading(entry, expr);
+    let fired_at = runtime_for_root(&entry.resolved_root())
+        .and_then(|runtime| schedule::fire::last_stamps(&runtime).get(name).copied());
+    let verdict = read(entry, expr, fired_at).verdict;
     write_terms(out, entry, expr, &verdict)?;
     if expr.reads_forge()
         && let Some(checked) = runtime_for_root(&entry.resolved_root())
@@ -243,7 +275,9 @@ pub(super) fn write_terms(
             .readings
             .get(&term.key)
             .and_then(|value| value.as_deref());
-        let role = if term.matches(value) != negated {
+        let role = if verdict.unread.contains_key(&term.key) {
+            ui::status::StateRole::Unknown
+        } else if term.matches(value) != negated {
             ui::status::StateRole::Success
         } else if value.is_none() {
             ui::status::StateRole::Unknown
@@ -252,7 +286,7 @@ pub(super) fn write_terms(
         };
         let (glyph, style) = ui::verdict(role);
         let reason = if value.is_none() {
-            term_unread_reason(term, &entry.run_dir(), open, source.as_ref())
+            term_unread_reason(term, &entry.run_dir(), open, source.as_ref(), verdict)
         } else {
             String::new()
         };
@@ -272,12 +306,16 @@ fn term_unread_reason(
     scope: &Path,
     open: bool,
     source: Option<&CiSource>,
+    verdict: &Verdict,
 ) -> String {
     if !term.reads_forge() {
         return "not read".to_owned();
     }
     if !open {
         return "readings paused (room closed)".to_owned();
+    }
+    if let Some(reason) = verdict.unread.get(&term.key) {
+        return reason.clone();
     }
     unread_reason(source.and_then(|source| source.unread_reason(&term.key, scope)))
 }

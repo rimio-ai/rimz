@@ -576,6 +576,58 @@ pub(super) fn percent_left(window: &RateLimitWindow) -> Option<u8> {
 pub struct Verdict {
     pub ok: bool,
     pub readings: BTreeMap<String, Option<String>>,
+    /// Each forge key held unread by [`Verdict::freshen`], with its reason; each reads `None`.
+    pub unread: BTreeMap<String, String>,
+}
+
+impl Verdict {
+    /// Hold a loop condition's verdict to the forge freshness rule: every forge key is unread
+    /// without a source or without a successful probe at or after `fired_at`, the task's fire
+    /// stamp, and bare `ci` under the commit fence when `fence` is set. The fence's git reads
+    /// run only for a true verdict on a fresh probe. Each unread key reads `None`, and the
+    /// verdict is false while any key is unread. Pass `now` to age a failing lookup's reason.
+    pub fn freshen(
+        mut self,
+        expr: &WhenExpr,
+        scope: &Path,
+        source: Option<&CiSource>,
+        fired_at: Option<Timestamp>,
+        now: Option<Timestamp>,
+        fence: bool,
+    ) -> Self {
+        let forge_keys = expr
+            .terms()
+            .filter(|term| term.reads_forge())
+            .map(|term| term.key.as_str())
+            .collect::<BTreeSet<_>>();
+        self.unread = match source {
+            None => forge_keys
+                .iter()
+                .map(|key| ((*key).to_owned(), "no sidebar source".to_owned()))
+                .collect(),
+            Some(source) => {
+                let checked_at = source.checked_at(scope);
+                let floor = Floor {
+                    at: fired_at.unwrap_or(Timestamp::MIN),
+                    stale: "probed before the last fire or first sight",
+                };
+                let fence = (fence
+                    && self.ok
+                    && forge_keys.contains("ci")
+                    && checked_at.is_some_and(|at| at >= floor.at))
+                .then(|| source.ci_fence(scope))
+                .flatten();
+                forge_unread(forge_keys, checked_at, floor, fence, |key| {
+                    super::unread_reason(source.probe_unread_reason(key, scope), now)
+                })
+            }
+        };
+        for key in self.unread.keys() {
+            self.readings.insert(key.clone(), None);
+        }
+        self.ok &= self.unread.is_empty();
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -639,6 +691,7 @@ pub fn evaluate(
     Verdict {
         ok: expr.0.matches(&readings),
         readings,
+        unread: BTreeMap::new(),
     }
 }
 
@@ -821,6 +874,7 @@ impl WhenExpr {
     pub(super) fn condition_count(
         &self,
         readings: &[(String, Option<String>)],
+        unread: &std::collections::BTreeSet<String>,
         satisfied: bool,
     ) -> Option<ConditionCount> {
         if !self.0.is_conjunction() {
@@ -837,7 +891,7 @@ impl WhenExpr {
                 .iter()
                 .find(|(key, _)| key == &term.key)
                 .and_then(|(_, value)| value.as_deref());
-            if satisfied || term.matches(reading) != negated {
+            if satisfied || (!unread.contains(&term.key) && term.matches(reading) != negated) {
                 count.met += 1;
             } else if reading.is_none() {
                 count.not_read += 1;

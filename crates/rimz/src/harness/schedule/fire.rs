@@ -389,7 +389,7 @@ fn fire_tasks(
         }
     }
     let definitions = tasks;
-    let capacity = scoped
+    let capacity: BTreeMap<String, super::launch_ledger::CapacityRecord> = scoped
         .iter()
         .filter_map(|(key, scope)| {
             capacity
@@ -419,20 +419,37 @@ fn fire_tasks(
                 return None;
             }
             match &task.trigger().as_ref().ok()?.trigger {
-                Trigger::Condition { expr, .. } => Some((
-                    name.clone(),
-                    when::evaluate(
+                Trigger::Condition { expr, hold } => {
+                    let scope = scoped[name]
+                        .checkout
+                        .clone()
+                        .unwrap_or_else(|| task.entry().run_dir());
+                    // A task fired on a true reading cannot fire again without a retry, so
+                    // fenced and true plan alike there and the fence's git reads are skipped.
+                    let refire_blocked = !task.entry().dedupes_checkout()
+                        && !capacity.contains_key(name)
+                        && when_states.get(name).is_some_and(|state| {
+                            state.fired
+                                && state.matches_condition(expr, *hold, &task.entry().run_dir())
+                        });
+                    let verdict = when::evaluate(
                         expr,
-                        &scoped[name]
-                            .checkout
-                            .clone()
-                            .unwrap_or_else(|| task.entry().run_dir()),
+                        &scope,
                         ci_source,
                         task.entry().provider.as_ref(),
                         task.entry().account.as_ref(),
                         &windows,
-                    ),
-                )),
+                    )
+                    .freshen(
+                        expr,
+                        &scope,
+                        ci_source,
+                        state.get(name).copied(),
+                        None,
+                        !refire_blocked,
+                    );
+                    Some((name.clone(), verdict))
+                }
                 Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Watch(_) => None,
             }
         })
@@ -689,6 +706,16 @@ fn plan(
             }
             Some(last_fire) if matches!(parsed.trigger, Trigger::Condition { .. }) => {
                 next_state.insert(name.clone(), last_fire);
+                // An unread forge key holds: no fire, and the clock is neither started nor dropped.
+                if verdicts
+                    .get(name)
+                    .is_some_and(|verdict| !verdict.unread.is_empty())
+                {
+                    if let Some(state) = when_states.get(name) {
+                        next_when.insert(name.clone(), state.clone());
+                    }
+                    continue;
+                }
                 if !verdicts.get(name).is_some_and(|verdict| verdict.ok) {
                     continue;
                 }

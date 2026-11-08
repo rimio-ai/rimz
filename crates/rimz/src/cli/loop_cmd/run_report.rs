@@ -597,6 +597,7 @@ pub(super) fn write_record_forensics(
             let verdict = schedule::when::Verdict {
                 ok: false,
                 readings: condition.readings.clone(),
+                unread: Default::default(),
             };
             for (key, value) in expr.readings(&verdict) {
                 readings.serialize_entry(key, &value)?;

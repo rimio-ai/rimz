@@ -438,6 +438,7 @@ fn show_header_names_kind_checkout_and_condition_progress_once() {
         &Verdict {
             ok: false,
             readings: BTreeMap::from([("pr".into(), Some("open".into())), ("ci".into(), None)]),
+            unread: Default::default(),
         },
         None,
         view.now_zoned.timestamp(),
@@ -739,6 +740,7 @@ fn worktree_view() -> ShowView {
             ("pr".into(), pr.map(str::to_owned)),
             ("ci".into(), ci.map(str::to_owned)),
         ]),
+        unread: Default::default(),
     };
     let since = Timestamp::from_second(3480).unwrap();
     view.worktrees = [
@@ -940,6 +942,30 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
     let row = ready_row(&view);
     assert!(row.contains("✗ failed"), "{row}");
     assert_eq!(short(&view), serde_json::json!(["ci"]));
+
+    let CheckoutState::Ready { verdict, .. } = &mut view.worktrees[0].state else {
+        panic!("ready fixture must carry a verdict");
+    };
+    verdict.readings.insert("ci".into(), None);
+    verdict.unread.insert(
+        "ci".into(),
+        "probed before the last fire or first sight".into(),
+    );
+    let row = ready_row(&view);
+    assert!(
+        row.contains("? probed before the last fire or first sight"),
+        "{row}"
+    );
+    assert_eq!(
+        short(&view),
+        serde_json::json!(["ci"]),
+        "a stale probe blocks"
+    );
+    let CheckoutState::Ready { verdict, .. } = &mut view.worktrees[0].state else {
+        panic!("ready fixture must carry a verdict");
+    };
+    verdict.readings.insert("ci".into(), Some("failed".into()));
+    verdict.unread.clear();
 
     let expr = schedule::when::WhenExpr::parse(&["pr=open && !ci=pending,failed".into()]).unwrap();
     let CheckoutState::Ready { verdict, .. } = &view.worktrees[0].state else {
@@ -1339,6 +1365,7 @@ fn worktrees_json_preserves_the_full_accepted_hold_duration() {
             verdict: schedule::when::Verdict {
                 ok: true,
                 readings: BTreeMap::new(),
+                unread: Default::default(),
             },
         },
     }];
@@ -1677,6 +1704,7 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
                         ("pr".into(), Some("open".into())),
                         ("ci".into(), Some("passed".into())),
                     ]),
+                    unread: Default::default(),
                 },
             },
         }),
@@ -1708,6 +1736,7 @@ fn show_fanout_refusals_do_not_override_waiting_conditions() {
                 ("pr".into(), Some("open".into())),
                 ("ci".into(), Some("failed".into())),
             ]),
+            unread: Default::default(),
         },
     };
     let text = show_text(&view);
@@ -1786,6 +1815,7 @@ fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
             verdict: Verdict {
                 ok: true,
                 readings: BTreeMap::new(),
+                unread: Default::default(),
             },
         },
     });
@@ -1856,11 +1886,43 @@ fn true_condition_without_hold_renders_due() {
     );
     let timing = super::super::condition::observe("ready", &entry, timing, now);
     let mut out = Vec::new();
-    super::super::condition::write_show(&mut out, &entry, &timing).unwrap();
+    super::super::condition::write_show(&mut out, "ready", &entry, &timing).unwrap();
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()
             .contains("team.stage=Done   ✓ Done")
+    );
+}
+
+#[test]
+fn closed_room_forge_condition_shows_waiting_on_unread_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        when: Some(vec!["!ci=failed".to_owned()]),
+        check: Some("true".into()),
+        ..TaskEntry::default()
+    };
+    let parsed = schedule::parse_trigger("forge", &entry);
+    let now = Timestamp::now();
+    let timing = schedule::TaskTiming::evaluate(
+        &parsed,
+        schedule::catalog::TaskSource::Config,
+        Some(now),
+        None,
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+    );
+    let timing = super::super::condition::observe("forge", &entry, timing, now);
+    assert_eq!(
+        timing.state().condition_label().as_deref(),
+        Some("waiting · ci: unknown")
+    );
+    let mut out = Vec::new();
+    super::super::condition::write_show(&mut out, "forge", &entry, &timing).unwrap();
+    assert!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
+            .to_string()
+            .contains("!ci=failed   ? readings paused (room closed)")
     );
 }
 

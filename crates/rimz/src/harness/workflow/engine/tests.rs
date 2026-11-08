@@ -379,6 +379,7 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
         let verdict = crate::harness::schedule::when::Verdict {
             ok: false,
             readings: BTreeMap::from([("window.5h.left".into(), reading.map(str::to_owned))]),
+            unread: Default::default(),
         };
         assert_eq!(expr.blocking_evidence(&verdict), expected);
     }
@@ -394,6 +395,7 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
                 ("window.5h.left".into(), Some("12".into())),
                 ("window.7d.left".into(), Some("12".into())),
             ]),
+            unread: Default::default(),
         };
         assert_eq!(expr.blocking_evidence(&verdict), expected);
     }

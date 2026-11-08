@@ -788,6 +788,8 @@ pub enum TaskTimingState {
     },
     Waiting {
         readings: Vec<(String, Option<String>)>,
+        /// Forge keys the freshness rule holds unread: each reads `None` and is not met.
+        unread: std::collections::BTreeSet<String>,
     },
     Holding {
         elapsed: Duration,
@@ -799,7 +801,7 @@ pub enum TaskTimingState {
 impl TaskTimingState {
     pub fn condition_label(&self) -> Option<String> {
         match self {
-            Self::Waiting { readings } => Some(format!(
+            Self::Waiting { readings, .. } => Some(format!(
                 "waiting · {}",
                 readings
                     .iter()
@@ -827,15 +829,17 @@ impl TaskTiming {
         let Trigger::Condition { expr, .. } = &self.parsed.as_ref().ok()?.trigger else {
             return None;
         };
-        let readings = match &self.state {
-            TaskTimingState::Waiting { readings } => readings.as_slice(),
+        let none = std::collections::BTreeSet::new();
+        let (readings, unread) = match &self.state {
+            TaskTimingState::Waiting { readings, unread } => (readings.as_slice(), unread),
             TaskTimingState::Holding { .. } | TaskTimingState::Fired | TaskTimingState::Due(_) => {
-                &[]
+                (&[][..], &none)
             }
             _ => return None,
         };
         expr.condition_count(
             readings,
+            unread,
             matches!(
                 self.state,
                 TaskTimingState::Holding { .. } | TaskTimingState::Fired | TaskTimingState::Due(_)
@@ -866,6 +870,7 @@ impl TaskTiming {
                     .readings(verdict)
                     .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
                     .collect(),
+                unread: verdict.unread.keys().cloned().collect(),
             }
         } else if state.is_some_and(|state| state.fired) {
             TaskTimingState::Fired
