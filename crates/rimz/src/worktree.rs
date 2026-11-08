@@ -782,6 +782,47 @@ impl RemovalOutcome {
     }
 }
 
+/// Announce one freshly created managed worktree as a `worktree.created` signal.
+pub fn emit_worktree_created(
+    store: &crate::Store,
+    workspace: &crate::ResolvedWorkspace,
+    marker: &WorktreeMarker,
+) {
+    let mut payload = serde_json::Map::from_iter([
+        ("name".into(), serde_json::json!(marker.name)),
+        ("branch".into(), serde_json::json!(marker.branch)),
+        (
+            "path".into(),
+            serde_json::json!(marker.worktree_path.to_string_lossy()),
+        ),
+        (
+            "repo".into(),
+            serde_json::json!(marker.repo_root.to_string_lossy()),
+        ),
+        (
+            "base".into(),
+            serde_json::json!(marker.base_branch.as_deref().unwrap_or(&marker.base_ref)),
+        ),
+    ]);
+    if let Some(number) = marker.from_pr {
+        payload.insert("from_pr".into(), serde_json::json!(number));
+    }
+    let signal = crate::harness::schedule::signal::Signal {
+        name: "worktree.created"
+            .parse()
+            .expect("built-in signal name is valid"),
+        payload,
+        source: crate::store::event::SignalSource::Worktree,
+        watch: None,
+    };
+    crate::harness::schedule::signal::emit_in_process(
+        store,
+        &workspace.session_name,
+        &workspace.project_root,
+        &signal,
+    );
+}
+
 /// Retire every durable consequence of one removed managed worktree.
 ///
 /// Session retirement runs first, and message archival still runs when it

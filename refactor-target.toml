@@ -2727,7 +2727,7 @@ reason = "Launch and relaunch callers share trust verdicts while consent UI stay
 
 [[verdict]]
 kind = "item"
-key = "launcher::checkout::emit_worktree_created"
+key = "worktree::emit_worktree_created"
 reason = "Explicit worktree creation and launch checkout creation share the same signal."
 
 [[verdict]]
@@ -4645,7 +4645,8 @@ path = "crates/rimz/src/worktree"
 # ProtectionSet::insert_team accepts CLI-gathered team-board pins (+1).
 # CheckoutKind and classify_checkout expose metadata-only room-relative labels (+2).
 # WorkflowRunHolder and ProtectionSet::insert_workflow_run carry caller-gathered run pins (+2).
-surface-budget = 86
+# emit_worktree_created moves here from launcher::checkout so the harness can signal creation (+1).
+surface-budget = 87
 
 [[verdict]]
 kind = "item"
