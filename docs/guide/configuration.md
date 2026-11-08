@@ -1040,12 +1040,12 @@ When the guard also needs judgment, add `judge` beside `check`. The profile must
 [tasks.pr_watch.judge]
 agent = "haiku"
 prompt = "Does this failure need a code change?"
-timeout = "5m"           # optional; the judge's own cap, independent of the task timeout
+timeout = "5m"           # optional; the judge's own cap over both attempts, independent of the task timeout
 # prompt-file = "prompts/judge.md"  # instead of prompt
 # recheck = "6h"         # optional; resident tasks only, no default
 ```
 
-Judges run without a pane and return a verdict and reason before the action. For several, use `[[tasks.pr_watch.judge]]` tables in the order they should run. The shell runs first, then each judge sees all earlier evidence; the first answered stage that misses `on` stops the chain. A judge without a verdict continues it. An old agent table under `check` still reads as the first judge. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
+Judges run without a pane and answer an outcome, `pass` or `fail`, and a reason before the action. For several, use `[[tasks.pr_watch.judge]]` tables in the order they should run. The shell runs first, then each judge sees all earlier evidence; the first answered stage that misses `on` stops the chain. A judge that cannot answer is asked once more, unless it timed out or hit a provider limit; with no answer then, it continues the chain. An old agent table under `check` still reads as the first judge. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
 
 The rest tune what one fire is allowed to do:
 

@@ -2339,7 +2339,9 @@ path = "crates/rimz/src/harness"
 # ConfiguredValues and SeatPolicy::configured_values expose declared settings to the CLI (+2).
 # budget::remove_ledger drops an agent override when reset has no launch cap (+1).
 # headless::judge shares one judge attempt, its failure classes, the retry rule, and exit wording between loop and workflow (+7).
-surface-budget = 1098
+# headless::judge owns the loop answer contract (LOOP_ANSWER_SCHEMA, LoopAnswer::from_value, LoopOutcome) and the prepared plan's model and verdict path a retrying loop judge reads (+6).
+# headless::judge::Failure::timed_out words a loop judge's spent deadline as the core's own timeout (+1).
+surface-budget = 1105
 
 [[verdict]]
 kind = "item"

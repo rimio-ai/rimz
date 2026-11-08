@@ -181,7 +181,7 @@ fn native_idle_compaction_follows_the_resolved_seat_floor() {
         request.subagent = parent && depth;
         request.headless = headless.then(|| crate::agents::HeadlessRequest {
             schema_open: false,
-            schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
             schema_file: "/check/schema.json".into(),
             verdict_file: "/check/verdict.json".into(),
         });

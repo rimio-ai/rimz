@@ -115,9 +115,9 @@ pub(super) fn guard_value(entry: &TaskEntry) -> String {
         stages.len(),
     ) {
         (true, _, _) | (_, CheckOn::Any, _) => "",
-        (_, _, 1) => " or gives no verdict",
-        (_, CheckOn::Fail, _) => ", a judge with no verdict counting as a fail",
-        (_, CheckOn::Success, _) => ", a judge with no verdict counting as a pass",
+        (_, _, 1) => " or gives no answer after one retry",
+        (_, CheckOn::Fail, _) => ", a judge with no answer after one retry counting as a fail",
+        (_, CheckOn::Success, _) => ", a judge with no answer after one retry counting as a pass",
     };
     format!("{}; acts {condition}{no_verdict}", stages.join(", then "))
 }

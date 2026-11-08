@@ -277,7 +277,7 @@ fn a_sigterm_after_judge_exit_keeps_its_verdict_before_the_next_poll() {
         "codex",
         r#"if [ "$1" = '--version' ]; then echo 'codex-cli 0.163.0'; exit 0; fi
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"Finished on my own."}' > "$1"; fi
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"fail","reason":"Finished on my own."}' > "$1"; fi
     shift
 done
 echo $$ > check-pid
@@ -324,6 +324,63 @@ while ! test -e allow-exit; do sleep 0.025; done
     );
 }
 
+#[test]
+fn a_sigterm_after_an_unanswered_judge_exits_starts_no_retry() {
+    let env = fixture("skip", None);
+    env.write_config(&env.project_root, "[agents]\nisolation='host'\n");
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "codex",
+        r#"if [ "$1" = '--version' ]; then echo 'codex-cli 0.163.0'; exit 0; fi
+echo run >> judge-runs
+echo $$ > check-pid
+touch check-ready
+while ! test -e allow-exit; do sleep 0.025; done
+"#,
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.busy]\nroot={:?}\nagent='codex'\nprompt='work'\nevery='1h'\non='success'\n[tasks.busy.check]\nagent='codex'\nprompt='Any work?'\n",
+            env.project_root
+        ),
+    );
+    let barrier_path = env.runtime_paths().sock_dir.join("check-read.sock");
+    let barrier = std::os::unix::net::UnixListener::bind(&barrier_path).unwrap();
+    let mut runner = env
+        .rimz()
+        .env("RIMZ_TEST_CHECK_BEFORE_SIGNAL_READ", &barrier_path)
+        .env("PATH", path_with_front(&bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "judge-shell", &[]),
+        )
+        .args(["loop", "run", "busy"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    exit_check_with_pending_sigterm(&env, &mut runner, &barrier);
+    runner.wait().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(env.project_root.join("judge-runs"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "a stop read as the judge exits must start no retry"
+    );
+    let rows = read_loop_run_records(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].result, LoopRunResult::Canceled, "{rows:?}");
+    assert_eq!(rows[0].judge.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].judge[0].retry, None, "{rows:?}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_sigterm_after_judge_exit_reaches_a_child_holding_its_pipes() {
@@ -341,7 +398,7 @@ fn a_sigterm_after_judge_exit_reaches_a_child_holding_its_pipes() {
         "codex",
         r#"if [ "$1" = '--version' ]; then echo 'codex-cli 0.163.0'; exit 0; fi
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"Finished on my own."}' > "$1"; fi
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"fail","reason":"Finished on my own."}' > "$1"; fi
     shift
 done
 sleep 240 &

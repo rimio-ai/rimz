@@ -419,7 +419,7 @@ fn headless_check_section_replaces_loop_in_the_same_slot() {
     ));
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     });

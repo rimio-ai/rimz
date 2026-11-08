@@ -326,7 +326,7 @@ fn long_cache_is_not_requested_for_headless_pi() {
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("pi"), Vec::new());
         request.headless = headless.then(|| crate::agents::HeadlessRequest {
             schema_open: false,
-            schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+            schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
             schema_file: "/check/schema.json".into(),
             verdict_file: "/check/verdict.json".into(),
         });
@@ -2324,7 +2324,7 @@ fn headless_requests_keep_native_delegation_without_a_catalog() {
     ));
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     });
@@ -2343,7 +2343,7 @@ fn headless_judge_reminder_omits_subagents_with_profiles_configured() {
     let mut request = request("claude", action_with_args("launch", vec![]));
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     });

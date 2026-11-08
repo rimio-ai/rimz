@@ -48,11 +48,11 @@ fn system_prompt_snapshot_requires_a_known_supported_version() {
 fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
     let request = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/unused/schema.json".into(),
         verdict_file: "/unused/verdict.json".into(),
     };
-    let stdout = br#"{"structured_output":{"pass":false,"reason":"Nothing to do."},"result":"not the verdict","total_cost_usd":0.003,"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":4},"is_error":false,"subtype":"success"}"#;
+    let stdout = br#"{"structured_output":{"outcome":"fail","reason":"Nothing to do."},"result":"not the verdict","total_cost_usd":0.003,"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":4},"is_error":false,"subtype":"success"}"#;
     let result = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
         stdout,
         b"diagnostic on stderr",
@@ -63,7 +63,7 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
     );
     assert_eq!(
         result.verdict,
-        Some(json!({"pass":false,"reason":"Nothing to do."}))
+        Some(json!({"outcome":"fail","reason":"Nothing to do."}))
     );
     assert_eq!(result.cost_usd, Some(0.003));
     assert_eq!(result.input_tokens, Some(60));
@@ -88,17 +88,18 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
 fn headless_result_rejects_malformed_and_provider_error_verdicts() {
     let request = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/unused/schema.json".into(),
         verdict_file: "/unused/verdict.json".into(),
     };
     for stdout in [
         "not JSON",
-        r#"{"result":"{\"pass\":true,\"reason\":\"No structured output\"}"}"#,
-        r#"{"structured_output":{"pass":"true","reason":"wrong type"}}"#,
-        r#"{"structured_output":{"pass":true}}"#,
-        r#"{"structured_output":{"pass":true,"reason":"bad","extra":1}}"#,
-        r#"{"is_error":true,"result":"quota exhausted","structured_output":{"pass":true,"reason":"must not trust"}}"#,
+        r#"{"result":"{\"outcome\":\"pass\",\"reason\":\"No structured output\"}"}"#,
+        r#"{"structured_output":{"outcome":true,"reason":"wrong type"}}"#,
+        r#"{"structured_output":{"outcome":"maybe","reason":"outside the pair"}}"#,
+        r#"{"structured_output":{"outcome":"pass"}}"#,
+        r#"{"structured_output":{"outcome":"pass","reason":"bad","extra":1}}"#,
+        r#"{"is_error":true,"result":"quota exhausted","structured_output":{"outcome":"pass","reason":"must not trust"}}"#,
     ] {
         let result = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
             stdout.as_bytes(),
@@ -108,10 +109,10 @@ fn headless_result_rejects_malformed_and_provider_error_verdicts() {
             false,
             &crate::agents::pricing::PriceBook::fixture(),
         );
-        let verdict = result
+        let answer = result
             .verdict
-            .and_then(|value| serde_json::from_value::<crate::agents::HeadlessVerdict>(value).ok());
-        assert_eq!(verdict, None, "{stdout}");
+            .and_then(|value| crate::harness::headless::judge::LoopAnswer::from_value(value).ok());
+        assert!(answer.is_none(), "{stdout}");
         if stdout.contains("quota exhausted") {
             assert_eq!(
                 result.error.unwrap().kind,
@@ -148,7 +149,7 @@ fn headless_settings_merge_pending_host_skills_without_another_settings_flag() {
     .unwrap();
     let request = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
     };

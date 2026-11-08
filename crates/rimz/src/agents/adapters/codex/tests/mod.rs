@@ -56,13 +56,13 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
     let root = tempfile::tempdir().unwrap();
     let request = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
     };
     std::fs::write(
         &request.verdict_file,
-        r#"{"pass":true,"reason":"Work remains."}"#,
+        r#"{"outcome":"pass","reason":"Work remains."}"#,
     )
     .unwrap();
     let prices = crate::agents::pricing::PriceBook::from_litellm_json(
@@ -83,7 +83,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
     );
     assert_eq!(
         result.verdict,
-        Some(json!({"pass":true,"reason":"Work remains."}))
+        Some(json!({"outcome":"pass","reason":"Work remains."}))
     );
     assert_eq!(result.input_tokens, Some(100));
     assert_eq!(result.output_tokens, Some(5));
@@ -161,7 +161,7 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
     let root = tempfile::tempdir().unwrap();
     let request = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
     };
@@ -171,8 +171,9 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
     assert!(result.error.is_some());
     for verdict in [
         "garbage",
-        r#"{"pass":false}"#,
-        r#"{"pass":true,"reason":"bad","extra":1}"#,
+        r#"{"outcome":"fail"}"#,
+        r#"{"outcome":"maybe","reason":"outside the pair"}"#,
+        r#"{"outcome":"pass","reason":"bad","extra":1}"#,
     ] {
         std::fs::write(&request.verdict_file, verdict).unwrap();
         let result = form.read_result(b"", b"", &request, None, false, &prices);
@@ -180,7 +181,7 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
             result
                 .verdict
                 .and_then(
-                    |value| serde_json::from_value::<crate::agents::HeadlessVerdict>(value).ok()
+                    |value| crate::harness::headless::judge::LoopAnswer::from_value(value).ok()
                 )
                 .is_none()
         );

@@ -654,13 +654,19 @@ fn write_check_section(
             };
             writeln!(
                 out,
-                "  judge {}: {verdict} — {reason}{spend}{tokens}{}{}",
+                "  judge {}: {verdict} — {reason}{spend}{tokens}{}{}{}",
                 judge.profile,
                 judge
                     .duration_ms
                     .map(|duration| format!(" · {}", render::format_duration_ms(duration)))
                     .unwrap_or_default(),
-                if judge.reused { " · reused" } else { "" }
+                if judge.reused { " · reused" } else { "" },
+                judge
+                    .retry
+                    .as_deref()
+                    .and_then(|retry| retry.lines().next())
+                    .map(|retry| format!(" · retried after {retry}"))
+                    .unwrap_or_default()
             )?;
             if !judge.warnings.is_empty() {
                 write_gutter_block(out, None, &judge.warnings.join("\n"))?;
@@ -893,7 +899,7 @@ mod tests {
                 .unwrap()
         });
         record.judge = serde_json::from_value(serde_json::json!([
-            {"profile":"claude","kind":"claude","verdict":false,"reason":"tier one","duration_ms":10},
+            {"profile":"claude","kind":"claude","verdict":false,"reason":"tier one","duration_ms":10,"retry":"judge exited 1\nprovider tail"},
             {"profile":"codex","kind":"codex","verdict":true,"reason":"tier two","duration_ms":20,"reused":true}
         ])).unwrap();
         let mut out = Vec::new();
@@ -908,6 +914,8 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(
             text.contains("judge claude: fail")
+                && text.contains("retried after judge exited 1")
+                && !text.contains("provider tail")
                 && text.contains("judge codex: pass")
                 && text.contains("reused"),
             "{text}"
@@ -991,6 +999,7 @@ mod tests {
             .unwrap();
             let text = String::from_utf8(out).unwrap();
             assert!(text.contains(&format!("judge haiku: {expected}")), "{text}");
+            assert!(!text.contains("retried after"), "{text}");
             assert!(
                 text.contains(error.unwrap_or("Read the tree."))
                     && text.contains("$0.02")

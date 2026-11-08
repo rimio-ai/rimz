@@ -562,7 +562,7 @@ printf '%s' "$*" | tr '\n' ' ' >> "$HOME/judge-calls"
 printf '\n' >> "$HOME/judge-calls"
 if [ "$1" = '--version' ]; then printf '%s\n' '{version}'; exit 0; fi
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{{"pass":false,"reason":"No actionable work."}}' > "$1"; fi
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{{"outcome":"fail","reason":"No actionable work."}}' > "$1"; fi
     shift
 done
 "#
@@ -624,7 +624,7 @@ fn resident_agent_decline_is_shown(recheck: Option<&str>) {
         "codex",
         r#"
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"No actionable work."}' > "$1"; fi
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"fail","reason":"No actionable work."}' > "$1"; fi
     shift
 done
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'

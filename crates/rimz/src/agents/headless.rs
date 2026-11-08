@@ -1,4 +1,4 @@
-//! Provider-neutral schema, paths, and results for bounded headless judges.
+//! Provider-neutral requests, paths, and results for bounded headless judges.
 
 use std::path::{Path, PathBuf};
 
@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use super::pricing::PriceBook;
 use super::skills::{LaunchSettingsArtifact, LaunchSettingsErr};
-
-pub const CHECK_VERDICT_SCHEMA: &str = r#"{"type":"object","properties":{"pass":{"type":"boolean"},"reason":{"type":"string"}},"required":["pass","reason"],"additionalProperties":false}"#;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadlessRequest {
@@ -18,6 +16,8 @@ pub struct HeadlessRequest {
     pub verdict_file: PathBuf,
 }
 
+/// The `{pass, reason}` verdict loop judges answered before outcome words, kept only
+/// to read legacy `AgentCheckRecord` rows in the loop run log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeadlessVerdict {

@@ -376,7 +376,7 @@ fn picker_argv_has_no_session_or_prompt_and_preserves_posture() {
     let adapter = crate::agents::find_definition("claude").unwrap();
     let headless = crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     };
@@ -526,7 +526,7 @@ fn headless_provider_argv(kind: &str) {
     }
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
     });
@@ -560,7 +560,7 @@ fn headless_provider_argv(kind: &str) {
               "--output-format",
               "json",
               "--json-schema",
-              "{\"type\":\"object\",\"properties\":{\"pass\":{\"type\":\"boolean\"},\"reason\":{\"type\":\"string\"}},\"required\":[\"pass\",\"reason\"],\"additionalProperties\":false}",
+              "{\"type\":\"object\",\"properties\":{\"outcome\":{\"type\":\"string\",\"enum\":[\"pass\",\"fail\"]},\"reason\":{\"type\":\"string\"}},\"required\":[\"outcome\",\"reason\"],\"additionalProperties\":false}",
               "--",
               "Decide now."
             ]
@@ -594,7 +594,7 @@ fn headless_provider_compiler_refuses_unsupported_forms() {
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
     request.headless = Some(crate::agents::HeadlessRequest {
         schema_open: false,
-        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema: crate::harness::headless::judge::LOOP_ANSWER_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
     });

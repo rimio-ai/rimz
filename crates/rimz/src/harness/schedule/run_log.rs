@@ -174,6 +174,7 @@ impl LoopRunRecord {
                     duration_ms: check.duration_ms,
                     reused: false,
                     warnings: Vec::new(),
+                    retry: None,
                 })),
                 None => RunStage::Check(check),
             })
@@ -285,6 +286,10 @@ pub struct JudgeRecord {
     pub reused: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// The first attempt's error when the judge ran a second time; usage and
+    /// duration then sum both attempts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -831,6 +836,9 @@ fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
         }
         if let Some(error) = &mut judge.error {
             *error = tail_string(error, CHECK_OUTPUT_CAP);
+        }
+        if let Some(retry) = &mut judge.retry {
+            *retry = tail_string(retry, CHECK_OUTPUT_CAP);
         }
     }
     if let Some(signal) = &mut capped.signal

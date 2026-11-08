@@ -3,11 +3,12 @@
 use std::cell::{Cell, RefCell};
 
 use super::*;
-use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest};
+use crate::agents::HeadlessRequest;
 use crate::config::Judge;
 use crate::harness::headless::HeadlessProfile;
 pub(super) use crate::harness::headless::ProcessErr;
-use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest};
+use crate::harness::headless::judge::{self as core, Contract, FailureKind, LoopOutcome};
+use crate::harness::launch::ExecIdentity;
 use crate::harness::launch_plan::LaunchPlan;
 use crate::harness::schedule::run_log::JudgeRecord;
 
@@ -25,6 +26,7 @@ pub(super) fn execute(
     )?);
     let group = Cell::new(None);
     let terminated = Cell::new(false);
+    let stop_after_exit = Cell::new(false);
     let poll = || {
         // Drain stops before reading liveness, so a judge that exited before
         // the stop read keeps its verdict. The host reaps after pipe drain,
@@ -37,7 +39,9 @@ pub(super) fn execute(
         for _ in pending {
             // A judge that exited keeps its verdict, but a child of it
             // still holding the output pipes gets the stop, so the drain ends.
-            if !judge_exited {
+            if judge_exited {
+                stop_after_exit.set(true);
+            } else {
                 terminated.set(true);
             }
             if let Some(pid) = group.get() {
@@ -51,11 +55,28 @@ pub(super) fn execute(
         // check exit itself, bounded only by its original timeout.
         interrupted() || (terminated.get() && group.get().is_none())
     };
-    let output =
-        crate::harness::headless::admit(adapter, plan)?.execute_hosted(timeout, &poll, |pid| {
-            group.set(Some(pid));
-            Ok(())
-        })?;
+    let started = Instant::now();
+    let admitted = crate::harness::headless::admit(adapter, plan)?;
+    // Admission counts against the deadline: with nothing left, no judge starts.
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Ok(crate::proc::BoundedOutput {
+            status: std::os::unix::process::ExitStatusExt::from_raw(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            stdin: None,
+            timed_out: true,
+        });
+    }
+    let output = admitted.execute_hosted(remaining, &poll, |pid| {
+        group.set(Some(pid));
+        Ok(())
+    })?;
+    if stop_after_exit.get()
+        && let Some(hold) = record_hold.as_mut()
+    {
+        hold.stop_read = true;
+    }
     if terminated.get() {
         return Err(ProcessErr::Io(std::io::ErrorKind::Interrupted.into()));
     }
@@ -89,10 +110,12 @@ pub(super) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
 
 pub(super) fn run(
     fire: &mut TaskFire<'_>,
+    tier: usize,
     judge: &Judge,
     dir: &Path,
     root: &Path,
 ) -> Result<ControlFlow<(LoopRunResult, String), (CheckOutcome, JudgeRecord)>> {
+    let started = Instant::now();
     if judge.recheck.is_some() && !fire.entry.stay {
         bail!("judge recheck requires a resident task");
     }
@@ -137,13 +160,6 @@ pub(super) fn run(
     )?;
     let cell = &profile.cell;
     let kind = cell.kind.clone();
-    let adapter = profile.adapter;
-    // HeadlessProfile admitted this adapter's headless form.
-    let form = adapter
-        .spec()
-        .launch
-        .headless
-        .expect("resolved headless profile");
     let login = &profile.login;
     let mut scope = FireScope::new(
         kind.clone(),
@@ -170,132 +186,139 @@ pub(super) fn run(
     };
     identity.params.loop_task = Some(fire.name.clone());
     identity.params.automation = Some(crate::agents::Automation::Loop);
-    let mut request = ExecRequest::fresh(cell, identity, None, false);
-    request.action = ExecAction::Launch {
-        prompt: Some(fire.augment_guard_prompt(prompt)),
-        extra_args: cell.args.clone(),
-    };
-    request.reminder_section = Some(crate::harness::launch::ReminderSection::Judge(
-        reminder::compose_check(&fire.name, &fire.task, &action_prompt),
-    ));
     let unit = state.ensure_temp_unit(None)?;
     let path = unit.join(format!("loop-judge-{}", RunId::new()));
     std::fs::create_dir(&path)?;
     let files = CheckFiles(path);
-    let host_request = HeadlessRequest {
-        schema_open: false,
-        schema: CHECK_VERDICT_SCHEMA.into(),
-        schema_file: files.0.join("schema.json"),
-        verdict_file: files.0.join("verdict.json"),
-    };
-    std::fs::write(&host_request.schema_file, CHECK_VERDICT_SCHEMA)?;
-    request.headless = Some(host_request.clone());
-    let (plan, warnings) = profile.prepare(request, &fire.config, dir, &workspace.project_root)?;
-    let interrupts = &fire.check_interrupts;
-    let output = (fire.check_process)(
-        adapter,
-        &plan,
-        &host_request,
-        timeout,
-        &|| {
-            interrupts
-                .as_ref()
-                .is_some_and(throttle::Interrupts::raised)
+    let (prepared, warnings) = core::prepare(
+        profile,
+        core::Request {
+            prompt: fire.augment_guard_prompt(prompt),
+            reminder: crate::harness::launch::ReminderSection::Judge(reminder::compose_check(
+                &fire.name,
+                &fire.task,
+                &action_prompt,
+            )),
+            identity,
+            dir,
+            root: &workspace.project_root,
+            contract: Contract::Loop,
+            schema_file: files.0.join("schema.json"),
+            verdict_file: files.0.join("verdict.json"),
+            timeout,
         },
-        &mut fire.record_hold,
-    );
-    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
-    let (mut result, timed_out, interrupted, tail) = match output {
-        Ok(output) => {
-            let mut result = form.read_result(
-                &output.stdout,
-                &output.stderr,
-                &host_request,
-                plan.request.identity.params.model.as_deref(),
-                plan.request.identity.params.fast,
-                &prices,
-            );
-            if output.timed_out {
-                result.verdict = None;
-                result.error = Some(
-                    format!(
-                        "judge timed out after {}",
-                        super::super::arm::duration_label(timeout)
-                    )
-                    .into(),
-                );
-            }
-            if result.verdict.is_none() && result.error.is_none() {
-                result.error =
-                    Some(format!("judge returned no verdict ({})", output.status).into());
-            }
-            let tail = format!(
-                "{}\n{}",
-                crate::proc::tail_output(&output.stdout, CHECK_OUTPUT_CAP / 2),
-                crate::proc::tail_output(&output.stderr, CHECK_OUTPUT_CAP / 2)
-            );
-            (result, output.timed_out, false, tail)
-        }
-        Err(ProcessErr::Directory(error @ crate::agents::LaunchDirRefusal::Home { .. })) => {
-            anyhow::bail!("{error}; re-add the loop task from a project directory")
-        }
-        Err(ProcessErr::Directory(error)) => return Err(error.into()),
-        Err(ProcessErr::Version(error)) => return Err(error.into()),
-        Err(ProcessErr::BindGuard(error)) => return Err(error.into()),
-        Err(ProcessErr::Io(error)) => (
-            crate::agents::HeadlessResult {
-                error: Some(format!("running judge: {error}").into()),
-                ..Default::default()
-            },
-            false,
-            error.kind() == std::io::ErrorKind::Interrupted,
-            String::new(),
-        ),
-    };
-    let verdict = result.verdict.take().and_then(|value| {
-        match serde_json::from_value::<crate::agents::HeadlessVerdict>(value) {
-            Ok(verdict) => Some(verdict),
-            Err(error) => {
-                result.error = Some(format!("invalid judge verdict: {error}").into());
-                None
-            }
-        }
-    });
-    let passed = verdict.as_ref().is_some_and(|verdict| verdict.pass);
-    let output = verdict.as_ref().map_or_else(
-        || {
-            format!(
-                "{}\n{tail}",
-                result
-                    .error
-                    .as_ref()
-                    .map(|error| error.text.as_str())
-                    .unwrap_or("judge returned no verdict")
-            )
-        },
-        |verdict| verdict.reason.clone(),
-    );
-    let error = if verdict.is_none() {
-        Some(output.clone())
-    } else {
-        result.error.map(|error| error.text)
-    };
-    let record = JudgeRecord {
+        &fire.config,
+        &runtime,
+    )?;
+    // One deadline bounds both attempts: the retry runs on what is left of it.
+    let deadline = Instant::now() + timeout;
+    let record = |judged: JudgeTry, retry: Option<String>| JudgeStage {
+        judged,
+        retry,
         profile: judge.agent.clone(),
-        kind,
-        model: plan.request.identity.params.model.clone(),
-        verdict: verdict.as_ref().map(|verdict| verdict.pass),
-        reason: verdict.map(|verdict| verdict.reason),
-        error,
-        cost_usd: result.cost_usd,
-        input_tokens: result.input_tokens,
-        output_tokens: result.output_tokens,
-        duration_ms: None,
-        reused: false,
-        warnings,
+        kind: kind.clone(),
+        model: prepared.model().map(str::to_owned),
+        warnings: warnings.clone(),
+        duration_ms: Some(elapsed_millis(started)),
     };
-    Ok(ControlFlow::Continue((
-        CheckOutcome {
+    let mut judged = attempt(fire, &prepared, timeout)?;
+    if let Err(failure) = &mut judged.answer
+        && fire.record_hold.as_ref().is_some_and(|hold| hold.stop_read)
+    {
+        // A stop read as the judge exited ends the tier like one read while it ran.
+        failure.kind = FailureKind::Canceled;
+    }
+    let mut retry = None;
+    if let Err(failure) = &judged.answer
+        && failure.kind.retry_owed(false)
+        && !fire.check_interrupted()
+    {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let timed_out = core::Failure::timed_out(timeout);
+            judged.answer = Err(core::Failure {
+                text: format!("{}\n{}", timed_out.text, failure.text),
+                ..timed_out
+            });
+        } else {
+            // The retry must read only its own answer.
+            let _ = std::fs::remove_file(prepared.verdict_file());
+            let first_error = failure.text.clone();
+            let second = match attempt(fire, &prepared, remaining) {
+                Ok(second) => second,
+                Err(refusal) => {
+                    // The refusal stops the fire; the first attempt's spend stays in history.
+                    fire.fired_guard.push(super::FiredCheck::Judge {
+                        tier,
+                        record: record(judged, None).into_parts().1,
+                    });
+                    return Err(refusal);
+                }
+            };
+            retry = Some(first_error);
+            judged.usage.add(&second.usage);
+            judged = JudgeTry {
+                usage: judged.usage,
+                ..second
+            };
+        }
+    }
+    Ok(ControlFlow::Continue(record(judged, retry).into_parts()))
+}
+
+/// A finished judge tier, before it becomes the chain's outcome and history record.
+struct JudgeStage {
+    judged: JudgeTry,
+    retry: Option<String>,
+    profile: String,
+    kind: crate::ids::AgentKind,
+    model: Option<String>,
+    warnings: Vec<String>,
+    duration_ms: Option<u64>,
+}
+
+impl JudgeStage {
+    fn into_parts(self) -> (CheckOutcome, JudgeRecord) {
+        let JudgeTry {
+            answer,
+            usage,
+            tail,
+        } = self.judged;
+        // An interrupt that skipped the retry is read again by the caller's chain.
+        let interrupted = matches!(&answer, Err(failure) if failure.kind == FailureKind::Canceled);
+        let timed_out = matches!(&answer, Err(failure) if failure.kind == FailureKind::Timeout);
+        let (passed, output, verdict, reason, error) = match answer {
+            Ok(answer) => {
+                let passed = answer.outcome == LoopOutcome::Pass;
+                (
+                    passed,
+                    answer.reason.clone(),
+                    Some(passed),
+                    Some(answer.reason),
+                    None,
+                )
+            }
+            Err(failure) => {
+                let output = format!("{}\n{tail}", failure.text);
+                (false, output.clone(), None, None, Some(output))
+            }
+        };
+        let record = JudgeRecord {
+            profile: self.profile,
+            kind: self.kind,
+            model: self.model,
+            verdict,
+            reason,
+            error,
+            cost_usd: usage.cost_usd,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            duration_ms: self.duration_ms,
+            reused: false,
+            warnings: self.warnings,
+            retry: self.retry,
+        };
+        let outcome = CheckOutcome {
             passed,
             code: None,
             timed_out,
@@ -303,9 +326,88 @@ pub(super) fn run(
             terminated: false,
             output,
             stderr_line: String::new(),
+        };
+        (outcome, record)
+    }
+}
+
+#[derive(Default)]
+struct Usage {
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+impl Usage {
+    fn add(&mut self, other: &Self) {
+        fn sum<T: std::ops::Add<Output = T> + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            }
+        }
+        self.cost_usd = sum(self.cost_usd, other.cost_usd);
+        self.input_tokens = sum(self.input_tokens, other.input_tokens);
+        self.output_tokens = sum(self.output_tokens, other.output_tokens);
+    }
+}
+
+/// One loop judge attempt, its answer decoded under the loop contract.
+struct JudgeTry {
+    answer: std::result::Result<core::LoopAnswer, core::Failure>,
+    usage: Usage,
+    tail: String,
+}
+
+fn attempt(
+    fire: &mut TaskFire<'_>,
+    prepared: &core::Prepared,
+    timeout: Duration,
+) -> Result<JudgeTry> {
+    let interrupts = &fire.check_interrupts;
+    let check_process = fire.check_process;
+    let record_hold = &mut fire.record_hold;
+    let attempt = prepared.attempt(|adapter, plan, request| {
+        check_process(
+            adapter,
+            plan,
+            request,
+            timeout,
+            &|| {
+                interrupts
+                    .as_ref()
+                    .is_some_and(throttle::Interrupts::raised)
+            },
+            record_hold,
+        )
+    });
+    let attempt = match attempt {
+        Ok(attempt) => attempt,
+        Err(ProcessErr::Directory(error @ crate::agents::LaunchDirRefusal::Home { .. })) => {
+            anyhow::bail!("{error}; re-add the loop task from a project directory")
+        }
+        Err(ProcessErr::Directory(error)) => return Err(error.into()),
+        Err(ProcessErr::Version(error)) => return Err(error.into()),
+        Err(ProcessErr::BindGuard(error)) => return Err(error.into()),
+        // The core turns every I/O end into a failed attempt; only refusals reach here.
+        Err(ProcessErr::Io(error)) => return Err(error.into()),
+    };
+    let tail = attempt.output.as_ref().map_or_else(String::new, |output| {
+        format!(
+            "{}\n{}",
+            crate::proc::tail_output(&output.stdout, CHECK_OUTPUT_CAP / 2),
+            crate::proc::tail_output(&output.stderr, CHECK_OUTPUT_CAP / 2)
+        )
+    });
+    Ok(JudgeTry {
+        answer: attempt.answer.and_then(core::LoopAnswer::from_value),
+        usage: Usage {
+            cost_usd: attempt.cost_usd,
+            input_tokens: attempt.input_tokens,
+            output_tokens: attempt.output_tokens,
         },
-        record,
-    )))
+        tail,
+    })
 }
 
 pub(super) fn replay(
@@ -326,6 +428,7 @@ pub(super) fn replay(
         duration_ms: Some(0),
         reused: true,
         warnings: Vec::new(),
+        retry: None,
     }
 }
 
