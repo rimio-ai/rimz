@@ -1289,6 +1289,26 @@ fn focus_request_does_not_retry_one_shot_or_other_errors() {
 }
 
 #[test]
+fn focus_request_stamps_the_input_instant_not_the_dispatch_instant() {
+    use crate::sidebar_pane::app::focus::input_at_ms;
+    let epoch = Timestamp::now();
+    let clock = LoopClock::play(epoch);
+    let clicked = clock.now();
+    clock.advance(Duration::from_millis(250));
+    let pressed_ms = epoch.as_millisecond() as u64;
+    assert_eq!(
+        input_at_ms(&clock, clicked, Some(crate::ids::FocusNonce::new())),
+        Some(pressed_ms)
+    );
+    assert_eq!(clock.now_ms(), pressed_ms + 250);
+    assert_eq!(
+        input_at_ms(&clock, clicked, None),
+        None,
+        "repairs carry no input stamp"
+    );
+}
+
+#[test]
 fn foreign_strand_has_no_effect_while_own_strand_waits_for_a_working_row() {
     let own = zellij("terminal_0");
     let foreign = zellij("terminal_2");
