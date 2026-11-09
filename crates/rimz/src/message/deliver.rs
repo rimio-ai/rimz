@@ -605,6 +605,17 @@ pub(super) fn execute_attempt(
             live_send,
         )
     };
+    let receipt = receipt.and_then(|receipt| {
+        if let send::Receipt::ClaimLost { compacted } = receipt {
+            store.release_message_claims(
+                records,
+                "pane write stopped: message claim no longer held",
+                compacted,
+                &workspace.session_name,
+            )?;
+        }
+        Ok(receipt)
+    });
     match receipt {
         Ok(send::Receipt::Sent {
             compacted,
@@ -613,7 +624,7 @@ pub(super) fn execute_attempt(
             compacted,
             interrupt,
         }),
-        Ok(send::Receipt::ClaimLost) => Ok(AttemptOutcome::Queued),
+        Ok(send::Receipt::ClaimLost { .. }) => Ok(AttemptOutcome::Queued),
         Ok(send::Receipt::TypingHeld { until, compacted }) => {
             if matches!(
                 source,

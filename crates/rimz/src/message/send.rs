@@ -67,7 +67,9 @@ pub(super) enum Receipt {
     },
     SkippedWaiting(super::InputWait),
     CompactionPending,
-    ClaimLost,
+    ClaimLost {
+        compacted: bool,
+    },
     TypingHeld {
         until: Timestamp,
         compacted: bool,
@@ -483,13 +485,7 @@ fn wait_and_decide(
         return Ok(Decided::Stop(Receipt::TypingHeld { until, compacted }));
     }
     if !store.message_claims_held(batch)? {
-        store.release_message_claims(
-            batch,
-            "pane write stopped: message claim no longer held",
-            compacted,
-            &workspace.session_name,
-        )?;
-        return Ok(Decided::Stop(Receipt::ClaimLost));
+        return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
     }
     let fresh = row_under_lock(store, head)?;
     let Some(agent) = fresh.as_ref().or(bound) else {
