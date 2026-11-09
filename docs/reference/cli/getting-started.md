@@ -30,6 +30,8 @@ rimz attach [SESSION] [launch options]
 
 Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A room written by an older RimZ is torn down and replaced by a fresh room; its history is not carried over. Replacement happens only when no running room holds the workspace; otherwise start or `rimz attach` without a session argument refuses with the held-room error below, leaving the room unchanged. For other rooms, a running session is reattached as it is, on the backend it runs under, except that a `rimzd` tab you closed is reopened from its layout. A detached Zellij session defers that late add: after attaching, run `rimz sidebar repair` to reopen the tab. A room is held while a sidebar pane or a live supervisor lives: a second birth on the same workspace exits nonzero, regardless of backend or session name. The error names the recorded session as already held by another running room, with `rimz attach` and `rimz reset --no-start` as fixes, and for a leftover or renamed session, closing it from its multiplexer (or renaming it back); the running room and its workspace record are unchanged. Once neither a sidebar pane nor a supervisor lives, the room is unheld. Attaching to that room relaunches its sidebar only if no other room holds the workspace; otherwise the attach exits nonzero without relaunching it. An attach during a sidebar restart can be refused until the sidebar returns. [`rimz reset`](./maintenance.md#reset-a-wedged-room) is the command that rebuilds a room.
 
+`start` prints two notices on stderr. A room rooted at a project marker or a plain directory, with no git repository, prints `rimz: marker-rooted workspace at <root> ...` or `rimz: directory workspace rooted at <root> ...` on every start except a remote reconnect. A start that writes the missing machine config prints `rimz: initialized config under ~/.rimz ...`, except on an attended first run, which asks the first-run questions instead.
+
 | Launch option | Effect |
 | --- | --- |
 | `--attach` | Enter the room after opening it, where RimZ would otherwise only print the attach command. |
@@ -77,7 +79,7 @@ Detach and run `rimz` here, or run it from another terminal.
 
 For tmux, the same messages name `tmux` instead of `zellij`.
 
-Inside a session, `rimz start --account` fails instead, because accounts apply only when a room is born.
+Inside a session of the selected backend, without `--attach` or `--print`, `rimz start --account` fails instead, because accounts apply only when a room is born. When the directory's room is not running, the error says to detach and rerun the same command. When it runs (this session or another), the error names `rimz accounts use <KIND> <NAME>`.
 
 ### Attach by session name
 
@@ -95,7 +97,7 @@ Without a nearby name, the second line is `  all rooms: rimz list --all`.
 
 ### Prompts at room birth
 
-A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start or attach that reattaches a running session asks none of them.
+A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start that reattaches a running session asks only the folder-trust question. An attach that reattaches a running session asks none of them.
 
 | Prompt | When | Default |
 | --- | --- | --- |
@@ -105,7 +107,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to five
 | Trust this folder for the listed agents | Detected Codex, Claude, or Qoder has no folder-trust decision under the room's account; shows the proposed file changes first. A decline is remembered per workspace and agent kind; `rimz trust grant` clears it. When no listed kind can be written (Claude in `$HOME`, say), it prints each fix, asks nothing, and remembers those kinds as declined | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
 
-A start without a terminal on stdin, including a remote reconnect, asks nothing: at birth it prints notices for missing hooks and undecided agent folder trust, leaves trust unchanged, and recovers prior agents. It does not remember a decline. Every start also prints the fix for saved-untrusted Codex folders, without offering a grant or remembering a decline for them. A running room leaves recovery candidates parked. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
+A start without a terminal on stdin, including a remote reconnect, asks nothing, leaves trust unchanged, and remembers no decline. At birth it prints a notice for missing hooks and recovers prior agents. Without a terminal, each start also prints one line per undecided agent folder-trust decision with its fix; a remote reconnect prints none. Every start except a remote reconnect prints the fix for saved-untrusted Codex folders, without offering a grant or remembering a decline for them. A running room leaves recovery candidates parked. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
 
 ### Resume on rebirth
 
@@ -117,9 +119,9 @@ rimz: this room's previous session ended with agents still running (2026-07-02 1
 Recover 2 agents (claude, codex)? [Y/n]
 ```
 
-After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. Rebirth recovery reports on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. When some agents cannot be resumed, RimZ lists each with its reason and asks a second question, whether to drop them, which defaults to no: kept agents are offered again at the next rebirth. `--no-resume` skips recovery and brings the room up with no agents, and so does answering `n` to the first question. Typed at a terminal, both are one-way: RimZ records the agents it did not recover as ended, so a later start without the flag has nothing left to seed from. Their transcripts and history stay on disk.
+After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. Rebirth recovery reports on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. When some agents cannot be resumed, RimZ lists each with its reason and asks a second question, whether to drop them, which defaults to no: kept agents are offered again at the next rebirth. `--no-resume` skips recovery and brings the room up with no agents, and so do `[resume] on_rebirth = false` and answering `n` to the first question. Typed at a terminal, both are one-way: RimZ records the agents it did not recover as ended, so a later start without the flag has nothing left to seed from. Their transcripts and history stay on disk.
 
-A running room never asks a recovery question, including web and remote entries, and opens no recovery tabs on entry. When agents remain parked it prints one stderr notice naming their count: `rimz agents resume <lane>` brings a lane back, and an attended `rimz start --no-resume` ends the parked candidates. The latter prints an ended count instead. With recovery on, even an unattended entry retires an old parked team session whose seat a live replacement already fills. An unattended rebirth resumes what it can and keeps the rest parked for an explicit resume or a later rebirth. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
+A running room never asks a recovery question, including web and remote entries, and opens no recovery tabs on entry. When agents remain parked it prints one stderr notice naming their count: `rimz agents resume <lane>` brings a lane back, and an attended `rimz start --no-resume` ends the parked candidates. The latter prints an ended count instead. A `--no-resume` entry into a running room with nothing parked prints `rimz: --no-resume changed nothing: the room was already running with no parked agents`. With recovery on, even an unattended entry retires an old parked team session whose seat a live replacement already fills. An unattended rebirth resumes what it can and keeps the rest parked for an explicit resume or a later rebirth. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
 
 ### Accounts
 
@@ -128,7 +130,8 @@ A running room never asks a recovery question, including web and remote entries,
 | Case | Fix it names |
 | --- | --- |
 | `--account` differs from an existing pin for that provider | `rimz accounts use <KIND> <NAME>` inside the room |
-| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz accounts use <KIND> <NAME>` |
+| Any `--account`, when you run `start` inside a session of the selected backend and the room is running | `rimz accounts use <KIND> <NAME>` |
+| Any `--account`, when you run `start` inside a session of the selected backend and the room is not running | Detach and rerun the same command |
 | A provider inherits and the project sets `[accounts]` but is untrusted or its trust is stale | Review with `rimz trust`, then `rimz trust grant`. Pinned providers ignore project selections. |
 | The machine `config.toml` is unreadable, for a provider inheriting or pinned to a named account | Correct the file; `rimz config get` shows the strict error. A provider pinned to `default` needs neither project nor machine configuration. |
 | A deciding `[accounts.use]` entry names an undeclared account | `rimz accounts add <kind> <name>`, or clear it with `rimz accounts use --global <kind> default` |
@@ -155,6 +158,7 @@ rimz sessions
 | --- | --- |
 | `↑` `↓`, `k` `j`, scroll wheel | Move the selection |
 | `Enter`, or click the selected card | Attach to the selected room |
+| Click another card | Select it |
 | `n` | Open the new-session selector |
 | `/` | Open the filter on repository name and path |
 | `Esc` | Quit |
@@ -166,12 +170,13 @@ rimz sessions
 | `Backspace` | Delete the last filter character |
 | `↑` `↓`, scroll wheel | Move the selection |
 | `Enter`, or click the selected card | Attach to the selected room |
+| Click another card | Select it |
 | `Esc` | Close the filter, keeping its text applied and visible |
 | `Ctrl-C` | Quit |
 
-The filter line stays visible. Its cursor appears only while the filter is open; reopen it with `/` to edit or backspace away the text.
+The filter is case-insensitive. The filter line stays visible. Its cursor appears only while the filter is open; reopen it with `/` to edit or backspace away the text.
 
-The new-session selector lists dormant known workspaces, then the current directory, then its non-hidden subdirectories, starting at `$HOME`. Typing filters the list.
+The new-session selector opens on `$HOME` (the current directory when `HOME` is unset). It lists dormant known workspaces, then the browsed directory itself as `.`, then its non-hidden subdirectories by name. Typing filters the list, case-insensitively, on each row's name and `~`-relative path.
 
 | Key (new session) | Action |
 | --- | --- |
@@ -180,8 +185,9 @@ The new-session selector lists dormant known workspaces, then the current direct
 | `←`, or `Backspace` with an empty filter | Go up one directory |
 | `Enter` | Create the room for the selected path and attach |
 | `Esc` | Return to the room list |
+| `Ctrl-C` | Quit |
 
-An unreadable directory shows an empty directory list with a notice. `rimz sessions` refuses to run inside Zellij or tmux and points at `rimz attach`. Without a terminal on stdin and stdout, it prints the live sessions in its error message, ends with `for a list, run: rimz list`, and exits 1.
+An unreadable directory shows an empty directory list with the notice `could not read <path>: <error>`. `rimz sessions` refuses to run inside Zellij or tmux and points at `rimz attach`. Without a terminal on stdin and stdout, it prints the live sessions in its error message, ends with `for a list, run: rimz list`, and exits 1.
 
 The browser's room picker is the same manager ([web guide](../../guide/web.md)).
 
@@ -191,14 +197,14 @@ The browser's room picker is the same manager ([web guide](../../guide/web.md)).
 rimz list [-a | --all] [--json]
 ```
 
-`rimz list` (alias `rimz ls`) joins RimZ's workspace records with the live Zellij and tmux sessions, matched by session name. By default it shows running rooms and rooms active in the last 24 hours; `--all` adds dormant ones. Running rooms sort first, then by most recent activity. It reads records only and changes no room.
+`rimz list` (alias `rimz ls`) joins RimZ's workspace records with the live Zellij and tmux sessions, matched by session name. By default it shows running rooms and rooms active in the last 24 hours; `--all` adds dormant ones. A room's activity is the newest modification time of its event log and `workspace.json`. Running rooms sort first, then by most recent activity, then by workspace id. It reads records only and changes no room.
 
 | Column | Content |
 | --- | --- |
 | `ROOM` | Multiplexer session name, the argument to `rimz attach`. The current room has `(here)` after its name. |
 | `PROJECT` | Project root, abbreviated with `~` under your home directory. |
 | `MUX` | `zellij`, `tmux`, or `-` when no session is live. |
-| `LAST ACTIVE` | Relative age of the last activity, such as `5h ago`. A stopped room whose last session died shows the death instead, such as `crashed · 16 agents · 2h ago` or `rebooted · 1 agent · 2h ago`. |
+| `LAST ACTIVE` | Relative age of the last activity, such as `5h ago`, or `-` with none. A stopped room whose last session died shows the death instead, such as `crashed · 16 agents · 2h ago`, `rebooted · 1 agent · 2h ago`, or `rebooted · 2h ago` when it lost no agents. |
 
 With no rows, human output leaves stdout empty and prints a hint on stderr. If the default view hides dormant rooms, the hint gives their count and names `rimz list --all`. With no known rooms, it says to run `rimz` in a project. Both exit 0. An empty JSON view prints `[]` on stdout and nothing on stderr.
 
