@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::config::keys::{
-    KeyAction, KeyActionName, KeyChord, KeyDirection, KeyMode, KeySplitDirection, RoomKeymap,
+    KeyAction, KeyActionName, KeyChord, KeyDirection, KeyMode, KeyScrollback, KeySplitDirection,
+    RoomKeymap,
 };
 use serde_json::{Value, json};
 
@@ -26,8 +27,10 @@ pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String 
             modes.push(json!({"mode":"normal", "clear":false, "binds":binds}));
         }
     }
-    if rimz {
-        modes.extend(scroll_modes());
+    match keymap.style.map(|style| style.scrollback) {
+        Some(KeyScrollback::Vi) => modes.extend(scroll_modes()),
+        Some(KeyScrollback::Native) => modes.extend(native_scroll_modes()),
+        None => {}
     }
     json!({"report_modes":rimz, "commands":commands, "modes":modes})
         .to_string()
@@ -205,6 +208,57 @@ fn scroll_modes() -> Vec<Value> {
     ]
 }
 
+/// Zellij's stock scroll, enter-search, and search keys, with every exit landing
+/// in locked, RimZ's home mode.
+fn native_scroll_modes() -> Vec<Value> {
+    let exit = || json!([{"action":["ScrollToBottom"]},{"mode":"locked"}]);
+    let bind = |key: &str, steps: Value| json!({"key":key,"steps":steps});
+    let motions = || {
+        let mut binds = Vec::new();
+        for (keys, action) in [
+            (&["j", "Down"][..], "ScrollDown"),
+            (&["k", "Up"][..], "ScrollUp"),
+            (&["Ctrl f", "PageDown", "Right", "l"][..], "PageScrollDown"),
+            (&["Ctrl b", "PageUp", "Left", "h"][..], "PageScrollUp"),
+            (&["d"][..], "HalfPageScrollDown"),
+            (&["u"][..], "HalfPageScrollUp"),
+        ] {
+            binds.extend(
+                keys.iter()
+                    .map(|key| bind(key, json!([{"action":[action]}]))),
+            );
+        }
+        binds
+    };
+    let exits = || ["Ctrl c", "Esc", "Enter"].map(|key| bind(key, exit()));
+    let mut scroll = motions();
+    scroll.push(bind(
+        "e",
+        json!([{"action":["EditScrollback"]},{"mode":"locked"}]),
+    ));
+    scroll.push(bind(
+        "s",
+        json!([{"action":["SearchInput","0"]},{"mode":"entersearch"}]),
+    ));
+    scroll.extend(exits());
+    let mut search = motions();
+    search.push(bind("n", json!([{"action":["Search","Down"]}])));
+    search.push(bind("p", json!([{"action":["Search","Up"]}])));
+    for (key, option) in [("c", "CaseSensitivity"), ("w", "Wrap"), ("o", "WholeWord")] {
+        search.push(bind(key, json!([{"action":["SearchToggleOption",option]}])));
+    }
+    search.extend(exits());
+    vec![
+        json!({"mode":"scroll","clear":true,"binds":scroll}),
+        json!({"mode":"entersearch","clear":true,"binds":[
+            bind("Enter", json!([{"mode":"search"}])),
+            bind("Esc", json!([{"mode":"scroll"}])),
+            bind("Ctrl c", json!([{"mode":"scroll"}]))
+        ]}),
+        json!({"mode":"search","clear":true,"binds":search}),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +415,80 @@ mod tests {
                 json!({"action":["MoveFocus","Down"]})
             );
         }
+    }
+
+    fn scroll_trio(wire: &Value) -> Vec<Value> {
+        wire["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|mode| {
+                matches!(
+                    mode["mode"].as_str(),
+                    Some("scroll" | "entersearch" | "search")
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn vi_scrollback_installs_the_rimz_scroll_tables() {
+        assert_eq!(scroll_trio(&wire("[room]\nstyle='rimz'")), scroll_modes());
+    }
+
+    #[test]
+    fn native_scrollback_installs_zellij_stock_keys_exiting_to_locked() {
+        let config: MachineConfig = toml::from_str("[room]\nstyle='rimz'").unwrap();
+        let mut keymap = config.room_keymap();
+        keymap.style.as_mut().unwrap().scrollback = KeyScrollback::Native;
+        let encoded = encode(&keymap, "room", Path::new("/project"));
+        let wire: Value =
+            serde_json::from_str(&encoded.replace("%2C", ",").replace("%25", "%")).unwrap();
+        let rows = |table: &str| -> Vec<Value> {
+            table
+                .lines()
+                .map(|row| {
+                    let (key, steps) = row.split_once(" => ").unwrap();
+                    let steps: Vec<_> = steps
+                        .split(" ; ")
+                        .map(|step| match step.strip_prefix("mode ") {
+                            Some(mode) => json!({"mode":mode}),
+                            None => json!({"action":step.split(' ').collect::<Vec<_>>()}),
+                        })
+                        .collect();
+                    json!({"key":key,"steps":steps})
+                })
+                .collect()
+        };
+        let motions = concat!(
+            "j => ScrollDown\nDown => ScrollDown\nk => ScrollUp\nUp => ScrollUp\n",
+            "Ctrl f => PageScrollDown\nPageDown => PageScrollDown\nRight => PageScrollDown\n",
+            "l => PageScrollDown\nCtrl b => PageScrollUp\nPageUp => PageScrollUp\n",
+            "Left => PageScrollUp\nh => PageScrollUp\nd => HalfPageScrollDown\n",
+            "u => HalfPageScrollUp\n"
+        );
+        let exits = concat!(
+            "Ctrl c => ScrollToBottom ; mode locked\nEsc => ScrollToBottom ; mode locked\n",
+            "Enter => ScrollToBottom ; mode locked"
+        );
+        let scroll = format!(
+            "{motions}e => EditScrollback ; mode locked\n\
+             s => SearchInput 0 ; mode entersearch\n{exits}"
+        );
+        let search = format!(
+            "{motions}n => Search Down\np => Search Up\nc => SearchToggleOption CaseSensitivity\n\
+             w => SearchToggleOption Wrap\no => SearchToggleOption WholeWord\n{exits}"
+        );
+        let entersearch = "Enter => mode search\nEsc => mode scroll\nCtrl c => mode scroll";
+        assert_eq!(
+            scroll_trio(&wire),
+            [
+                json!({"mode":"scroll","clear":true,"binds":rows(&scroll)}),
+                json!({"mode":"entersearch","clear":true,"binds":rows(entersearch)}),
+                json!({"mode":"search","clear":true,"binds":rows(&search)}),
+            ]
+        );
     }
 
     #[test]
