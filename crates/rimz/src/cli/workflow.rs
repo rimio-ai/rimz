@@ -292,13 +292,15 @@ fn start(
     };
     let record = workflow::create(
         ctx.store.paths(),
-        &dir,
+        workflow::DefinitionSource::Deployed {
+            dir: &dir,
+            task: None,
+        },
         workflow::ScopeRoots {
             checkout: scope.clone(),
             project: ctx.workspace.project_root.clone(),
         },
         || Ok(prompt),
-        None,
         false,
     )?;
     if worktree.is_some() && record.scope.kind == records::ScopeKind::Project {

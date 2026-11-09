@@ -348,13 +348,15 @@ fn create_validates_the_spec_it_reads_before_publication() {
     fs::write(crate::disk::paths::workflow_spec_file(&dir), text).unwrap();
     let error = create(
         &state,
-        &dir,
+        DefinitionSource::Deployed {
+            dir: &dir,
+            task: None,
+        },
         ScopeRoots {
             checkout: home.path().into(),
             project: home.path().into(),
         },
         || Ok(None),
-        None,
         false,
     )
     .unwrap_err();
@@ -423,13 +425,15 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
         }
         let error = create(
             &state,
-            &dir,
+            DefinitionSource::Deployed {
+                dir: &dir,
+                task: None,
+            },
             ScopeRoots {
                 checkout: home.path().into(),
                 project: home.path().into(),
             },
             || Ok(None),
-            None,
             false,
         )
         .unwrap_err();
@@ -473,13 +477,15 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
         drop(guard);
         let error = create(
             &state,
-            &dir,
+            DefinitionSource::Deployed {
+                dir: &dir,
+                task: None,
+            },
             ScopeRoots {
                 checkout,
                 project: home.path().into(),
             },
             || Err("prompt was read".into()),
-            None,
             false,
         )
         .unwrap_err();
@@ -855,4 +861,165 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
         serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
     assert_eq!(ctx["seq"], 2);
     assert_eq!(ctx["retry"], record.check_retry_context.unwrap());
+}
+
+const CHECK_ONLY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
+const ONE_TURN: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
+
+fn bare_room() -> (tempfile::TempDir, StatePaths) {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    (home, state)
+}
+
+fn open_room(state: &StatePaths, root: &Path) {
+    fs::create_dir_all(state.workspace_record.parent().unwrap()).unwrap();
+    fs::write(&state.workspace_record, serde_json::to_vec(&json!({
+        "layout":crate::disk::paths::WORKSPACE_LAYOUT, "workspace_id":crate::ids::WorkspaceId::from_project_root(root),
+        "project_root":root, "session_name":"test", "updated_at":Timestamp::now()
+    })).unwrap()).unwrap();
+}
+
+fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'static> {
+    DefinitionSource::Inline {
+        task: task.into(),
+        definition: InlineDefinition {
+            text: text.into(),
+            assets: assets
+                .iter()
+                .map(|(name, body)| ((*name).to_owned(), body.as_bytes().to_vec()))
+                .collect(),
+        },
+    }
+}
+
+fn start_at(state: &StatePaths, root: &Path, source: DefinitionSource<'_>) -> Result<RunRecord> {
+    create(
+        state,
+        source,
+        ScopeRoots {
+            checkout: root.into(),
+            project: root.into(),
+        },
+        || Ok(None),
+        false,
+    )
+}
+
+#[test]
+fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
+    let (home, state) = bare_room();
+    open_room(&state, home.path());
+    let record = start_at(
+        &state,
+        home.path(),
+        inline("nightly", ONE_TURN, &[("prompts/fix.md", "fix the build")]),
+    )
+    .unwrap();
+    let paths = state.workflow(&record.id);
+    assert_eq!(
+        (
+            record.origin,
+            record.workflow.as_str(),
+            record.task.as_deref()
+        ),
+        (RunOrigin::Inline, "nightly", Some("nightly"))
+    );
+    assert_eq!(record.spec_dir, paths.definition.canonicalize().unwrap());
+    assert_eq!(fs::read(&paths.spec).unwrap(), ONE_TURN.as_bytes());
+    assert!(
+        record.notes.is_some(),
+        "an agent run keeps its notes folder"
+    );
+    let asset = paths.definition.join("prompts/fix.md");
+    fs::write(&asset, "fix the build, sealed copy").unwrap();
+    let spec = spec::load_run(&paths.home, &record).unwrap();
+    assert_eq!(
+        agent::compose(&record, &paths, &spec.steps["fix"], &mut BTreeMap::new()).unwrap(),
+        "fix the build, sealed copy",
+        "each attempt reads the prompt from the run's own definition root"
+    );
+}
+
+#[test]
+fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
+    let (home, state) = bare_room();
+    open_room(&state, home.path());
+    let dir = home.path().join("nightly");
+    let other = home.path().join("other");
+    for dir in [&dir, &other] {
+        fs::create_dir(dir).unwrap();
+        fs::write(crate::disk::paths::workflow_spec_file(dir), CHECK_ONLY).unwrap();
+    }
+    let deployed = start_at(
+        &state,
+        home.path(),
+        DefinitionSource::Deployed {
+            dir: &dir,
+            task: None,
+        },
+    )
+    .unwrap();
+    let task = start_at(&state, home.path(), inline("nightly", CHECK_ONLY, &[]))
+        .expect("a deployed workflow and a task of the same name are different runs");
+    let blocker = |source| match start_at(&state, home.path(), source) {
+        Err(WorkflowErr::Exists { run, .. }) => run,
+        other => panic!("expected a live run to refuse the start: {other:?}"),
+    };
+    assert_eq!(blocker(inline("nightly", CHECK_ONLY, &[])), task.id);
+    assert_eq!(
+        blocker(DefinitionSource::Deployed {
+            dir: &other,
+            task: Some("nightly".into()),
+        }),
+        task.id,
+        "a task that now names another workflow still overlaps its inline run"
+    );
+    assert_eq!(
+        blocker(DefinitionSource::Deployed {
+            dir: &dir,
+            task: None,
+        }),
+        deployed.id
+    );
+}
+
+#[test]
+fn a_task_started_run_needs_a_room_even_with_only_checks() {
+    let (home, state) = bare_room();
+    for source in [
+        inline("probe", CHECK_ONLY, &[]),
+        inline("fixer", ONE_TURN, &[("prompts/fix.md", "fix")]),
+    ] {
+        let error = start_at(&state, home.path(), source).unwrap_err();
+        assert!(
+            matches!(&error, WorkflowErr::Refused(reason) if reason.starts_with("no room at")),
+            "a fire in a root with no room refuses, as trunk's did: {error}"
+        );
+    }
+    assert!(
+        state.workflow_runs().map_or(true, |runs| runs.is_empty()),
+        "a refused inline start leaves no sealed root behind"
+    );
+    open_room(&state, home.path());
+    let probe = start_at(&state, home.path(), inline("probe2", CHECK_ONLY, &[]));
+    assert_eq!(
+        probe.unwrap().notes,
+        None,
+        "a task's check-only run allocates no notes folder"
+    );
+    let dir = home.path().join("checks");
+    fs::create_dir(&dir).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(&dir), CHECK_ONLY).unwrap();
+    let deployed = DefinitionSource::Deployed {
+        dir: &dir,
+        task: None,
+    };
+    assert!(
+        start_at(&state, home.path(), deployed)
+            .unwrap()
+            .notes
+            .is_some(),
+        "a deployed run in a room keeps its notes and history"
+    );
 }

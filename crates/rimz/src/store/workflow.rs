@@ -518,6 +518,17 @@ pub enum RouteDefaults {
     OnBreak,
 }
 
+/// Where a run's definition came from; a record written before origins existed is deployed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOrigin {
+    /// A workflow directory under the machine home; `workflow` is its name.
+    #[default]
+    Deployed,
+    /// A loop task's compiled definition, sealed in the run's own root; `workflow` is the task.
+    Inline,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
@@ -532,6 +543,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub break_agents: Vec<String>,
     pub id: WorkflowRunId,
+    #[serde(default)]
+    pub origin: RunOrigin,
     pub workflow: String,
     #[serde(default)]
     pub task: Option<String>,
@@ -805,6 +818,50 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
         });
     }
     Ok(record)
+}
+
+/// Write an inline definition's text and assets into the run's definition root, before
+/// `initialize` publishes the record. Each asset name is a relative path inside that root.
+pub fn seal_definition(
+    paths: &WorkflowPaths,
+    text: &str,
+    assets: &BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
+    let root = &paths.definition;
+    std::fs::create_dir_all(root).map_err(WorkflowStoreErr::io(root))?;
+    crate::disk::atomic::write_bytes_atomically(
+        &crate::disk::paths::workflow_spec_file(root),
+        text.as_bytes(),
+    )?;
+    for (name, bytes) in assets {
+        let relative = Path::new(name);
+        if !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(WorkflowStoreErr::Io {
+                path: root.join(relative),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "a definition asset must be a relative path inside its root",
+                ),
+            });
+        }
+        let file = root.join(relative);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
+        }
+        crate::disk::atomic::write_bytes_atomically(&file, bytes)?;
+        // Publish each new subdirectory entry down from the root.
+        for dir in file
+            .ancestors()
+            .skip(2)
+            .take_while(|dir| dir.starts_with(root))
+        {
+            crate::disk::atomic::sync_dir(dir)?;
+        }
+    }
+    Ok(())
 }
 
 #[must_use = "durability barrier; check the result"]

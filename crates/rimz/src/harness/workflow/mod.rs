@@ -21,7 +21,10 @@ mod state;
 mod validate;
 
 pub(crate) use engine::reassign_task;
-pub use engine::{WorkflowErr, advance, cancel, create, restart, resume, wake, wake_run};
+pub use engine::{
+    DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, restart, resume,
+    wake, wake_run,
+};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,

@@ -174,6 +174,7 @@ fn paths() -> WorkflowPaths {
         record: "/run/record.json".into(),
         journal: "/run/journal.jsonl".into(),
         spec: "/run/workflow.toml".into(),
+        definition: "/run/definition".into(),
         work: "/run/work".into(),
         context: "/run/work/context.json".into(),
     }

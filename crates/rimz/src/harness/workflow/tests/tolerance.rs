@@ -1452,13 +1452,15 @@ fn create_and_validate_agree_on_ignored_fields_and_required_rules() {
         let report = validate(&dir, &LoadedDefinitions::default(), Some(&dir));
         let result = create(
             &state,
-            &dir,
+            DefinitionSource::Deployed {
+                dir: &dir,
+                task: None,
+            },
             ScopeRoots {
                 checkout: dir.clone(),
                 project: dir.clone(),
             },
             || Ok(None),
-            None,
             false,
         );
         actual.push((

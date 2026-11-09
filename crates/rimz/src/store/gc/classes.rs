@@ -522,8 +522,9 @@ fn collect_owned(
         }
     }
     // A run home without its record is a crash during `initialize`, which runs
-    // under the workspace lock held here, so no creation is in flight; every
-    // reader skips it, so it goes once the home itself is past the grace.
+    // under the workspace lock held here, or during an inline run's sealing,
+    // which precedes it by moments; every reader skips it, so it goes once the
+    // home itself is past the grace.
     for home in paths.workflow_runs()? {
         let recordless = !home.record.try_exists().map_err(|source| GcErr::Io {
             path: home.record.clone(),

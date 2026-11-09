@@ -31,6 +31,7 @@ expression: value
   "next_seq": 2,
   "node": "pr",
   "notes": "20260101/000000Z-workflow-review-project",
+  "origin": "deployed",
   "park": null,
   "prev_attempt": {
     "asked": null,

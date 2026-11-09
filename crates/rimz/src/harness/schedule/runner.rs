@@ -1265,13 +1265,15 @@ impl<'a> TaskFire<'a> {
         };
         let result = crate::harness::workflow::create(
             &state,
-            &dir,
+            crate::harness::workflow::DefinitionSource::Deployed {
+                dir: &dir,
+                task: Some(self.name.clone()),
+            },
             crate::harness::workflow::ScopeRoots {
                 checkout: self.launch_checkout(),
                 project: root,
             },
             prompt,
-            Some(self.name.clone()),
             self.mode == LoopRunMode::Manual,
         );
         let (result, id, error) = match result {

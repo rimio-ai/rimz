@@ -17,7 +17,7 @@ use crate::harness::schedule::{
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
-    ParkReason, RunRecord, RunState, Scope, ScopeKind, Verdict,
+    ParkReason, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
 };
 
 mod accounting;
@@ -55,29 +55,112 @@ type Result<T> = std::result::Result<T, WorkflowErr>;
 
 mod agent;
 
+/// Where a new run's definition comes from.
+pub enum DefinitionSource<'a> {
+    /// A deployed workflow directory; its basename names the run.
+    Deployed { dir: &'a Path, task: Option<String> },
+    /// A loop task's compiled definition, sealed into the run's own root and named for the task.
+    Inline {
+        task: String,
+        definition: InlineDefinition,
+    },
+}
+
+/// Definition text plus the files it names by relative path, written beside it.
+pub struct InlineDefinition {
+    pub text: String,
+    pub assets: BTreeMap<String, Vec<u8>>,
+}
+
 pub fn create(
     state: &StatePaths,
-    spec_dir: &Path,
+    source: DefinitionSource<'_>,
     roots: ScopeRoots,
     prompt: impl FnOnce() -> std::result::Result<Option<String>, String>,
-    task: Option<String>,
     manual: bool,
 ) -> Result<RunRecord> {
-    let spec_dir = spec_dir.canonicalize()?;
-    let name = spec_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
-        .to_owned();
     let roots = ScopeRoots {
         checkout: roots.checkout.canonicalize()?,
         project: roots.project.canonicalize()?,
     };
+    let start = match &source {
+        DefinitionSource::Deployed { dir, task } => {
+            let dir = dir.canonicalize()?;
+            RunStart {
+                origin: RunOrigin::Deployed,
+                name: dir
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
+                    .to_owned(),
+                task: task.clone(),
+                spec_dir: dir,
+            }
+        }
+        DefinitionSource::Inline { task, .. } => RunStart {
+            origin: RunOrigin::Inline,
+            name: task.clone(),
+            task: Some(task.clone()),
+            spec_dir: std::path::PathBuf::new(),
+        },
+    };
     // A run already holding the scope wins before the definition or the
     // prompt is read, so an edit to either mid-run reads as a skip.
-    refuse_existing(state, &name, &roots)?;
+    refuse_existing(
+        state,
+        start.origin,
+        &start.name,
+        start.task.as_deref(),
+        &roots,
+    )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
-    let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&spec_dir))?;
+    let id = WorkflowRunId::new();
+    let record = match source {
+        DefinitionSource::Deployed { .. } => publish(state, id, start, roots, prompt, manual)?,
+        DefinitionSource::Inline { definition, .. } => {
+            let paths = state.workflow(&id);
+            let published = workflow::seal_definition(&paths, &definition.text, &definition.assets)
+                .map_err(WorkflowErr::from)
+                .and_then(|()| Ok(paths.definition.canonicalize()?))
+                .and_then(|spec_dir| {
+                    publish(
+                        state,
+                        id,
+                        RunStart { spec_dir, ..start },
+                        roots,
+                        prompt,
+                        manual,
+                    )
+                });
+            if published.is_err() {
+                // Nothing was published, so the sealed root has no record to keep it.
+                let _ = std::fs::remove_dir_all(&paths.home);
+            }
+            published?
+        }
+    };
+    spawn(&record)?;
+    Ok(record)
+}
+
+/// A run's identity before its record exists.
+struct RunStart {
+    origin: RunOrigin,
+    name: String,
+    task: Option<String>,
+    spec_dir: std::path::PathBuf,
+}
+
+/// Validate the definition at `start.spec_dir` and publish the run's record.
+fn publish(
+    state: &StatePaths,
+    id: WorkflowRunId,
+    start: RunStart,
+    roots: ScopeRoots,
+    prompt: Option<String>,
+    manual: bool,
+) -> Result<RunRecord> {
+    let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&start.spec_dir))?;
     let spec =
         spec::parse(std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?)?;
     let machine = crate::config::MachineConfig::load_lenient();
@@ -89,8 +172,13 @@ pub fn create(
         &machine.tiers,
         machine.harness.auto_compact,
     );
-    let report =
-        super::validate::validate_spec(&spec_dir, &name, &spec, &definitions, Some(&roots.project));
+    let report = super::validate::validate_spec(
+        &start.spec_dir,
+        &start.name,
+        &spec,
+        &definitions,
+        Some(&roots.project),
+    );
     if !report.errors.is_empty() {
         return Err(WorkflowErr::Refused(
             report
@@ -105,7 +193,18 @@ pub fn create(
         kind: spec.workflow.scope,
         path: roots.path(spec.workflow.scope).to_path_buf(),
     };
-    if crate::workspace::record::read(&state.workspace_record).is_err() {
+    // An agent or a message needs the room, and so does a loop task's run, whose advance finds
+    // it through the room's record; a hand-started run of checks and scripts runs without one.
+    let in_room = spec
+        .steps
+        .values()
+        .any(|step| step.agent.is_some() || step.message.is_some())
+        || spec.checks.values().any(|check| check.agent.is_some());
+    let room = crate::workspace::record::read(&state.workspace_record).is_ok();
+    // A deployed run in a room keeps its notes and history; a loop task's run of checks fires too
+    // often to keep a folder each time.
+    let keeps_notes = in_room || (start.origin == RunOrigin::Deployed && room);
+    if (in_room || start.task.is_some()) && !room {
         return Err(WorkflowErr::Refused(format!(
             "no room at {}; run `rimz start` there first",
             roots.project.display()
@@ -118,11 +217,12 @@ pub fn create(
         route_defaults: workflow::RouteDefaults::OnBreak,
         spec_version: spec::SPEC_VERSION,
         break_agents: Vec::new(),
-        id: WorkflowRunId::new(),
-        workflow: name,
-        task,
+        id,
+        origin: start.origin,
+        workflow: start.name,
+        task: start.task,
         manual,
-        spec_dir,
+        spec_dir: start.spec_dir,
         spec_digest: script::digest(&bytes),
         prompt,
         scope,
@@ -156,9 +256,15 @@ pub fn create(
         check_retry: 0,
         check_retry_context: None,
     };
-    {
-        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-        refuse_existing(state, &record.workflow, &roots)?;
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    refuse_existing(
+        state,
+        record.origin,
+        &record.workflow,
+        record.task.as_deref(),
+        &roots,
+    )?;
+    if keeps_notes {
         record.notes = Some(crate::store::notes::allocate(
             state,
             crate::store::notes::Kind::Workflow {
@@ -168,19 +274,29 @@ pub fn create(
             &record.scope.path,
             record.created_at,
         )?);
-        workflow::initialize(state, &record, &bytes, &guard)?;
     }
-    spawn(&record)?;
+    workflow::initialize(state, &record, &bytes, &guard)?;
     Ok(record)
 }
 
-fn refuse_existing(state: &StatePaths, name: &str, roots: &ScopeRoots) -> Result<()> {
+/// A live run blocks a new one on the same scope when it shares the new run's origin and name,
+/// or its task, so a task cannot dodge overlap by changing what it runs.
+fn refuse_existing(
+    state: &StatePaths,
+    origin: RunOrigin,
+    name: &str,
+    task: Option<&str>,
+    roots: &ScopeRoots,
+) -> Result<()> {
     match workflow::list(state)?.into_iter().find(|r| {
-        !r.state.is_terminal() && r.workflow == name && r.scope.path == roots.path(r.scope.kind)
+        !r.state.is_terminal()
+            && r.scope.path == roots.path(r.scope.kind)
+            && ((r.origin == origin && r.workflow == name)
+                || task.is_some_and(|task| r.task.as_deref() == Some(task)))
     }) {
         Some(existing) => Err(WorkflowErr::Exists {
             run: existing.id,
-            workflow: name.into(),
+            workflow: existing.workflow,
             scope: existing.scope.path,
             task: existing.task,
             kind: existing.scope.kind,

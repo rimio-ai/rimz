@@ -2322,7 +2322,8 @@ path = "crates/rimz/src/harness"
 # Workflow steps carry `share`, `message`, and `undelivered`, with `Step::subscriptions` and `Step::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack (+3).
 # run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
-surface-budget = 1112
+# Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
+surface-budget = 1114
 
 [[verdict]]
 kind = "item"
@@ -4212,7 +4213,8 @@ path = "crates/rimz/src/store"
 # MessageRecord::with_reply_wait_lease stamps a reply wait leg's lease token for cycle detection (+1).
 # Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
-surface-budget = 590
+# workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
+surface-budget = 592
 
 [[verdict]]
 kind = "item"
@@ -11207,6 +11209,16 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
+key = "store::workflow::RunOrigin"
+reason = "A run record says whether a deployed workflow or a loop task's inline definition started it; overlap and views key on it."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::seal_definition"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine seals an inline definition before publishing its record."
+
+[[verdict]]
+kind = "item"
 key = "store::workflow::RouteDefaults"
 reason = "A sealed run freezes legacy park defaults or on-break routing independently of the current definition parser."
 
@@ -11844,6 +11856,16 @@ reason = "The host receives the complete admitted supervised-attempt request."
 kind = "item"
 key = "harness::workflow::LaunchOverrides"
 reason = "The host maps an agent step's sealed launch settings onto the launcher's overrides and cohort."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::DefinitionSource"
+reason = "Run creation takes a deployed directory or a loop task's inline definition; the CLI and the loop runner choose the source."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::InlineDefinition"
+reason = "A loop task's compiled definition text and named assets reach creation, which seals them into the run's own root."
 
 [[verdict]]
 kind = "item"
