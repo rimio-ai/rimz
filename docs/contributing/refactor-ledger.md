@@ -202,7 +202,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/body_filter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/agent_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/workspace_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
-| `sidebar_pane/app` | holds; landed pass-26b | `be91f3434` | 30 | loop clock mechanics consume one render animation answer. |
+| `sidebar_pane/app` | holds; landed pass-26b; pass-33e | `608d58716` | 30 | loop clock mechanics consume one render animation answer; selection dispatch arms issue every viewport request and its helpers stay private. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `1b6ece679` | 30 | preview types `pub` for the CLI. |
 | `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `83b184ffb` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
 | `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | supervisor entry points `pub` for the CLI. |
@@ -215,7 +215,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/sections` | holds; landed pass-33d | `46c659274` | 30 | provider bars and the card's latest call draw a reading resolved in the snapshot. |
 | `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
-| `sidebar_pane/render/ui_state` | holds; landed pass-26b | `be91f3434` | 30 | pane-reach state owns the active roster projection. |
+| `sidebar_pane/render/ui_state` | holds; landed pass-26b; pass-33e | `608d58716` | 30 | pane-reach state owns the active roster projection; one-paint viewport facts go through `ViewState::request` and user toggles through `PresentationToggles`. |
 | `sidebar_pane/render/interaction` | holds; landed pass-24c | `e083557ba` | 30 | hit map pane-internal. |
 | `sidebar_pane/render/odometer` | holds; landed pass-24c | `e083557ba` | 30 | `Roll` floored by `TallyAnim`. |
 | `sidebar_pane/render/scrollbar` | holds; landed pass-24c | `e083557ba` | 30 | pane-internal. |

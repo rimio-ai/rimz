@@ -4011,7 +4011,7 @@ reason = "The CLI passes argv and pane identity to the supervisor without host-o
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::ui_state::ViewState"
-reason = "Portable presentation excludes pane-bound caches and hit geometry."
+reason = "Portable presentation excludes pane-bound caches and hit geometry. Its one-paint viewport facts live in ViewportRequest, written only through ViewState::request, and its user toggles in PresentationToggles (pass 33e)."
 
 [[verdict]]
 kind = "item"
@@ -10509,23 +10509,28 @@ reason = "Field type of HitRegion::target (interaction.rs:31) and named across t
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::render::ui_state::LayoutKey"
+reason = "Field type of ViewState::layout_key, which the struct-update literals across the pane need at pane reach; narrowing beneath it violates private_interfaces under -D warnings (pass 33e)."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::render::ui_state::SpendRatchet"
-reason = "Field type of UiState::spend_ratchet, so it follows the field to pane reach rather than going private (pass 24c)."
+reason = "Field type of ViewState::spend_ratchet, so it follows the field to pane reach rather than going private (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::ui_state::Browse"
-reason = "Field type of UiState::browse, so it follows the field to pane reach rather than going private (pass 24c)."
+reason = "Field type of ViewState::browse, so it follows the field to pane reach rather than going private (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::ui_state::LayoutFreeze"
-reason = "Field type of UiState::freeze, so it follows the field to pane reach rather than going private (pass 24c)."
+reason = "Field type of ViewState::freeze, so it follows the field to pane reach rather than going private (pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::ui_state::DashboardTab"
-reason = "Field type of UiState::dashboard_tab, so it follows the field to pane reach rather than going private (pass 24c)."
+reason = "Field type of PresentationToggles::dashboard_tab, so it follows the field to pane reach rather than going private (pass 24c; owner moved in pass 33e)."
 
 [[verdict]]
 kind = "item"
