@@ -76,7 +76,7 @@ An agent that accepts [launch reminders](../reference/agent-support.md#the-wirin
 
 ## Share code navigation
 
-A native language-server tool starts a full index for every agent and child, so a parent with three children can hold four copies of the same index over one checkout. A [shared language server](./lsp.md) gives them one instead: configure it once, launch as usual, and the first query starts it if memory permits. A child joins its parent's shared server, including while dormant, and its launch reminder names it only when the child's own [skill policy](./configuration.md#skills) makes `rimz-lsp` callable. Its queries can wake that server rather than starting a private index.
+A native language-server tool starts a full index for every agent and child, so a parent with three children can hold four copies of the same index over one checkout. A [shared language server](./lsp.md) gives them one instead: configure it once, launch as usual, and it starts at launch, or on the first query, if memory permits. A child joins its parent's shared server, including while dormant, and its launch reminder names it only when the child's own [skill policy](./configuration.md#skills) makes `rimz-lsp` callable. Its queries can wake that server rather than starting a private index.
 
 ## Watch and answer children
 

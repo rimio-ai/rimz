@@ -102,8 +102,8 @@ impl std::fmt::Display for LspServerKind {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LspPolicy {
-    #[default]
     Optional,
+    #[default]
     Warm,
     Required,
 }
