@@ -80,8 +80,7 @@ fn keymap_commands(
     for mode in [KeyMode::Prefix, KeyMode::Resize, KeyMode::Move] {
         commands.push(words(&["unbind-key", "-a", "-T", table(mode)]));
     }
-    let rimz = keymap.modes.contains_key(&KeyMode::Prefix);
-    if rimz {
+    if keymap.style.is_some() {
         if prior_mode_keys.is_none() {
             commands.push(words(&[
                 "set-option",

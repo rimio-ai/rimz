@@ -1118,6 +1118,16 @@ reason = "MachineConfig resolves one typed keymap without consulting a live mult
 
 [[verdict]]
 kind = "item"
+key = "config::keys::RoomKeyStyle"
+reason = "The resolved keymap carries the RimZ-style prefix and scrollback flavour so backends never infer the style."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::KeyScrollback"
+reason = "Each bundled keymap picks vi scrollback keys or the multiplexer's own, compiled by both backends."
+
+[[verdict]]
+kind = "item"
 key = "config::keys::sidebar::SidebarKeymap"
 reason = "The snapshot carries one resolved in-pane table that the renderer's resolver, hint, and legend read."
 

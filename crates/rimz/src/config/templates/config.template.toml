@@ -131,7 +131,7 @@
 [keys]
 # keymap, prefix, and keys.bind are read only with room.style = "rimz"; bindings belong in this per-machine file.
 # keymap = "rimz"                     # bundled sidebar-first keymap
-# prefix = "Alt+p"                    # moves both the mode entry and the prefix-mode palette chord
+## prefix = "Ctrl+a"                  # unset: the keymap's own (rimz: Alt+p); moves every prefix binding
 ## [keys.bind.normal]
 ## "Alt+x" = "card.close"              # named action, or { run = "rimz ..." }; "none" removes a binding
 ## [keys.sidebar]                     # in-pane sidebar keys, read under both room styles
