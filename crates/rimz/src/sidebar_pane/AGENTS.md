@@ -58,6 +58,8 @@ Render tests golden a full screen through the `assert_snapshot` helper in [`rend
 
 A change to what a click or key does updates that input's row in the input table of [docs/interface/sidebar.md](../../../../docs/interface/sidebar.md) (`rg -n -F '| click' docs/interface/sidebar.md`): a sweep for the behaviour's words misses a row that names only the input.
 
+A loop test of a key's effect sends the raw `Wakeup::Press` the attach wire delivers, not a resolved `Wakeup::Key`: a press becomes its `KeyAction` only inside `handle_wakeup` under the views lock, so work `LoopState::apply_input` does ahead of the reducer for a resolved key never runs for a real press. `q` once passed its unit test and did nothing in a live room for that reason.
+
 A change to `Views::route` evidence routing or to reconciliation rules on, and tests, each kind of retained view against a live client's current view: an anonymous view with input, a paint-only view, a view left behind at a sample, a departed client's own view, and a departed client's frozen copy. It is also checked live after an external `rimz pane focus`, not only after a native tab switch, since paint-only views from background or startup attachments exist only in a real room. It also runs `sidebar_pane::host::tests::detached_attachment_mirrors_layout_without_routing_on_hidden_resize` ten times by name, since one pass hides an intermittent failure.
 
 A renderer rule that compares with the previously presented snapshot (`SelectionFold::previous` in [`app/view_state.rs`](./app/view_state.rs)) states and tests the first fetch, where that snapshot is the empty initial one and the initial selection arms the layout freeze.
