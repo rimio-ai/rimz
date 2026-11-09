@@ -116,10 +116,10 @@ fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
 
 #[test]
 fn capacity_json_retains_the_typed_hold_and_omits_unknown() {
-    let mut record: launch_ledger::CapacityRecord = serde_json::from_value(serde_json::json!({
-        "since": "2026-01-01T00:00:00Z", "first": "2026-01-01T00:00:00Z",
-        "last": "2026-01-01T00:00:00Z", "count": 1, "kinds": [],
-        "reason": "free disk low", "hold": "disk", "gave_up": false
+    let mut record: rimz::store::workflow::Wait = serde_json::from_value(serde_json::json!({
+        "node": "agent", "outcome": "capacity", "detail": "free disk low", "hold": "disk",
+        "first": "2026-01-01T00:00:00Z", "last": "2026-01-01T00:00:00Z", "count": 1,
+        "recheck_at": null
     }))
     .unwrap();
     assert_eq!(
@@ -201,6 +201,7 @@ fn workflow_run_json_includes_only_nonempty_detail() {
         live: true,
         target: None,
         command: None,
+        evidence: None,
     };
     assert_eq!(
         serde_json::to_value(&row).unwrap()["detail"],
@@ -381,6 +382,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         live: true,
         target: None,
         command: None,
+        evidence: None,
     };
     row.workflow_runs = vec![run()];
     row.head = "every 5m".into();

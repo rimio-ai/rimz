@@ -327,6 +327,11 @@ fn layout<'a>(tasks: &[&'a TaskRow], now: Timestamp, cols: usize) -> (Columns, V
                     acting_run_text(last, task.exit.as_deref(), now),
                     render::run_status(&last.record).style,
                 )
+            } else if let Some(newest) = &task.newest {
+                (
+                    newest_fire_text(newest, now),
+                    render::run_status(newest).style,
+                )
             } else if let Some(heard) = &task.heard {
                 (
                     format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)),

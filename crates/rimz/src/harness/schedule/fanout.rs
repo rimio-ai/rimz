@@ -31,12 +31,6 @@ pub enum CheckoutState {
         run: crate::ids::WorkflowRunId,
         at: Timestamp,
     },
-    Declined {
-        at: Timestamp,
-        reason: String,
-        profile: String,
-        recheck_at: Option<Timestamp>,
-    },
     Holding {
         since: Timestamp,
         hold: Duration,
@@ -75,11 +69,6 @@ pub fn inspect(
     };
     let clocks = fire::last_when_states(runtime);
     let stamps = fire::last_stamps(runtime);
-    let declines = if entry.stay {
-        launch_ledger::load_declines_room(runtime, Some(&root))?
-    } else {
-        Default::default()
-    };
     let windows = WindowReadings::new(Some(runtime), now);
     let mut rows = Vec::new();
     for worktree in crate::worktree::discover_owned(&root)? {
@@ -117,25 +106,6 @@ pub fn inspect(
                 let since = clock.map_or(now, |clock| clock.since);
                 if !verdict.ok {
                     CheckoutState::Waiting { verdict }
-                } else if let Some(decline) = launch_ledger::holding_decline(
-                    &declines,
-                    name,
-                    entry,
-                    &checkout,
-                    clock.map(|clock| clock.since),
-                    now,
-                ) {
-                    CheckoutState::Declined {
-                        at: decline.at,
-                        reason: decline.reason.clone(),
-                        profile: decline.profile.clone(),
-                        recheck_at: entry
-                            .guard()
-                            .judges
-                            .get(decline.tier)
-                            .and_then(|judge| launch_ledger::judge_recheck(judge))
-                            .and_then(|duration| decline.at.checked_add(duration).ok()),
-                    }
                 } else if let Some(hold) = hold
                     && u128::try_from(now.duration_since(since).as_millis()).unwrap_or(0)
                         < hold.as_millis()

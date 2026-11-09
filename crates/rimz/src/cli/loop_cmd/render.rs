@@ -297,7 +297,7 @@ struct ShowView {
     records: Vec<LoopRunRecord>,
     heard: Option<run_log::HeardSummary>,
     launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
-    capacity: BTreeMap<PathBuf, schedule::launch_ledger::CapacityRecord>,
+    capacity: BTreeMap<PathBuf, list::CapacityWaitView>,
     in_flight: Option<InFlightRun>,
     backlog: Option<schedule::backlog::TaskBacklog>,
     condition: String,
@@ -314,6 +314,8 @@ struct ShowView {
     workflow_runs: Vec<list::WorkflowRunRow>,
     /// The task's per-fire trees a fire kept, newest first.
     kept_worktrees: Vec<rimz::worktree::ManagedWorktree>,
+    /// The task's fires start workflow runs, named or compiled from its row.
+    runs_workflows: bool,
     all: bool,
 }
 
@@ -471,7 +473,7 @@ struct WorktreeRow<'a> {
     run: Option<&'a list::WorkflowRunRow>,
     armed: usize,
     short: Vec<&'a str>,
-    capacity: Option<&'a schedule::launch_ledger::CapacityRecord>,
+    capacity: Option<&'a list::CapacityWaitView>,
 }
 
 impl WorktreeRow<'_> {
@@ -484,7 +486,6 @@ impl WorktreeRow<'_> {
         }
         match self.condition.state {
             CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => "launched",
-            CheckoutState::Declined { .. } => "declined",
             CheckoutState::Holding { .. } => "holding",
             CheckoutState::Ready { .. } => "ready",
             CheckoutState::Waiting { .. } => "waiting",
@@ -521,7 +522,6 @@ impl WorktreeRow<'_> {
                 3
             }
             CheckoutState::Waiting { .. } => 4,
-            CheckoutState::Declined { .. } => 5,
             CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => 6,
         }
     }
@@ -536,9 +536,7 @@ fn worktree_expr(view: &ShowView) -> Option<&WhenExpr> {
 
 fn worktree_verdict(state: &CheckoutState) -> Option<&Verdict> {
     match state {
-        CheckoutState::Launched { .. }
-        | CheckoutState::Workflow { .. }
-        | CheckoutState::Declined { .. } => None,
+        CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => None,
         CheckoutState::Holding { verdict, .. }
         | CheckoutState::Ready { verdict, .. }
         | CheckoutState::Waiting { verdict } => Some(verdict),
@@ -616,7 +614,7 @@ fn write_worktrees(
     }
     let mut counts = vec![format!("{} owned", rows.len())];
     for state in [
-        "blocked", "ready", "holding", "capacity", "waiting", "declined", "launched",
+        "blocked", "ready", "holding", "capacity", "waiting", "launched",
     ] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
         if count > 0 {
@@ -677,9 +675,7 @@ fn write_worktrees(
             CheckoutState::Launched { .. } | CheckoutState::Workflow { .. }
         )
     });
-    let has_reason = rendered.iter().any(|row| {
-        row.blocked.is_some() || matches!(row.condition.state, CheckoutState::Declined { .. })
-    });
+    let has_reason = rendered.iter().any(|row| row.blocked.is_some());
     let mut headers = vec!["WORKTREE".to_owned(), "STATE".to_owned()];
     headers.extend(terms.iter().map(|(term, negated)| {
         if *negated && !repeated_keys.contains(term.key.as_str()) {
@@ -689,31 +685,20 @@ fn write_worktrees(
         }
     }));
     if has_launch {
-        headers.push(
-            if view.entry.workflow.is_some() {
-                "RUN"
-            } else {
-                "LEADER"
-            }
-            .to_owned(),
-        );
+        headers.push(if view.runs_workflows { "RUN" } else { "LEADER" }.to_owned());
     }
     if has_reason {
         headers.push("REASON".to_owned());
     }
     let width = ui::terminal_columns(120);
     let mut table = ui::Table::new(headers).indent(2);
-    if view.entry.workflow.is_none() || has_reason {
+    if !view.runs_workflows || has_reason {
         table = table.max_width(width);
     }
     let now = view.now_zoned.timestamp();
     for row in rendered {
         let state = if let Some(wait) = row.capacity {
-            format!(
-                "{} · {}",
-                list::CapacityWaitView::from(wait).text(now),
-                wait.reason
-            )
+            format!("{} · {}", wait.text(now), wait.reason())
         } else if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
@@ -721,7 +706,6 @@ fn write_worktrees(
                 CheckoutState::Launched { at, .. } | CheckoutState::Workflow { at, .. } => {
                     format!("launched {}", ui::rel_age(*at, now))
                 }
-                CheckoutState::Declined { at, .. } => format!("declined {}", ui::rel_age(*at, now)),
                 CheckoutState::Holding { since, hold, .. } => schedule::TaskTimingState::Holding {
                     elapsed: Duration::from_millis(
                         u64::try_from(now.duration_since(*since).as_millis()).unwrap_or(0),
@@ -801,16 +785,10 @@ fn write_worktrees(
             cells.push(ui::cell(launch));
         }
         if has_reason {
-            let reason = if let Some((_, refusal)) = &row.blocked {
-                refusal.reason.to_owned()
-            } else if let CheckoutState::Declined {
-                profile, reason, ..
-            } = &row.condition.state
-            {
-                format!("judge {profile}: {}", first_line(reason))
-            } else {
-                String::new()
-            };
+            let reason = row
+                .blocked
+                .as_ref()
+                .map_or_else(String::new, |(_, refusal)| refusal.reason.to_owned());
             cells.push(ui::cell(reason));
         }
         table.row(cells);
@@ -829,7 +807,7 @@ fn write_worktree_folds(
     width: usize,
 ) -> Result<()> {
     let now = view.now_zoned.timestamp();
-    let folds = [fold_declined(rows, now), fold_launched(rows, now)];
+    let folds = [fold_launched(rows, now)];
     for line in folds.iter().flatten() {
         writeln!(
             out,
@@ -848,7 +826,7 @@ fn write_worktree_folds(
                 ui::palette::muted(),
                 &format!(
                     "→ reasons and {}: rimz loop show {} --all",
-                    if view.entry.workflow.is_some() {
+                    if view.runs_workflows {
                         "runs"
                     } else {
                         "leaders"
@@ -859,49 +837,6 @@ fn write_worktree_folds(
         )?;
     }
     Ok(())
-}
-
-fn fold_declined(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
-    let mut count = 0;
-    let mut profiles = std::collections::BTreeSet::new();
-    let mut next_recheck = None;
-    let mut newest = None;
-    for row in rows {
-        let CheckoutState::Declined {
-            at,
-            profile,
-            reason,
-            recheck_at,
-        } = &row.condition.state
-        else {
-            continue;
-        };
-        count += 1;
-        profiles.insert(profile.as_str());
-        if let Some(recheck_at) = recheck_at {
-            next_recheck =
-                Some(next_recheck.map_or(*recheck_at, |next: Timestamp| next.min(*recheck_at)));
-        }
-        if newest.is_none_or(|(_, latest, _)| *at > latest) {
-            newest = Some((&row.condition.name, *at, reason));
-        }
-    }
-    let (name, at, reason) = newest?;
-    let judges = if profiles.len() == 1 {
-        "judge"
-    } else {
-        "judges"
-    };
-    let profiles = profiles.into_iter().collect::<Vec<_>>().join(", ");
-    let reopen = next_recheck.map_or_else(
-        || "re-judged when the guard changes".into(),
-        |at| format!("next recheck {}", ui::rel_until(at, now)),
-    );
-    Some(format!(
-        "… {count} declined by {judges} {profiles} · {reopen} · newest {name} {}: {}",
-        ui::rel_age(at, now),
-        first_line(reason)
-    ))
 }
 
 fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
@@ -968,13 +903,7 @@ struct WorktreeJson<'a> {
     state: &'static str,
     capacity_wait: Option<list::CapacityWaitView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    profile: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     since: Option<Timestamp>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recheck_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hold_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1014,11 +943,8 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 checkout: &row.condition.checkout,
                 name: &row.condition.name,
                 state: row.state_name(),
-                capacity_wait: row.capacity.map(list::CapacityWaitView::from),
-                reason: None,
-                profile: None,
+                capacity_wait: row.capacity.cloned(),
                 since: None,
-                recheck_at: None,
                 hold_ms: None,
                 held_ms: None,
                 short: readings.as_ref().map(|_| row.short),
@@ -1030,17 +956,6 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 blocked: None,
             };
             match &row.condition.state {
-                CheckoutState::Declined {
-                    at,
-                    reason,
-                    profile,
-                    recheck_at,
-                } => {
-                    json.since = Some(*at);
-                    json.reason = Some(reason);
-                    json.profile = Some(profile);
-                    json.recheck_at = *recheck_at;
-                }
                 CheckoutState::Launched { leader, at } => {
                     json.since = Some(*at);
                     json.leader = Some(leader);
@@ -1132,8 +1047,8 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
                 out,
                 "  {} · {} · {}",
                 checkout.display(),
-                list::CapacityWaitView::from(wait).text(now),
-                wait.reason
+                wait.text(now),
+                wait.reason()
             )?;
         }
     }
@@ -1229,6 +1144,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             &view.entry,
             &view.records,
             &attribution,
+            &view.workflow_runs,
             now,
             ui::prose::Prose::for_stdout(),
         )?;
@@ -1526,10 +1442,16 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             if let Some(in_flight) = &view.in_flight {
                 return show_in_flight(&args, &view.root, in_flight);
             }
+            let runs = workflow_log_runs(&view.root, &view.history.fires, globals)?;
+            let state = runs
+                .iter()
+                .filter(|run| run.live)
+                .max_by_key(|run| run.since)
+                .map_or("finished", |run| run.state);
             let mut out = ui::out();
             writeln!(
                 out,
-                "{} — one-shot fired · finished\n",
+                "{} — one-shot fired · {state}\n",
                 ui::paint(ui::palette::header(), &args.name)
             )?;
             let attribution = refused_fire_attribution(&view.history.fires);
@@ -1539,7 +1461,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 &view.history.fires,
                 &attribution,
                 None,
-                None,
+                Some(&runs),
                 args.runs,
                 false,
             )?;
@@ -1689,9 +1611,13 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         ShowThrottle::Off
     };
-    let workflow_runs = if entry.workflow.is_some() {
+    let runs_workflows = runs_workflows(&task);
+    let (workflow_runs, capacity) = if runs_workflows {
         let paths = StatePaths::for_project_root(&root)?;
         let records = rimz::store::workflow::list(&paths)?;
+        let capacity = list::capacity_waits(&records, &args.name, &root)
+            .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
+            .collect();
         let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
         let mut rows = list::WorkflowRunRow::for_show(
             &records,
@@ -1705,43 +1631,21 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             now_zoned.timestamp(),
         );
         name_workflow_runs(&mut rows, &records, globals);
-        rows
+        // LAST RUN reads its run's checks and attempts from the journal.
+        let detail =
+            detail_index(&history.fires).and_then(|index| history.fires[index].run_id.as_deref());
+        for row in rows
+            .iter_mut()
+            .filter(|row| Some(row.id.as_str()) == detail)
+        {
+            if let Some(record) = records.iter().find(|record| record.id == row.id) {
+                row.read_evidence(&paths, record);
+            }
+        }
+        (rows, capacity)
     } else {
-        Vec::new()
+        (Vec::new(), BTreeMap::new())
     };
-    let running_checkout = in_flight.as_ref().and_then(|flight| {
-        flight
-            .run
-            .as_ref()
-            .map(|run| run.worktree_path.as_path())
-            .or_else(|| {
-                flight
-                    .held
-                    .iter()
-                    .find(|held| flight.holder.is_some_and(|holder| holder.pid == held.pid))
-                    .map(|held| held.checkout.as_path())
-            })
-    });
-    let mut capacity = StatePaths::for_project_root(&root)
-        .map_err(anyhow::Error::from)
-        .and_then(|paths| match &runtime {
-            Some(runtime) => Ok(schedule::launch_ledger::load_live_capacity(
-                &paths, runtime,
-            )?),
-            None => Ok(BTreeMap::new()),
-        })
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "loop capacity waits unavailable");
-            BTreeMap::new()
-        })
-        .remove(&args.name)
-        .filter(|_| matches!(timing.arm_state(), ArmState::Live))
-        .unwrap_or_default();
-    if let Some(checkout) = running_checkout {
-        capacity.remove(checkout);
-    } else if in_flight.is_some() && !entry.each_worktree {
-        capacity.remove(&entry.run_dir());
-    }
     let view = ShowView {
         kept_worktrees: if entry.fresh_worktree.is_some() {
             kept_worktrees(&entry.resolved_root(), &args.name)
@@ -1772,6 +1676,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         worktrees,
         worktrees_error,
         workflow_runs,
+        runs_workflows,
         all: args.all,
     };
     if args.json {
@@ -1833,8 +1738,8 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 .then(|| {
                     view.capacity
                         .values()
-                        .min_by_key(|wait| wait.first)
-                        .map(list::CapacityWaitView::from)
+                        .min_by_key(|wait| wait.since)
+                        .cloned()
                 })
                 .flatten(),
         };
@@ -2259,12 +2164,17 @@ fn stale_clause(
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the history, its two joins (attribution, workflow runs), and the screen's clock and prose"
+)]
 fn write_last_run(
     out: &mut impl Write,
     name: &str,
     entry: &TaskEntry,
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
+    workflow_runs: &[list::WorkflowRunRow],
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
@@ -2306,6 +2216,7 @@ fn write_last_run(
         record,
         "LAST RUN",
         &format!("rimz loop logs {name} -n {blocks_since}"),
+        Some(workflow_runs),
         now,
         prose,
     )
@@ -2376,10 +2287,18 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
     let in_flight = in_flight.filter(|_| !args.failed);
-    let workflow_runs = entry
-        .filter(|entry| entry.workflow.is_some())
-        .map(|entry| workflow_log_runs(entry, &history.fires, globals))
-        .transpose()?;
+    let workflow_runs = match &task {
+        Some(task) if runs_workflows(task) => Some(workflow_log_runs(
+            &task.entry().resolved_root(),
+            &history.fires,
+            globals,
+        )?),
+        Some(_) => None,
+        None => root
+            .as_deref()
+            .map(|root| workflow_log_runs(root, &history.fires, globals))
+            .transpose()?,
+    };
     let mut out = ui::out();
     let attribution = refused_fire_attribution(&history.fires);
     let shown = write_log_records(
@@ -2422,6 +2341,14 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+/// Whether a task's fires start workflow runs: a named workflow or the graph its row compiles to.
+fn runs_workflows(task: &LoadedTask) -> bool {
+    matches!(
+        task.compiled(),
+        Ok(schedule::compile::CompiledAction::Workflow(_))
+    )
+}
+
 fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) -> bool {
     record.result == LoopRunResult::Launched
         && runs.iter().any(|run| {
@@ -2452,15 +2379,21 @@ fn name_workflow_runs(
 }
 
 /// The runs a workflow task's log blocks name, live or finished, whichever task started them.
+/// The workflow runs a task's history names, found by the run ids its fires recorded.
 fn workflow_log_runs(
-    entry: &TaskEntry,
+    root: &Path,
     fires: &[LoopRunRecord],
     globals: &GlobalFlags,
 ) -> Result<Vec<list::WorkflowRunRow>> {
-    let paths = StatePaths::for_project_root(&entry.resolved_root())?;
+    let paths = StatePaths::for_project_root(root)?;
+    let blockers = fires
+        .iter()
+        .filter_map(|fire| fire.blocking_run.as_ref())
+        .map(rimz::ids::WorkflowRunId::as_str);
     let named = fires
         .iter()
         .filter_map(|fire| fire.run_id.as_deref())
+        .chain(blockers)
         .collect::<std::collections::BTreeSet<_>>();
     let mut records = rimz::store::workflow::list(&paths)?;
     records.retain(|record| named.contains(record.id.as_str()));
@@ -2468,7 +2401,10 @@ fn workflow_log_runs(
     let mut rows = records
         .iter()
         .map(|record| {
-            list::WorkflowRunRow::of_record(record, specs.get(&record.id), Timestamp::now())
+            let mut row =
+                list::WorkflowRunRow::of_record(record, specs.get(&record.id), Timestamp::now());
+            row.read_evidence(&paths, record);
+            row
         })
         .collect::<Vec<_>>();
     name_workflow_runs(&mut rows, &records, globals);
@@ -3755,7 +3691,7 @@ fn check_failure_line(record: &LoopRunRecord) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn first_line(text: &str) -> &str {
+pub(super) fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
 }
 
@@ -3774,7 +3710,7 @@ pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
 }
 
 fn is_agent_run(record: &LoopRunRecord) -> bool {
-    record.run_id.is_some()
+    record.acted != Some(false) && record.run_id.is_some()
         || matches!(
             record.result,
             LoopRunResult::Delivered | LoopRunResult::TargetGone

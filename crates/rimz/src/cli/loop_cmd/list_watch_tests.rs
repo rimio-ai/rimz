@@ -532,8 +532,21 @@ fn last_run_is_history_even_when_running_or_disabled() {
         signal: "ci.passed".into(),
         at: now() - SignedDuration::from_hours(2),
     });
+    // A canceled run is no outcome, but the task fired.
+    let mut canceled = row("canceled");
+    let mut record =
+        LoopRunRecord::new("canceled", LoopRunResult::Canceled, LoopRunMode::Manual, 0);
+    record.at = now() - SignedDuration::from_secs(30);
+    canceled.newest = Some(record);
     let output = frame(
-        &room(vec![good, bad, heard, running("first"), row("never")]),
+        &room(vec![
+            good,
+            bad,
+            heard,
+            canceled,
+            running("first"),
+            row("never"),
+        ]),
         100,
         24,
         true,
@@ -542,6 +555,7 @@ fn last_run_is_history_even_when_running_or_disabled() {
         ("good", "✓ 2m ago"),
         ("bad", "✗ failed 1m ago · exit 101"),
         ("heard", "heard ci.passed 2h ago"),
+        ("canceled", "○ canceled 30s ago"),
         ("first", "—"),
         ("never", "never fired"),
     ] {

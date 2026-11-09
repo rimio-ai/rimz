@@ -9610,7 +9610,7 @@ fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
 }
 
 #[test]
-fn loop_check_outcomes_report_once_per_run() {
+fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     let env = Env::new();
     env.record(&env.project_root);
     loop_ok(
@@ -9649,6 +9649,70 @@ fn loop_check_outcomes_report_once_per_run() {
     let journal = loop_run_journal(&env, &env.project_root, &broken);
     assert!(journal.contains("broken"), "{journal}");
     assert_eq!(read_loop_run_records(&env).len(), 4);
+
+    // The views read each fire's check output from its run's journal.
+    let show = loop_ok(&env, &["loop", "show", "history"]);
+    assert!(
+        show.contains("LAST RUN — ✗ failed")
+            && show.contains("check: fail · exit 127")
+            && show.contains("broken"),
+        "{show}"
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "history"]);
+    assert!(
+        logs.find("healthy").unwrap() < logs.find("broken").unwrap()
+            && logs.contains(broken.run_id.as_deref().unwrap()),
+        "{logs}"
+    );
+    let failed = loop_ok(&env, &["loop", "logs", "history", "--failed"]);
+    assert!(
+        failed.contains("broken") && !failed.contains("healthy"),
+        "{failed}"
+    );
+}
+
+#[test]
+fn loop_judge_decline_renders_its_verdict_from_the_run() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    // A stored guarded wait whose judge declines ends before its message step.
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.judged]\nwait = {{ kind = \"claude\", session = \"sess-judged\", handle = \"@claude\" }}\n\
+             prompt = \"fix it\"\non = \"fail\"\n\
+             every = \"15m\"\nroot = {:?}\n\
+             [[tasks.judged.judge]]\nagent = \"claude\"\nprompt = \"is it broken?\"\n",
+            env.project_root
+        ),
+    );
+    let shell = crate::common::write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    crate::common::write_path_shim(
+        &bin,
+        "claude",
+        "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
+         printf '%s\\n' '{\"structured_output\":{\"outcome\":\"pass\",\"reason\":\"all green\"}}'\n",
+    );
+    let fired = env
+        .rimz()
+        .args(["loop", "fire", "judged"])
+        .env("SHELL", &shell)
+        .env("PATH", crate::common::path_with_front(&bin))
+        .output()
+        .unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    let report = wait_for_loop_report(&env, "judged");
+    assert_eq!(report.result, LoopRunResult::Completed);
+
+    let logs = loop_ok(&env, &["loop", "logs", "judged"]);
+    assert!(logs.contains("judge claude: pass — all green"), "{logs}");
+    let show = loop_ok(&env, &["loop", "show", "judged"]);
+    assert_eq!(
+        show.matches("judge claude: pass — all green").count(),
+        1,
+        "{show}"
+    );
 }
 
 #[test]
@@ -10332,6 +10396,8 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
         &["loop", "add", "busy", "--check", "true", "--every", "1h"],
     );
     loop_ok(&env, &["loop", "fire", "busy"]);
+    // The fire returns once its run starts; LAST reads the run's report.
+    wait_for_loop_report(&env, "busy");
     let row = |list: &str, head: &str| -> Vec<String> {
         list.lines()
             .find(|line| line.trim_start().starts_with(head))
