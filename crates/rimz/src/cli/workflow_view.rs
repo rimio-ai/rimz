@@ -8,6 +8,7 @@ use rimz::store::workflow::{Asking, ParkReason, RunRecord, RunState};
 use super::render;
 
 pub(super) mod history;
+pub(super) mod resolve;
 
 pub(super) fn sealed_specs(
     state: &rimz::StatePaths,
