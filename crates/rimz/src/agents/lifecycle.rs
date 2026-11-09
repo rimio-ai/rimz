@@ -217,8 +217,8 @@ pub enum LifecycleSignal {
 /// What a completed tool did to the workspace, ordered by strength. Editing
 /// implies mutating: a file edit is a mutation, so the strongest effect
 /// carries both facts. It rides the wire as the `mutates` and `edits` bits
-/// (`edits` defaulted for records written before it existed); a record
-/// carrying `edits` without `mutates` reads as editing.
+/// (`edits` defaulted for records written before it existed); `edits` true
+/// with `mutates` false reads as editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(from = "ToolFlags", into = "ToolFlags")]
 pub enum ToolEffect {
