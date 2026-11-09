@@ -2098,6 +2098,88 @@ fn row_click_resolves_painted_identity_through_an_unpainted_fold() {
     );
 }
 
+/// The scroll rig wheeled down until its painted top is not the roster's first row, with the
+/// ids of the painted window, top to bottom.
+fn scrolled_window() -> (Rig, Vec<String>) {
+    let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
+    let mut inbox = queued((0..4).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    // Let the scroll ease settle, then paint the window at rest.
+    clock.advance(Duration::from_secs(1));
+    rig.state.pane.next_frame = clock.now();
+    rig.paint(true);
+    let ui = &rig.state.pane.ui;
+    let (first, last) = ui.interactions.visible_row_span().unwrap();
+    assert!(first > 0 && last > first + 1, "{first}..={last}");
+    let window = ui.painted_roster[first..=last].to_vec();
+    (rig, window)
+}
+
+/// Drop `ids` from the live roster after the paint, then press `action`.
+fn screen_edge_after_removing(
+    rig: &mut Rig,
+    ids: &[&String],
+    action: KeyAction,
+) -> (InputOutcome, Option<String>) {
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.view().ctx().current.worktree_groups)[0].rows)
+        .retain(|row| !ids.contains(&&row.id));
+    let outcome = rig
+        .state
+        .apply_input([Wakeup::Key(action)], &mut rig.terminal)
+        .unwrap();
+    let selected = rig.state.inspect_view(|ui, ctx| {
+        ui.selected_index
+            .and_then(|index| ui.visible_roster(&ctx.current).row(index))
+            .map(|row| row.id.clone())
+    });
+    (outcome, selected)
+}
+
+#[test]
+fn screen_edge_keys_select_the_painted_edge_after_a_row_above_departs() {
+    for action in [KeyAction::ScreenTop, KeyAction::ScreenBottom] {
+        let (mut rig, window) = scrolled_window();
+        let above = rig.state.pane.ui.painted_roster[0].clone();
+        let (_, selected) = screen_edge_after_removing(&mut rig, &[&above], action);
+        let expected = if action == KeyAction::ScreenTop {
+            window.first()
+        } else {
+            window.last()
+        };
+        assert_eq!(selected.as_ref(), expected, "{action:?}");
+    }
+}
+
+#[test]
+fn screen_edge_keys_fall_back_inward_when_the_edge_row_departs() {
+    for (action, from_top) in [
+        (KeyAction::ScreenBottom, false),
+        (KeyAction::ScreenTop, true),
+    ] {
+        let (mut rig, window) = scrolled_window();
+        let last = window.len() - 1;
+        let (gone, expected) = if from_top {
+            (&window[0], &window[1])
+        } else {
+            (&window[last], &window[last - 1])
+        };
+        let (_, selected) = screen_edge_after_removing(&mut rig, &[gone], action);
+        assert_eq!(selected.as_ref(), Some(expected), "{action:?}");
+    }
+}
+
+#[test]
+fn screen_edge_keys_do_nothing_once_every_painted_row_departs() {
+    for action in [KeyAction::ScreenTop, KeyAction::ScreenBottom] {
+        let (mut rig, window) = scrolled_window();
+        let gone = window.iter().collect::<Vec<_>>();
+        let (outcome, selected) = screen_edge_after_removing(&mut rig, &gone, action);
+        assert_eq!(outcome, InputOutcome::default(), "{action:?}");
+        assert_eq!(selected, None, "{action:?}");
+    }
+}
+
 fn dispatch(rig: &mut Rig, inbox: &mut WakeupInbox) {
     inbox
         .dispatch_next(&mut rig.state, &mut rig.terminal, Duration::ZERO)

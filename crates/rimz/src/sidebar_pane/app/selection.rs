@@ -164,6 +164,9 @@ fn select_to_index_in(
     InputOutcome::redraw()
 }
 
+/// Select the first (`H`) or last (`L`) row the last paint drew. The painted edge resolves
+/// through its id to the live roster; when that row has left it, the nearest painted row
+/// inward that is still listed takes its place, and with none left the key does nothing.
 fn select_screen_edge(
     view: &mut ViewState,
     ui: &mut UiState,
@@ -173,11 +176,17 @@ fn select_screen_edge(
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
+    let painted = ui.painted_roster.get(first..=last).unwrap_or_default();
+    let roster = view.visible_roster(snapshot);
+    let live = |id: &String| roster.ordinal_of_id(id);
     let target = match end {
-        End::Top => first,
-        End::Bottom => last,
+        End::Top => painted.iter().find_map(live),
+        End::Bottom => painted.iter().rev().find_map(live),
     };
-    select_to_index(view, snapshot, target)
+    match target {
+        Some(target) => select_to_index_in(view, &roster, target),
+        None => InputOutcome::default(),
+    }
 }
 
 fn select_page(

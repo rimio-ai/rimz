@@ -43,16 +43,25 @@ fn clicking_not_tracked_tip_focuses_its_pane() {
 
 fn assert_no_selection_move(action: KeyAction, target: usize) {
     let snapshot = clickable_block_snapshot(&workspace());
-    let mut ui = ViewState::default();
-    let mut pane_ui = UiState {
+    let pane_ui = UiState {
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
+    assert_selection_move(&snapshot, ViewState::default(), pane_ui, action, target);
+}
+
+fn assert_selection_move(
+    snapshot: &SidebarSnapshot,
+    mut ui: ViewState,
+    mut pane_ui: UiState,
+    action: KeyAction,
+    target: usize,
+) {
     assert_eq!(
-        handle_key(action, &mut ui, &mut pane_ui, &snapshot),
+        handle_key(action, &mut ui, &mut pane_ui, snapshot),
         InputOutcome::redraw()
     );
-    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, target)));
+    assert_eq!(ui.selected_pane, Some(pane_of(snapshot, target)));
     assert_eq!(ui.selected_index, Some(target));
 }
 
@@ -82,13 +91,15 @@ fn no_selection_page_moves_enter_at_the_first_row() {
 
 #[test]
 fn no_selection_absolute_moves_select_their_target() {
-    for (action, target) in [
-        (KeyAction::Top, 0),
-        (KeyAction::Bottom, 1),
-        (KeyAction::ScreenTop, 0),
-        (KeyAction::ScreenBottom, 1),
-    ] {
+    for (action, target) in [(KeyAction::Top, 0), (KeyAction::Bottom, 1)] {
         assert_no_selection_move(action, target);
+    }
+    let snapshot = clickable_block_snapshot(&workspace());
+    for (action, target) in [(KeyAction::ScreenTop, 0), (KeyAction::ScreenBottom, 1)] {
+        let mut ui = ViewState::default();
+        let mut pane_ui = UiState::default();
+        paint(&mut ui, &mut pane_ui, &snapshot, 64);
+        assert_selection_move(&snapshot, ui, pane_ui, action, target);
     }
 }
 
@@ -2507,44 +2518,36 @@ fn top_and_bottom_keys_browse_to_the_ends() {
 #[test]
 fn screen_edge_keys_browse_to_the_painted_window_edges() {
     let ws = workspace();
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", false),
-            pane("terminal_4", "tab_0", false),
-            pane("terminal_5", "tab_0", false),
-        ],
-    );
+    let panes = (1..=12)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect();
+    let snapshot = snapshot_with_panes(&ws, panes);
     let mut ui = render::ViewState {
-        selected_index: Some(2),
+        scroll_offset: 3,
+        offset_authoritative: true,
         ..Default::default()
     };
-    let mut pane_ui = UiState {
-        interactions: render::FrameInteractions::from_parts(
-            vec![None, Some(1), Some(1), Some(2), Some(3), None],
-            Vec::new(),
-        ),
-        ..Default::default()
-    };
+    ui.expanded_groups
+        .insert(snapshot.worktree_groups[0].key.clone());
+    let mut pane_ui = UiState::default();
+    paint(&mut ui, &mut pane_ui, &snapshot, 20);
+    let (first, last) = pane_ui.interactions.visible_row_span().unwrap();
+    assert!(
+        first > 0 && last < 11 && last > first + 1,
+        "{first}..={last}"
+    );
+    ui.selected_index = Some(first + 1);
 
     let outcome = handle_key(KeyAction::ScreenTop, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, Some(1));
-    assert_eq!(
-        ui.selected_pane,
-        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
-    );
+    assert_eq!(ui.selected_index, Some(first));
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, first)));
     assert!(ui.browse.is_some(), "screen-edge jump is a browse pick");
 
     let outcome = handle_key(KeyAction::ScreenBottom, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, Some(3));
-    assert_eq!(
-        ui.selected_pane,
-        Some(PaneId::from_parts(MuxName::Zellij, "terminal_4"))
-    );
+    assert_eq!(ui.selected_index, Some(last));
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, last)));
 }
 
 #[test]
