@@ -503,6 +503,13 @@ pub(crate) struct AgentLaunchArgs {
     /// Working directory for the launched agent; the room stays the caller's.
     #[arg(long, value_name = "DIR", conflicts_with_all = ["worktree", "from_pr", "continue_cohort", "fresh"])]
     pub(crate) cwd: Option<PathBuf>,
+    /// Cut a worktree this launch creates from the remote default branch, as team launches do.
+    #[arg(
+        long,
+        requires = "worktree",
+        conflicts_with_all = ["from_pr", "continue_cohort", "channel", "cwd"]
+    )]
+    pub(crate) from_trunk: bool,
     #[arg(skip)]
     pub(crate) add_dirs: Vec<PathBuf>,
     #[arg(skip)]
@@ -1380,6 +1387,7 @@ fn into_supervised_request(
     );
     request.description = args.launch.cohort.description;
     request.worktree = args.launch.cohort.worktree;
+    request.from_trunk = args.launch.from_trunk;
     request.fresh = args.launch.cohort.fresh;
     request.cwd = args.launch.cwd;
     request.add_dirs = args.launch.add_dirs;

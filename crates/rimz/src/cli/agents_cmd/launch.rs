@@ -122,6 +122,7 @@ pub(super) fn launch_layout(
             cwd: launch.cwd.take(),
             cohort: rimz::launcher::CohortRequest {
                 worktree: launch.cohort.worktree,
+                from_trunk: launch.from_trunk,
                 from_pr: launch.cohort.from_pr,
                 channel: launch.cohort.channel,
                 description: launch.cohort.description,

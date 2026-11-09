@@ -73,6 +73,8 @@ pub struct LayoutLaunch {
 #[derive(Default)]
 pub struct CohortRequest {
     pub worktree: Option<String>,
+    /// Cut a created worktree with `LaunchBase::Team` even when no team is named.
+    pub from_trunk: bool,
     pub from_pr: Option<crate::forge::PrTarget>,
     pub channel: Option<String>,
     pub description: Option<String>,
@@ -756,7 +758,7 @@ fn settle_layout(
     }
 
     let cells = cohort_cells(&layout);
-    let base = if team_name.is_some() {
+    let base = if team_name.is_some() || args.launch.cohort.from_trunk {
         crate::worktree::LaunchBase::Team
     } else {
         crate::worktree::LaunchBase::Configured

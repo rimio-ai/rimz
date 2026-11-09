@@ -79,8 +79,8 @@ Both creation entry points, and both PR strategies that create a tree, converge 
 
 | `LaunchBase` | Chosen by | Unset `base` means |
 | --- | --- | --- |
-| `Configured` | `rimz worktree new`, and agent or supervised launches that name no team | `head` |
-| `Team` | Agent and supervised launches that name a team | `fresh` |
+| `Configured` | `rimz worktree new`, and agent or supervised launches that name no team and pass no `--from-trunk` | `head` |
+| `Team` | Agent and supervised launches that name a team or pass `--from-trunk`, and loop fires that create a tree (`create_for_loop_fire`) | `fresh` |
 
 Each base value resolves to a commit for `base_ref` and records a `base_branch`:
 

@@ -6175,6 +6175,101 @@ fn team_worktree_launch_doorways_cut_from_the_remote_tip() {
 }
 
 #[cfg(unix)]
+#[test]
+fn solo_worktree_launch_cuts_from_the_remote_tip_only_with_from_trunk() {
+    use crate::common::git::{git, git_stdout};
+
+    for (args, from_tip) in [
+        (
+            vec!["agents", "launch", "worker", "-w", "demo", "--from-trunk"],
+            true,
+        ),
+        (
+            vec![
+                "agents",
+                "worker",
+                "-p",
+                "complete the work",
+                "--bg",
+                "--detach",
+                "-w",
+                "demo",
+                "--from-trunk",
+            ],
+            true,
+        ),
+        (vec!["agents", "launch", "worker", "-w", "demo"], false),
+    ] {
+        let env = team_worktree_launch_env();
+        let origin = env.home_root.join("origin.git");
+        git(
+            &env.project_root,
+            &["clone", "--bare", ".", origin.to_str().unwrap()],
+        );
+        git(
+            &env.project_root,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        let head = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+        let tip = git_stdout(
+            &origin,
+            &[
+                "-c",
+                "user.email=rimz@example.test",
+                "-c",
+                "user.name=RimZ Test",
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                "HEAD",
+                "-m",
+                "upstream",
+            ],
+        );
+        git(&origin, &["update-ref", "refs/heads/main", &tip]);
+        let output = launch_team_worktree(&env, &args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?}: {stderr}");
+        let tree = env.home_root.join("project-worktrees/demo");
+        let expected = if from_tip { &tip } else { &head };
+        assert_eq!(
+            &git_stdout(&tree, &["rev-parse", "HEAD"]),
+            expected,
+            "{args:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn from_trunk_launch_warns_and_continues_when_origin_is_offline() {
+    use crate::common::git::git;
+
+    let env = team_worktree_launch_env();
+    git(
+        &env.project_root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            env.home_root.join("missing.git").to_str().unwrap(),
+        ],
+    );
+    let output = launch_team_worktree(
+        &env,
+        &["agents", "launch", "worker", "-w", "demo", "--from-trunk"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: could not fetch origin/main for the worktree"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("warning: could not fetch").count(), 1);
+    assert!(output.status.success(), "{stderr}");
+    assert!(env.home_root.join("project-worktrees/demo").exists());
+}
+
+#[cfg(unix)]
 fn team_worktree_launch_env() -> Env {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
