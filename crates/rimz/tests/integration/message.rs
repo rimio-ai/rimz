@@ -8626,6 +8626,53 @@ fn delivery_releases_digest_claim_when_post_claim_run_scan_fails() {
 }
 
 #[test]
+fn delivery_defers_digest_without_claiming_when_pre_claim_run_scan_fails() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[false]);
+    queue_messages(&env, &[&digest]);
+    assert_eq!(message_by_id(&env, &digest.message_id).last_error, None);
+    let trace_log = env.project_root.join("digest-pre-claim-scan-trace.log");
+    let store = env.store();
+    let run = rimz::harness::run::list(store.paths()).unwrap().remove(0);
+    let path = store.paths().runs_dir.join(format!("{}.json", run.run_id));
+    std::fs::write(&path, b"{not a run}\n").unwrap();
+    let deliver = || {
+        let mut command = traced_rimz(&env, &trace_log);
+        command
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                digest.message_id.as_str(),
+            ]);
+        command
+    };
+    run_success(&mut deliver(), "deliver digest with unreadable run");
+    assert_no_report_pane_write(&trace_log);
+    let queued = message_by_id(&env, &digest.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+    assert_eq!(queued.last_attempt_at, None);
+    assert_eq!(queued.last_sent_at, None);
+    assert_eq!(queued.last_error, None);
+
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    run_success(&mut deliver(), "retry digest after run repair");
+    assert_text_then_enter(
+        &trace_log,
+        &format!(
+            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+            digest.text
+        ),
+    );
+    assert_eq!(
+        message_by_id(&env, &digest.message_id).status,
+        MessageStatus::Sent
+    );
+}
+
+#[test]
 fn sweep_delivers_partially_joined_subagent_report() {
     assert_subagent_report_delivered(&[true, false]);
 }
