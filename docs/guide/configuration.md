@@ -421,15 +421,15 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 
 ### Room keymap
 
-`[keys]` applies only with `[room] style = "rimz"`, except [`[keys.sidebar]`](#sidebar-keys), which applies under both styles. The bundled `rimz` keymap has normal, prefix, sticky resize, and sticky move bindings. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal.
+`[keys]` applies only with `[room] style = "rimz"`, except [`[keys.sidebar]`](#sidebar-keys), which applies under both styles. A room keymap gives you chords that work from any pane, a prefix layer, and sticky modes. RimZ bundles four: `rimz` is sidebar-first, and `tmux`, `zellij` and `vim` keep that tool's own keys and add RimZ's card actions, so a tmux, Zellij or vim user keeps their habits. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal. The [keymap reference](../reference/keymaps.md) lists every action and every bundled table.
 
 ```toml
 [room]
 style = "rimz"
 
 [keys]
-keymap = "rimz"
-prefix = "Alt+p"
+keymap = "tmux"
+prefix = "Ctrl+a"
 
 [keys.bind.normal]
 "Alt+x" = "card.close"
@@ -440,17 +440,19 @@ prefix = "Alt+p"
 z = "pane.zoom"
 ```
 
-Only `rimz` is bundled. The prefix defaults to `Alt+p`; changing it moves both normal mode's prefix entry and prefix mode's command-palette chord. User tables under `keys.bind` override the bundled keys; `"none"` removes a binding. The configured prefix is applied last, so it wins even over an override on the same chord. `p` in prefix mode still opens the command palette.
+`keymap` is `rimz`, `tmux`, `zellij` or `vim`, and defaults to `rimz`. Each keymap has its own default prefix: `Alt+p` for `rimz`, `Ctrl+b` for `tmux`, `Ctrl+g` for `zellij`, and `Alt+w` for `vim` (not vim's `Ctrl+w`, which would capture delete-word in every pane). An unset `prefix` takes that default; a set one moves every prefix entry of whichever keymap you pick. User tables under `keys.bind` (`normal`, `prefix`, `pane`, `tab`, `resize`, `move`) override the bundled keys; `"none"` removes a binding. The configured prefix is applied last, so it wins even over an override on the same chord.
 
-A key is one ASCII graphic character, optionally modified with `Alt` or `Ctrl`, or the bare named key `Esc` or `Enter`. Case matters: `Alt+J` and `Alt+j` are different. `meta`/`m` alias `Alt`, `control`/`c` alias `Ctrl`, and `-` can replace `+`. `Space` and combined modifiers are not supported. Every normal-mode key, including the prefix, needs a modifier so it cannot swallow ordinary typing in an agent's pane.
+Pane, tab, resize and move modes are sticky for motions: a focus, swap, resize, tab or card step stays in the mode, and any other action returns to normal. Prefix mode runs one action and returns. Each keymap also picks a scrollback flavour: `rimz` and `vim` use vi keys, while `tmux` and `zellij` keep the multiplexer's own copy and scroll keys.
+
+A key is one ASCII graphic character or one of `Left`, `Right`, `Up`, `Down`, optionally modified with `Alt` or `Ctrl`, or the bare named key `Esc` or `Enter`. Case matters: `Alt+J` and `Alt+j` are different. `meta`/`m` alias `Alt`, `control`/`c` alias `Ctrl`, and `-` can replace `+`. `Space` and combined modifiers are not supported. Every normal-mode key, including the prefix, needs a modifier so it cannot swallow ordinary typing in an agent's pane, and the prefix cannot be an arrow.
 
 Ctrl chords that alias Enter, Esc, Tab, or Backspace are refused in normal and prefix modes, including the configured prefix. `rimz config set` refuses an invalid prefix or an unknown keymap rather than saving it.
 
-A value is a named action, `"none"`, or `{ run = "rimz ..." }`. Commands use shell-style quoting to split arguments, not shell evaluation: pipes, substitutions, and redirects are literal arguments. The first word must be `rimz`; RimZ uses its own binary when running the binding. Invalid bindings warn with their dotted path and are ignored individually, leaving the rest of the file and keymap intact. An invalid prefix warns and uses `Alt+p`; an invalid keymap name warns and uses `rimz`.
+A value is a named action, `"none"`, or `{ run = "rimz ..." }`. Commands use shell-style quoting to split arguments, not shell evaluation: pipes, substitutions, and redirects are literal arguments. The first word must be `rimz`; RimZ uses its own binary when running the binding. Invalid bindings warn with their dotted path and are ignored individually, leaving the rest of the file and keymap intact. An invalid prefix warns and uses the keymap's default; an invalid keymap name warns and uses `rimz`.
 
-On tmux, reload removes the previous keymap's bindings before installing the new one. RimZ style uses its own prefix, resize, and move tables and vi copy mode; switching back to native removes those tables and restores the prior copy-mode key style. Unrelated root bindings and your tmux prefix table remain, but a user binding overwritten by a RimZ chord needs a server restart to return. Keys are server-global, so the most recently applied keymap wins across rooms. User commands run from the pressing room's directory; RimZ supplies the backend, not a verb-specific `--session-name` flag.
+On tmux, reload removes the previous keymap's bindings before installing the new one. RimZ style uses its own prefix, pane, tab, resize, and move tables, and vi copy mode under a `vi` keymap; switching to native or to a `native` keymap restores the prior copy-mode key style. Unrelated root bindings and your tmux prefix table remain, but a user binding overwritten by a RimZ chord needs a server restart to return. When your global tmux `prefix` or `prefix2` equals a key RimZ binds (`Ctrl+b` under the `tmux` keymap), RimZ turns that option off so the key reaches RimZ, and restores it once no RimZ key collides ([your tmux prefix](../reference/keymaps.md#your-tmux-prefix)); `Ctrl+b Ctrl+b` then sends a literal `Ctrl+b` to the pane. Keys are server-global, so the most recently applied keymap wins across rooms. User commands run from the pressing room's directory; RimZ supplies the backend, not a verb-specific `--session-name` flag.
 
-On Zellij, native style adds its two chords in normal and locked modes without clearing anything. RimZ style replaces the locked, prefix, resize, move, scroll, enter-search, and search bindings, including your own bindings in those modes, for each attached client. Reload replaces the map without editing `config.kdl`; switching back to native restores Zellij's full stock and user bindings only after you detach and attach again. User commands receive the room's project root and backend, not a verb-specific `--session-name` flag.
+On Zellij, native style adds its two chords in normal and locked modes without clearing anything. RimZ style replaces the locked, prefix, pane, tab, resize, move, scroll, enter-search, and search bindings, including your own bindings in those modes, for each attached client. Reload replaces the map without editing `config.kdl`; switching back to native restores Zellij's full stock and user bindings only after you detach and attach again. User commands receive the room's project root and backend, not a verb-specific `--session-name` flag.
 
 Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind`, its mode tables, and `keys.sidebar` in `~/.rimz/config.toml`, not with `rimz config set`.
 

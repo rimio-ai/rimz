@@ -79,6 +79,8 @@ fn template_lists_room_keymap_settings() {
         "# keymap = \"rimz\"",
         "## prefix = \"Ctrl+a\"",
         "unset: the keymap's own",
+        "rimz, tmux, zellij, or vim",
+        "rimz Alt+p, tmux Ctrl+b, zellij Ctrl+g, vim Alt+w",
         "status_bar = \"on\"",
     ] {
         assert!(template.contains(setting), "template must list {setting}");

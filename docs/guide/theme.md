@@ -109,7 +109,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker, and the compacted-context meter's glyph while it has no size estimate |
 | `warn` | the caution floor: resting `?` waits, starts-needing-a-fix notices, the pane notice a refused in-pane key leaves above the key row, workflow `parked` words, the `⊘` held mark on workflow rails and capped visit counts, the low-mid gauge rung; turned toward amber and kept readable against the background for the fast-mode `ϟ` bolt |
-| `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, the conflicted pull request marker and cockpit PR count, and the `PREFIX`, `RESIZE`, `SCROLL` and `MOVE` room-mode marks on the bottom key row |
+| `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, the conflicted pull request marker and cockpit PR count, and the `PREFIX`, `PANE`, `TAB`, `RESIZE`, `SCROLL` and `MOVE` room-mode marks on the bottom key row |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker, the card's `✎` typing pen, and the pending and continuation keys of the which-key hint on the bottom key row |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
