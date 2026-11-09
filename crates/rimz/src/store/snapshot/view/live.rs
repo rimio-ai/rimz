@@ -381,66 +381,49 @@ impl SidebarSnapshot {
         changed
     }
 
-    pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) -> bool {
+    /// Apply a fused pane-command change to every row on `pane_id`. A row whose
+    /// pane already shows `command` is left as pulled. A command that projects
+    /// nothing, or an agent of the kind the row already runs, keeps its tenant:
+    /// the row stays whole and only its pane command and process start change.
+    /// Any other projection is a new tenant that replaces the row and inherits
+    /// only the pane slot (`inherit_pane_slot`). A bare `rimz` waits for the
+    /// pulled argv.
+    pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) {
         if command.split_whitespace().count() == 1 && crate::proc::program_label(command) == "rimz"
         {
-            return false;
+            return;
         }
-        let mut changed = false;
+        let stale = |row: &SidebarRow| {
+            row.pane.as_ref().is_some_and(|pane| {
+                pane.pane_id == *pane_id && pane.command.as_deref() != Some(command)
+            })
+        };
+        let wiring = PaneWiring {
+            kinds: &self.wired_kinds,
+            default_models: &self.wired_default_models,
+            untracked: &self.untracked_kinds,
+        };
         for index in 0..self.worktree_groups.len() {
-            let group = &self.worktree_groups[index];
-            if !group.rows.iter().any(|row| {
-                row.pane
-                    .as_ref()
-                    .is_some_and(|pane| pane.pane_id == *pane_id)
-            }) {
+            if !self.worktree_groups[index].rows.iter().any(stale) {
                 continue;
             }
             let group = &mut Arc::make_mut(&mut self.worktree_groups)[index];
             for row in Arc::make_mut(&mut group.rows) {
+                if !stale(row) {
+                    continue;
+                }
                 let Some(pane) = row.pane.as_mut() else {
                     continue;
                 };
-                if pane.pane_id != *pane_id {
-                    continue;
-                }
                 pane.command = Some(command.to_owned());
                 pane.pane_process_start = None;
-                changed = true;
-                if let Some(mut next) = row_from_frame_pane(
-                    pane,
-                    &PaneWiring {
-                        kinds: &self.wired_kinds,
-                        default_models: &self.wired_default_models,
-                        untracked: &self.untracked_kinds,
-                    },
-                    self.now,
-                ) {
-                    if row.is_agent()
-                        && next.is_agent()
-                        && row.name == next.name
-                        && row.id != next.id
-                    {
-                        continue;
-                    }
-                    next.attention_at_ms = row.attention_at_ms;
-                    if next.is_agent() && row.id == next.id {
-                        next.unread = row.unread;
-                    }
-                    if let (Some(prior), Some(card)) = (row.as_agent(), next.as_agent_mut()) {
-                        card.due_messages = prior.due_messages;
-                    }
-                    if next.is_process() {
-                        next.inactive = row.inactive;
-                        next.archived = row.archived;
-                    }
-                    let worktree_path = row
-                        .worktree_path
-                        .clone()
-                        .or_else(|| next.worktree_path.clone());
-                    *row = next;
-                    row.worktree_path = row.worktree_path.clone().or(worktree_path);
+                let Some(next) = row_from_frame_pane(pane, &wiring, self.now) else {
+                    continue;
+                };
+                if row.is_agent() && next.is_agent() && row.name == next.name {
+                    continue;
                 }
+                *row = inherit_pane_slot(row, next);
             }
             refresh_overlay_group(
                 group,
@@ -448,7 +431,6 @@ impl SidebarSnapshot {
                 AttentionWindows::from_config(&self.attention),
             );
         }
-        changed
     }
 
     /// Apply a fused session-focus transition. A single focused pane updates
@@ -912,4 +894,24 @@ fn stamp_unread_rows(
     for row in rows {
         row.unread = unread_row_ids.contains(&row.id);
     }
+}
+
+/// Start `next` as the new tenant of `prior`'s pane. It inherits the pane slot
+/// and nothing else: the attention stamp, `prior`'s worktree when `next` has
+/// none, the sinks when `next` is a process row (a new agent starts awake), and
+/// the unread mark when `next` is an agent row under the same id. Everything
+/// else on the row belongs to the tenant.
+fn inherit_pane_slot(prior: &SidebarRow, mut next: SidebarRow) -> SidebarRow {
+    next.attention_at_ms = prior.attention_at_ms;
+    if next.worktree_path.is_none() {
+        next.worktree_path.clone_from(&prior.worktree_path);
+    }
+    if next.is_process() {
+        next.inactive = prior.inactive;
+        next.archived = prior.archived;
+    }
+    if next.is_agent() && next.id == prior.id {
+        next.unread = prior.unread;
+    }
+    next
 }
