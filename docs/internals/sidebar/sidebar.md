@@ -323,7 +323,7 @@ Unread state is a runtime episode set (`lanes/unread.json`) plus one room read-m
 | Staying in a tab for `TAB_READ_DWELL` (2.5 seconds) | Clears the unread rows in that tab. Leaving earlier clears nothing. |
 | `m` on an unread row, or `rimz agents mark TARGET read` | Writes a manual receipt without focusing; the CLI also removes a reached alert. |
 | `M` | Writes manual receipts for every readable row. |
-| `m` on a read row, or `rimz agents mark TARGET unread` | Opens a fresh episode through [`sidebar::unread::mark_rows_unread`](../../../crates/rimz/src/sidebar/unread.rs), stamped at `max(last_activity, now)` so no existing receipt reaches it. |
+| `m` on a read row, or `rimz agents mark TARGET unread` | Opens a fresh episode through [`sidebar::unread::mark_rows_unread`](../../../crates/rimz/src/sidebar/unread.rs), stamped at `max(last_activity, now, receipt + 1)`, strictly after the row's current receipt, so no existing receipt reaches it, one in the same millisecond or ahead of a clock that stepped back included. |
 
 Every writer max-updates the latest clear time per row under `read-marks.lock`, and a receipt clears an episode only when its clear time is at or after the episode, so an old focus cannot erase a later turn. Marks outlive the pane that wrote them, manual marks included, until the fetch worker prunes their rows against a produced room frame. Writes use cache-class temp-and-rename without fsync. If `marks.json` is absent, readers import the maximum of the legacy `manual.json` and valid `sidebar.<instance>.json` receipts with their original timestamps. The fetch worker's first prune, or an earlier changed write, materializes that import. Legacy receipts are reclaimed only by class-TTL GC, not by heartbeat expiry.
 

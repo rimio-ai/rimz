@@ -225,16 +225,18 @@ impl UnreadEpisodes {
 
 /// Open an unread episode for each row and persist `unread.json` — the one
 /// durable manual-unread write path, shared by `rimz agents mark TARGET unread`
-/// and the renderer's `M` key. Each episode opens at `last_activity.max(now_ms)`
-/// so no read receipt can reach it, which keeps the host's reconcile from
-/// pruning it and makes the write safe from any process. Callers
-/// trace and wake; this owns only the persistence.
+/// and the renderer's `m` key on a read row. Each episode opens at
+/// `max(last_activity, now_ms, receipt + 1)`, strictly after the row's current
+/// read receipt, so no receipt that exists when the mark is made reaches it and
+/// the host's reconcile cannot prune it. Callers trace and wake; this owns only
+/// the persistence.
 pub fn mark_rows_unread(
     runtime: &RuntimePaths,
     rows: &[SidebarRow],
     now_ms: i64,
 ) -> atomic::Result<Vec<OpenedUnread>> {
     let mut episodes = UnreadEpisodes::load(runtime);
+    let marks = ReadMarks::load(runtime);
     // Unread is an agent-row concept: an episode opens on a `needs_a_look`
     // status, so a process row (no status) can never be unread. Skip non-agent
     // rows so the renderer's `M` key stays panic-free at `opened_unread`.
@@ -242,7 +244,14 @@ pub fn mark_rows_unread(
         .iter()
         .filter(|row| row.status().is_some())
         .map(|row| {
-            let episode_ms = row.last_activity.as_millisecond().max(now_ms);
+            let after_receipt = marks
+                .cleared_at_ms(&row.id)
+                .map_or(i64::MIN, |receipt| receipt.saturating_add(1));
+            let episode_ms = row
+                .last_activity
+                .as_millisecond()
+                .max(now_ms)
+                .max(after_receipt);
             episodes.open_for_row(row, episode_ms)
         })
         .collect::<Vec<_>>();

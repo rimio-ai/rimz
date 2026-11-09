@@ -379,3 +379,37 @@ fn load_persist_round_trips_and_garbage_reads_empty() {
     fs::write(runtime.unread_path(), b"{ not json").expect("garbage");
     assert_eq!(UnreadEpisodes::load(&runtime), UnreadEpisodes::default());
 }
+
+#[test]
+fn manual_mark_lands_after_an_existing_receipt_and_survives_reconcile() {
+    // (receipt, last activity, now): a receipt in the mark's own ms, and one
+    // ahead of a clock that stepped back.
+    for (receipt, last_activity, now) in [(5_000, 1_000, 5_000), (9_000, 1_000, 5_000)] {
+        let (_dir, runtime) = runtime();
+        crate::sidebar::read_marks::write_read_marks(&runtime, ["a".to_owned()], receipt)
+            .expect("receipt");
+
+        let opened = mark_rows_unread(
+            &runtime,
+            &[row("a", AgentStatus::Running, last_activity)],
+            now,
+        )
+        .expect("mark unread");
+        assert_eq!(opened[0].episode_ms, receipt + 1, "receipt={receipt}");
+
+        let mut held = snapshot(vec![row("a", AgentStatus::Running, last_activity)]);
+        reconcile_snapshot(&runtime, &mut held);
+        assert!(held.worktree_groups[0].rows[0].unread, "receipt={receipt}");
+        assert_eq!(
+            UnreadEpisodes::load(&runtime).episodes.get("a"),
+            Some(&(receipt + 1)),
+            "receipt={receipt}"
+        );
+
+        crate::sidebar::read_marks::write_read_marks(&runtime, ["a".to_owned()], receipt + 1)
+            .expect("read");
+        let mut read = snapshot(vec![row("a", AgentStatus::Running, last_activity)]);
+        reconcile_snapshot(&runtime, &mut read);
+        assert!(!read.worktree_groups[0].rows[0].unread, "receipt={receipt}");
+    }
+}
