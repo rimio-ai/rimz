@@ -77,14 +77,14 @@ pub fn read(
     at_ms: i64,
 ) -> atomic::Result<()> {
     super::read_marks::write_read_marks(runtime, rows.iter().map(|row| row.id.clone()), at_ms)?;
-    let mut episodes = super::unread::UnreadEpisodes::load(runtime);
-    let cleared = rows
-        .iter()
-        .filter(|row| episodes.remove_reached_for_row(row, at_ms))
-        .collect::<Vec<_>>();
-    if !cleared.is_empty() {
-        episodes.persist(runtime)?;
-    }
+    let cleared = super::unread::update_episodes(runtime, |episodes| {
+        let cleared = rows
+            .iter()
+            .filter(|row| episodes.remove_reached_for_row(row, at_ms))
+            .collect::<Vec<_>>();
+        let write = !cleared.is_empty();
+        (cleared, write)
+    })?;
     for row in cleared {
         diag.trace_notify(crate::diag::notify::NotifyTraceEvent::UnreadCleared {
             row_id: row.id.clone(),
@@ -131,5 +131,64 @@ pub fn unread(
 fn wake(runtime: &RuntimePaths) {
     if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
         tracing::debug!(error = %err, "sidebar unread wake failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::AgentStatus;
+    use crate::store::snapshot::{AgentCard, RowCard};
+
+    #[test]
+    fn mark_read_waits_for_the_episode_transaction() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).expect("runtime");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let row = SidebarRow {
+            checkout: None,
+            id: "a".to_owned(),
+            name: "claude".to_owned(),
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            channel: None,
+            unread: true,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            attention_at_ms: None,
+            last_activity: jiff::Timestamp::from_millisecond(1_000).expect("timestamp"),
+            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
+                status: AgentStatus::Success,
+                ..AgentCard::default()
+            })),
+        };
+        super::super::unread::mark_rows_unread(&runtime, std::slice::from_ref(&row), 1_000)
+            .expect("episode");
+        let lock = crate::disk::lock::WorkspaceLock::acquire_with_timeout(
+            &runtime.unread_lock_path(),
+            std::time::Duration::from_millis(250),
+        )
+        .expect("unread lock");
+
+        let out = read(
+            &runtime,
+            std::slice::from_ref(&row),
+            &DiagSink::disabled(),
+            2_000,
+        );
+
+        drop(lock);
+        assert!(
+            out.is_err(),
+            "mark read replaced unread.json under a held lock"
+        );
+        assert!(
+            std::fs::read_to_string(runtime.unread_path())
+                .expect("episodes")
+                .contains("\"a\"")
+        );
     }
 }

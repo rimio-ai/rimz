@@ -185,7 +185,7 @@ fn assert_unwatched_attention_delivery(reminder: bool) {
     worker.config.notification_prefs.coalesce_ms = if reminder { 0 } else { 1_000 };
     worker.config.notification_prefs.remind_secs = if reminder { 2 } else { 0 };
     if !reminder {
-        UnreadEpisodes::default().persist(&fixture.runtime).unwrap();
+        UnreadEpisodes::materialize(&fixture.runtime).unwrap();
     }
     let (wake, events) = wake_channel();
     let (mut sink, _reader) = single_sink(fixture.host_data.clone(), wake);
@@ -1827,7 +1827,7 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    UnreadEpisodes::default().persist(&runtime).unwrap();
+    UnreadEpisodes::materialize(&runtime).unwrap();
     let mut worker = fixture.worker();
     worker.runtime = runtime.clone();
     let (observer_tx, _observer_rx) = std::sync::mpsc::sync_channel(64);
@@ -1950,7 +1950,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    UnreadEpisodes::default().persist(&runtime).unwrap();
+    UnreadEpisodes::materialize(&runtime).unwrap();
     let mut worker = fixture.worker();
     worker.runtime = runtime.clone();
     worker.config.notification_prefs.coalesce_ms = 0;

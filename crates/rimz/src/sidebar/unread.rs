@@ -4,6 +4,11 @@
 //! shared snapshot enrichment folds this set with read receipts to stamp
 //! `SidebarRow::unread`; the room host reconciles it against current
 //! rows and persists opens/prunes.
+//!
+//! Every writer (host reconcile, manual unread, CLI mark read) changes the
+//! set inside one transaction under `unread.lock`, from before its load until
+//! after its replace, so no writer publishes a map loaded before another's
+//! change. No writer holds `read-marks.lock` at the same time.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -14,7 +19,7 @@ use tracing::debug;
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
+use crate::sidebar::read_marks::{ReadMarks, lane_lock, prune_read_marks};
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
@@ -23,8 +28,6 @@ pub(crate) fn reconcile_snapshot(
     runtime: &RuntimePaths,
     snapshot: &mut SidebarSnapshot,
 ) -> ReconcileOutcome {
-    let mut episodes = UnreadEpisodes::load(runtime);
-    let silent_opens = episodes.was_absent_on_load();
     let marks = ReadMarks::load(runtime);
     if snapshot.panes_produced_at_ms.is_some() {
         prune_read_marks(
@@ -32,13 +35,37 @@ pub(crate) fn reconcile_snapshot(
             &snapshot.rows().map(|row| row.id.clone()).collect(),
         );
     }
-    let unread = episodes.reconcile(snapshot, &marks, silent_opens);
-    if (episodes.was_absent_on_load() || unread.changed)
-        && let Err(err) = episodes.persist(runtime)
-    {
-        debug!(error = %err, "unread episodes persist failed");
+    let reconciled = update_episodes(runtime, |episodes| {
+        let silent_opens = episodes.was_absent_on_load();
+        let unread = episodes.reconcile(snapshot, &marks, silent_opens);
+        let write = silent_opens || unread.changed;
+        (unread, write)
+    });
+    match reconciled {
+        Ok(unread) => unread,
+        Err(err) => {
+            // Opens wait for the next final fold rather than notifying ones
+            // this pass could not record.
+            debug!(error = %err, "unread episodes reconcile deferred");
+            derive(snapshot, &UnreadEpisodes::load(runtime), &marks);
+            ReconcileOutcome::default()
+        }
     }
-    unread
+}
+
+/// The episode transaction: holds `unread.lock` across a fresh load, the
+/// caller's change, and the replace the change asks for with its `bool`.
+pub(super) fn update_episodes<T>(
+    runtime: &RuntimePaths,
+    change: impl FnOnce(&mut UnreadEpisodes) -> (T, bool),
+) -> atomic::Result<T> {
+    let _lock = lane_lock(runtime.unread_lock_path())?;
+    let mut episodes = UnreadEpisodes::load(runtime);
+    let (out, write) = change(&mut episodes);
+    if write {
+        episodes.persist(runtime)?;
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -84,11 +111,18 @@ impl UnreadEpisodes {
         }
     }
 
+    /// Writes an empty `unread.json` through the episode transaction, so a
+    /// test's later opens are not cold-start silent.
+    #[cfg(test)]
+    pub(crate) fn materialize(runtime: &RuntimePaths) -> atomic::Result<()> {
+        update_episodes(runtime, |_| ((), true))
+    }
+
     pub(crate) fn was_absent_on_load(&self) -> bool {
         self.absent_on_load
     }
 
-    pub fn persist(&mut self, runtime: &RuntimePaths) -> atomic::Result<()> {
+    fn persist(&mut self, runtime: &RuntimePaths) -> atomic::Result<()> {
         let path = runtime.unread_path();
         let file = UnreadEpisodesFile {
             v: UNREAD_EPISODES_VERSION.to_owned(),
@@ -226,22 +260,33 @@ impl UnreadEpisodes {
 /// Open an unread episode for each row and persist `unread.json` — the one
 /// durable manual-unread write path, shared by `rimz agents mark TARGET unread`
 /// and the renderer's `m` key on a read row. Each episode opens at
-/// `max(last_activity, now_ms, receipt + 1)`, strictly after the row's current
-/// read receipt, so no receipt that exists when the mark is made reaches it and
-/// the host's reconcile cannot prune it. Callers trace and wake; this owns only
+/// `max(last_activity, now_ms, receipt + 1)`, the receipt read inside the
+/// episode transaction, so no receipt that exists when the mark is made
+/// reaches it and the host's reconcile cannot prune it. A held `unread.lock`
+/// past the lane budget fails the mark. Callers trace and wake; this owns only
 /// the persistence.
 pub fn mark_rows_unread(
     runtime: &RuntimePaths,
     rows: &[SidebarRow],
     now_ms: i64,
 ) -> atomic::Result<Vec<OpenedUnread>> {
-    let mut episodes = UnreadEpisodes::load(runtime);
-    let marks = ReadMarks::load(runtime);
+    update_episodes(runtime, |episodes| {
+        let opened = open_manual(episodes, &ReadMarks::load(runtime), rows, now_ms);
+        let write = !opened.is_empty();
+        (opened, write)
+    })
+}
+
+fn open_manual(
+    episodes: &mut UnreadEpisodes,
+    marks: &ReadMarks,
+    rows: &[SidebarRow],
+    now_ms: i64,
+) -> Vec<OpenedUnread> {
     // Unread is an agent-row concept: an episode opens on a `needs_a_look`
     // status, so a process row (no status) can never be unread. Skip non-agent
-    // rows so the renderer's `M` key stays panic-free at `opened_unread`.
-    let opened = rows
-        .iter()
+    // rows so the renderer's `m` key stays panic-free at `opened_unread`.
+    rows.iter()
         .filter(|row| row.status().is_some())
         .map(|row| {
             let after_receipt = marks
@@ -254,11 +299,7 @@ pub fn mark_rows_unread(
                 .max(after_receipt);
             episodes.open_for_row(row, episode_ms)
         })
-        .collect::<Vec<_>>();
-    if !opened.is_empty() {
-        episodes.persist(runtime)?;
-    }
-    Ok(opened)
+        .collect()
 }
 
 pub(super) fn derive(snapshot: &mut SidebarSnapshot, episodes: &UnreadEpisodes, marks: &ReadMarks) {
