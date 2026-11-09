@@ -1,7 +1,6 @@
 //! Published provider and workspace spending cache shapes.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -212,10 +211,7 @@ pub fn write_provider_spending_cache(path: &Path, cache: &ProviderSpendingCache)
 /// always get a usable value; a pre-stamp file deserializes with its spending
 /// values intact.
 pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
-        .unwrap_or_default()
+    crate::disk::atomic::read_json_cache(path)
 }
 
 pub(crate) fn cached_provider_spending(path: &Path) -> Arc<ProviderSpendingCache> {
@@ -301,8 +297,5 @@ pub fn write_workspace_spending_cache(path: &Path, cache: &WorkspaceSpendingCach
 }
 
 pub fn read_workspace_spending_cache(path: &Path) -> WorkspaceSpendingCache {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<WorkspaceSpendingCache>(&bytes).ok())
-        .unwrap_or_default()
+    crate::disk::atomic::read_json_cache(path)
 }

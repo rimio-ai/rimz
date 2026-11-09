@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::agents::AgentDefinition;
 use crate::agents::definition::ThreadKey;
 
-use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
+use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache, is_zero};
 use super::user_input::UserInputRecord;
 use super::{
     CachedScopedSpending, ChartSpend, ModelTally, RoleTallies, ScopedSpending, SpendingFile,
@@ -33,16 +33,16 @@ pub struct SpendWindow {
     pub input: u64,
     #[serde(default)]
     pub output: u64,
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub timed_ms: u64,
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub timed_output: u64,
     #[serde(default)]
     pub cache_write: u64,
     #[serde(default)]
     pub cache_read: u64,
     /// Total named tool calls observed in this window.
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub tool_calls: u64,
     /// Named tool call counts in this window.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -50,10 +50,6 @@ pub struct SpendWindow {
     /// Distinct sessions (threads) with activity in this window.
     #[serde(default)]
     pub sessions: u32,
-}
-
-fn is_zero_u64(value: &u64) -> bool {
-    *value == 0
 }
 
 pub(super) fn tokens_per_sec(timed_ms: u64, timed_output: u64) -> Option<u64> {

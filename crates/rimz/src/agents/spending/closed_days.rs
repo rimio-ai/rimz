@@ -11,7 +11,7 @@ use super::aggregate::{
     dedup_cached_entry_locations, file_session_key, indexed_counted_entries, session_key,
     within_widest_window,
 };
-use super::cache::{CacheStamp, cache_stamp};
+use super::cache::{CacheStamp, cache_stamp, is_false, is_zero};
 use super::discovery::HistoryAccount;
 use super::history::{self, Maintenance};
 use super::rebuild::{self, KeptDay, RebuildErr, RebuildReport, RebuildScope, RebuiltDay};
@@ -88,14 +88,6 @@ struct SpendRow {
 struct StoredTiming {
     ms: u64,
     output: u64,
-}
-
-fn is_zero(value: &u64) -> bool {
-    *value == 0
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 impl SpendRow {
