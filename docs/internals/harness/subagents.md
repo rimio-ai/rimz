@@ -42,7 +42,7 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `print` | always `true` | selects RimZ's supervised run, not provider print mode, so interactive providers can take follow-up turns |
 | `bg` | always `true` | single launch and fanout share one background composition |
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
-| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Execution reads it as `self_cleanup_on_completion && !keep` (`crates/rimz/src/launcher/execute.rs::open_fresh`) |
+| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Supervised preparation stores `self_cleanup_on_completion && !keep` as the leader's `cleanup` (`crates/rimz/src/launcher/supervised.rs::prepare`) |
 | `keep` | `--keep`, default false | turns automatic completion cleanup off and holds the pane past provider exit until the parent ends or Ctrl-C, under a live parent watch |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
 | `warn` | `--warn`, else `[agents.subagents] warn`, default `["6m", "3m"]` | normalized offsets before the soft bound |
@@ -50,7 +50,7 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `report_to` | `launcher` | see [which runs a fleet owes](#which-runs-a-fleet-owes) for `nobody` |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving. The duration limits only the caller's join |
 
-The pass-through fields are `--prompt-file`, `--model`, `--tier`, `--agent` (a re-base onto another profile or kind), `--effort`, `--fast`/`--no-fast`, `--isolation`, `--yolo`, `--cwd` ([below](#the-child-works-where-its-parent-works)), `--description`, `--max-turns`, and trailing argv. The doorway omits `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output and input formats, retries, and verification. Each stays reachable through `rimz agents`. The retired `--detach` flag still parses and refuses (`reject_detach`).
+The pass-through fields are `--prompt-file`, `--model`, `--tier`, `--agent` (a re-base onto another profile or kind), `--effort`, `--fast`/`--no-fast`, `--isolation`, `--yolo`, `--cwd`, `--add-dir`, and `--empty-dir` ([below](#the-child-works-where-its-parent-works)), `--description`, `--max-turns`, and trailing argv. The doorway omits `--ask`, `--account`, `--name`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output and input formats, retries, and verification. Each stays reachable through `rimz agents`. The retired `--detach` flag still parses and refuses (`reject_detach`).
 
 A launch prints the minted petname and returns. Its stderr receipt, shared with `rimz agents -p --bg` through `supervised::output::write_background_receipt`, names the fleet report, the agent-visible response path, and the `wait` command that blocks instead. `--wait` leaves the background run unchanged and passes the petname to the shared `agents_cmd::wait_agent` join. `--wait=DURATION` adds a caller-side deadline without changing the child's timeout. `--json` on a single launch requires `--wait`.
 
@@ -79,7 +79,7 @@ Both caps apply only where the planner sees `subagent` set, and at parent-messag
 
 `rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag, which wins over the configured default. Fanout-level `--keep` applies to every task. Permission mode, isolation, wait, retention, and passthrough argv are not per-task fields, and the task format rejects unknown fields. Every task still passes the planner's [parent caps](#the-parent-caps-a-childs-posture).
 
-The whole array is validated before the first side effect: parsing, required fields, and every deadline duration. A validation failure launches nothing. Pane opens then run one at a time in the caller process, so two backend splits never race against the same anchor pane. Each child process starts as soon as its pane opens, so the children run in parallel.
+The whole array is validated before the first side effect: parsing, a nonempty array, required fields, every `prompt_file` read, every deadline duration, and every task's `cwd` and `add_dirs` resolved against the room (`parse_fanout_launches`, then `resolve_launch_cwd` per path in `crates/rimz/src/cli/subagents/mod.rs::fanout_children`). A validation failure launches nothing. Pane opens then run one at a time in the caller process, so two backend splits never race against the same anchor pane. Each child process starts as soon as its pane opens, so the children run in parallel.
 
 The supervised runner returns each child's minted petname and run id to the command. Fanout therefore collects identities directly instead of diffing store snapshots, which another launch in the same family could confuse.
 
@@ -97,11 +97,11 @@ A failure partway through aborts the remaining launches and names every child al
 
 The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` entry: when it sets `subagents = [...]`, both the positional profile and any `--agent` re-base must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation.
 
-`subagent_policy::catalog` is the one owner of catalog assembly. Both `rimz subagents profiles` and the parent's launch reminder read it ([below](#parents-learn-their-catalog)). It filters by the literal allowlist and returns `Disabled` for `subagents = []` or when no profile or command survives; `Available` is never empty. A caller whose profile sets no `subagents` list, or that resolves to no profile (a user shell included), sees the unfiltered catalog.
+`subagent_policy::catalog` is the one owner of catalog assembly. Both `rimz subagents profiles` and the parent's launch reminder read it ([below](#parents-learn-their-catalog)). It lists the `[subagents.profiles]` entries, the shared commands, and each runtime variant (such as `opencode-mini`) whose kind has a `[subagents.profiles]` base or that the allowlist names. It then filters by the literal allowlist and returns `Disabled` for `subagents = []` or when nothing survives; `Available` is never empty. A caller whose profile sets no `subagents` list, or that resolves to no profile (a user shell included), sees the unfiltered catalog.
 
 ## The child works where its parent works
 
-A child's checkout defaults to its parent's recorded checkout, not to the directory the parent's shell is in. The runner first resolves its workspace from `"."`, so a parent that writes a brief under `/tmp` and launches from there would hand the child `/tmp`. Right after ancestry, `anchor_caller_workspace` ([`cli/mod.rs`](../../../crates/rimz/src/cli/mod.rs)) resolves the workspace again from the caller's `AgentState::lane_path` (`checkout`, else `worktree_path`). Everything after reads that value: profile qualification, channel inference, `RIMZ_WORKTREE_PATH`, and `resolve_launch_checkout`. That checkout's cwd becomes the pane cwd, the provider cwd, the sidebar options, `RunRecord.worktree_path`, and the child's recorded checkout. When the path is a repository subdirectory selected by the parent's `--root`, it stays the child's `worktree_root`, and workspace resolution supplies only the surrounding metadata.
+A child's checkout defaults to its parent's recorded checkout, not to the directory the parent's shell is in. The runner first resolves its workspace from `"."`, so a parent that writes a brief under `/tmp` and launches from there would hand the child `/tmp`. Right after ancestry, `anchor_caller_workspace` ([`launcher/checkout.rs`](../../../crates/rimz/src/launcher/checkout.rs), behind a CLI delegate of the same name) resolves the workspace again from the caller's `AgentState::lane_path` (`checkout`, else `worktree_path`). Everything after reads that value: profile qualification, channel inference, `RIMZ_WORKTREE_PATH`, and `resolve_launch_checkout`. That checkout's cwd becomes the pane cwd, the provider cwd, the sidebar options, `RunRecord.worktree_path`, and the child's recorded checkout. When the path is a repository subdirectory selected by the parent's `--root`, it stays the child's `worktree_root`, and workspace resolution supplies only the surrounding metadata.
 
 The parent's `worktree_path` is stamped from its launch cwd (or filled from a hook process's cwd) and does not follow a shell `cd`. Both resolutions share the room pin's project root, so the store and effective config opened before the re-anchor stay correct.
 
@@ -160,12 +160,14 @@ Resolving a launch id to its current occupant, instead of the first row that car
 `resolve_launch_ancestry` then reads the caller's durable `launch_depth` as a launch generation:
 
 ```text
+no resolved caller (a human shell)              → no stamp
 caller is a launched child                      → refuse (SubagentCaller)
 generation = caller.launch_depth ?? 0
 
 rimz agents / rimz teams:
   generation >= max_chain_length                → refuse (ChainExceeded)
   parent_agent_id = None
+  launched_by = (caller.kind, caller.launch_id ?? caller.agent_id)
   launch_depth = generation + 1
 
 rimz subagents:
@@ -231,9 +233,11 @@ A session-id link resolves only where the row it names is visible, which costs t
 | `stop` | resolved agent | alive snapshot, then `ended_at.is_none()` for `--all` | the caller's live children |
 | `wait`, `stop` | unresolved | none | refuse, since they need a durable caller |
 
-For a user shell, [`address::launched_children_in_channel`](../../../crates/rimz/src/address.rs) keeps every launched child that matches `Ctx::channel`. A child with a channel stamp matches it exactly, or as the dashed form of a branch-style filter. A child without one matches the channel composed from its worktree directory name. Membership never comes from a live parent, so ended parents and adopted identities do not hide child history. [`address::launched_parent`](../../../crates/rimz/src/address.rs) is the inverse join: each row labels its parent launch's current row, and the table adds parent and channel columns. A plain shell in the project directory cannot derive an in-place team's `<directory>/<team>` channel from cwd, so `Ctx::channel` is `None` there and `list` shows every channel, with the channel column telling in-place lanes apart. A RimZ-launched pane carries `RIMZ_CHANNEL`, and a shell in a separate worktree derives its worktree channel.
+For a user shell, [`address::launched_children_in_channel`](../../../crates/rimz/src/address.rs) keeps every launched child that matches `Ctx::channel`. A root-lane child matches `main`. A child with a channel stamp matches it exactly, or as the dashed form of a branch-style filter. A child without one matches by its worktree path, the path's directory name, or the channel composed from that name, each also against the dashed form. Membership never comes from a live parent, so ended parents and adopted identities do not hide child history. [`address::launched_parent`](../../../crates/rimz/src/address.rs) is the inverse join: each row's `PARENT` cell names its parent launch's current row. A plain shell in the project directory cannot derive an in-place team's `<directory>/<team>` channel from cwd, so `Ctx::channel` is `None` there and `list` shows every channel, with the channel column telling in-place lanes apart. A RimZ-launched pane carries `RIMZ_CHANNEL`, and a shell in a separate worktree derives its worktree channel.
 
 ### What `list` prints
+
+An agent caller's table has `SUBAGENT`, `KIND`, `AGENT`, `RUN`, and `ELAPSED` columns, and a user shell's adds `PARENT` and `CHANNEL`. Rows sort by their newest run: open runs first, then settled ones, newest answer start first within each, and children with no run last (`child_reports`).
 
 `list` joins the context sidecar onto the audit rows with `store::agent_context::attach_rest_certificates` and `attach_child_display_context`. The latter attaches every unended launched child, whatever its stored status. The `AGENT` column prints `AgentState::rowless_status` with the room's [reset-window and exhausted-resume demotion](../agents/model.md#the-sidebar-ladder), shared by `rimz agents show` and the sidebar's nested entry:
 
@@ -318,9 +322,9 @@ The stamp-then-queue order makes the report race-safe. A fleet is every child la
 
 The digest text (`compose_digest`) has a heading and one row per answer:
 
-- The heading is `Your subagent settled:` or `All N subagents settled:`, with `background agent` in place of `subagent` unless every row is a subagent run. N counts rows, and several rows may name the same child or peer. With two or more response files the heading appends `responses total {label}` over their summed `FileSummary`.
-- A row carries the answer's status, the elapsed time from that answer's start, the last line of the failure tail for a non-completed answer, its task, and its response path with `FileSummary::label` (estimated tokens and physical lines from `FileSummary::measure`), or `no response`.
-- The task of a launch answer is the launcher's `--description`, else a bounded first-line preview of the prompt. A follow-up uses the bounded first line of its own stored prompt, and omits `task:` when that is unknown. A peer turn always uses its own prompt preview.
+- The heading is `Your subagent settled:` or `All N subagents settled:`, with `background agent` in place of `subagent` unless every row is a subagent run. N counts rows, and several rows may name the same child or peer. With two or more response files the heading reads `All N subagents settled, responses total {label}:`, over their summed `FileSummary`.
+- A row carries the answer's status, the elapsed time from that answer's start (`after` for a timed-out answer, `in` otherwise), the last nonblank line of the failure tail for a non-completed answer, its task, and its response path with `FileSummary::label` (estimated tokens and physical lines from `FileSummary::measure`), or `no response`. A timed-out answer's path is labelled `partial response`.
+- The task of a launch answer is the child card's description (which `--description` seeds), else a bounded first-line preview of the prompt. A follow-up uses the bounded first line of its own stored prompt, and omits `task:` when that is unknown. A peer turn always uses its own prompt preview.
 
 The digest ends at its last row, with no trailing instruction.
 
@@ -337,7 +341,7 @@ An agent that launches a peer with `rimz agents` and a prompt is owed that peer'
 | `record_run_delivery` | runs inside the [acknowledgment callback](./messaging.md#confirmation-and-retry) and enrolls a launcher's message into the peer's open turn, or [stamps a subagent's follow-up](#a-follow-up-reopens-the-run) |
 | `fail_peer_run` | settles an open run and wakes its waiter |
 
-A peer has at most one open run, enforced at creation and enrollment. Further launcher messages join that run, including while it is parked, keeping its original task and adding opener ids. A turn that a later launcher message opens is a new record and reports to the launcher. Human-launched agents, provider-native agents, and team seats (`AgentState::is_team_seat`) are excluded before any run is scanned. The interface never puts a run id into the persistent pane's environment.
+Enrollment takes only a prompt-correlated confirmation (`DeliveryAckMatch::PromptCorrelated`), and only the messages the peer's `launched_by` agent sent. A peer has at most one open run, enforced at creation and enrollment. Further launcher messages join that run, including while it is parked, keeping its original task and adding opener ids. A turn that a later launcher message opens is a new record and reports to the launcher. Human-launched agents, provider-native agents, and team seats (`AgentState::is_team_seat`) are excluded before any run is scanned. The interface never puts a run id into the persistent pane's environment.
 
 Interactive launch calls `create_peer_prompt` after `begin_agent_launch_batch` assigns the prompt leader's identity and before placement opens a pane. Only an agent-launched, nonempty prompt gets a pending run, and resume bypasses it. A compilation or placement failure fails the run. Both launch and message enrollment require the adapter's native root turn-start and turn-end coverage: an unsupported adapter still launches, but its receipt says explicitly that no report comes. A supported launch receipt maps the response path through the launcher's `TmpView` and names the wait and follow-up commands by the peer's handle, `@<name>#<channel>`, which resolves the pending run before registration.
 
@@ -373,7 +377,7 @@ An unresolved caller is a human shell and counts as attended. A failed snapshot 
 A launched child waits for its parent to receive the answer before the wrapper stops the provider and closes the pane. `RunMonitor` in [`cli/agents_cmd/exec/supervisor.rs`](../../../crates/rimz/src/cli/agents_cmd/exec/supervisor.rs) polls the run record every 250 ms with self-cleanup on, and runs two kinds of `supervise-duty` helper (`cli/agents_cmd/exec/duty.rs`) so the wrapper itself holds no store:
 
 - A resident `Strand` helper runs only while the run is parked and nonterminal. It repairs the fleet's digests and checks for a [stranded park](./scripting.md#parked-runs) every 5 s. When the run leaves that phase, it finishes its current work and is reaped, never killed mid-write.
-- A one-shot `Receipt` helper answers whether the parent has received the answer. Queue `(mtime, len)` changes, parent lifecycle frames, a waiter leaving, or a 60 s fallback trigger it, with at most one in flight and a 1 s floor between starts. While a terminal run awaits receipt, the wrapper wakes the parent watchdog to drain parent frames every second, without speeding up pane probes or confirmation helpers.
+- A one-shot `Receipt` helper runs the [fleet reporter](#composing-the-digest) when the record changed since its last start and still owes a report, then answers whether the parent has received the answer. A new record revision, queue `(mtime, len)` changes, parent lifecycle frames, a waiter leaving, or a 60 s fallback trigger it, with at most one in flight and a 1 s floor between starts. While a terminal run awaits receipt, the wrapper wakes the parent watchdog to drain parent frames every second, without speeding up pane probes or confirmation helpers.
 
 Helpers also finish their current work when the wrapper exits, and a strand helper stops iterating once its wrapper is gone.
 
@@ -425,11 +429,11 @@ The one exception is the startup relaunch. At each relaunch decision (the end of
 
 ### The orphan sweep
 
-The room host runs [`harness/orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) at most once a minute. It folds the producer's shared audit cursor once per pass and decides over the borrowed layered rollup, keeping ended parent rows without flattening history. It reads durable records only and starts hidden helpers, each of which rechecks the records before acting:
+The room host runs [`harness/orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) at most once a minute (`ORPHAN_SWEEP_SCAN_TTL` in `crates/rimz/src/sidebar/refresh/mod.rs`), on a heavy-lane pass whose run-timeout step read the run list. It folds the producer's shared audit cursor once per pass and decides over the borrowed layered rollup, keeping ended parent rows without flattening history. It reads durable records only and starts hidden helpers, each of which rechecks the records before acting:
 
 | Scan | Condition | Helper action | Diagnostic |
 | --- | --- | --- | --- |
-| missed digest | a live launcher whose `launched_fleet` rows are all terminal, with at least one row neither reported nor joined | runs the same fleet reporter | `subagent_digest_backstopped` when it queues |
+| missed digest | a live launcher whose `FleetRuns` selection is nonempty, has no live run, and owes at least one answer | runs the same fleet reporter | `subagent_digest_backstopped` when it queues |
 | abandoned peer turn | a launcher's open peer run whose row ended, whose recorded process died, or which is parked with no running or unreported runs in its own fleet and no armed wait for its session in the loop catalog | rechecks the peer. Fails an ended or dead peer's turn, or checks a parked turn twice five seconds apart through `settle_stranded_park`, then runs the fleet reporter | `subagent_digest_backstopped` when it queues |
 | orphan | a live launched child whose parent launch's latest row ended, or that has no row, `ORPHAN_GRACE` (10 minutes) ago, measured from that end stamp or from the child's registration | uses the [stop seam](./scripting.md#reclaiming-the-run-pane) to reclaim a run's pane and record its end. Without a run, closes the pane and records `rimz.subagent-orphan-reaped` | `subagent_orphan_reaped`, or `subagent_orphan_repair_failed`, which stays eligible for the next scan |
 
@@ -477,11 +481,11 @@ A settled child can take another turn: a live interactive child through an ordin
 
 ### A follow-up reopens the run
 
-[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens a terminal subagent run on a matching `TurnStarted`, whatever its terminal status. Other terminal runs stay terminal. The reopen:
+[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens a terminal turn-lifecycle subagent run on a `TurnStarted` of its kind and bound session, whatever its terminal status. Other terminal runs stay terminal. The reopen:
 
 1. moves the replaced answer into `earlier_answers` with its digest link, unless it was joined or reported to `nobody`, and drops joined earlier entries
 2. increments `follow_ups` and sets `follow_up.started_at` to the reopen time with no prompt, then clears `opened_by`
-3. sets `report_to` to `launcher` and status `Running`, clearing `completed_at`, `parked_at`, `parked_answer`, `joined_at`, `report_message_id`, and `deadline_notice_at`
+3. sets `report_to` to `launcher` and status `Running`, clearing `completed_at`, `parked_at`, `parked_answer`, `joined_at`, `report_message_id`, `last_message`, `failure_tail`, and `deadline_notice_at` (`stall_noticed_at` stays set)
 4. re-arms the deadline to `now + timeout`. A record without a stored timeout re-arms by the previous answer's own span (from `follow_up.started_at`, else `started_at`), so later reopens do not compound the timeout
 
 The next completion is newly terminal again and can produce another digest without losing the earlier answer. Verification retries and park and unpark cycles keep the same ordinal.
@@ -500,7 +504,7 @@ Text fan-out claims after each printed reply, and JSON claims only after the sel
 
 For an ended child, [`cli/message/dispatch.rs`](../../../crates/rimz/src/cli/message/dispatch.rs), `recipient_miss`, calls `resume_child` in [`cli/subagents/resume.rs`](../../../crates/rimz/src/cli/subagents/resume.rs) before reporting a miss. It resolves the caller through ancestry against the audit projection, and the target only among that caller's launched children, so a user shell, peer, or sibling cannot resume it this way.
 
-Before it queues anything or opens a pane, `resume_child` checks, in order: the recorded cwd, subagent-profile posture, scoped skills and capability, trust, login, provider session resume support, and the resolved login's [health](./fleet.md#every-path-that-builds-a-launch-layout). After posture resolution it applies the [parent caps](#the-parent-caps-a-childs-posture), which refuse a replayed mode above the parent's current one and never lower the saved grant. A missing session, unsupported resume, or degraded posture is a miss with its reason, never a fresh launch.
+Before it queues anything or opens a pane, `resume_child` checks, in order: the recorded cwd (an empty-directory checkout is re-prepared), the subagent-profile posture and the [parent caps](#the-parent-caps-a-childs-posture), the sandbox preflight for scoped skills and capability, the kind's hook installation, the login and provider session resume support, the resolved login's hook [health](./fleet.md#every-path-that-builds-a-launch-layout), folder trust for a placed checkout, launch-directory admission, a recorded run, a launch identity, and a bound parent pane. The caps refuse a replayed mode above the parent's current one and never lower the saved grant. A missing session, unsupported resume, or degraded posture is a miss with its reason, never a fresh launch.
 
 The request reuses the child's session, launch identity, newest run, and keep policy, and takes cwd from the child without taking checkout ownership. Placement uses the parent's session and the ordinary subagent zone fallbacks. Under the zone lock, an already-live card returns to normal dispatch. Otherwise the follow-up is queued for the named ended child before the split, and the queue commit decides:
 
