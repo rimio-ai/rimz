@@ -378,6 +378,9 @@ pub(super) struct TaskRow {
     last: Option<LastRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     heard: Option<Heard>,
+    /// The newest fire, read when no fire acted (a canceled run): it still fired.
+    #[serde(skip)]
+    newest: Option<LoopRunRecord>,
     spend_today_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     budget_per_day_usd: Option<f64>,
@@ -424,21 +427,21 @@ struct RowContext<'a> {
 #[derive(Clone, Serialize)]
 pub(super) struct CapacityWaitView {
     kinds: Vec<rimz::ids::AgentKind>,
-    since: Timestamp,
+    pub(super) since: Timestamp,
     gives_up_at: Option<Timestamp>,
     reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     hold: Option<rimz::ids::HoldKind>,
 }
 
-impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
-    fn from(record: &launch_ledger::CapacityRecord) -> Self {
+impl From<&rimz::store::workflow::Wait> for CapacityWaitView {
+    fn from(wait: &rimz::store::workflow::Wait) -> Self {
         Self {
-            kinds: record.kinds.clone(),
-            since: record.first,
-            gives_up_at: record.gives_up_at,
-            reason: record.reason.clone(),
-            hold: record.hold,
+            kinds: wait.kinds.clone(),
+            since: wait.first,
+            gives_up_at: wait.gives_up_at,
+            reason: wait.detail.clone().unwrap_or_default(),
+            hold: wait.hold,
         }
     }
 }
@@ -446,6 +449,10 @@ impl From<&launch_ledger::CapacityRecord> for CapacityWaitView {
 impl CapacityWaitView {
     pub(super) fn text(&self, now: Timestamp) -> String {
         rimz::theme::fmt::held_start(self.since, self.gives_up_at, now)
+    }
+
+    pub(super) fn reason(&self) -> &str {
+        &self.reason
     }
 }
 
@@ -484,6 +491,27 @@ fn capacity_wait_json<S: serde::Serializer>(
         .min_by_key(|start| start.wait.since)
         .map(|start| &start.wait)
         .serialize(serializer)
+}
+
+/// The capacity waits of a task's active runs, by the checkout each run is scoped to.
+pub(super) fn capacity_waits<'a>(
+    runs: &'a [rimz::store::workflow::RunRecord],
+    task: &'a str,
+    root: &'a Path,
+) -> impl Iterator<Item = (&'a Path, CapacityWaitView)> + 'a {
+    runs.iter()
+        .filter(move |run| {
+            run.started_by(task)
+                && run.project_root == root
+                && run.state == rimz::store::workflow::RunState::Active
+        })
+        .filter_map(|run| {
+            let wait = run
+                .wait
+                .as_ref()
+                .filter(|wait| wait.outcome == "capacity")?;
+            Some((run.scope.path.as_path(), CapacityWaitView::from(wait)))
+        })
 }
 
 enum LoadScope {
@@ -586,16 +614,6 @@ fn load(
         let workflow_specs = StatePaths::for_project_root(&root)
             .map(|state| crate::cli::workflow_view::sealed_specs(&state, &workflows))
             .unwrap_or_default();
-        let capacity = runtime
-            .as_ref()
-            .map(|runtime| {
-                load_launch_memory(
-                    &root,
-                    |paths| launch_ledger::load_live_capacity(paths, runtime),
-                    &mut warnings,
-                )
-            })
-            .unwrap_or_default();
         let mut tasks = Vec::new();
         for (name, task) in catalog.visible() {
             let entry = task.entry();
@@ -662,39 +680,12 @@ fn load(
                     now,
                 },
             );
-            if let Some(checkouts) = capacity.get(name) {
-                row.capacity
-                    .extend(checkouts.iter().map(|(checkout, wait)| CapacityStart {
-                        checkout: checkout.clone(),
-                        wait: CapacityWaitView::from(wait),
-                    }));
-            }
-            for run in workflows
-                .iter()
-                .filter(|run| {
-                    run.started_by(name)
-                        && run.project_root == root
-                        && run.state == rimz::store::workflow::RunState::Active
-                })
-                .filter(|run| {
-                    run.wait
-                        .as_ref()
-                        .is_some_and(|wait| wait.outcome == "capacity")
-                })
-            {
-                if let Some(wait) = &run.wait {
-                    row.capacity.push(CapacityStart {
-                        checkout: run.scope.path.clone(),
-                        wait: CapacityWaitView {
-                            kinds: wait.kinds.clone(),
-                            since: wait.first,
-                            gives_up_at: wait.gives_up_at,
-                            reason: wait.detail.clone().unwrap_or_default(),
-                            hold: wait.hold,
-                        },
-                    });
-                }
-            }
+            row.capacity.extend(
+                capacity_waits(&workflows, name, &root).map(|(checkout, wait)| CapacityStart {
+                    checkout: checkout.to_path_buf(),
+                    wait,
+                }),
+            );
             row.held = tickets.remove(name).unwrap_or_default();
             row.refresh_attention(count, now);
             row.worktree_here = here
@@ -859,6 +850,7 @@ impl TaskRow {
             running_since: running.flatten().map(|holder| holder.started_at),
             last: None,
             heard: None,
+            newest: None,
             spend_today_usd: 0.0,
             budget_per_day_usd: entry
                 .budget_per_day
@@ -919,11 +911,15 @@ impl TaskRow {
             .and_then(|stats| stats.heard.as_ref())
             .filter(|heard| since_wait_armed(Some(task), heard.at))
             .map(Heard::from);
+        let newest = stats
+            .and_then(|stats| stats.last.as_ref())
+            .filter(|newest| since_wait_armed(Some(task), newest.at));
         let exit = last
             .as_ref()
             .and_then(|last| render::record_exit(&last.record));
         last_run_text(
             last.as_ref(),
+            newest,
             heard.as_ref(),
             task.action().ok().map(ActionKind::from),
             exit.as_deref(),
@@ -990,6 +986,7 @@ impl TaskRow {
             running_since: holder.map(|holder| holder.started_at),
             last: None,
             heard: None,
+            newest: None,
             spend_today_usd: 0.0,
             budget_per_day_usd: None,
             workflow_runs: Vec::new(),
@@ -1021,6 +1018,10 @@ impl TaskRow {
             .as_ref()
             .filter(|acting| since_wait_armed(self.task.as_ref(), acting.record.at))
             .map(LastRun::from);
+        self.newest = stats
+            .last
+            .clone()
+            .filter(|newest| since_wait_armed(self.task.as_ref(), newest.at));
         self.exit = self
             .last
             .as_ref()
@@ -1091,6 +1092,7 @@ impl TaskRow {
             TaskState::Off | TaskState::NotEnabled => self.state.label().into(),
             _ => last_run_text(
                 self.last.as_ref(),
+                self.newest.as_ref(),
                 self.heard.as_ref(),
                 self.action.as_ref().map(|action| action.kind),
                 self.exit.as_deref(),
@@ -1154,12 +1156,16 @@ fn since_wait_armed(task: Option<&LoadedTask>, at: Timestamp) -> bool {
 
 fn last_run_text(
     last: Option<&LastRun>,
+    newest: Option<&LoopRunRecord>,
     heard: Option<&Heard>,
     action: Option<ActionKind>,
     exit: Option<&str>,
     now: Timestamp,
 ) -> Option<String> {
     let Some(last) = last else {
+        if let Some(newest) = newest {
+            return Some(newest_fire_text(newest, now));
+        }
         return heard.map(|heard| {
             format!(
                 "never fired · heard {} {}",
@@ -1173,6 +1179,16 @@ fn last_run_text(
         text.push_str(&format!(" · {} in a row", last.streak));
     }
     Some(text)
+}
+
+/// A fire whose outcome joins no streak, such as a canceled run.
+fn newest_fire_text(newest: &LoopRunRecord, now: Timestamp) -> String {
+    format!(
+        "{} {} {}",
+        render::loop_result_mark(newest.result).glyph,
+        newest.result.label(),
+        ui::rel_age(newest.at, now)
+    )
 }
 
 fn acting_run_text(last: &LastRun, exit: Option<&str>, now: Timestamp) -> String {
@@ -1225,11 +1241,19 @@ pub(super) struct WorkflowRunRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_at: Option<Timestamp>,
     #[serde(skip)]
-    live: bool,
+    pub(super) live: bool,
     #[serde(skip)]
     target: Option<String>,
     #[serde(skip)]
     pub(super) command: Option<String>,
+    #[serde(skip)]
+    pub(super) evidence: Option<Box<RunEvidence>>,
+}
+
+/// A run's sealed graph and journal, read for the loop views' per-fire forensics.
+pub(super) struct RunEvidence {
+    pub(super) spec: rimz::harness::workflow::WorkflowSpec,
+    pub(super) journal: Vec<rimz::store::workflow::JournalEntry>,
 }
 
 impl WorkflowRunRow {
@@ -1266,6 +1290,7 @@ impl WorkflowRunRow {
                         live: false,
                         target: None,
                         command: None,
+                        evidence: None,
                     }),
             );
         }
@@ -1322,6 +1347,28 @@ impl WorkflowRunRow {
             live: !record.state.is_terminal(),
             target: None,
             command: None,
+            evidence: None,
+        }
+    }
+
+    /// Reads the run's sealed graph and journal; a run whose home is unreadable keeps none.
+    pub(super) fn read_evidence(
+        &mut self,
+        state: &StatePaths,
+        record: &rimz::store::workflow::RunRecord,
+    ) {
+        let paths = state.workflow(&record.id);
+        let read = rimz::harness::workflow::load_run(&paths.home, record)
+            .map_err(anyhow::Error::from)
+            .and_then(|spec| {
+                let journal = rimz::store::workflow::journal(&paths)?;
+                Ok(RunEvidence { spec, journal })
+            });
+        match read {
+            Ok(evidence) => self.evidence = Some(Box::new(evidence)),
+            Err(error) => {
+                tracing::warn!(run = %record.id, %error, "workflow run evidence unreadable")
+            }
         }
     }
 

@@ -5,6 +5,7 @@ use rimz::harness::schedule::signal::WatchVerdict;
 use serde::ser::{SerializeMap, Serializer as _};
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
+const CHECK_LOG_TAIL_CAP: usize = 64 * 1024;
 
 pub(super) struct RunSummary<'a> {
     pub(super) record: &'a LoopRunRecord,
@@ -432,12 +433,17 @@ fn summary_check_tail<'a>(record: &LoopRunRecord, check: &'a CheckRecord) -> Opt
 
 /// `full_output` is the `loop logs` command whose first block is this record,
 /// printed when the summary cut its check output.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the record, its title and full-output command, its workflow-run join, and the clock"
+)]
 pub(super) fn render_record_detail(
     out: &mut impl Write,
     entry: &TaskEntry,
     record: &LoopRunRecord,
     title: &str,
     full_output: &str,
+    workflow_runs: Option<&[list::WorkflowRunRow]>,
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
@@ -469,7 +475,14 @@ pub(super) fn render_record_detail(
         write!(out, " · {late}")?;
     }
     writeln!(out)?;
-    write_record_forensics(out, Some(entry), record, None, prose, Forensics::Summary)?;
+    write_record_forensics(
+        out,
+        Some(entry),
+        record,
+        workflow_runs,
+        prose,
+        Forensics::Summary,
+    )?;
     let is_cut = record.stages().next().is_some_and(|stage| {
         matches!(stage, RunStage::Check(check) if summary_check_tail(record, check).is_some())
     });
@@ -531,6 +544,11 @@ pub(super) fn write_record_forensics(
         write_detail_link(out, "leader", leader)?;
     }
     write_check_section(out, record, run_record.as_ref(), prose, detail)?;
+    if let Some(evidence) = workflow_run(record.run_id.as_deref(), workflow_runs)
+        .and_then(|run| run.evidence.as_deref())
+    {
+        write_run_evidence(out, evidence, prose, detail)?;
+    }
     write_verify_section(out, run_record.as_ref())?;
     if let Some(spend) = record_spend_label(record) {
         writeln!(
@@ -677,6 +695,145 @@ fn write_check_section(
     Ok(())
 }
 
+fn workflow_run<'a>(
+    id: Option<&str>,
+    runs: Option<&'a [list::WorkflowRunRow]>,
+) -> Option<&'a list::WorkflowRunRow> {
+    let id = id?;
+    runs?.iter().find(|run| run.id.as_str() == id)
+}
+
+/// A run's checks and attempts as its journal records them, oldest first: each shell check's
+/// verdict, exit and output, each judge's answer, and each step attempt's end. Adjacent
+/// evaluations of one check with one outcome fold into the newest, counted.
+fn write_run_evidence(
+    out: &mut impl Write,
+    evidence: &list::RunEvidence,
+    prose: ui::prose::Prose,
+    detail: Forensics,
+) -> std::io::Result<()> {
+    use rimz::store::workflow::JournalEvent;
+    let journal = &evidence.journal;
+    for (index, entry) in journal.iter().enumerate() {
+        match &entry.event {
+            JournalEvent::Evaluation { outcome, .. } => {
+                let repeats = |other: &rimz::store::workflow::JournalEntry| {
+                    other.node == entry.node
+                        && matches!(&other.event, JournalEvent::Evaluation { outcome: next, .. } if next == outcome)
+                };
+                if journal.get(index + 1).is_some_and(repeats) {
+                    continue;
+                }
+                let count = journal[..index]
+                    .iter()
+                    .rev()
+                    .take_while(|other| repeats(other))
+                    .count()
+                    + 1;
+                write_evaluation(out, evidence, entry, count, prose, detail)?;
+            }
+            JournalEvent::Attempt {
+                outcome,
+                visit,
+                started_at,
+                ended_at,
+                handle,
+                cost_usd,
+                reason,
+                ..
+            } => {
+                let mut line = format!("{} attempt {visit}: {}", entry.node, outcome.as_str());
+                if let Some(handle) = handle {
+                    line.push_str(&format!(" · {handle}"));
+                }
+                if let Some(cost) = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0) {
+                    line.push_str(&format!(" · {}", render::run_cost(cost)));
+                }
+                line.push_str(&format!(" · {}", span(*started_at, *ended_at)));
+                writeln!(out, "  {line}")?;
+                if let Some(reason) = reason {
+                    write_gutter_prose(out, reason, prose)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn write_evaluation(
+    out: &mut impl Write,
+    evidence: &list::RunEvidence,
+    entry: &rimz::store::workflow::JournalEntry,
+    count: usize,
+    prose: ui::prose::Prose,
+    detail: Forensics,
+) -> std::io::Result<()> {
+    let rimz::store::workflow::JournalEvent::Evaluation {
+        outcome,
+        object,
+        started_at,
+        ended_at,
+        cost_usd,
+        ..
+    } = &entry.event
+    else {
+        return Ok(());
+    };
+    let check = evidence.spec.checks.get(&entry.node);
+    let mut line = match check.and_then(|check| check.agent.as_deref()) {
+        Some(agent) => format!("judge {agent}: {outcome}"),
+        None => format!("{}: {outcome}", entry.node),
+    };
+    let reason = object.get("reason").and_then(serde_json::Value::as_str);
+    if let Some(reason) = reason.filter(|_| check.is_some_and(|check| check.agent.is_some())) {
+        line.push_str(&format!(" — {}", render::first_line(reason)));
+    }
+    if let Some(code) = object.get("code").and_then(serde_json::Value::as_i64) {
+        line.push_str(&format!(" · exit {code}"));
+    }
+    if let Some(cost) = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0) {
+        line.push_str(&format!(" · {}", render::run_cost(cost)));
+    }
+    if count > 1 {
+        line.push_str(&format!(" · ×{count}"));
+    }
+    line.push_str(&format!(" · {}", span(*started_at, *ended_at)));
+    writeln!(out, "  {line}")?;
+    let Some(log) = object.get("log").and_then(serde_json::Value::as_str) else {
+        if let Some(reason) = reason.filter(|_| check.is_none_or(|check| check.agent.is_none())) {
+            write_gutter_prose(out, reason, prose)?;
+        }
+        return Ok(());
+    };
+    let output = std::fs::read_to_string(log).unwrap_or_default();
+    let output = output.trim_end();
+    // A long log keeps its tail; `output:` names the whole file.
+    let output = output
+        .char_indices()
+        .map(|(at, _)| at)
+        .find(|at| output.len() - at <= CHECK_LOG_TAIL_CAP)
+        .map_or(output, |at| &output[at..]);
+    if detail != Forensics::Summary {
+        write_detail_link(out, "output", log)?;
+    }
+    if output.is_empty() {
+        return Ok(());
+    }
+    let passed = outcome == "pass";
+    let shown = match output.rmatch_indices('\n').nth(SUMMARY_CHECK_LINES - 1) {
+        Some((cut, _)) if passed && detail == Forensics::Summary => &output[cut + 1..],
+        _ => output,
+    };
+    write_gutter_block(out, (!passed).then(ui::palette::alarm), shown)
+}
+
+fn span(started: Timestamp, ended: Timestamp) -> String {
+    render::format_duration_ms(
+        u64::try_from(ended.duration_since(started).as_millis()).unwrap_or(0),
+    )
+}
+
 fn write_verify_section(
     out: &mut impl Write,
     run_record: Option<&rimz::store::run::RunRecord>,
@@ -713,12 +870,17 @@ fn write_stored_run_links(
     run_record: Option<&rimz::store::run::RunRecord>,
 ) -> std::io::Result<()> {
     if let Some(runs) = workflow_runs
+        && let Some(id) = &record.blocking_run
+    {
+        write_workflow_run_link(out, "blocked by", id, runs)?;
+    }
+    if let Some(runs) = workflow_runs
         && let Some(id) = record
             .run_id
             .as_deref()
             .and_then(|id| id.parse::<rimz::ids::WorkflowRunId>().ok())
     {
-        return write_workflow_run_link(out, &id, runs);
+        return write_workflow_run_link(out, "run", &id, runs);
     }
     if let Some(run_id) = &record.run_id {
         write_detail_link(out, "run", run_id)?;
@@ -736,21 +898,22 @@ fn write_stored_run_links(
     Ok(())
 }
 
-/// `run: <id> · <state> at <node>[ · <detail>]` and the `workflow show` command, or
+/// `<label>: <id> · <state> at <node>[ · <detail>]` and the `workflow show` command, or
 /// `gone` once the run's home is removed.
 fn write_workflow_run_link(
     out: &mut impl Write,
+    label: &str,
     id: &rimz::ids::WorkflowRunId,
     runs: &[list::WorkflowRunRow],
 ) -> std::io::Result<()> {
     let Some(run) = runs.iter().find(|run| &run.id == id) else {
-        return write_detail_link(out, "run", &format!("{id} · gone"));
+        return write_detail_link(out, label, &format!("{id} · gone"));
     };
     let mut state = format!("{id} · {} at {}", run.state, run.node);
     if !run.detail.is_empty() {
         state.push_str(&format!(" · {}", run.detail));
     }
-    write_detail_link(out, "run", &state)?;
+    write_detail_link(out, label, &state)?;
     match &run.command {
         Some(command) => write_detail_command(out, command),
         None => Ok(()),

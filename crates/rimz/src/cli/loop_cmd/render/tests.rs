@@ -212,6 +212,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         worktrees_error: None,
         workflow_runs: Vec::new(),
         kept_worktrees: Vec::new(),
+        runs_workflows: false,
         all: false,
     }
 }
@@ -226,6 +227,7 @@ fn workflow_view() -> ShowView {
     let mut view = show_view(true);
     view.entry.agent = None;
     view.entry.workflow = Some("review".into());
+    view.runs_workflows = true;
     view.entry.stay = false;
     view.entry.subscribe.clear();
     view.launches.clear();
@@ -746,24 +748,6 @@ fn worktree_view() -> ShowView {
     let since = Timestamp::from_second(3480).unwrap();
     view.worktrees = [
         (
-            "declined-new",
-            CheckoutState::Declined {
-                at: since,
-                reason: "Nothing actionable.\nA whole judge paragraph.".into(),
-                profile: "haiku".into(),
-                recheck_at: Some(Timestamp::from_second(10800).unwrap()),
-            },
-        ),
-        (
-            "declined-old",
-            CheckoutState::Declined {
-                at: Timestamp::from_second(10).unwrap(),
-                reason: "Already handled.".into(),
-                profile: "haiku".into(),
-                recheck_at: None,
-            },
-        ),
-        (
             "running",
             CheckoutState::Launched {
                 leader: "running-leader".into(),
@@ -1003,7 +987,7 @@ fn worktrees_order_counts_terms_and_fold_lines() {
     let text = show_text(&view);
     assert!(
         text.contains(
-            "WORKTREES (13 owned · 1 blocked · 1 ready · 1 holding · 2 waiting · 2 declined · 6 launched)"
+            "WORKTREES (11 owned · 1 blocked · 1 ready · 1 holding · 2 waiting · 6 launched)"
         ),
         "{text}"
     );
@@ -1060,10 +1044,6 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         "{text}"
     );
     assert!(
-        table.contains("… 2 declined by judge haiku · next recheck in 2h · newest declined-new 2m ago: Nothing actionable."),
-        "{text}"
-    );
-    assert!(
         table.contains(
             "… 4 launched: 2 success · 1 ended · 1 paused · newest success @success-leader 1m ago"
         ),
@@ -1078,16 +1058,9 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         "{text}"
     );
     assert!(
-        [
-            "ended",
-            "older",
-            "paused",
-            "success",
-            "declined-new",
-            "declined-old"
-        ]
-        .iter()
-        .all(|name| !table.contains(&format!("  {name} "))),
+        ["ended", "older", "paused", "success"]
+            .iter()
+            .all(|name| !table.contains(&format!("  {name} "))),
         "{text}"
     );
     assert!(
@@ -1099,7 +1072,7 @@ fn worktrees_order_counts_terms_and_fold_lines() {
 }
 
 #[test]
-fn worktrees_all_unfolds_declined_and_launched_rows() {
+fn worktrees_all_unfolds_launched_rows() {
     let mut view = worktree_view();
     view.all = true;
     view.room_is_open = true;
@@ -1130,9 +1103,7 @@ fn worktrees_all_unfolds_declined_and_launched_rows() {
         "{text}"
     );
     assert!(
-        table.find("  waiting-one ").unwrap() < table.find("  declined-new ").unwrap()
-            && table.find("  declined-new ").unwrap() < table.find("  declined-old ").unwrap()
-            && table.find("  declined-old ").unwrap() < table.find("  success ").unwrap()
+        table.find("  waiting-one ").unwrap() < table.find("  success ").unwrap()
             && table.find("  success ").unwrap() < table.find("  ended ").unwrap()
             && table.find("  ended ").unwrap() < table.find("  paused ").unwrap()
             && table.find("  paused ").unwrap() < table.find("  older ").unwrap(),
@@ -1148,8 +1119,7 @@ fn worktrees_all_unfolds_declined_and_launched_rows() {
             .any(|line| line.contains("LEADER") && line.ends_with("REASON")),
         "{text}"
     );
-    assert!(table.contains("judge haiku:"), "{text}");
-    assert!(!table.contains("A whole judge paragraph."), "{text}");
+    assert!(table.contains("@busy is work"), "{text}");
     assert!(!table.contains("ci and pr readings come"), "{text}");
 }
 
@@ -1181,14 +1151,6 @@ fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
 }
 
 #[test]
-fn worktrees_declined_fold_names_next_recheck_and_newest_reason() {
-    let view = worktree_view();
-    let text = show_text(&view);
-    assert!(text.contains("… 2 declined by judge haiku · next recheck in 2h · newest declined-new 2m ago: Nothing actionable."), "{text}");
-    assert!(!text.contains("A whole judge paragraph."), "{text}");
-}
-
-#[test]
 fn worktrees_launched_fold_counts_only_folded_leaders() {
     let view = worktree_view();
     let text = show_text(&view);
@@ -1205,71 +1167,15 @@ fn worktrees_reason_cell_clips_to_terminal_width() {
     use unicode_width::UnicodeWidthStr;
     let mut view = worktree_view();
     view.all = true;
-    view.worktrees.retain(|row| row.name == "declined-new");
-    let CheckoutState::Declined { reason, .. } = &mut view.worktrees[0].state else {
-        panic!("declined fixture");
-    };
-    *reason = "A long judge paragraph. ".repeat(20);
+    view.worktrees.retain(|row| row.name == "blocked");
+    view.records[0].error = Some("A long refusal paragraph. ".repeat(20));
     let text = show_text(&view);
     let row = text
         .lines()
-        .find(|line| line.starts_with("  declined-new "))
+        .find(|line| line.starts_with("  blocked "))
         .unwrap();
     assert!(
         row.width() <= ui::terminal_columns(120) && row.ends_with('…'),
-        "{text}"
-    );
-}
-
-#[test]
-fn worktrees_declined_fold_without_recheck_names_reopening_and_first_line() {
-    let mut view = worktree_view();
-    view.worktrees.retain(|row| row.name == "declined-new");
-    let CheckoutState::Declined { recheck_at, .. } = &mut view.worktrees[0].state else {
-        panic!("declined fixture");
-    };
-    *recheck_at = None;
-    let text = show_text(&view);
-    assert!(text.contains("… 1 declined by judge haiku · re-judged when the guard changes · newest declined-new 2m ago:"), "{text}");
-    assert!(!text.contains("A whole judge paragraph."), "{text}");
-}
-
-#[test]
-fn worktrees_declined_fold_clips_reason_after_reopening() {
-    use unicode_width::UnicodeWidthStr;
-    let mut view = worktree_view();
-    view.worktrees.retain(|row| row.name == "declined-new");
-    let CheckoutState::Declined { reason, .. } = &mut view.worktrees[0].state else {
-        panic!("declined fixture");
-    };
-    *reason = "A long judge paragraph. ".repeat(20);
-    let rows = worktree_rows(&view, worktree_expr(&view));
-    let mut out = Vec::new();
-    write_worktree_folds(&mut out, &view, &rows, 80).unwrap();
-    let text = anstream::adapter::strip_str(std::str::from_utf8(&out).unwrap()).to_string();
-    let fold = text.lines().next().expect("declined fold");
-    assert!(fold.contains("next recheck in 2h"), "{text}");
-    assert!(fold.width() <= 80 && fold.ends_with('…'), "{text}");
-}
-
-#[test]
-fn worktrees_declined_fold_uses_earliest_recheck_and_sorted_profiles() {
-    let mut view = worktree_view();
-    let CheckoutState::Declined {
-        recheck_at,
-        profile,
-        ..
-    } = &mut view.worktrees[1].state
-    else {
-        panic!("declined fixture");
-    };
-    *recheck_at = Some(view.now_zoned.timestamp());
-    *profile = "codex".into();
-    let text = show_text(&view);
-    assert!(
-        text.contains(
-            "… 2 declined by judges codex, haiku · next recheck due · newest declined-new"
-        ),
         "{text}"
     );
 }
@@ -1325,23 +1231,9 @@ fn worktrees_keeps_waiting_leaders_and_folds_idle_and_sleeping() {
 }
 
 #[test]
-fn worktrees_json_rechecks_are_optional_and_all_does_not_change_json() {
+fn worktrees_json_does_not_change_under_all() {
     let mut view = worktree_view();
     let json = serde_json::to_value(worktrees_json(&view)).unwrap();
-    let declined = json
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["name"] == "declined-new")
-        .unwrap();
-    assert_eq!(declined["recheck_at"], "1970-01-01T03:00:00Z");
-    let old = json
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["name"] == "declined-old")
-        .unwrap();
-    assert!(old.get("recheck_at").is_none());
     view.all = true;
     assert_eq!(serde_json::to_value(worktrees_json(&view)).unwrap(), json);
 }
@@ -2047,6 +1939,7 @@ fn last_run(records: &[LoopRunRecord]) -> String {
         &TaskEntry::default(),
         records,
         &refused_fire_attribution(records),
+        &[],
         Timestamp::from_second(100).unwrap(),
         ui::prose::Prose::Raw,
     )
@@ -2779,6 +2672,14 @@ fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
     assert!(is_agent_run(&spawned));
     assert!(is_agent_run(&record(2, LoopRunResult::Delivered)));
     assert!(is_agent_run(&record(3, LoopRunResult::TargetGone)));
+    // A workflow run's report says whether it reached its agent or message step.
+    let mut acted = record(5, LoopRunResult::Completed);
+    acted.run_id = Some("wf_01a1c231d56d75c88fa045811f1cd54f".to_owned());
+    acted.acted = Some(true);
+    assert!(is_agent_run(&acted));
+    let mut declined = acted.clone();
+    declined.acted = Some(false);
+    assert!(!is_agent_run(&declined));
     for result in [
         LoopRunResult::CheckSkipped,
         LoopRunResult::BudgetSkipped,
@@ -4259,6 +4160,7 @@ fn render_record_detail_titles_status_age_and_mode() {
         &detail,
         "LAST FAILURE",
         "rimz loop logs wait -n 1",
+        None,
         Timestamp::from_second(30).expect("timestamp"),
         ui::prose::Prose::Raw,
     )
@@ -4296,6 +4198,7 @@ fn render_record_detail_marks_failed_check_output() {
         &detail,
         "LAST FAILURE",
         "rimz loop logs wait -n 1",
+        None,
         Timestamp::from_second(30).expect("timestamp"),
         ui::prose::Prose::Raw,
     )
@@ -4722,6 +4625,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
                 &detail,
                 "last run",
                 "rimz loop logs wait -n 1",
+                None,
                 Timestamp::from_second(30).unwrap(),
                 ui::prose::Prose::Raw,
             )
@@ -5080,4 +4984,25 @@ fn kept_worktrees_section_lists_each_tree_and_is_left_out_when_empty() {
     assert_eq!(rows[1].find("night-b-renamed"), rows[0].find("BRANCH"));
     assert!(rows[2].trim_start().starts_with("night-a "), "{text}");
     assert_eq!(text.matches("night-a").count(), 2, "{text}");
+}
+
+#[test]
+fn workflow_log_overlap_names_its_blocking_run() {
+    let holder = task_run("active", "c", "gate", 20);
+    let runs = task_rows(std::slice::from_ref(&holder));
+    for result in [LoopRunResult::Overlapped, LoopRunResult::Deferred] {
+        let mut record = scheduled(30, result);
+        record.blocking_run = Some(holder.id.clone());
+        let text = workflow_logs(std::slice::from_ref(&record), &runs, false);
+        assert!(
+            text.contains(&format!("  blocked by: {} · active at gate", holder.id)),
+            "{text}"
+        );
+        assert_eq!(
+            text.matches(&format!("rimz workflow show {}", holder.id))
+                .count(),
+            1,
+            "{text}"
+        );
+    }
 }

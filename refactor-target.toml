@@ -2277,7 +2277,6 @@ path = "crates/rimz/src/harness"
 # LeaderTurn and leader_turn share locked workflow eligibility with the CLI attempt host (+2).
 # Observation limits leader-turn reads to workflow decisions that consume them (+1).
 # CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
-# load_live_capacity filters capacity waits against the planner's current condition clocks (+1).
 # spec::validate_team shares per-item team validation with pack loading (+1).
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
@@ -2419,12 +2418,7 @@ reason = "Read-only consumers share the per-task per-checkout wait map."
 [[verdict]]
 kind = "item"
 key = "harness::schedule::launch_ledger::load_capacity"
-reason = "Planner, CLI and sidebar read strict capacity memory without locks or writes."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::launch_ledger::load_live_capacity"
-reason = "CLI and sidebar display only capacity waits matching the planner's current condition clock."
+reason = "Catalog removal and rename read the strict capacity memory an older RimZ wrote, without locks or writes."
 
 [[verdict]]
 kind = "item"

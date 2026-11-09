@@ -502,19 +502,20 @@ fn fresh_arrival_reconciles_waiting_triggers_and_manual_overlap_never_enqueues()
         1
     );
     lock.unlock().unwrap();
+    let before = read_loop_run_records(&env).len();
     arrive(&env, "b", "c");
-    let record = last_loop_record(&env);
+    let record = read_loop_run_records(&env).swap_remove(before);
     assert_eq!(record.result, LoopRunResult::Launched);
+    let payload = json!({"repo":"r", "trunk":"main", "from":"a", "to":"c"});
     assert_eq!(
         record.signal.unwrap().payload,
-        *json!({"repo":"r", "trunk":"main", "from":"a", "to":"c"})
-            .as_object()
-            .unwrap()
+        *payload.as_object().unwrap()
     );
-    assert_eq!(
-        serde_json::to_value(&show(&env, "busy")["runs"][2]).unwrap()["absorbed"],
-        1
-    );
+    // The served run's report replaces its launch row and keeps the fire's facts.
+    wait_for_loop_report_after(&env, "busy", before);
+    let served = &show(&env, "busy")["runs"][2];
+    assert_eq!(served["absorbed"], 1, "{served}");
+    assert_eq!(served["signal"]["payload"], payload, "{served}");
 }
 
 #[test]
