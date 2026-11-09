@@ -932,7 +932,7 @@ path = "crates/rimz/src/agents/spending"
 # SubagentOwner, resolve_owner and AgentSeat::from_identity share recorded ownership (+3).
 # RebuildScope, RebuildReport, RebuiltDay, KeptDay, RebuildErr and
 # rebuild_spending_history share saved-day rebuilds with the CLI (+6).
-surface-budget = 123
+surface-budget = 121
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -6737,7 +6737,27 @@ reason = "Public SpendParse update policy distinguishes incremental extension, a
 [[verdict]]
 kind = "item"
 key = "agents::spending::aggregate::aggregate_counted_rollups"
-reason = "One fold for fleet, provider, workspace, day, model and role outputs; optional history inputs carry provenance; raw-row session counts deliberately survive dedup (pass 13)."
+reason = "The fleet fold keeps its distinct populations (fleet, provider, login, day, model and role windows over one dedup) and its optional history outputs, with the scoped workspace fold apart; raw-row session counts deliberately survive dedup (pass 13, pass 33)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::SpendingWalker::walk_inner"
+reason = "Durability state machine: readiness, fill marker, pending closed days, the downgrade re-peek, reconciliation and the test panic point stay in one ordered body; one FleetWalk mode replaces the persist and rebuild pair, and each branch is fix-pinned (pass 33)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::closed_days::ClosedDays::refresh"
+reason = "Newest-wins decoding of the ledger segments, in path order and file order, decides each account-day's effective line before recording; it returns the read key it used (pass 33)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::closed_days::ClosedDays::rebuild"
+reason = "Two maintenance holds around an unlocked cold parse, alias deferral of unread accounts and partial-error reports stay in one ordered body (pass 33)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::history::migrate"
+reason = "Crash-ordered copy, tag, sync and remove over two heterogeneous legacy kinds; a kind table priced as more lines with no decision removed (pass 33)."
 
 [[verdict]]
 kind = "item"

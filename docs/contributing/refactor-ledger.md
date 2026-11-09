@@ -47,7 +47,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/attribution` | holds | `2f84d791a` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
-| `agents/spending` | holds; landed pass-13 | `8e9477b57` | 30 | one writer per cache, one engine election; wire, walker, fold and cache records hold. |
+| `agents/spending` | holds; landed pass-13; pass-33 | `08578cccd` | 30 | one writer per cache, one engine election, one mode through the walk with one persisted acknowledgement, keyed fold windows; walker, ledger and migration residuals are fix-pinned state machines. |
 | `agents/capabilities` | holds; landed pass-32a | `1986a3caa` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
 | `agents/hook_types` | holds; landed pass-24b | `6f49ccef0` | 30 | hook representation at `pub(super)`; `HookRouting` and two binary-called `HookOutput` readers stay `pub`. |
 | `agents/account` | holds; landed pass-24b | `6f49ccef0` | 30 | cache schema and reset-credit types stay `pub` for the integration crate. |
