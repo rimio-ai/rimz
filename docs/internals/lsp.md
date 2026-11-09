@@ -8,7 +8,7 @@ This page owns the process model in [`lsp/`](../../crates/rimz/src/lsp/mod.rs) a
 | --- | --- |
 | `lsp/admission.rs` | Memory accounting, launch and query admission, eviction, the required-server queue, lost-row revival |
 | `lsp/broker.rs` | The `rimz lsp serve` main thread: server lifetimes, housekeeping, client capabilities, shared settings |
-| `lsp/broker/socket.rs` | The newline-JSON socket: one thread per connection, query waits, the attach upgrade |
+| `lsp/broker/socket.rs` | The newline-JSON socket: one thread per connection, the read-only query vocabulary, query waits, the attach upgrade |
 | `lsp/broker/transport.rs` | Content-Length JSON-RPC over the server's stdio, request IDs, server-initiated requests |
 | `lsp/broker/router.rs`, `lsp/broker/clients.rs` | Editor traffic: the single writer and the pure routing state machine |
 | `lsp/broker/adaptation.rs` | Reply shapes adapted to each editor's capabilities |
@@ -20,10 +20,10 @@ This page owns the process model in [`lsp/`](../../crates/rimz/src/lsp/mod.rs) a
 | `lsp/history.rs` | Learned peak memory per project, server, and settings |
 | `lsp/usage.rs` | Room query counts |
 | `lsp/memory.rs`, `lsp/installed.rs`, `lsp/retire.rs` | Process-tree memory, installed-build identity, outdated-broker retirement |
-| `lsp/server.rs`, `lsp/protocol.rs` | The server process and its stderr tail, framing and the read-only request vocabulary |
+| `lsp/server.rs`, `lsp/protocol.rs` | The server process and its stderr tail, Content-Length framing and shared LSP types |
 | `lsp/query.rs`, `lsp/query/client.rs` | Symbol resolution, query composition, compact output |
 | `lsp/check.rs`, `lsp/check/` | Notes anchor checks, `--fix`, and `rimz lsp show` |
-| `lsp/attach.rs` | The editor stdio bridge |
+| `lsp/attach.rs` | The editor stdio bridge and the `rimz lsp shim` script |
 | `cli/lsp.rs`, `launcher/lsp_admission.rs` | The `rimz lsp` verbs, and pre-pane admission at launch |
 
 ## Why RimZ owns this
@@ -56,26 +56,26 @@ Memory is the only admission budget. There is no concurrency cap. A server start
 | `recycled` | Housekeeping: a ready server over its footprint ceiling ([Recycling](#recycling)) | Server |
 | `memory pressure` | The watchdog ([Memory pressure](#memory-pressure)) | Server, alarm |
 | `evicted` | Query-time admission making room (`admission::admit_query`) | Server |
-| `crashed` | A server exit or a lifetime error in the broker | Server, alarm |
+| `crashed` | A server exit, a closed transport, or a lifetime or router error in the broker | Server, alarm |
 | `stopped by hand` | `rimz lsp stop` (`crates/rimz/src/cli/lsp.rs::stop`) | Server |
-| `team done` | `team_stage::open_stage` at a board's terminal flip | Server |
+| `team done` | `crates/rimz/src/harness/team_stage.rs::deliver_stage` when a board reaches Done, through `registry::stop_checkout` | Server |
 | `released` | Housekeeping: 60 seconds after the last lease went | Broker |
 | `never leased` | Housekeeping: five minutes after broker start with no lease ever taken | Broker |
-| `checkout removed` | Housekeeping's root check, or worktree removal (`registry::stop_checkout`) | Broker |
+| `checkout removed` | Housekeeping's root check, or `crates/rimz/src/worktree.rs::remove_checkout` through `registry::stop_checkout` | Broker |
 
 A reason that ends the server leaves the broker dormant, and the next agent query or editor request can restart it. The last three are terminal (`StopReason::is_terminal`): the broker exits. `State::is_alarm` marks crashed and memory-pressure dormancy. List shows alarm rows by default and sorts them after running rows, and a hand stop acknowledges them. Memory-pressure dormancy still renders in the neutral role, and only a crash renders as a failure.
 
 ### Which launches register a broker
 
-`crates/rimz/src/launcher/lsp_admission.rs::admit` registers brokers for one checkout. Each launch path calls it after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per distinct checkout its panes open in:
+`crates/rimz/src/launcher/lsp_admission.rs::admit` registers brokers for one checkout. Each launch path calls it after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per distinct checkout its panes open in. The CLI paths reach it through `crates/rimz/src/cli/launch_interaction.rs::admit_lsp`.
 
 | Caller | Checkouts |
 | --- | --- |
-| `crates/rimz/src/launcher/execute.rs::execute` (`rimz agents`, `rimz teams`) | The launch's cwd |
-| `crates/rimz/src/launcher/mod.rs::launch_resume_layout` (cohort resume) | Each resumed empty-dir agent's recorded checkout, then the cohort's cwd |
+| `crates/rimz/src/launcher/mod.rs::settle_layout`, under `crates/rimz/src/launcher/execute.rs::execute` (`rimz agents`, `rimz teams`) | The launch's cwd, which is the prepared empty directory for an empty-dir launch |
+| `crates/rimz/src/launcher/mod.rs::launch_resume_layout` (cohort resume, reached from `settle_layout`) | Each resumed empty-dir agent's recorded checkout, then the cohort's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_selected` | Each resumed tab's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane` | Each distinct target cwd |
-| `crates/rimz/src/launcher/supervised.rs::prepare_supervised` (`-p` runs) | The launch's cwd, after provider preflights, skipped for a subagent |
+| `crates/rimz/src/launcher/supervised.rs::prepare`, under `prepare_supervised` (`-p` runs) and `prepare_run_layout` (run-bearing layouts) | The launch's cwd, after provider preflights, skipped for a subagent |
 | `crates/rimz/src/cli/room/mod.rs::preflight_recovery` (rebirth) | `RebirthPlan::checkout_roots`, warning and continuing on any admission error |
 
 A subagent launch never admits. It joins whatever broker its checkout already has, dormant or running, which by default is its parent's ([subagents.md § The child works where its parent works](./harness/subagents.md#the-child-works-where-its-parent-works)). A child sent with `--cwd` into a checkout with no broker gets exit 3 from its queries.
@@ -103,17 +103,17 @@ A refusal depends on the server's `policy`:
 | --- | --- |
 | `optional` | The launch does not check memory. A query-time refusal leaves the broker dormant, returns exit 4 with the memory figures, and records the shortfall. A later query tries again. |
 | `warm` (default) | The launch checks memory once and never waits, retries, queues, or evicts. The server starts eagerly when its estimate plus the warm growth allowance fits and no required-queue ticket is live; otherwise the broker stays dormant, a `warm_deferred` record says why, and the first query admits it as for `optional`. A configuration error warns and skips the server. |
-| `required` | The launch waits in first-come order among required waiters, before panes open. Admission polls every five seconds, and the launcher's terminal prints the wait when the queue position changes. No sidebar row exists before launch. At `wait-timeout` the launch fails with the fix, naming the memory needed, the memory free, and the holders. Optional and warm launches do not queue behind required ones. |
+| `required` | The launch waits in first-come order among required waiters, before panes open. A start that fits still queues while any other live ticket is in `queue/`, and admits only at the head of the queue. Admission polls every five seconds, and the launcher's terminal prints the wait when the queue position changes. No sidebar row exists before launch. At `wait-timeout` the launch fails with the fix, naming the memory needed, the memory free, and the holders. Optional and warm launches do not queue behind required ones. |
 
 `required` gates the first launch admission only. Joining a live broker, dormant or not, skips eager admission. After any stop, every policy restarts lazily, and a query-time refusal returns exit 4. RimZ never stops agents to honour required policy. Editor attachment exits 3 on an admission timeout or refusal.
 
-`admission::admit_query` can evict other servers to make room. A candidate must be ready, have a live broker, have been ready for at least five minutes, and have had no request in the last 120 seconds, measured from the later of readiness and last request. Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`. Admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then samples again and stops evicting once the request fits. Warm and required launch admission do not evict.
+`admission::admit_query` can evict other servers to make room. A candidate must be ready, have a live broker, have been ready for at least five minutes, and have had no request in the last 120 seconds, measured from the later of readiness and last request. Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`, and each is judged again against a fresh registry read just before its stop. Admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then samples again and stops evicting once the request fits. Warm and required launch admission do not evict.
 
 ### Readiness
 
 Launch admission waits up to five seconds, under the admission lock, for the broker to publish its entry. It does not wait for the index. If the entry does not appear, an optional or warm server records a refusal and the launch proceeds, and a required server fails the launch with the server name and a command or configuration fix.
 
-After `initialize` and `initialized`, an open progress token means `indexing`. The server is `ready` when every token has closed, at least one has ended, and two seconds have passed since the last progress event. Without any progress the fallback is ten seconds after initialization. The settle window keeps a short initial token from claiming readiness before indexing begins. Later progress can return the server to `indexing`. Each lifetime resets readiness and the start and ready timestamps, and broker readiness also waits for the router's editor replay ([Ownership and replay](#ownership-and-replay)).
+The readiness clock starts once `initialize` has answered, `initialized` has gone out, and the router has replayed editor buffers ([Ownership and replay](#ownership-and-replay)). Until then the entry stays `starting`. After it, an open progress token means `indexing`. The server is `ready` when every token has closed, at least one has ended, and two seconds have passed since the last progress event. Without any progress the fallback is ten seconds after the clock starts. A server whose progress never sends an `end` (only `report` frames) stays `indexing`. The settle window keeps a short initial token from claiming readiness before indexing begins. Later progress can return the server to `indexing`. Each lifetime resets readiness and the start and ready timestamps (`crates/rimz/src/lsp/broker/lifecycle.rs::Readiness`).
 
 A query request waits at most 110 seconds for startup and readiness. The client's socket timeout is 115 seconds; these are per-request bounds, not a whole-call deadline, since a name target can issue several requests in sequence. At the readiness deadline the broker returns `{"indexing":{"elapsed_ms":N}}`, measuring the current not-ready stretch from the lifetime's start or its last drop out of Ready, never an empty result from an unfinished index. The client-side 600-second ceiling beside `crates/rimz/src/lsp/query.rs::QueryErr` tells agents to `rerun to keep waiting` below the ceiling and to `use grep for this question and retry on the next` at or above it. A dormant broker whose next start has not begun still measures from the previous stretch.
 
@@ -123,9 +123,11 @@ The first Ready transition in `crates/rimz/src/lsp/broker.rs::run` samples RSS p
 
 ### Leases and shutdown
 
-`crates/rimz/src/cli/agents_cmd/exec.rs::run_exec_inner` registers a lease with every live broker at its checkout (`registry::register_lease`) after `launch_plan::apply`, and `settle_after_exit` releases them on resident-wrapper paths. A lease carries an optional launch id, the wrapper pid, and its process start token. A session recovered without a launch id still takes a lease, and the wire accepts absent and null ids. A direct `exec` keeps the wrapper pid. An attached editor holds a lease without a launch id, and a fork takes its own.
+`crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise`, under `run_exec_inner`, registers a lease with every live broker at its checkout (`registry::register_lease`) after `launch_plan::apply`, and `settle_after_exit` releases them on resident-wrapper paths. A lease carries an optional launch id, the wrapper pid, and its process start token. The broker refuses a lease whose process is not live, and a second lease with the same launch id and pid replaces the first. A session recovered without a launch id still takes a lease, and the wire accepts absent and null ids. A direct `exec` keeps the wrapper pid. An attached editor holds a lease without a launch id, and a fork takes its own.
 
-Housekeeping runs every five seconds, dormant or running. It reaps leases whose owner is dead, rejecting pid reuse through the start token, and it never reads store or pane state. It also checks that the checkout root exists, as the backstop for worktree removal, which calls `registry::stop_checkout` best-effort. When the last lease goes, a 60-second grace starts, covering the gap of an agent restart, and a new lease cancels it. A broker that never had a lease exits five minutes after it started.
+Housekeeping (`crates/rimz/src/lsp/broker.rs::housekeeping`) runs every five seconds, dormant or running. It reaps leases whose owner is dead, rejecting pid reuse through the start token, and it never reads store or pane state. It then decides at most one stop, in this order: the checkout root is gone (the backstop for worktree removal, which calls `registry::stop_checkout` best-effort), the lease grace expired, a Ready server is idle, a Ready server is due to recycle. It publishes the entry and finally runs the pressure check ([The watchdog](#the-watchdog)). When the last lease goes, a 60-second grace starts, covering the gap of an agent restart, and a new lease cancels it. A broker that never had a lease exits five minutes after it started.
+
+The idle stop (`crates/rimz/src/lsp/broker/lifecycle.rs::idle_expired`) fires when no agent query is in flight and `idle-timeout` has passed since the later of `ready_at_ms` and `last_request_at_ms`. It does not wait for editor requests the router is forwarding or for outstanding transport requests, as a recycle does.
 
 A query starts a dormant server whether or not the broker holds a lease at that moment, so a query during the release grace or the never-leased window can start one. Required-queue tickets also carry an owner pid and start token: abandoned tickets are removed, and dropping the launcher's `WaitQueue` removes its own.
 
@@ -159,7 +161,7 @@ The nonce-checked `{"op":"retire"}` socket operation marks the broker in memory.
 
 A retiring broker closes the router, drains owed replies, and removes its socket, but it keeps its key directory and publishes no further row. Its last Dormant entry and leases stay as a lost row, which a query, launch, or attach revives while a holder lives ([Lost rows and revival](#lost-rows-and-revival)). `broker_exited` records `reason: "retired"`. That is a diagnostic reason only, never a registry state or a `StopReason` variant, so a binary from another build can still read the row.
 
-A broker that rejects `retire`, answers anything else, or cannot be reached falls back to a guarded kill. Reload takes `registry::lock()` and reads the row again. If the broker has exited or its row is gone, the outcome is `gone`, without a warning. Otherwise it signals only the same live broker (nonce, pid, and start token), Dormant with no server pid, no editor attached, and no child processes. Every dormant start takes that lock, and the child check excludes a server still shutting down after Dormant was published. The token is checked again immediately before SIGKILL, followed by a bounded wait for death. A query already at such a broker's socket can fail once, and the next query revives the kept row. A broker that is not safe to kill keeps running, with its own build's rules, until a later reload finds it safe.
+A broker that rejects `retire`, answers anything else, or cannot be reached falls back to a guarded kill. Reload takes `registry::lock()` and reads the row again. If the broker has exited or its row is gone, the outcome is `gone`, without a warning. Otherwise it signals only the same live broker (nonce, pid, and start token), Dormant with no server pid, no editor attached, and no child processes. Every dormant start takes that lock, and the child check excludes a server still shutting down after Dormant was published. The token is checked again immediately before SIGKILL to the broker pid, followed by a wait of up to three seconds for death. A broker still alive after it is `kept`. A dead one has its socket file removed and counts as `killed`. A query already at such a broker's socket can fail once, and the next query revives the kept row. A broker that is not safe to kill keeps running, with its own build's rules, until a later reload finds it safe.
 
 Reload appends one `retired` diagnostic per outdated live broker, carrying `broker_pid`, `build` (the broker's), `installed`, and `outcome`: `exiting`, `marked`, `killed`, `kept`, or `gone`. A `gone` outcome counts toward none of the retired, marked, or kept totals in the [reload report](../reference/cli/maintenance.md#reload-running-sidebars).
 
@@ -167,9 +169,9 @@ Reload appends one `retired` diagnostic per outdated live broker, carrying `brok
 
 ### The watchdog
 
-Every live broker samples free memory (available RAM plus free swap, each capped by cgroup headroom) on its housekeeping pass. Below the admission reserve, the broker that wins the machine lock picks victims and samples again after each stop, until free memory reaches the reserve.
+Every live broker samples free memory (available RAM plus free swap, each capped by cgroup headroom) on its housekeeping pass (`crates/rimz/src/lsp/broker/watchdog.rs::check`). Below the admission reserve, a broker with stop authority (below) tries `admission.lock` without waiting. The one that gets it picks victims and samples again before each stop, until free memory reaches the reserve. A broker that finds the lock held skips the pass, since another broker or an admission holds it.
 
-A stop goes to the victim's broker over the socket with reason `memory pressure`, and the request and the wait for the server to die share one two-second budget. A server still alive after it is killed with a token-guarded SIGKILL on its process group. When the elected broker picks itself, it kills its own server group directly instead of waiting on its own housekeeping loop. Each server starts as a process-group leader, so the kill also ends its cargo and proc-macro children. Servers get `oom_score_adj = 800`, so the kernel picks them before agents if it acts first.
+A stop goes to the victim's broker over the socket with reason `memory pressure`, and the request and the wait for the server to die share one two-second budget. A server still alive at the end of that budget gets a token-guarded SIGKILL on its process group, and the watchdog waits for its death until three seconds after the stop began. When the elected broker picks itself, it skips the wait and kills its own server group at once, since its main thread is the one running the watchdog. Each server starts as a process-group leader, so the kill also ends its cargo and proc-macro children. Servers get `oom_score_adj = 800`, so the kernel picks them before agents if it acts first.
 
 Only a broker whose build id matches the first `rimz` on its inherited `PATH` may take the pressure-relief lock and stop servers. A staged copy of that build qualifies, and a branch build does not. The installed identity is resolved only under pressure or an admission shortfall, and cached while the resolved path's stat identity is unchanged. An absent `rimz` on `PATH`, an unreadable installed image, or an unreadable own build id grants no stop authority. Query-time eviction uses the same gate: an ineligible broker still admits a start that fits, but refuses a short start without taking victims.
 
@@ -193,7 +195,7 @@ The owning broker appends one `crates/rimz/src/lsp/history.rs::Record` per serve
 
 Admission takes the maximum of the last five records for the same project, server, and settings hash that reached Ready at least once (`ready_ms` present and non-null). Without such a lifetime it falls back to `memory-estimate`. A partial lifetime stays recorded but takes no slot in the window, and a later return to Indexing does not disqualify a lifetime that reached Ready. Records without a project are skipped. The watchdog remains the backstop for an estimate that is too low.
 
-The project is the workspace's `launch_repo_root()`, resolved by `crates/rimz/src/launcher/lsp_admission.rs::admit`, so every checkout of one project shares learned costs while the registry key stays checkout and server. The settings hash covers the command argv and the canonical initialization options ([Configuration](#configuration)).
+The project is the workspace's `launch_repo_root()`, resolved by `crates/rimz/src/launcher/lsp_admission.rs::admit`, so every checkout of one project shares learned costs while the registry key stays checkout and server. The settings hash (`crates/rimz/src/lsp/history.rs::settings_hash`) covers the command argv, the canonical initialization options, and `editor-check-on-save` when it is on ([Configuration](#configuration)).
 
 ## The broker
 
@@ -203,13 +205,13 @@ A language server speaks to exactly one client over stdio, so each server gets o
 
 `broker::serve` loops over server lifetimes and stays dormant between them while leases live. Each lifetime creates a new child, transport, and saved-file watcher. The main thread owns admission and server lifetimes, and it never holds the model mutex while it waits on the machine lock, a socket, or process death. The acceptor blocks in `accept`. Each socket connection has its own thread, which only signals starts and stops and never spawns or kills a process. Each reply is one write of a complete line, and terminal shutdown waits for those threads' owed replies before it takes the registry lock.
 
-Both supervisor loops wait on the model condvar until a model change, a watch event, a server exit, the readiness settle deadline, or the next housekeeping pass. Only the startup handshake polls, every 50 ms. Only the owning broker publishes its entry. The broker answers `hello` before publishing its first entry and without taking `admission.lock`, since launch admission holds that lock while it waits for the publication.
+Both supervisor loops wait on the model condvar until a model change, a watch event, a server exit, the readiness settle deadline, or the next housekeeping pass. Only the startup handshake and the editor replay poll, every 50 ms. Only the owning broker publishes its entry. The broker answers `hello` before publishing its first entry and without taking `admission.lock`, since launch admission holds that lock while it waits for the publication.
 
 ### The socket protocol
 
-The socket is mode 0600 and speaks newline JSON. It accepts `hello`, `lease`, `release`, `query`, `stop`, `status`, `attach`, and `retire` ([Build retirement](#build-retirement)). Every response carries the broker's nonce, which stays the same across server lifetimes.
+The socket is mode 0600 and speaks newline JSON, one request line of at most 1 MiB per connection, with 5 s read and write timeouts. It accepts `hello`, `lease`, `release`, `query`, `stop`, `status`, `attach`, and `retire` ([Build retirement](#build-retirement)). Every response carries the broker's nonce, which stays the same across server lifetimes.
 
-A query carries `method`, `params`, and `wait_ms`, and returns the raw LSP `result`, elapsed `indexing`, `refused` with a `Shortfall`, or `error`. A query to a dormant broker signals a start request and waits for readiness, a terminal stop, a new refusal, or its deadline. An RAII in-flight counter covers the whole query, that wait included, and keeps the server from an idle stop. Agent queries and editor requests both stamp recent use, and agent query stamps feed the LAST column, idle stop, and admission. Only editor requests increment `request_count` (editor LSP requests since the broker started), and they do not hold the in-flight counter. The CLI owns query verb semantics, and the broker forwards a method and its parameters.
+A query carries `method`, `params`, and `wait_ms`, and returns the raw LSP `result`, elapsed `indexing`, `refused` with a `Shortfall`, or `error`. A query to a dormant broker signals a start request and waits for readiness, a terminal stop, a new refusal, or its deadline. An RAII in-flight counter covers the whole query, that wait included, and keeps the server from an idle stop. Agent queries and editor requests both stamp recent use, and agent query stamps feed the LAST column, idle stop, and admission. Only editor requests increment `request_count` (editor LSP requests since the broker started), and they do not hold the in-flight counter. The CLI owns query verb semantics, and the broker forwards a method and its parameters. `crates/rimz/src/lsp/broker/socket.rs::QueryRequest` admits nine read-only methods (definition, references, hover, implementation, documentSymbol, workspace/symbol, prepareCallHierarchy, and the incoming and outgoing call lists), and a request naming any other method fails to parse.
 
 ### The server process
 
@@ -223,7 +225,7 @@ A query carries `method`, `params`, and `wait_ms`, and returns the raw LSP `resu
 
 `admission.rs` spawns the broker through `child_process::spawn_detached_rimz`, and the broker calls `setsid`. Three traps follow:
 
-- A scoped launcher. An agent may run `rimz teams` from inside its bubblewrap view, and a broker spawned there inherits that mount namespace, where `/tmp` is the agent's temp unit. The sandbox rebinds the runtime home, the RimZ home, and every checkout at their host paths ([sandbox.md § Reachable host paths](./sandbox.md#reachable-host-paths)), so the broker names only such paths. Its socket and registry live under `disk::paths::runtime_rimz_root` (`$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`), never under the launcher's temp unit.
+- A scoped launcher. An agent may run `rimz teams` from inside its bubblewrap view, and a broker spawned there inherits that mount namespace, where `/tmp` is the agent's temp unit. The sandbox rebinds the runtime home, the RimZ home, and every checkout at their host paths ([sandbox.md § Reachable host paths](./sandbox.md#reachable-host-paths)), so the broker names only such paths. Its socket and registry live under `disk::paths::lsp_runtime_dir` (`<runtime>/rimz/lsp`, where the runtime is `$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`), never under the launcher's temp unit.
 - A host launcher's temp unit. The detached spawn gives the broker the user's `TMPDIR` back and drops the listed provider temp-root keys ([sandbox.md § Environment pins](./sandbox.md#environment-pins)). A shared broker and its servers therefore never hold the first launcher's temp unit, which GC removes after that agent's sessions end. A sandboxed launcher's broker keeps `/tmp`, since no saved variable reaches the view. A broker keeps its inherited environment for its whole life: `rimz lsp stop` makes only its server dormant.
 - The server's own build. The `rust-analyzer` template in the [reference](../reference/cli/lsp.md#configuration) sets `checkOnSave = false`. The read-only query surface exposes no diagnostics, and a check would contend for the checkout's `target/` lock with the agents' own builds. The broker does not inject this option into a custom definition.
 
@@ -233,7 +235,7 @@ Claude and Codex queries use the [routine-command rules](../reference/agent-supp
 
 ### Registry compatibility
 
-Every `rimz` binary on the host reads the registry, older builds in other worktrees included, so its schema changes only additively. `registry::Entry` does not deny unknown fields, so an older binary ignores a new field. An enum variant it does not know, such as a new `StopReason`, fails that row's parse. `registry::read_entries_at` skips any row it cannot read (a parse, key, or read error) and records `unreadable_entry`, so the row is invisible to that binary and never swept by it, and every other row still reads. Missing `attached` defaults to an empty list, missing `kind` and `last_crash` to absent.
+Every `rimz` binary on the host reads the registry, older builds in other worktrees included, so its schema changes only additively. `registry::Entry` does not deny unknown fields, so an older binary ignores a new field. An enum variant it does not know, such as a new `StopReason`, fails that row's parse. `registry::read_entries_at` skips any row it cannot read (a parse, key, or read error) and records `unreadable_entry`, so the row is invisible to that binary and never swept by it, and every other row still reads. Missing `attached` defaults to an empty list, missing `restarts` to 0, missing `kind`, `editor_check_on_save`, and `last_crash` to absent, and a missing `dirty` on an open-document marker to false.
 
 The broker's read of its own key and admission's startup wait stay strict, so an older broker fails before it binds instead of unlinking a newer broker's live socket.
 
@@ -333,6 +335,8 @@ The pure `lsp/broker/adaptation.rs` adapts each reply to the receiving editor's 
 | Outbound frames per client | 1024 | The client is detached |
 | Message size | 64 MiB (`protocol.rs` framing cap) | A protocol error on the reading side |
 
+A `$/cancelRequest` for a request still queued removes it and answers the editor with `-32800` (`request cancelled`), and one for a request the server holds is forwarded to the server.
+
 Editor request counters reach the registry on housekeeping or another publication, not on every request.
 
 ### Registry and unsaved output
@@ -345,7 +349,7 @@ Editor request counters reach the registry on housekeeping or another publicatio
 
 | Record | Where | Lifetime | Truth |
 | --- | --- | --- | --- |
-| Registry entry per key: root and server, broker and server pids and tokens, nonce, state, start and ready times, estimate and settings hash, editor request count, last request time, peak footprint, restarts, leases, attached editors and their open-buffer markers | Machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | Lease lifetime plus shutdown grace, gone at reboot | The matching broker process start token holds ownership, and a nonce-checked socket serves requests |
+| Registry entry per key: root and server, broker and server pids and tokens, nonce, state, start and ready times, estimate and settings hash, editor request count, last request time, peak footprint, restarts, leases, attached editors and their open-buffer markers | Machine-level, `entry.json` beside `sock` and `entry.lock` in one directory per key under `disk::paths::lsp_runtime_dir`, atomic writes | Lease lifetime plus shutdown grace, gone at reboot | The matching broker process start token holds ownership, and a nonce-checked socket serves requests |
 | Cost history | `lsp-history.jsonl` under the RimZ home, rotating at 4 MiB | Survives restarts | Best-effort append without fsync |
 | Query usage | The caller's room, `records/lsp-usage.jsonl` | Room lifetime, independent of registry rows | Shared append, exclusive compaction ([Query usage](#query-usage)) |
 | Diagnostics | `~/.rimz/logs/lsp.log.jsonl`, rotating at 4 MiB ([diagnostics.md](./diagnostics.md)) | Survives restarts | Best-effort append without fsync |
@@ -387,7 +391,7 @@ A room with no `[lsp.servers.*]` table has the feature off. Server definitions m
 
 ## What agents see
 
-The launch reminder. `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) lists language names only, in an `- lsp:` bullet under `### Environment`, and points to `Skill(rimz-lsp)`, for children too, when the launch's tools and skills make that skill callable ([fleet.md](./harness/fleet.md#launch-reminders)). The bullet appears even when `env_reminder` is off. It is omitted when no server is registered or `rimz-lsp` is not callable.
+The launch reminder. `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) lists the live server names only, in an `- lsp:` bullet under `### Environment`, and points to `Skill(rimz-lsp)`, for children too, when the launch's tools and skills make that skill callable ([fleet.md](./harness/fleet.md#launch-reminders)). The bullet appears even when `env_reminder` is off. It is omitted when no server is registered or `rimz-lsp` is not callable.
 
 The skill. `rimz-lsp` lives in the user's skill library beside `rimz-subagents`, outside this repository. It teaches the query verbs, the exit codes, and the grep fallback. Profile skill lists apply at every isolation level, through the scoped view or the provider's host-mode switch, and a host provider without a switch warns and runs unrestricted ([sandbox.md § Profile skill views](./sandbox.md#profile-skill-views)). The skill is visible whether or not a server runs, and the CLI's no-server exit covers that case.
 
