@@ -246,6 +246,33 @@ fn popup_still_opens_when_its_typing_stamp_or_client_view_fails() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn popup_repeat_refuses_before_opening_without_a_readable_record() {
+    for record in [None, Some("{\"args\": [")] {
+        let fixture = PopupFixture::new();
+        let path = fixture.env.runtime_paths().palette_last_launch_path();
+        if let Some(body) = record {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+        }
+        let output = fixture.command().arg("--repeat").output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{record:?}: {stderr}");
+        assert!(
+            stderr.contains(
+                "no palette launch to repeat in this room; start one with rimz palette --mode new"
+            ),
+            "{record:?}: {stderr}"
+        );
+        let trace = std::fs::read_to_string(&fixture.trace).unwrap_or_default();
+        assert!(
+            !trace.lines().any(|line| line == "display-popup"),
+            "{record:?}: {trace}"
+        );
+    }
+}
+
 #[test]
 fn palette_without_a_terminal_names_the_popup_escape() {
     let env = Env::new();

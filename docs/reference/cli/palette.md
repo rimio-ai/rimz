@@ -6,6 +6,8 @@
 rimz palette
 rimz palette --popup
 rimz palette --popup --mode commands
+rimz palette --popup --mode new --new-worktree
+rimz palette --popup --repeat
 ```
 
 The popup is centred at 80% of the client's width and height on tmux and Zellij. Exiting closes it. This command installs no keybinding.
@@ -40,9 +42,15 @@ The `+` mode launches one agent in four steps: profile, where, name (only for a 
 
 The bottom line shows the command Enter will run at every step, built from the selections so far: `rimz agents launch <profile>`, then `-w NAME` for a RimZ-owned worktree, `--cwd PATH` for an unmanaged current checkout, nothing for the root checkout, or `-w [NAME] --from-trunk` for a new worktree, then the prompt as the last word. A new worktree is cut [as team launches cut theirs](./agents.md#channel-worktree-and-placement). The palette does not check a prompt; one the launch refuses fails with the launch's own message.
 
+`--new-worktree` starts the `+` mode with `new worktree from trunk` selected in the where step, and the bottom line names it before that step is reached. It needs `--mode new`; with another mode it refuses with `--new-worktree needs --mode new` (exit 2).
+
 Launches are offered only while the room's multiplexer session is live, read when the palette first enters the `+` mode, together with the profiles and worktrees; otherwise the profile step shows the refusal naming `rimz start` and `rimz attach`.
 
 The launch leaves the palette view and runs in its terminal, so the launch's own questions (entering an existing worktree, a cross-repository worktree, project trust) are answered there. It runs without the palette's pane, so it opens a new tab and takes focus rather than replacing the popup. On success the palette closes; on failure the output stays until a key is pressed.
+
+### Repeat the last launch
+
+Each palette launch that exits 0 is recorded for the room; a failed launch keeps the previous record, and a shell `rimz agents launch` records nothing. `rimz palette --repeat` runs the recorded command again exactly, place and prompt included, without opening the palette view: it prints `$ <command>`, then runs it in the terminal as the `+` mode does, and on failure waits for a key and exits 1. With no readable record it exits 1 with `no palette launch to repeat in this room; start one with rimz palette --mode new`; with `--popup` that refusal comes before any popup opens. `--repeat` conflicts with `--mode` and `--new-worktree`. The record lives in the room's runtime state, so room reset, teardown, and reboot discard it.
 
 ## Commands
 
@@ -68,7 +76,7 @@ Card read, unread, and alert marks are shell commands: [`rimz agents mark TARGET
 
 Without `--session-name`, the command follows the current room identity, like other participant commands. `--session-name S` addresses that room explicitly; an unknown room refuses before any popup opens. `--from-pane PANE` supplies the opener when launching from outside its pane; otherwise the current pane is used when available.
 
-`--popup` opens the same palette in the chosen backend (`--mux tmux` or `--mux zellij`). On tmux, `--client NAME` chooses the attached client and requires `--popup`. Without it, exactly one client must be attached; no clients names `rimz attach`, and several clients asks for `--client`. On Zellij, actions reach the last client to type; another client typing during an open or focus can redirect it. `--client` is tmux-only.
+`--popup` opens the same palette in the chosen backend (`--mux tmux` or `--mux zellij`). On tmux, `--client NAME` chooses the attached client and requires `--popup`. Without it, exactly one client must be attached; no clients names `rimz attach`, and several clients asks for `--client`. On Zellij, actions reach the last client to type; another client typing during an open or focus can redirect it. `--client` is tmux-only. The popup runs the palette with the outer command's `--mode`, `--new-worktree`, or `--repeat`.
 
 Opening on Zellij reveals the tab's floating layer, so existing hidden floats may appear and remain shown after close, and focus then lands on such a float rather than the pane that opened the palette. A second open is ignored while a floating pane titled `rimz palette` is present; a just-closed popup may briefly remain in the cached listing. On tmux, popup geometry is not recomputed when the terminal resizes.
 

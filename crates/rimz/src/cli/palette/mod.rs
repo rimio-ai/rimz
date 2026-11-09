@@ -23,7 +23,9 @@ use rimz::mux::{ClientFocusOptions, ClientView, PopupRequest};
 use rimz::sidebar::consumer::{PublishedSnapshotReader, published_frame_exists};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::workspace::ResolvedWorkspace;
+use serde::{Deserialize, Serialize};
 
+use super::usage::UsageError;
 use super::{Ctx, GlobalFlags};
 use launch::LaunchSetup;
 use model::{Action, ChildOutcome, Effect, PaletteState, candidates};
@@ -87,9 +89,61 @@ pub(super) struct PaletteArgs {
     /// Attached tmux client to open on (tmux only).
     #[arg(long, requires = "popup")]
     client: Option<String>,
+    /// With --mode new, preselect a new worktree from trunk.
+    #[arg(long)]
+    new_worktree: bool,
+    /// Run this room's last palette launch again, without the palette.
+    #[arg(long, conflicts_with_all = ["mode", "new_worktree"])]
+    repeat: bool,
+}
+
+const NO_LAST_LAUNCH: &str =
+    "no palette launch to repeat in this room; start one with rimz palette --mode new";
+
+/// The room's last palette launch: `args` follow `rimz` exactly as they ran.
+#[derive(Debug, Serialize, Deserialize)]
+struct LastLaunch {
+    args: Vec<String>,
+    launched_at: u64,
+}
+
+fn check_new_worktree(mode: Mode, new_worktree: bool) -> Result<()> {
+    if new_worktree && mode != Mode::New {
+        return Err(UsageError::new("--new-worktree needs --mode new".to_owned()).into());
+    }
+    Ok(())
+}
+
+fn read_last_launch(path: &Path) -> Result<Vec<String>> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LastLaunch>(&bytes).ok())
+        .map(|record| record.args)
+        .filter(|args| !args.is_empty())
+        .context(NO_LAST_LAUNCH)
+}
+
+/// Runs a launch, and records it as the room's last palette launch once it exits 0.
+fn launch_and_record(
+    path: &Path,
+    args: &[String],
+    runner: impl FnOnce(&[String]) -> ChildOutcome,
+) -> ChildOutcome {
+    let outcome = runner(args);
+    if matches!(outcome, ChildOutcome::Success) {
+        let record = LastLaunch {
+            args: args.to_vec(),
+            launched_at: rimz::utils::time::unix_now_ms(),
+        };
+        if let Err(error) = rimz::disk::atomic::write_temp_then_rename_cache(path, &record) {
+            tracing::warn!(%error, path = %path.display(), "cannot record the palette launch");
+        }
+    }
+    outcome
 }
 
 pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
+    check_new_worktree(args.mode, args.new_worktree)?;
     require_terminal(
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         args.popup,
@@ -102,6 +156,10 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
         }
         None => Ctx::open(globals)?,
     };
+    let repeat = args
+        .repeat
+        .then(|| read_last_launch(&ctx.runtime().palette_last_launch_path()))
+        .transpose()?;
     let mux = match &args.session_name {
         Some(session) => super::render::room::present_mux_pick(
             rimz::room::session::pick_mux_for_session(session, globals.mux),
@@ -113,7 +171,10 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
         .clone()
         .or_else(|| rimz::mux::own_pane_id(mux));
     if !args.popup {
-        return run_terminal(&ctx, args.mode, mux, opener);
+        return match repeat {
+            Some(launch) => run_repeat(&ctx, launch),
+            None => run_terminal(&ctx, args.mode, mux, opener, args.new_worktree),
+        };
     }
     let backend = rimz::mux::backend_for(mux);
     let mut typing_pane = None;
@@ -204,22 +265,52 @@ fn popup_args(
     mux: MuxName,
     opener: Option<&PaneId>,
 ) -> Vec<String> {
-    let mut argv = vec![
-        "palette".to_owned(),
-        "--mode".to_owned(),
-        args.mode.name().to_owned(),
+    let mut argv = vec!["palette".to_owned()];
+    if args.repeat {
+        argv.push("--repeat".to_owned());
+    } else {
+        argv.extend(["--mode".to_owned(), args.mode.name().to_owned()]);
+    }
+    if args.new_worktree {
+        argv.push("--new-worktree".to_owned());
+    }
+    argv.extend([
         "--session-name".to_owned(),
         session.to_owned(),
         "--mux".to_owned(),
         mux.to_string(),
-    ];
+    ]);
     if let Some(opener) = opener {
         argv.extend(["--from-pane".to_owned(), opener.to_string()]);
     }
     argv
 }
 
-fn run_terminal(ctx: &Ctx, mode: Mode, mux: MuxName, opener: Option<PaneId>) -> Result<()> {
+/// Runs the recorded launch in this terminal as the `+` mode runs one.
+fn run_repeat(ctx: &Ctx, args: Vec<String>) -> Result<()> {
+    let action = Action {
+        args,
+        effect: Effect::Launch,
+    };
+    writeln!(super::render::out(), "$ {}", action.command_line())?;
+    let path = ctx.runtime().palette_last_launch_path();
+    match launch_and_record(&path, &action.args, |_| run_child(ctx, &action)) {
+        ChildOutcome::Success => Ok(()),
+        ChildOutcome::Failure(error) => {
+            writeln!(super::render::err(), "{error}")?;
+            wait_for_key()?;
+            bail!("palette launch failed: {error}")
+        }
+    }
+}
+
+fn run_terminal(
+    ctx: &Ctx,
+    mode: Mode,
+    mux: MuxName,
+    opener: Option<PaneId>,
+    new_worktree: bool,
+) -> Result<()> {
     let mut guard = Some(TerminalModeGuard::enable(
         MouseCapture::Off,
         Screen::Alternate,
@@ -231,11 +322,12 @@ fn run_terminal(ctx: &Ctx, mode: Mode, mux: MuxName, opener: Option<PaneId>) -> 
     let mut state = PaletteState::new(mode, opener, &ctx.workspace.session_name);
     let mut reader =
         PublishedSnapshotReader::new(ctx.runtime().clone(), &ctx.workspace.session_name, None);
+    let last_launch = ctx.runtime().palette_last_launch_path();
     let mut launch_loaded = false;
     let mut next_refresh = Instant::now();
     loop {
         if !launch_loaded && state.mode() == Mode::New {
-            state = state.with_launch(load_launch(ctx, mux));
+            state = state.with_launch(load_launch(ctx, mux, new_worktree));
             launch_loaded = true;
         }
         if Instant::now() >= next_refresh {
@@ -274,7 +366,12 @@ fn run_terminal(ctx: &Ctx, mode: Mode, mux: MuxName, opener: Option<PaneId>) -> 
                 if show || effect == Some(Effect::Launch) {
                     drop(guard.take());
                 }
-                state.activate(|action| run_child(ctx, action));
+                state.activate(|action| match action.effect {
+                    Effect::Launch => {
+                        launch_and_record(&last_launch, &action.args, |_| run_child(ctx, action))
+                    }
+                    Effect::Act | Effect::Show => run_child(ctx, action),
+                });
                 if show || (effect == Some(Effect::Launch) && state.notice.is_some()) {
                     if let Some(notice) = &state.notice {
                         writeln!(super::render::err(), "{notice}")?;
@@ -303,7 +400,7 @@ fn refresh(state: &mut PaletteState, reader: &mut PublishedSnapshotReader, ctx: 
 
 /// Reads the `+` mode's inputs the first time the palette enters it, so other modes open without
 /// loading definitions or listing worktrees.
-fn load_launch(ctx: &Ctx, mux: MuxName) -> LaunchSetup {
+fn load_launch(ctx: &Ctx, mux: MuxName, new_worktree: bool) -> LaunchSetup {
     let unavailable = rimz::room::require_live_mux(Some(mux), &ctx.workspace)
         .err()
         .map(|error| error.to_string());
@@ -313,7 +410,7 @@ fn load_launch(ctx: &Ctx, mux: MuxName) -> LaunchSetup {
             &sources,
             &ctx.workspace.project_root,
             unavailable,
-            false,
+            new_worktree,
         ),
         Err(error) => LaunchSetup {
             unavailable: Some(format!("loading machine config: {error:#}")),

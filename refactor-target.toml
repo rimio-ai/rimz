@@ -1613,7 +1613,8 @@ allowed-dependencies = [
 # RuntimePaths::zellij_client_mode_paths owns stamped per-client mode lanes (+1).
 # RuntimePaths::reply_wait_lease_path classes each reply wait leg's liveness lease (+1).
 # RuntimePaths::unread_lock_path classes the unread-episode lock (+1).
-surface-budget = 331
+# RuntimePaths::palette_last_launch_path owns the palette's last-launch record (+1).
+surface-budget = 332
 
 [[verdict]]
 kind = "item"
