@@ -4,7 +4,7 @@
 
 A managed worktree is one Git checkout of the repository, on its own branch, whose whole life RimZ runs. RimZ creates the tree for a line of work, seeds it with the untracked files an agent needs, and reclaims it once the work has landed. The tree's name is also a [channel](./messaging.md#channels), so `@coder#feat-a` addresses the agent working inside it.
 
-The subsystem stands on its own. `rimz worktree new`, `list`, `merge`, `remove`, `sweep`, and `rimz gc` work whether or not an agent ever launches into a tree, and an agent launch calls the same domain entry points when it does. What agents do inside a tree belongs to [fleet.md](./fleet.md).
+The subsystem stands on its own. `rimz worktree new`, `list`, `cd`, `path`, `merge`, `remove`, `sweep`, and `rimz gc` work whether or not an agent ever launches into a tree, and an agent launch calls the same domain entry points when it does. What agents do inside a tree belongs to [fleet.md](./fleet.md).
 
 ## The one rule: RimZ touches only what it marked
 
@@ -36,6 +36,7 @@ A tree's path has two spellings, and code that matches an agent or a cohort to a
 | --- | --- |
 | Marker `worktree_path` | The launch cwd (`LaunchCheckout::cwd`), so every agent's recorded worktree path, launch records, cohort reconciliation, `rimz worktree remove` and `merge` (which build the path from the template) |
 | Git's reported path | `worktree list`, `sweep`, `gc`, lane resume (`crates/rimz/src/cli/agents_cmd/resume.rs::local_worktrees`) |
+| Canonical path | Wrapper cleanup: the exec wrapper canonicalizes the entered path before it calls `rimz worktree cleanup` |
 
 Agent and cohort path matches stay lexical, after `normalize_path_lexical`. Removal protection also tries the candidate's canonical spelling when it exists, so a resolved pin holds a candidate spelled through a symlinked template. Pins themselves are not canonicalized: an agent's template-spelled record can still miss a Git-spelled sweep candidate. The Git identity check for an [unmarked checkout](#which-repository-a-launch-uses) also canonicalizes.
 
@@ -51,7 +52,10 @@ Agent and cohort path matches stay lexical, after `normalize_path_lexical`. Remo
 | [`worktree/hooks.rs`](../../../crates/rimz/src/worktree/hooks.rs) | Machine-local lifecycle command execution and bounded failure tails. |
 | [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | `info/exclude` registration for linked directories and team scratch patterns. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | The `rimz worktree` commands and the hidden `cleanup` helper. |
-| [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane, agent, loop-task, team-board, and workflow-run facts for each removal caller. |
+| [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane, agent, loop-task, team-board, and workflow-run facts for each removal caller. Explicit removal and merge delegate to the launcher builders below. |
+| [`launcher/worktree_entry.rs`](../../../crates/rimz/src/launcher/worktree_entry.rs) | The named-worktree entry check, the cohort's protected `remove` answer, and the room-spanning protection builders (`runtime_protections`, `occupancy_protections`, `explicit_removal_protections`). |
+| [`harness/worktree_entry.rs`](../../../crates/rimz/src/harness/worktree_entry.rs) | The facts behind the entry check: occupancy, Git state, and last recorded activity. |
+| [`cli/worktree_entry.rs`](../../../crates/rimz/src/cli/worktree_entry.rs) | The terminal closed-cohort offers. |
 | [`launcher/checkout.rs`](../../../crates/rimz/src/launcher/checkout.rs) | Launch-checkout admission and settlement: `admit_launch_worktree_name`, `resolve_launch_checkout` and `settle_launch_checkout` (unmarked-checkout entry, PR retry, the `worktree.created` signal), and the `confirm_cross_repo_worktree` decision. |
 | [`cli/launch_interaction.rs`](../../../crates/rimz/src/cli/launch_interaction.rs) | Terminal checkout decisions and notices; the PR and cross-repository prompts it presents (`resolve_pr_branch_choice`, `confirm_cross_repo_worktree_with`) remain in `cli/mod.rs`. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The worktree area of the aggregate `rimz gc` report. |
@@ -141,7 +145,7 @@ On the fork strategy, `crates/rimz/src/worktree/pr.rs::fork_checkout` calls `add
 
 #### The same-repository branch holder
 
-After fetching the head branch, `crates/rimz/src/worktree/pr.rs::same_repo_checkout` finds the checkout holding it through Git's worktree list, including trees outside the configured directory. The main checkout and an unmarked holder refuse with `PrBranchConflict`, and a marker recording another PR refuses with `PrWorktreeMismatch`. An explicit worktree name that differs from the holder's marker name refuses with a hint to omit `-w` or name the holder. When the local tip equals the PR head, no choice is needed: RimZ reuses the marked holder, adopts an unheld local branch into a fresh tree, or creates a tracking branch when none exists.
+After fetching the head branch, `crates/rimz/src/worktree/pr.rs::same_repo_checkout` finds the checkout holding it through Git's worktree list, including trees outside the configured directory. The main checkout and an unmarked holder refuse with `PrBranchConflict`, and a marker recording another PR refuses with `PrWorktreeMismatch`. An explicit worktree name that differs from the holder's marker name refuses with a hint to omit `-w` or name the holder. With no holder, the fresh destination is validated (`Exists` for an occupied directory) before any tip choice can move the branch. When the local tip equals the PR head, no choice is needed: RimZ reuses the marked holder, adopts an unheld local branch into a fresh tree, or creates a tracking branch when none exists.
 
 When the tips differ, `crates/rimz/src/worktree/pr.rs::classify_divergence` counts local-only and remote-only commits and returns one of three shapes:
 
@@ -175,7 +179,7 @@ A freshly created PR tree records the repository trunk as `base_branch` (`pr_mar
 - `.worktreeinclude` lists glob patterns, one per line. Each match is copied into the new tree at the same repo-relative path. `*` stays within a path component, `**` crosses directories, a leading `*` matches dotfiles, and a matched directory copies recursively.
 - `.worktreelink` lists relative directory paths, one per line. Each is symlinked into the new tree with an absolute link target and registered in the tree's effective `info/exclude` as an anchored `/<path>` pattern. It is for heavy machine-local data whose contents do not depend on the branch, such as model or fixture caches.
 
-Both files skip blank lines and `#` comments, and both confine every source to the project root. Absolute entries and entries containing `..` are skipped with a warning. An include match that is itself a symlink is skipped, and every copied file is re-checked against the canonicalized root, because `glob`'s `**` descends through symlinked directories and a committed symlink could otherwise pull host files into a tree an agent reads. A link source must canonicalize to a real directory inside the root, and an existing destination is never replaced.
+Both files skip blank lines and `#` comments, and both confine every source to the project root. Absolute entries and entries containing `..` are skipped with a warning. An include match under `.git`, or one that is the new tree or lies inside it (a `dir` template under the repository root), is skipped silently. An include match that is itself a symlink is skipped, and every copied file is re-checked against the canonicalized root, because `glob`'s `**` descends through symlinked directories and a committed symlink could otherwise pull host files into a tree an agent reads. A link source must canonicalize to a real directory inside the root, and an existing destination is never replaced.
 
 Seeding is best-effort. A missing file is a silent no-op. A pattern that matches nothing, a failed copy, or an unlinkable directory warns through `tracing` and is skipped, and the tree and its agents still launch. Neither file can run a command, which is why both stay outside the trust hash ([trust.md](./trust.md)).
 
@@ -183,7 +187,7 @@ Git usually resolves a linked worktree's effective `info/exclude` to the reposit
 
 ### Team scratch patterns
 
-A staged team registers Git exclude patterns for its scratch files before its panes start. Fresh launch, explicit cohort resume, and place-first team restore all register through the same harness entry. Registration always adds `/.rimz/team`, with no trailing slash because it names a symlink. When the launch directory is below the Git worktree root, it also adds `/<path from the root>/.rimz/team`, escaping gitignore metacharacters in that prefix. The team's `scratch-files` adds extra patterns, and is empty when unset or `[]`.
+A team registers Git exclude patterns for its scratch files before its panes start. Fresh launch, explicit cohort resume, and place-first team restore all register through the same harness entry, `crates/rimz/src/harness/team_notes.rs::register`. Every team registers its `scratch-files` patterns, which are empty when unset or `[]`. A team without stages registers only those. A staged team also adds `/.rimz/team`, with no trailing slash because it names a symlink. When its canonical launch directory is below the Git checkout root, it also adds `/<path from the root>/.rimz/team`, escaping the gitignore metacharacters `\`, `*`, `?`, `[`, and `]` in that prefix.
 
 `worktree::exclude_team_scratch` appends only missing lines, publishes the effective `info/exclude` atomically, and warns without blocking on a Git or filesystem failure. The patterns hide matching untracked names in the main checkout and every sibling worktree. RimZ never removes a line it registered.
 
@@ -321,7 +325,7 @@ The CLI gathers pane cwds from the mux and agent rows from the store, and `prote
 
 Paths are normalized lexically (`.` and `..` folded) before comparison, so `/repo/../repo-worktrees/demo` matches `/repo-worktrees/demo`. Every pin is also compared with the candidate's canonical spelling when it exists; a missing candidate matches lexically only ([two spellings](#two-spellings-of-a-trees-path)).
 
-Callers differ in occupancy, the own-pane exemption, and which facts they require. `cli/worktree_protection.rs` fixes them per caller:
+Callers differ in occupancy, the own-pane exemption, and which facts they require. `cli/worktree_protection.rs` fixes them per caller. Explicit removal and merge build theirs through `crates/rimz/src/launcher/worktree_entry.rs::explicit_removal_protections` and `crates/rimz/src/launcher/worktree_entry.rs::occupancy_protections`, which resolve the room of each root once per workspace id, so a cohort relaunch's `remove` answer gathers the same facts:
 
 | Caller | Occupancy | Own pane exempt | Loop tasks | Team boards | Workflow runs | Missing facts |
 | --- | --- | --- | --- | --- | --- | --- |
