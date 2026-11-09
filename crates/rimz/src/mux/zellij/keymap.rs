@@ -6,7 +6,7 @@ use crate::config::keys::{
 use serde_json::{Value, json};
 
 pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String {
-    let rimz = keymap.modes.contains_key(&KeyMode::Prefix);
+    let rimz = keymap.style.is_some();
     let mut commands = Vec::new();
     let mut modes = Vec::new();
     for (&mode, bindings) in &keymap.modes {

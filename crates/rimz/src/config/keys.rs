@@ -15,6 +15,8 @@ pub mod sidebar;
 #[serde(default)]
 pub struct KeysConfig {
     keymap: Value,
+    /// Null when unset, so the selected keymap's own prefix applies.
+    #[serde(skip_serializing_if = "Value::is_null")]
     prefix: Value,
     bind: Value,
     pub(super) sidebar: Value,
@@ -24,7 +26,7 @@ impl Default for KeysConfig {
     fn default() -> Self {
         Self {
             keymap: Value::String("rimz".into()),
-            prefix: Value::String("Alt+p".into()),
+            prefix: Value::Null,
             bind: Value::Object(Default::default()),
             sidebar: Value::Object(Default::default()),
         }
@@ -353,6 +355,24 @@ impl fmt::Display for KeyAction {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoomKeymap {
     pub modes: BTreeMap<KeyMode, BTreeMap<KeyChord, KeyAction>>,
+    /// The RimZ-style facts the backends compile from; `None` in native style.
+    pub style: Option<RoomKeyStyle>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoomKeyStyle {
+    pub prefix: KeyChord,
+    pub scrollback: KeyScrollback,
+}
+
+/// Which keys a RimZ-style room's scrollback answers to.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyScrollback {
+    /// RimZ's vi-style table on both backends.
+    Vi,
+    /// The multiplexer's own stock keys, as the user configured them.
+    Native,
 }
 
 impl MachineConfig {
@@ -389,30 +409,53 @@ impl MachineConfig {
             }
             return RoomKeymap {
                 modes: BTreeMap::from([(KeyMode::Normal, normal)]),
+                style: None,
             };
         }
 
-        if self.keys.keymap.as_str() != Some("rimz") {
-            notices.insert(
-                "keys.keymap".into(),
-                "keys.keymap: expected `rimz`; using the rimz keymap".into(),
-            );
-        }
-        let prefix = self
+        let keymap = self
             .keys
-            .prefix
+            .keymap
             .as_str()
-            .and_then(KeyChord::parse_prefix)
+            .and_then(bundled_keymap)
             .unwrap_or_else(|| {
                 notices.insert(
-                    "keys.prefix".into(),
-                    "keys.prefix: expected a modified chord such as Alt+p, not a terminal key alias; using Alt+p".into(),
+                    "keys.keymap".into(),
+                    format!(
+                        "keys.keymap: expected {}; using the rimz keymap",
+                        bundled_keymap_names()
+                    ),
                 );
-                KeyChord::Alt('p')
+                bundled_keymap("rimz").expect("the rimz keymap is bundled")
             });
+        let prefix = if self.keys.prefix.is_null() {
+            keymap.default_prefix
+        } else {
+            self.keys
+                .prefix
+                .as_str()
+                .and_then(KeyChord::parse_prefix)
+                .unwrap_or_else(|| {
+                    notices.insert(
+                        "keys.prefix".into(),
+                        format!(
+                            "keys.prefix: expected a modified chord such as Alt+p, not a terminal \
+                             key alias; using {}",
+                            keymap.default_prefix
+                        ),
+                    );
+                    keymap.default_prefix
+                })
+        };
 
-        let mut map = RoomKeymap::default();
-        for (&mode, bindings) in &*EMBEDDED {
+        let mut map = RoomKeymap {
+            modes: BTreeMap::new(),
+            style: Some(RoomKeyStyle {
+                prefix,
+                scrollback: keymap.scrollback,
+            }),
+        };
+        for (&mode, bindings) in &keymap.modes {
             let resolved = map.modes.entry(mode).or_default();
             for (key, action) in bindings {
                 if key != "<prefix>" {
@@ -427,7 +470,7 @@ impl MachineConfig {
             }
         }
         overlay(&mut map, &self.keys.bind, notices);
-        for (&mode, bindings) in &*EMBEDDED {
+        for (&mode, bindings) in &keymap.modes {
             if let Some(action) = bindings.get("<prefix>") {
                 map.modes.entry(mode).or_default().insert(
                     prefix,
@@ -442,10 +485,61 @@ impl MachineConfig {
     }
 }
 
-static EMBEDDED: LazyLock<BTreeMap<KeyMode, BTreeMap<String, String>>> = LazyLock::new(|| {
-    toml::from_str(include_str!("../../keymaps/rimz.toml"))
-        .expect("embedded rimz keymap TOML is pinned by tests")
+/// One bundled keymap file: its default prefix (`default_prefix`, since `prefix`
+/// names the prefix-mode table), its scrollback flavour, and its
+/// mode tables, where `<prefix>` stands for the resolved prefix chord.
+#[derive(Deserialize)]
+struct BundledKeymap {
+    #[serde(deserialize_with = "deserialize_prefix")]
+    default_prefix: KeyChord,
+    scrollback: KeyScrollback,
+    #[serde(flatten)]
+    modes: BTreeMap<KeyMode, BTreeMap<String, String>>,
+}
+
+fn deserialize_prefix<'de, D: serde::Deserializer<'de>>(raw: D) -> Result<KeyChord, D::Error> {
+    let raw = String::deserialize(raw)?;
+    KeyChord::parse_prefix(&raw)
+        .ok_or_else(|| serde::de::Error::custom(format!("invalid keymap prefix {raw:?}")))
+}
+
+const BUNDLED_KEYMAP_FILES: &[(&str, &str)] = &[("rimz", include_str!("../../keymaps/rimz.toml"))];
+
+static BUNDLED_KEYMAPS: LazyLock<Vec<(&str, BundledKeymap)>> = LazyLock::new(|| {
+    BUNDLED_KEYMAP_FILES
+        .iter()
+        .map(|&(name, text)| {
+            (
+                name,
+                toml::from_str(text).expect("bundled keymap TOML is pinned by tests"),
+            )
+        })
+        .collect()
 });
+
+fn bundled_keymap(name: &str) -> Option<&'static BundledKeymap> {
+    BUNDLED_KEYMAPS
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, keymap)| keymap)
+}
+
+pub(super) fn is_bundled_keymap(name: &str) -> bool {
+    BUNDLED_KEYMAP_FILES
+        .iter()
+        .any(|(candidate, _)| *candidate == name)
+}
+
+/// The bundled keymap names as a sentence list: `rimz, tmux, zellij, or vim`.
+pub(super) fn bundled_keymap_names() -> String {
+    let names: Vec<_> = BUNDLED_KEYMAP_FILES.iter().map(|(name, _)| *name).collect();
+    match names.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, [only])) => format!("{only} or {last}"),
+        Some((last, rest)) => format!("{}, or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
 
 fn overlay(map: &mut RoomKeymap, user: &Value, notices: &mut BTreeMap<String, String>) {
     let Some(modes) = user.as_object() else {

@@ -1550,9 +1550,12 @@ fn parse_string_edit_value(raw: &str) -> Value {
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     if matches!(path, [root, leaf] if root == "keys" && leaf == "keymap")
-        && value.as_str() != Some("rimz")
+        && !value.as_str().is_some_and(super::keys::is_bundled_keymap)
     {
-        invalid_value!("keys.keymap must be rimz");
+        invalid_value!(
+            "keys.keymap must be {}",
+            super::keys::bundled_keymap_names()
+        );
     }
     if matches!(path, [root, leaf] if root == "keys" && leaf == "prefix")
         && value

@@ -101,13 +101,17 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
         dir.path().join("config.toml"),
         dir.path().join("definitions"),
     ));
-    for (key, default, value) in [
-        ("keys.keymap", "rimz", "rimz"),
-        ("keys.prefix", "Alt+p", "Ctrl+a"),
-    ] {
-        let result = editor.get(Some(key));
-        assert!(result.is_ok(), "{key} must be readable: {result:?}");
-        assert_eq!(result.unwrap().as_str(), Some(default));
+    let result = editor.get(Some("keys.keymap"));
+    assert!(result.is_ok(), "keys.keymap must be readable: {result:?}");
+    assert_eq!(result.unwrap().as_str(), Some("rimz"));
+    assert!(
+        matches!(
+            editor.get(Some("keys.prefix")),
+            Err(ConfigEditErr::UnsetKey { .. })
+        ),
+        "an unset prefix takes the keymap's own default"
+    );
+    for (key, value) in [("keys.keymap", "rimz"), ("keys.prefix", "Ctrl+a")] {
         editor.set(key, value).unwrap();
         assert_eq!(editor.get(Some(key)).unwrap().as_str(), Some(value));
     }

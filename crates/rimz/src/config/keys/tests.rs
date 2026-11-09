@@ -127,6 +127,13 @@ fn embedded_keymap_matches_every_spec_binding() {
             .flat_map(BTreeMap::values)
             .any(|action| action.to_string() == "sidebar.focus")
     );
+    assert_eq!(
+        map.style,
+        Some(RoomKeyStyle {
+            prefix: KeyChord::Alt('p'),
+            scrollback: KeyScrollback::Vi,
+        })
+    );
 }
 
 #[test]
@@ -139,11 +146,15 @@ fn overlays_remove_bindings_and_prefix_moves_both_symbolic_entries_last() {
     assert!(machine.notices.key_bindings.is_empty());
     let map = machine.room_keymap();
     assert!(
-        map.modes.contains_key(&KeyMode::Prefix),
+        !map.modes[&KeyMode::Prefix].is_empty(),
         "resolved overrides must retain prefix mode"
     );
     assert_eq!(action(&map, KeyMode::Normal, "Alt+p"), None);
     assert_eq!(action(&map, KeyMode::Prefix, "Alt+p"), None);
+    assert_eq!(
+        map.style.map(|style| style.prefix),
+        Some(KeyChord::Ctrl('a'))
+    );
     assert_eq!(
         action(&map, KeyMode::Normal, "Ctrl+a").as_deref(),
         Some("mode.prefix")
@@ -224,14 +235,17 @@ fn bad_prefix_and_unknown_keymap_warn_and_use_defaults() {
             1,
             "bad prefix must warn"
         );
-        assert!(machine.notices.key_bindings["keys.prefix"].contains("Alt+p"));
+        assert!(machine.notices.key_bindings["keys.prefix"].ends_with("; using Alt+p"));
         assert_eq!(
             action(&machine.room_keymap(), KeyMode::Normal, "Alt+p").as_deref(),
             Some("mode.prefix")
         );
     }
     let machine = config("[room]\nstyle='rimz'\n[keys]\nkeymap='unknown'\n");
-    assert!(machine.notices.key_bindings["keys.keymap"].contains("rimz"));
+    assert_eq!(
+        machine.notices.key_bindings["keys.keymap"],
+        "keys.keymap: expected rimz; using the rimz keymap"
+    );
     assert_eq!(
         action(&machine.room_keymap(), KeyMode::Normal, "Alt+j").as_deref(),
         Some("card.next")
@@ -262,6 +276,10 @@ fn native_ignores_keys_and_retains_only_valid_modified_sidebar_chords() {
     assert!(machine.notices.key_bindings.is_empty());
     assert!(machine.notices.unknown_keys.is_empty());
     let map = machine.room_keymap();
+    assert_eq!(
+        map.style, None,
+        "native style carries no prefix or scrollback"
+    );
     assert_eq!(
         map.modes.len(),
         1,

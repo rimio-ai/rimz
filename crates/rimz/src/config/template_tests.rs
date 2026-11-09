@@ -77,7 +77,8 @@ fn template_lists_room_keymap_settings() {
         "[room]",
         "[keys]",
         "# keymap = \"rimz\"",
-        "# prefix = \"Alt+p\"",
+        "## prefix = \"Ctrl+a\"",
+        "unset: the keymap's own",
         "status_bar = \"on\"",
     ] {
         assert!(template.contains(setting), "template must list {setting}");
