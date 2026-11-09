@@ -768,6 +768,8 @@ Preparation refuses what a reply wait cannot follow. Every target must be a life
 
 Dispatch captures one frame-aligned event-log base before enqueue and copies it into every leg, so each leg folds terminal message events from its own cursor. Each `Sent` leg anchors a skip-existing transcript cursor before dispatch, so it reads only assistant messages written after the prompt. Ordinary queued legs re-anchor when delivery starts, to exclude intervening turns. A follow-up queued to an ended, resuming child keeps its pre-dispatch anchor: there is no intervening live turn, and its reply may finish before the first delivery poll.
 
+The re-anchor leaves a known gap. An ordinary queued leg has no cursor until the first 500 ms poll that reads its record as `Sent` or `Delivered`, and that poll anchors at the transcript's end. A receiver that answers and ends its turn before that poll has its answer behind the anchor, so the leg settles `Completed` with no final message. `crates/rimz/src/message/reply/tests.rs::parked_reply_reanchors_when_delivery_starts` pins the re-anchor. The fix is to anchor at the acknowledged prompt's own transcript entry instead of the end.
+
 Each leg is a two-phase machine.
 
 **Delivery** waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply. Interrupt never takes that shortcut, so `--interrupt --wait` follows only the fresh turn that `Delivered` acknowledges.
