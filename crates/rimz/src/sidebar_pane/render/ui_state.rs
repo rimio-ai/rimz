@@ -420,6 +420,14 @@ impl ViewState {
         self.viewport.focus_placement.as_ref()
     }
 
+    /// A copy for a hidden mirror, which draws none of the pending request and no glide.
+    pub(in crate::sidebar_pane) fn hidden_mirror(&self) -> Self {
+        let mut mirror = self.clone();
+        mirror.viewport = ViewportRequest::default();
+        mirror.scroll_ease.cancel();
+        mirror
+    }
+
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn authoritative_offset(&self) -> bool {
         self.viewport.offset_authoritative

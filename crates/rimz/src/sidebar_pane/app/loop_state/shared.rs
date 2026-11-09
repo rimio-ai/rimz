@@ -151,7 +151,7 @@ impl ViewAccess {
         let (id, state, context, _revision) = views.mirror_view()?;
         Some(MirrorSource {
             target: (id, state.layout_sequence),
-            view: state.clone(),
+            view: state.hidden_mirror(),
             snapshot: context.current.clone(),
             alert: context.health.alert.clone(),
             gate_notice: context.gate.rule.map(|rule| render::GateNotice { rule }),

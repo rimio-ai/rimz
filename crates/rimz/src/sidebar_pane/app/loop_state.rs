@@ -2339,8 +2339,6 @@ impl LoopState {
         {
             return Ok(());
         }
-        source.view.scroll_ease.cancel();
-        source.view.viewport = render::ViewportRequest::default();
         self.pane.paint.refresh_view(
             &mut self.pane.ui,
             &source.view,
