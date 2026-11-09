@@ -46,6 +46,12 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [agent-support.md](./agent-support.md) | Every built-in adapter: support tiers, `rimz coverage`, the six capabilities and the compatibility matrix, per-agent gaps, config homes and skill roots, launch flags (permission modes, model, effort, prompt replacement, auto-compaction), the wiring matrix, the lifecycle hook surface, and each agent's mapping doc. |
 | [agent-plugins.md](./agent-plugins.md) | External agent plugins, an early and unstable surface: registering and checking a bundle, the manifest, the canonical event envelope, the shim contract, probe contracts, and how coverage, doctor, and `rimz start` treat a plugin. |
 
+## Rooms
+
+| Page | What it covers |
+| --- | --- |
+| [keymaps.md](./keymaps.md) | The room keymaps under `[room] style = "rimz"`: choosing `rimz`, `tmux`, `zellij` or `vim`, default prefixes, the key grammar, the modes and their stickiness, scrollback flavours, every action's tmux and Zellij effect, each bundled table with what it leaves unbound, and the tmux prefix option. |
+
 ## See also
 
 - [User documentation](../README.md): the guide pages that teach each workflow end to end.

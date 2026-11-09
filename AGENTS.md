@@ -239,6 +239,7 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 
 **Reference** — `docs/reference/` answers a specific flag or field, and [its README](./docs/reference/README.md) indexes the pages by topic. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
 
+- [keymaps.md](./docs/reference/keymaps.md): the room keymap vocabulary, modes and stickiness, and the four bundled keymap tables.
 - [packs.md](./docs/reference/cli/packs.md): Git and linked definition and skill packs, install reviews and update holds, item fates and exclusions, the manifest, and the installation record.
 
 **Internals** — `docs/internals/` documents each subsystem for people who read the code; [README.md](./docs/internals/README.md) is the index: a page table per area, and a table from each source tree to the page that documents it. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file. The experimental OMP mapping is [adapter_omp.md](./docs/internals/agents/adapter_omp.md).

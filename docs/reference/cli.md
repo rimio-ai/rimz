@@ -28,7 +28,7 @@ Tab completion for commands, flags, and live room names is set up in the [shell 
 
 ## Room keys
 
-`rimz keys` prints the resolved per-machine room keymap, grouped by mode, with each key's action name or quoted `rimz` command. It needs no running room. `rimz keys --wait` requires a terminal and holds the list open until a keypress, for use in a popup. [Room keymap configuration](../guide/configuration.md#room-keymap) explains the style switch, prefix, and overrides.
+`rimz keys` prints the resolved per-machine room keymap, grouped by mode (modes with no bindings are left out), with each key's action name or quoted `rimz` command. It needs no running room. `rimz keys --wait` requires a terminal and holds the list open until a keypress, for use in a popup. [Room keymap configuration](../guide/configuration.md#room-keymap) explains the style switch, prefix, and overrides.
 
 ## Global flags
 
