@@ -2384,7 +2384,7 @@ fn team_worktree_fetch_failure_uses_the_last_fetched_tip() {
     assert_eq!(
         failure.to_string(),
         format!(
-            "could not fetch origin/main for the team worktree ({}); branching from origin/main as last fetched",
+            "could not fetch origin/main for the worktree ({}); branching from origin/main as last fetched",
             failure.error
         )
     );
@@ -2432,7 +2432,7 @@ fn team_worktree_fetch_failure_without_cached_refs_uses_local_head() {
     assert_eq!(
         failure.to_string(),
         format!(
-            "could not fetch origin/main for the team worktree ({}); branching from local main",
+            "could not fetch origin/main for the worktree ({}); branching from local main",
             failure.error
         )
     );

@@ -6103,7 +6103,7 @@ fn team_worktree_launch_warns_and_continues_when_origin_is_offline() {
     let output = launch_team_worktree(&env, &["teams", "solo", "-w", "demo"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("warning: could not fetch origin/main for the team worktree"),
+        stderr.contains("warning: could not fetch origin/main for the worktree"),
         "{stderr}"
     );
     assert_eq!(stderr.matches("warning: could not fetch").count(), 1);
