@@ -83,3 +83,31 @@ fn v30_cache_preserves_per_file_and_single_file_bytes() {
         ]
     );
 }
+
+#[test]
+fn spend_window_omits_zero_timing_and_tool_counters() {
+    let keys = |window: &SpendWindow| {
+        serde_json::to_value(window)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let optional = ["timed_ms", "timed_output", "tool_calls", "tools"];
+    let bare = keys(&SpendWindow::default());
+    assert!(optional.iter().all(|key| !bare.contains(&key.to_string())));
+    let counted = keys(&SpendWindow {
+        timed_ms: 1,
+        timed_output: 2,
+        tool_calls: 3,
+        tools: BTreeMap::from([("Read".into(), 3)]),
+        ..Default::default()
+    });
+    assert!(
+        optional
+            .iter()
+            .all(|key| counted.contains(&key.to_string()))
+    );
+}

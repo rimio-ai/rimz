@@ -964,3 +964,148 @@ fn live_origin_updates_share_the_walk_persist_gate() {
         Some(&second)
     );
 }
+
+#[test]
+fn unwritable_cursor_keeps_the_fill_dirty_until_a_writable_walk_lands_it() {
+    let dir = TempDir::new().unwrap();
+    let transcript = write_jsonl(
+        dir.path(),
+        "claude.jsonl",
+        &[&claude_line(&utc_date(NOW_SECS), 1.0, "msg-1", "req-1")],
+    );
+    let files = vec![spending_file(claude_adapter(), transcript)];
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"").unwrap();
+    let mut walker = SpendingWalker::new();
+
+    let failed = walk_spending!(
+        walker,
+        &blocker.join("spending.json"),
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    assert!(!failed.stats.cache_written);
+    assert!(walker.cache.dirty);
+    assert!(
+        walker.cache.fill_in_progress,
+        "a failed final write keeps the cold fill open"
+    );
+
+    let cache_path = dir.path().join("spending.json");
+    let landed = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    assert!(landed.stats.cache_written);
+    assert!(!read_spending_cache(&cache_path).fill_in_progress);
+}
+
+#[test]
+fn reordered_files_rebuild_the_memo_at_one_generation() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let mut files = (0..2)
+        .map(|i| {
+            let line = claude_line(
+                &today,
+                1.0 + i as f64,
+                &format!("msg-{i}"),
+                &format!("req-{i}"),
+            );
+            spending_file(
+                claude_adapter(),
+                write_jsonl(dir.path(), &format!("memo-{i}.jsonl"), &[&line]),
+            )
+        })
+        .collect::<Vec<_>>();
+    let cache_path = dir.path().join("spending.json");
+    let mut walker = SpendingWalker::new();
+    let first = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    let generation = walker.cache.generation;
+
+    files.reverse();
+    let reordered = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    assert_eq!(walker.cache.generation, generation);
+    assert_eq!(reordered.stats.dedup_passes, 1);
+    assert_eq!(reordered.spending, first.spending);
+}
+
+#[test]
+fn refresh_finishes_every_file_once_and_reports_only_uncached_misses_unread() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let file = |name: &str, mtime: u64| {
+        let path = write_jsonl(
+            dir.path(),
+            name,
+            &[&claude_line(
+                &today,
+                1.0,
+                &format!("msg-{name}"),
+                &format!("req-{name}"),
+            )],
+        );
+        set_file_mtime(&path, mtime);
+        spending_file(claude_adapter(), path)
+    };
+    let unchanged = file("unchanged.jsonl", NOW_SECS);
+    let vanished = file("vanished.jsonl", NOW_SECS);
+    let mut cache = SpendingDiskCache::default();
+    compute_spending(
+        &[unchanged.clone(), vanished.clone()],
+        &mut cache,
+        &PriceBook::default(),
+        NOW_SECS,
+    );
+    std::fs::remove_file(&vanished.path).unwrap();
+    let missing = spending_file(claude_adapter(), dir.path().join("missing.jsonl"));
+    let old = file("old.jsonl", NOW_SECS - 2 * WIDEST_SPEND_WINDOW_SECS);
+    let parsed = file("parsed.jsonl", NOW_SECS);
+    let files = [missing, unchanged, vanished, old, parsed];
+
+    let mut finished = Vec::new();
+    let mut unread_paths = Vec::new();
+    let mut stats = WalkStats::default();
+    refresh_spending_cache(
+        &files,
+        &mut cache,
+        &PriceBook::default(),
+        NOW_SECS,
+        &HashMap::new(),
+        &mut stats,
+        &mut RefreshCallbacks {
+            on_jobs_scheduled: &mut |_| {},
+            tick: &mut |_, progress| {
+                assert_eq!(progress.total_files, files.len());
+                finished.push(progress.finished_files);
+            },
+            before_compact: &mut |_, _, unread, _| {
+                unread_paths.extend(unread.iter().map(|file| file.path.clone()));
+            },
+        },
+    );
+
+    assert_eq!(stats.parse_jobs, 1);
+    assert_eq!(finished, (1..=files.len()).collect::<Vec<_>>());
+    assert_eq!(unread_paths, [files[0].path.clone()]);
+}

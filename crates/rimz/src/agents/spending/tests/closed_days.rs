@@ -883,3 +883,52 @@ fn closed_days_keep_per_file_local_midnight_and_month_splits() {
     let lines = a.lines();
     assert_eq!(lines[0]["rows"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn closed_day_rows_omit_zero_counters_and_false_flags() {
+    let dir = TempDir::new().unwrap();
+    let mut a = Fixture::new(dir.path(), "a");
+    let bare = "87654321-4321-4321-8321-cba987654321";
+    a.seed(vec![
+        (a.path(SESSION), vec![row("2026-06-10T12:00:00Z", 1.0)]),
+        (
+            a.path(bare),
+            vec![CachedEntry::new(
+                seconds("2026-06-10T13:00:00Z"),
+                2.0,
+                &Default::default(),
+            )],
+        ),
+    ]);
+    a.walk(seconds("2026-06-30T12:00:00Z"), true);
+    let keys = |session: &str| {
+        let lines = a.lines();
+        let row = lines
+            .iter()
+            .flat_map(|line| line["rows"].as_array().unwrap())
+            .find(|row| row["session"] == json!({"native": session}))
+            .unwrap()
+            .clone();
+        let mut keys = row.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        keys
+    };
+    assert_eq!(keys(bare), ["origin", "session", "ts", "usd"]);
+    assert_eq!(
+        keys(SESSION),
+        [
+            "cache_read",
+            "cache_write",
+            "fast",
+            "input",
+            "model",
+            "origin",
+            "output",
+            "session",
+            "timing",
+            "tools",
+            "ts",
+            "usd"
+        ]
+    );
+}
