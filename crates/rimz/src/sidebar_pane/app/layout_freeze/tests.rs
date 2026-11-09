@@ -1069,7 +1069,7 @@ fn success_lens_survives_inactive_admission_deferred_by_the_hold() {
     let clock = super::super::clock::LoopClock::play(previous.now);
     let filter = crate::sidebar::body_filter::BodyFilter::Status(AgentStatus::Success);
     let mut ui = ViewState::default();
-    ui.make_up_filter.filter = Some(filter);
+    ui.toggles.make_up_filter.filter = Some(filter);
     ui.last_order = capture_order(&previous, &ui);
     arm_freeze(&mut ui, clock.now_ms() as i64);
     clock.advance(std::time::Duration::from_secs(1));
@@ -1080,7 +1080,7 @@ fn success_lens_survives_inactive_admission_deferred_by_the_hold() {
 
     assert!(ui.freeze.is_some());
     assert!(!inactive_group(&presented, "b"));
-    assert_eq!(ui.make_up_filter.filter, Some(filter));
+    assert_eq!(ui.toggles.make_up_filter.filter, Some(filter));
     assert!(!persist_filter);
 
     clock.advance(LAYOUT_FREEZE - std::time::Duration::from_secs(1));
@@ -1090,7 +1090,7 @@ fn success_lens_survives_inactive_admission_deferred_by_the_hold() {
         reconcile_fold(next, &presented, &mut ui, &clock, None);
     assert!(expired);
     assert!(inactive_group(&released, "b"));
-    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
     assert!(persist_filter);
     assert!(ui.freeze.is_none(), "clearing must not arm another hold");
 }
@@ -1107,7 +1107,7 @@ fn unread_lens_clears_and_persists_while_freeze_is_held() {
     let focused = pane("terminal_2", "tab_0", false).pane_id;
     let filter = crate::sidebar::body_filter::BodyFilter::Unread;
     let mut ui = ViewState::default();
-    ui.make_up_filter.filter = Some(filter);
+    ui.toggles.make_up_filter.filter = Some(filter);
     ui.selected_pane = Some(focused.clone());
     ui.selected_index = Some(0);
     ui.baseline_pane = Some(focused.clone());
@@ -1123,7 +1123,7 @@ fn unread_lens_clears_and_persists_while_freeze_is_held() {
         reconcile_fold(next, &previous, &mut ui, &clock, Some(focused.clone()));
     assert!(ui.freeze.is_some());
     assert_eq!(filter.total(&held.worktree_groups), 0);
-    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
     assert!(persist_filter);
     assert!(!expired);
     assert_eq!(ui.selected_pane, Some(focused.clone()));
@@ -1136,7 +1136,7 @@ fn unread_lens_clears_and_persists_while_freeze_is_held() {
     let (_, persist_filter, expired) =
         reconcile_fold(next, &held, &mut ui, &clock, Some(focused.clone()));
     assert!(expired);
-    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
     assert!(!persist_filter);
     assert!(ui.freeze.is_none(), "clearing must not arm another hold");
     assert_eq!(ui.selected_pane, Some(focused));
@@ -1263,7 +1263,7 @@ fn reconcile_fold(
     use super::super::view_state::{SelectionFold, ViewContext};
     let mut context = ViewContext::new(current, clock.now());
     let selected = ui.selected_pane.clone();
-    let filter = ui.make_up_filter.clone();
+    let filter = ui.toggles.make_up_filter.clone();
     let (persist_filter, expired) = context.reconcile_selection_and_order(
         ui,
         SelectionFold {

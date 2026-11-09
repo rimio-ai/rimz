@@ -1074,7 +1074,7 @@ pub(super) fn top_lines(
         CockpitBadges {
             open_prs,
             open_pr_attention,
-            pr_picked: view.make_up_filter.filter == Some(BodyFilter::OpenPr),
+            pr_picked: view.toggles.make_up_filter.filter == Some(BodyFilter::OpenPr),
         },
         (today_usd, tripped),
         &view.tally,
@@ -1109,7 +1109,7 @@ pub(super) fn top_lines(
         theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        &view.make_up_filter,
+        &view.toggles.make_up_filter,
         view.cosmetic_phase.unwrap_or(view.animation_phase),
         inner,
         lead_unread_status,
@@ -1232,8 +1232,8 @@ fn scroll_lines_windowed(
         lead_unread: lead_unread_id,
         recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
         max_recent_subagents: snapshot.theme.display.max_recent_subagents,
-        delegation_overrides: &view.delegation_overrides,
-        delegation_history: &view.delegation_history,
+        delegation_overrides: &view.toggles.delegation_overrides,
+        delegation_history: &view.toggles.delegation_history,
     };
     if walk.measuring
         && let Some(cache) = walk.heights.as_deref_mut()
@@ -1250,9 +1250,10 @@ fn scroll_lines_windowed(
     }
     if !roster.groups().iter().any(|group| group.shown())
         && view
+            .toggles
             .search_draft
             .as_deref()
-            .or(view.make_up_filter.query.as_deref())
+            .or(view.toggles.make_up_filter.query.as_deref())
             .is_some_and(|query| !query.is_empty())
     {
         block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
@@ -1264,11 +1265,12 @@ fn scroll_lines_windowed(
         };
     }
     if !snapshot.worktree_groups.is_empty() {
-        let hide_inactive_chip = view.make_up_filter.filter.is_some()
+        let hide_inactive_chip = view.toggles.make_up_filter.filter.is_some()
             || view
+                .toggles
                 .search_draft
                 .as_ref()
-                .map_or(view.make_up_filter.query.is_some(), |draft| {
+                .map_or(view.toggles.make_up_filter.query.is_some(), |draft| {
                     !draft.is_empty()
                 });
         let inactive_count = snapshot
@@ -1282,7 +1284,7 @@ fn scroll_lines_windowed(
             .filter(|group| group.inactive == Some(SidebarInactive::Unlanded))
             .count();
         let mut inactive_chip = None;
-        let page_limit = view.inactive_peek.as_ref().map_or(0, |peek| {
+        let page_limit = view.toggles.inactive_peek.as_ref().map_or(0, |peek| {
             peek.pages.get().saturating_mul(INACTIVE_PAGE_SIZE)
         });
         let mut inactive_seen = 0;
@@ -1307,7 +1309,7 @@ fn scroll_lines_windowed(
                         width,
                         inactive_count,
                         unlanded_count,
-                        view.inactive_peek.is_some(),
+                        view.toggles.inactive_peek.is_some(),
                     );
                     chip.tag("chrome");
                     block.append(chip);
@@ -1315,7 +1317,7 @@ fn scroll_lines_windowed(
                 }
                 inactive_seen += 1;
                 if inactive_seen > page_limit && group.is_empty() {
-                    if view.inactive_peek.is_some() {
+                    if view.toggles.inactive_peek.is_some() {
                         older += 1;
                     }
                     continue;

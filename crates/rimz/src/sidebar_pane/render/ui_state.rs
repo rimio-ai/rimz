@@ -98,7 +98,6 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) entry_cursor: Option<EntryCursor>,
     /// Last agreed working-pane focus, finer-grained than the owning card baseline.
     pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
-    pub(in crate::sidebar_pane) help_visible: bool,
     /// Driver-clock phase for cyclic sampling only.
     /// Frame-sequence heads read `head_step` instead, so late paints never skip frames.
     pub(in crate::sidebar_pane) animation_phase: u64,
@@ -215,13 +214,6 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// `auto` scrollbar mode reads it to paint the bar only while the viewport
     /// moves plus a short settle window. Crate-internal, like `tally`.
     pub(in crate::sidebar_pane) scrollbar: ScrollbarFade,
-    /// The dashboard provider tab the user picked by hand (`←`/`→` or a click
-    /// on a tab label), riding above the selection-derived provider. Ends like
-    /// a browse: it clears when the selection-derived provider kind *genuinely*
-    /// changes from the value captured at pick time (a `None` derivation — a
-    /// process row — holds it), or when its target leaves the dashboard.
-    /// Travels with the client view, including a fork's initial state.
-    pub(in crate::sidebar_pane) dashboard_tab: Option<DashboardTab>,
     /// The last selection-derived agent kind the dashboard followed — its
     /// hold-last, one level finer than `baseline_pane`. Reconciliation
     /// advances it on an agent selection that has a dashboard panel and holds
@@ -233,16 +225,31 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Last selected credential per dashboard kind, retained while that kind
     /// has a panel and used only while the credential is still carried there.
     pub(in crate::sidebar_pane) last_sub_providers: BTreeMap<crate::ids::AgentKind, String>,
-    /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
-    ///
-    /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
-    pub(in crate::sidebar_pane) make_up_filter: BodyLens,
-    pub(in crate::sidebar_pane) search_draft: Option<String>,
     /// The in-pane keys pressed so far toward a longer bound sequence, empty
     /// when none waits. It has no timeout: the next key resolves or cancels it.
     pub(in crate::sidebar_pane) pending_keys: Vec<crate::config::keys::sidebar::SidebarChord>,
     /// A refusal from the last in-pane key, cleared by the next key.
     pub(in crate::sidebar_pane) notice: Option<String>,
+    pub(in crate::sidebar_pane) toggles: PresentationToggles,
+}
+
+/// The presentation choices a user makes in a client view. They travel with the view across
+/// tab moves, mirrors and forks, and a change to any of them publishes a new layout.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct PresentationToggles {
+    pub(in crate::sidebar_pane) help_visible: bool,
+    /// The dashboard provider tab the user picked by hand (`←`/`→` or a click
+    /// on a tab label), riding above the selection-derived provider. Ends like
+    /// a browse: it clears when the selection-derived provider kind *genuinely*
+    /// changes from the value captured at pick time (a `None` derivation — a
+    /// process row — holds it), or when its target leaves the dashboard.
+    /// Travels with the client view, including a fork's initial state.
+    pub(in crate::sidebar_pane) dashboard_tab: Option<DashboardTab>,
+    /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
+    ///
+    /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
+    pub(in crate::sidebar_pane) make_up_filter: BodyLens,
+    pub(in crate::sidebar_pane) search_draft: Option<String>,
     /// Worktree groups unfolded by the user in this client view.
     /// Presentation state only: the snapshot carries the full roster. A user
     /// fold clears the key, as does closing the section for inactive groups.
@@ -268,7 +275,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct InactivePeek {
     pub(in crate::sidebar_pane) pages: NonZeroUsize,
 }
@@ -289,14 +296,7 @@ pub(in crate::sidebar_pane) struct LayoutKey {
     bottom_height: usize,
     content_height: usize,
     scroll_max: usize,
-    expanded_groups: BTreeSet<String>,
-    inactive_pages: Option<NonZeroUsize>,
-    delegation_overrides: BTreeMap<String, bool>,
-    delegation_history: BTreeMap<String, Option<Timestamp>>,
-    dashboard_tab: Option<DashboardTab>,
-    make_up_filter: BodyLens,
-    help_visible: bool,
-    search_draft: Option<String>,
+    toggles: PresentationToggles,
 }
 
 impl LayoutKey {
@@ -308,14 +308,7 @@ impl LayoutKey {
             && self.bottom_height == frame.bottom_height
             && self.content_height == frame.content_height
             && self.scroll_max == frame.scroll_max
-            && self.expanded_groups == view.expanded_groups
-            && self.inactive_pages == view.inactive_peek.as_ref().map(|peek| peek.pages)
-            && self.delegation_overrides == view.delegation_overrides
-            && self.delegation_history == view.delegation_history
-            && self.dashboard_tab == view.dashboard_tab
-            && self.make_up_filter == view.make_up_filter
-            && self.help_visible == view.help_visible
-            && self.search_draft == view.search_draft
+            && self.toggles == view.toggles
     }
 }
 
@@ -370,14 +363,7 @@ impl ViewState {
             bottom_height: frame.bottom_height,
             content_height: frame.content_height,
             scroll_max: frame.scroll_max,
-            expanded_groups: self.expanded_groups.clone(),
-            inactive_pages: self.inactive_peek.as_ref().map(|peek| peek.pages),
-            delegation_overrides: self.delegation_overrides.clone(),
-            delegation_history: self.delegation_history.clone(),
-            dashboard_tab: self.dashboard_tab.clone(),
-            make_up_filter: self.make_up_filter.clone(),
-            help_visible: self.help_visible,
-            search_draft: self.search_draft.clone(),
+            toggles: self.toggles.clone(),
         });
         self.layout_sequence += 1;
     }
@@ -411,7 +397,7 @@ impl ViewState {
         snapshot: &SidebarSnapshot,
         index: usize,
     ) -> Vec<EntryCursor> {
-        if self.search_draft.is_some() {
+        if self.toggles.search_draft.is_some() {
             return Vec::new();
         }
         let roster = self.visible_roster(snapshot);
@@ -453,8 +439,8 @@ impl ViewState {
         let reach =
             super::sections::row_selection_reach(roster, group, index, self.selected_index, &held);
         let expansion = super::sections::CardExpansion::resolve(
-            &self.delegation_overrides,
-            &self.delegation_history,
+            &self.toggles.delegation_overrides,
+            &self.toggles.delegation_history,
             snapshot.theme.display.card_density,
             row,
             reach,
@@ -476,14 +462,14 @@ impl ViewState {
         &self,
         snapshot: &'a SidebarSnapshot,
     ) -> VisibleRoster<'a> {
-        let draft_lens = self.search_draft.as_ref().map(|draft| BodyLens {
-            filter: self.make_up_filter.filter,
+        let draft_lens = self.toggles.search_draft.as_ref().map(|draft| BodyLens {
+            filter: self.toggles.make_up_filter.filter,
             query: (!draft.is_empty()).then(|| draft.clone()),
         });
         VisibleRoster::new(
             snapshot,
-            draft_lens.as_ref().unwrap_or(&self.make_up_filter),
-            &self.expanded_groups,
+            draft_lens.as_ref().unwrap_or(&self.toggles.make_up_filter),
+            &self.toggles.expanded_groups,
             self.freeze.as_ref().map(|hold| &hold.frozen.visible),
         )
     }
@@ -666,24 +652,24 @@ mod tests {
         type Toggle = fn(&mut ViewState);
         let toggles: [(&str, Toggle); 9] = [
             ("expanded_groups", |view| {
-                view.expanded_groups.insert("group".into());
+                view.toggles.expanded_groups.insert("group".into());
             }),
             ("inactive_peek opens", |view| {
-                view.inactive_peek = Some(InactivePeek::default());
+                view.toggles.inactive_peek = Some(InactivePeek::default());
             }),
             ("inactive_peek pages", |view| {
-                view.inactive_peek = Some(InactivePeek {
+                view.toggles.inactive_peek = Some(InactivePeek {
                     pages: NonZeroUsize::new(2).unwrap(),
                 });
             }),
             ("delegation_overrides", |view| {
-                view.delegation_overrides.insert("row".into(), true);
+                view.toggles.delegation_overrides.insert("row".into(), true);
             }),
             ("delegation_history", |view| {
-                view.delegation_history.insert("row".into(), None);
+                view.toggles.delegation_history.insert("row".into(), None);
             }),
             ("dashboard_tab", |view| {
-                view.dashboard_tab = Some(DashboardTab {
+                view.toggles.dashboard_tab = Some(DashboardTab {
                     login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
                         "claude",
                     )),
@@ -691,11 +677,11 @@ mod tests {
                 });
             }),
             ("make_up_filter", |view| {
-                view.make_up_filter.query = Some("auth".into());
+                view.toggles.make_up_filter.query = Some("auth".into());
             }),
-            ("help_visible", |view| view.help_visible = true),
+            ("help_visible", |view| view.toggles.help_visible = true),
             ("search_draft", |view| {
-                view.search_draft = Some(String::new())
+                view.toggles.search_draft = Some(String::new())
             }),
         ];
         for (what, toggle) in toggles {

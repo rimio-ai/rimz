@@ -315,6 +315,7 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
         .collect();
     rig.view()
         .ui()
+        .toggles
         .delegation_overrides
         .insert(row.id.clone(), true);
     rig.fold(snapshot, SnapshotSource::Produced);
@@ -591,7 +592,9 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
             rig.view().ctx().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
                 sampled_at: Instant::now(),
                 anchor: Some(anchor.clone()),
-                filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+                filter: rig
+                    .state
+                    .inspect_view(|ui, _| ui.toggles.make_up_filter.clone()),
                 stall: Vec::new(),
             }));
             assert!(crate::mux::focus_anchor::clear_matching(
@@ -803,7 +806,9 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
     rig.view().ctx().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         sampled_at: Instant::now(),
         anchor: Some(anchor),
-        filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+        filter: rig
+            .state
+            .inspect_view(|ui, _| ui.toggles.make_up_filter.clone()),
         stall: Vec::new(),
     }));
 
@@ -846,7 +851,9 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         Arc::new(super::super::super::fetch::FoldInputs {
             sampled_at: Instant::now(),
             anchor: None,
-            filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+            filter: rig
+                .state
+                .inspect_view(|ui, _| ui.toggles.make_up_filter.clone()),
             stall: Vec::new(),
         }),
     );
@@ -1827,7 +1834,9 @@ fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
     rig.view().ctx().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         sampled_at,
         anchor: Some(anchor),
-        filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
+        filter: rig
+            .state
+            .inspect_view(|ui, _| ui.toggles.make_up_filter.clone()),
         stall: Vec::new(),
     }));
     assert!(

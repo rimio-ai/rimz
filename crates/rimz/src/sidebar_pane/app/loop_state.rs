@@ -314,9 +314,9 @@ pub(super) fn handle_wakeup(
     let mut pending_moved = false;
     let wakeup = match wakeup {
         Wakeup::Press { code, mods } => {
-            let mode = if view.help_visible {
+            let mode = if view.toggles.help_visible {
                 InputMode::Help
-            } else if view.search_draft.is_some() {
+            } else if view.toggles.search_draft.is_some() {
                 InputMode::Typing
             } else {
                 InputMode::Normal
@@ -331,13 +331,13 @@ pub(super) fn handle_wakeup(
     // The help popup is a transient modal: while it is up, the next
     // interaction dismisses it and is consumed, never also acting on the
     // sidebar beneath.
-    if view.help_visible
+    if view.toggles.help_visible
         && matches!(
             wakeup,
             Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
         )
     {
-        view.help_visible = false;
+        view.toggles.help_visible = false;
         return InputOutcome::redraw();
     }
     let mut outcome = match wakeup {
@@ -352,7 +352,7 @@ pub(super) fn handle_wakeup(
             {
                 return InputOutcome::default();
             }
-            if view.search_draft.is_some() {
+            if view.toggles.search_draft.is_some() {
                 // Resolve the pane against the painted draft before clearing widens the roster.
                 let pane = ui
                     .interactions
@@ -592,8 +592,11 @@ impl LoopState {
         Self {
             views: ViewAccess::new(
                 ViewState {
-                    make_up_filter,
                     baseline_pane: baseline_pane.clone(),
+                    toggles: render::PresentationToggles {
+                        make_up_filter,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ViewContext::new(current, now),
@@ -1579,8 +1582,8 @@ impl LoopState {
         } else if own_unfocused {
             self.pane.optimistic_watch_until = None;
             self.views.with(&mut self.pane, Route::READ, |state, v| {
-                v.state.help_visible = false;
-                if v.state.search_draft.take().is_some() {
+                v.state.toggles.help_visible = false;
+                if v.state.toggles.search_draft.take().is_some() {
                     reconcile_selection(v.state, &v.context.current, None);
                     state.dirty = true;
                 }
@@ -3011,7 +3014,7 @@ impl PaneState {
             .replace(Arc::new(super::fetch::FoldInputs {
                 sampled_at,
                 anchor: Some(anchor),
-                filter: v.state.make_up_filter.clone(),
+                filter: v.state.toggles.make_up_filter.clone(),
                 stall: Vec::new(),
             }));
         self.fold_fused_now(v, prepared);
@@ -3280,7 +3283,7 @@ impl PaneState {
         let (update, _) = update.into_parts();
         let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
         let now = self.clock.timestamp();
-        let searching = v.state.search_draft.is_some();
+        let searching = v.state.toggles.search_draft.is_some();
         let (prev_good, rejected, diagnostics) = v.context.commit_fetch(update, v.state, now);
         self.fold_effects.diagnostics.extend(diagnostics);
         self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
@@ -3293,7 +3296,7 @@ impl PaneState {
         {
             self.fold_effects.degraded = Some(alert.reason.clone());
         }
-        self.dirty |= searching && v.state.search_draft.is_none();
+        self.dirty |= searching && v.state.toggles.search_draft.is_none();
         let authoritative_filter_fold = allow_shared_filter_sync
             && snapshot_ok
             && !rejected
@@ -3435,7 +3438,7 @@ impl PaneState {
         );
         self.hold_expired_since_paint |= expired;
         if persist_filter {
-            self.fold_effects.filter = Some(v.state.make_up_filter.clone());
+            self.fold_effects.filter = Some(v.state.toggles.make_up_filter.clone());
         }
     }
 

@@ -46,7 +46,7 @@ pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Alert, EntryCursor, FrameTime, UiState, ViewState,
+    Alert, EntryCursor, FrameTime, PresentationToggles, UiState, ViewState,
 };
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
@@ -160,7 +160,7 @@ fn draw_into(
     let paragraph = Paragraph::new(Text::from(composed.lines));
     frame.render_widget(paragraph, area);
     paint_hyperlinks(frame, &ui.interactions, area);
-    if view.help_visible
+    if view.toggles.help_visible
         && let Some(rect) = draw_help_overlay(
             frame,
             theme.as_ref(),
@@ -277,8 +277,8 @@ fn draw_help_overlay(
 /// unfolded below the chip. A process-only group draws there anyway and keeps
 /// its `+K more` toggle.
 fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
-    let peek_open = ui.inactive_peek.is_some();
-    ui.expanded_groups.retain(|key| {
+    let peek_open = ui.toggles.inactive_peek.is_some();
+    ui.toggles.expanded_groups.retain(|key| {
         snapshot.worktree_groups.iter().any(|group| {
             group.key == *key && (peek_open || !group.collapses()) && group_can_fold(group)
         })
@@ -296,8 +296,11 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
             .find(|row| row.id == id)
             .and_then(SidebarRow::as_agent)
     };
-    ui.delegation_overrides.retain(|id, _| agent(id).is_some());
-    ui.delegation_history
+    ui.toggles
+        .delegation_overrides
+        .retain(|id, _| agent(id).is_some());
+    ui.toggles
+        .delegation_history
         .retain(|id, turn| agent(id).is_some_and(|agent| agent.user_turn_started_at == *turn));
     ui.validate_entry_cursor(snapshot);
 }
@@ -319,8 +322,8 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
             .zip(group.rows(&roster).iter().copied())
             .any(|(row_index, row)| {
                 let expansion = sections::CardExpansion::resolve(
-                    &ui.delegation_overrides,
-                    &ui.delegation_history,
+                    &ui.toggles.delegation_overrides,
+                    &ui.toggles.delegation_history,
                     density,
                     row,
                     sections::row_selection_reach(
@@ -438,7 +441,7 @@ pub(in crate::sidebar_pane) fn active_dashboard_tab(
     ui: &ViewState,
 ) -> Option<crate::ids::LoginKey> {
     let panels = &snapshot.providers;
-    if let Some(tab) = &ui.dashboard_tab
+    if let Some(tab) = &ui.toggles.dashboard_tab
         && dashboard_has_tab(snapshot, &tab.login)
     {
         return Some(tab.login.clone());
@@ -553,7 +556,7 @@ pub(in crate::sidebar_pane) fn animation_interval(
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.
-    if view.help_visible || view.scrollbar.fading(frame_ms, refresh_ms) {
+    if view.toggles.help_visible || view.scrollbar.fading(frame_ms, refresh_ms) {
         return Some(base);
     }
     let cadence = animation_cadence(snapshot, &theme.animations);
@@ -676,15 +679,15 @@ fn render_line_ansi<W: Write>(
     };
     let mut ui = UiState::default();
     if height.is_none() {
-        view.inactive_peek = Some(ui_state::InactivePeek {
+        view.toggles.inactive_peek = Some(ui_state::InactivePeek {
             pages: std::num::NonZeroUsize::MAX,
         });
-        view.expanded_groups = snapshot
+        view.toggles.expanded_groups = snapshot
             .worktree_groups
             .iter()
             .map(|group| group.key.clone())
             .collect();
-        view.delegation_history = snapshot
+        view.toggles.delegation_history = snapshot
             .worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter())

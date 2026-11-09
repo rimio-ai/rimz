@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 
 #[test]
 fn pi_block_follows_the_card_then_memory_then_the_top_level_in_both_layouts() {
@@ -666,10 +667,13 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     let snapshot = tabbed_provider_snapshot();
     let ui = ViewState {
         selected_index: Some(0),
-        dashboard_tab: Some(DashboardTab {
-            login: "codex@default".parse().unwrap(),
-            derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
-        }),
+        toggles: PresentationToggles {
+            dashboard_tab: Some(DashboardTab {
+                login: "codex@default".parse().unwrap(),
+                derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();

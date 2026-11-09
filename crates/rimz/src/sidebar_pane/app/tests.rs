@@ -15,6 +15,7 @@ use crate::sidebar_pane::app::fixtures::{
 };
 use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::{self, UiState};
 use jiff::Timestamp;
 use ratatui::Terminal;
@@ -583,13 +584,16 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         Wakeup::Scroll { down: true },
     ] {
         let mut view = render::ViewState {
-            help_visible: true,
-            make_up_filter: crate::sidebar_pane::view::BodyLens {
-                query: Some("kept".to_owned()),
-                ..Default::default()
-            },
             selected_index: Some(0),
             scroll_offset: 4,
+            toggles: PresentationToggles {
+                help_visible: true,
+                make_up_filter: crate::sidebar_pane::view::BodyLens {
+                    query: Some("kept".to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut ui = UiState {
@@ -600,8 +604,8 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         let outcome = handle_wakeup(wakeup, &mut view, &mut ui, &snapshot, &keymap, false);
 
         assert_eq!(outcome, InputOutcome::redraw());
-        assert!(!view.help_visible);
-        assert_eq!(view.make_up_filter.query.as_deref(), Some("kept"));
+        assert!(!view.toggles.help_visible);
+        assert_eq!(view.toggles.make_up_filter.query.as_deref(), Some("kept"));
         assert_eq!(view.selected_index, Some(0), "key input was consumed");
         assert_eq!(view.scroll_offset, 4, "scroll input was consumed");
         assert!(!view.offset_authoritative, "scroll input was consumed");

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::{SidebarWorkflow, WorkflowNodeKind};
 
@@ -79,7 +80,10 @@ fn snapshot_to_screen_for_theme(
         ..Default::default()
     };
     let ui = ViewState {
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     snapshot_to_screen_with_alert_and_ui(snapshot, None, &ui, &pane_ui, width, height)
@@ -181,7 +185,7 @@ fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
     let mut ui = ViewState::default();
     let pane_ui = UiState::default();
     for query in ["land", "merge-lane", "#91"] {
-        ui.make_up_filter.query = Some(query.to_owned());
+        ui.toggles.make_up_filter.query = Some(query.to_owned());
         let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 22);
         assert!(screen.contains("watch queued"), "{query}: {screen}");
         assert!(
@@ -190,12 +194,12 @@ fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
         );
         assert!(!screen.contains("no match"), "{screen}");
     }
-    ui.make_up_filter.query = Some("absent".to_owned());
+    ui.toggles.make_up_filter.query = Some("absent".to_owned());
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 22);
     assert!(screen.contains("no match"), "{screen}");
-    ui.make_up_filter.query = None;
+    ui.toggles.make_up_filter.query = None;
     for filter in [BodyFilter::Unread, BodyFilter::Status(AgentStatus::Running)] {
-        ui.make_up_filter.filter = Some(filter);
+        ui.toggles.make_up_filter.filter = Some(filter);
         let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 22);
         assert!(!screen.contains("merge-lane"), "{screen}");
     }

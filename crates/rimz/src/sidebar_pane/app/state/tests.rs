@@ -8,6 +8,7 @@ use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::sidebar_pane::app::view_state::ViewContext;
 use crate::sidebar_pane::app::views::ViewsHandle;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
 use crate::{PaneId, RuntimePaths, SidebarInstanceId, WorkspaceId};
@@ -686,7 +687,10 @@ fn hook_drainer_alert_tracks_committed_facts_on_both_fold_paths() {
         });
         let mut context = ViewContext::new(snapshot(&workspace()), std::time::Instant::now());
         let mut ui = ViewState {
-            search_draft: Some("cod".into()),
+            toggles: PresentationToggles {
+                search_draft: Some("cod".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let update = |snapshot: SidebarSnapshot| FetchUpdate::Snapshot {
@@ -706,7 +710,7 @@ fn hook_drainer_alert_tracks_committed_facts_on_both_fold_paths() {
             fixed_time(1_700_000_000)
         );
         assert!(context.health.alert.is_none());
-        assert_eq!(ui.search_draft.as_deref(), Some("cod"));
+        assert_eq!(ui.toggles.search_draft.as_deref(), Some("cod"));
         assert!(
             !diagnostics
                 .iter()

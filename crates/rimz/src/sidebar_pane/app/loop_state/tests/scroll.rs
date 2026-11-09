@@ -23,6 +23,7 @@ fn scroll_rig_with(amend: impl FnOnce(&mut SidebarSnapshot)) -> (Rig, FrameOutpu
     amend(&mut snapshot);
     rig.view()
         .ui()
+        .toggles
         .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     rig.view().ctx().current = snapshot;
@@ -124,6 +125,7 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
         .views
         .lock()
         .paint(&own, source.state.pane.clock.now())
+        .toggles
         .expanded_groups
         .insert(group);
     source
@@ -184,7 +186,7 @@ fn paint_scrolled(source: &mut Rig, offset: usize) {
     source.view().ui().scroll_offset = offset;
     source.view().ui().offset_authoritative = true;
     source.view().ui().scroll_ease.cancel();
-    source.view().ui().inactive_peek = Some(Default::default());
+    source.view().ui().toggles.inactive_peek = Some(Default::default());
     source.state.pane.dirty = true;
     paint_at(source, 0);
 }
@@ -204,7 +206,7 @@ impl SharedPanes {
         pair.fold(1);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             let group = v.context.current.worktree_groups[0].key.clone();
-            v.state.expanded_groups.insert(group);
+            v.state.toggles.expanded_groups.insert(group);
         });
         pair.paint(0);
         pair
@@ -895,7 +897,7 @@ fn joined_view_paints_unseated_until_the_new_sidebar_is_listed_on_both_backends(
         assert!(before.browse.is_some());
         assert!(before.drawn_selection.is_some());
         assert!(before.scroll_offset > 0);
-        assert!(!before.expanded_groups.is_empty());
+        assert!(!before.toggles.expanded_groups.is_empty());
         let output = FrameOutput::default();
         pair.panes[1].terminal = Terminal::with_options(
             PaneBackend::headless(output.clone()),
@@ -920,7 +922,10 @@ fn joined_view_paints_unseated_until_the_new_sidebar_is_listed_on_both_backends(
             let arrived = pair.view(1);
             assert_unseated(&arrived);
             assert_eq!(arrived.scroll_offset, before.scroll_offset);
-            assert_eq!(arrived.expanded_groups, before.expanded_groups);
+            assert_eq!(
+                arrived.toggles.expanded_groups,
+                before.toggles.expanded_groups
+            );
             parser.process(&output.0.lock().unwrap());
             let screen = parser.screen().contents();
             assert!(screen.contains("scroll-card-"), "cards painted:\n{screen}");
@@ -964,7 +969,10 @@ fn forked_view_leaves_its_selection_on_an_unlisted_pane() {
         pair.paint(1);
         assert_unseated(&pair.view(1));
         assert_eq!(pair.view(1).scroll_offset, before.scroll_offset);
-        assert_eq!(pair.view(1).expanded_groups, before.expanded_groups);
+        assert_eq!(
+            pair.view(1).toggles.expanded_groups,
+            before.toggles.expanded_groups
+        );
         assert_eq!(pair.view(0).selected_pane, before.selected_pane);
         assert_eq!(pair.view(0).browse, before.browse);
     }
@@ -3381,7 +3389,7 @@ fn help_dismissal_consumes_only_the_first_tick_of_a_run() {
     output.1.store(0, std::sync::atomic::Ordering::SeqCst);
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    assert!(!rig.view().ui().help_visible);
+    assert!(!rig.view().ui().toggles.help_visible);
     assert_eq!(rig.view().ui().scroll_offset, 6);
     assert_eq!(paints(&output), 1);
 }
@@ -3439,6 +3447,7 @@ fn a_viewport_request_lives_until_the_paint_not_the_input_pass() {
     });
     rig.view()
         .ui()
+        .toggles
         .delegation_overrides
         .insert("agent-0".into(), true);
     rig.state.pane.dirty = true;

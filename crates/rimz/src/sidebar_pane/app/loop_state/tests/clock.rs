@@ -15,6 +15,7 @@ fn compacting_rig() -> (Rig, FrameOutput, LoopClock) {
         .compacting = true;
     rig.state.with_view_for_test(Route::READ, |_, v| {
         v.state
+            .toggles
             .expanded_groups
             .insert(snapshot.worktree_groups[0].key.clone());
         v.context.current = snapshot;
@@ -176,7 +177,7 @@ fn body_filter_observation_is_not_backdated_to_the_fold() {
         }),
     );
     assert_eq!(
-        rig.view().ui().make_up_filter,
+        rig.view().ui().toggles.make_up_filter,
         filter,
         "an older worker cut cannot undo the filter just loaded"
     );

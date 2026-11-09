@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::layout::{spans_width, text_width};
 use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::CacheClock;
@@ -78,7 +79,10 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
         .id
         .clone();
     let mut ui = ViewState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -104,7 +108,7 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
         !screen.contains("context task"),
         "the unselected teammate stays compact: {screen}"
     );
-    ui.make_up_filter = BodyLens::default();
+    ui.toggles.make_up_filter = BodyLens::default();
     let unfiltered = super::super::compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 40);
     let card_lines = |frame: super::super::compose::ComposedFrame| {
         frame
@@ -444,7 +448,10 @@ fn render_pipeline_folded_stage() {
         &snapshot,
         None,
         &ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),

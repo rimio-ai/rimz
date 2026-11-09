@@ -32,12 +32,12 @@ fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
             .is_active()
     );
     rig.input(KeyAction::Search);
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
-    rig.view().ui().search_draft = Some("cod".into());
+    assert_eq!(rig.view().ui().toggles.search_draft.as_deref(), Some(""));
+    rig.view().ui().toggles.search_draft = Some("cod".into());
     fetched.now += jiff::SignedDuration::from_secs(1);
     rig.fold(fetched.clone(), SnapshotSource::Cached);
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cod"));
-    rig.view().ui().search_draft = None;
+    assert_eq!(rig.view().ui().toggles.search_draft.as_deref(), Some("cod"));
+    rig.view().ui().toggles.search_draft = None;
     fetched.hook_drainer_outage = None;
     rig.fold(fetched, SnapshotSource::Cached);
     assert!(
@@ -1042,7 +1042,7 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         "a terminal outcome must not erase the unread snapshot"
     );
     assert_eq!(
-        rig.view().ui().make_up_filter,
+        rig.view().ui().toggles.make_up_filter,
         filter,
         "snapshot context is applied with its snapshot"
     );
@@ -1258,7 +1258,7 @@ fn birth_seeds_the_shared_body_filter() {
     let mut rig = Rig::with_filter(BodyLens::from(BodyFilter::Unread));
 
     assert_eq!(
-        rig.view().ui().make_up_filter,
+        rig.view().ui().toggles.make_up_filter,
         BodyLens::from(BodyFilter::Unread)
     );
 }
@@ -1276,7 +1276,7 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 
     rig.event(SidebarEvent::BodyFilterChanged);
 
-    assert_eq!(rig.view().ui().make_up_filter, filter);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, filter);
     assert!(rig.state.pane.dirty);
     assert!(
         rig.next_request().is_none(),
@@ -1331,24 +1331,30 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
             &mut rig.terminal,
         )
         .unwrap();
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
-    rig.view().ui().search_draft = Some("draft".to_owned());
+    assert_eq!(rig.view().ui().toggles.search_draft.as_deref(), Some(""));
+    rig.view().ui().toggles.search_draft = Some("draft".to_owned());
     let committed = BodyLens {
         query: Some("cla".to_owned()),
         ..Default::default()
     };
     crate::sidebar::body_filter::write(&rig.runtime, &committed).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("draft"));
+    assert_eq!(
+        rig.view().ui().toggles.search_draft.as_deref(),
+        Some("draft")
+    );
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("draft"));
+    assert_eq!(
+        rig.view().ui().toggles.search_draft.as_deref(),
+        Some("draft")
+    );
     rig.event(SidebarEvent::FocusChanged {
         focused: Vec::new(),
         unfocused: vec![own],
     });
-    assert_eq!(rig.view().ui().search_draft, None);
-    assert_eq!(rig.view().ui().make_up_filter, committed);
+    assert_eq!(rig.view().ui().toggles.search_draft, None);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, committed);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
 }
 
@@ -1376,19 +1382,25 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
             )
             .unwrap();
     }
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cla!"));
+    assert_eq!(
+        rig.view().ui().toggles.search_draft.as_deref(),
+        Some("cla!")
+    );
     assert_eq!(rig.view().ui().selected_pane, None, "draft has no matches");
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
     });
     assert!(!rig.state.alert_active());
-    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cla!"));
+    assert_eq!(
+        rig.view().ui().toggles.search_draft.as_deref(),
+        Some("cla!")
+    );
     rig.state.pane.dirty = false;
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
     });
-    assert_eq!(rig.view().ui().search_draft, None);
-    assert_eq!(rig.view().ui().make_up_filter, committed);
+    assert_eq!(rig.view().ui().toggles.search_draft, None);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, committed);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
     assert!(rig.state.alert_active());
     assert!(rig.state.pane.dirty);
@@ -1402,7 +1414,7 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
             &mut rig.terminal,
         )
         .unwrap();
-    assert_eq!(rig.view().ui().search_draft, None);
+    assert_eq!(rig.view().ui().toggles.search_draft, None);
 }
 
 #[test]
@@ -1480,7 +1492,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     crate::sidebar::body_filter::write(&rig.runtime, &filter).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    assert_eq!(rig.view().ui().make_up_filter, filter);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, filter);
 
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -1494,7 +1506,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
         }),
     });
     assert_eq!(
-        rig.view().ui().make_up_filter,
+        rig.view().ui().toggles.make_up_filter,
         filter,
         "an older shared cut must not undo the already consumed filter event"
     );
@@ -1513,7 +1525,7 @@ fn successful_fetch_converges_a_missed_body_filter_event() {
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.view().ui().make_up_filter, filter);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, filter);
 }
 
 #[test]
@@ -1536,7 +1548,7 @@ fn shared_fold_adopts_query_in_the_visible_roster() {
         let (ui, context) = guard.pair();
         assert_eq!(ui.visible_roster(&context.current).len(), 0);
     }
-    assert_eq!(rig.view().ui().make_up_filter, lens);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, lens);
 }
 
 #[test]
@@ -1549,7 +1561,7 @@ fn newer_shared_cut_converges_a_missed_filter_clear() {
     rig.event(SidebarEvent::BodyFilterChanged);
     crate::sidebar::body_filter::write(&rig.runtime, &BodyLens::default()).unwrap();
     rig.shared_fold(snapshot, Arc::default());
-    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().toggles.make_up_filter, BodyLens::default());
 }
 
 #[test]
@@ -1560,12 +1572,12 @@ fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
     rig.deliver(FetchUpdate::Failed {
         error: "not ready".to_owned(),
     });
-    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().toggles.make_up_filter, BodyLens::default());
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 
     let rowless = snapshot(&rig.ws);
     rig.fold(rowless, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().toggles.make_up_filter, BodyLens::default());
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 }
 
@@ -1585,7 +1597,7 @@ fn empty_body_filter_auto_clear_updates_the_shared_file() {
         query: Some("auth".to_owned()),
         ..Default::default()
     };
-    assert_eq!(rig.view().ui().make_up_filter, expected);
+    assert_eq!(rig.view().ui().toggles.make_up_filter, expected);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), expected);
 }
 
@@ -1596,7 +1608,7 @@ fn focus_out_closes_help_popup() {
     let snapshot = snapshot_with_focused_pane(&rig.ws, own_pane.clone());
     rig.set_pulled(&snapshot);
     rig.view().ctx().current = snapshot;
-    rig.view().ui().help_visible = true;
+    rig.view().ui().toggles.help_visible = true;
     rig.state.pane.optimistic_watch_until = Some(Instant::now() + Duration::from_secs(1));
 
     rig.event(SidebarEvent::FocusChanged {
@@ -1604,7 +1616,7 @@ fn focus_out_closes_help_popup() {
         unfocused: vec![own_pane],
     });
 
-    assert!(!rig.view().ui().help_visible);
+    assert!(!rig.view().ui().toggles.help_visible);
     assert!(rig.state.pane.optimistic_watch_until.is_none());
 }
 
@@ -1694,14 +1706,14 @@ fn assert_inactive_frame_closed(pair: &mut super::scroll::SharedPanes, index: us
     let text = inactive_frame(pair, index);
     assert!(text.contains("[ ▸ 25 inactive ]"), "{text}");
     assert!(!text.contains('▾'), "{text}");
-    assert!(pair.view(index).inactive_peek.is_none());
+    assert!(pair.view(index).toggles.inactive_peek.is_none());
 }
 
 fn assert_inactive_frame_open(pair: &mut super::scroll::SharedPanes, index: usize) {
     let text = inactive_frame(pair, index);
     assert!(text.contains("[ ▾ 25 inactive ]"), "{text}");
     assert!(text.contains("old-"), "{text}");
-    assert!(pair.view(index).inactive_peek.is_some());
+    assert!(pair.view(index).toggles.inactive_peek.is_some());
 }
 
 #[test]
@@ -1711,28 +1723,28 @@ fn inactive_peek_stays_open_from_the_first_frame_on_a_tab_round_trip() {
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
         assert!(inactive_frame(&mut pair, 0).contains("[ ▾ 25 inactive ]"));
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.inactive_peek.as_mut().unwrap().pages = 2.try_into().unwrap();
-            v.state.expanded_groups.insert("old-25".into());
+            v.state.toggles.inactive_peek.as_mut().unwrap().pages = 2.try_into().unwrap();
+            v.state.toggles.expanded_groups.insert("old-25".into());
         });
 
         pair.sample(&[(1, 1)]);
         assert_inactive_frame_open(&mut pair, 1);
-        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
-        assert!(pair.view(1).expanded_groups.contains("old-25"));
+        assert_eq!(pair.view(1).toggles.inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(1).toggles.expanded_groups.contains("old-25"));
         pair.panes[1].state.on_snapshot();
         assert_inactive_frame_open(&mut pair, 1);
-        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
-        assert!(pair.view(1).expanded_groups.contains("old-25"));
+        assert_eq!(pair.view(1).toggles.inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(1).toggles.expanded_groups.contains("old-25"));
 
         pair.sample(&[(1, 0)]);
         assert_inactive_frame_open(&mut pair, 0);
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
-        assert!(pair.view(0).expanded_groups.contains("old-25"));
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 2);
+        assert!(pair.view(0).toggles.expanded_groups.contains("old-25"));
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
         assert_inactive_frame_closed(&mut pair, 0);
-        assert!(!pair.view(0).expanded_groups.contains("old-25"));
+        assert!(!pair.view(0).toggles.expanded_groups.contains("old-25"));
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 1);
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 1);
     }
 }
 
@@ -1780,14 +1792,17 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
             pair.clock.advance(Duration::from_secs(60));
             inactive_clients(&mut pair, std::slice::from_ref(&work));
             assert!(
-                pair.view(0).inactive_peek.is_some(),
+                pair.view(0).toggles.inactive_peek.is_some(),
                 "{mux:?}: stays open without sidebar focus"
             );
         }
         for _ in 0..3 {
             pair.clock.advance(Duration::from_secs(60));
             inactive_clients(&mut pair, std::slice::from_ref(&own));
-            assert!(pair.view(0).inactive_peek.is_some(), "{mux:?}: no timer");
+            assert!(
+                pair.view(0).toggles.inactive_peek.is_some(),
+                "{mux:?}: no timer"
+            );
         }
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
@@ -1808,9 +1823,9 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
         assert!(outcome.effects.is_empty());
         assert_eq!(pair.view(0).scroll_offset, offset);
         assert_eq!(pair.view(0).selected_pane, selection);
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 2);
         inactive_clients(&mut pair, std::slice::from_ref(&own));
-        assert!(pair.view(0).inactive_peek.is_some());
+        assert!(pair.view(0).toggles.inactive_peek.is_some());
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
             v.state.offset_authoritative = true;
@@ -1826,16 +1841,16 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
                 .is_none()
         );
         inactive_clients(&mut pair, std::slice::from_ref(&work));
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 2);
         inactive_clients(&mut pair, std::slice::from_ref(&own));
         pair.sample(&[(1, 1)]);
         pair.panes[1].state.on_snapshot();
-        assert_eq!(pair.view(1).inactive_peek.unwrap().pages.get(), 2);
+        assert_eq!(pair.view(1).toggles.inactive_peek.unwrap().pages.get(), 2);
         pair.sample(&[(1, 0)]);
         pair.panes[0].state.on_snapshot();
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 2);
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 2);
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
-        assert!(pair.view(0).inactive_peek.is_none());
+        assert!(pair.view(0).toggles.inactive_peek.is_none());
         pair.paint(0);
         let ui = &pair.panes[0].state.pane.ui;
         assert!(
@@ -1845,7 +1860,7 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
         );
         assert!(pair.view(0).scroll_offset <= ui.drawn_scroll_max.unwrap());
         inactive_input(&mut pair, Wakeup::Key(KeyAction::ToggleInactive));
-        assert_eq!(pair.view(0).inactive_peek.unwrap().pages.get(), 1);
+        assert_eq!(pair.view(0).toggles.inactive_peek.unwrap().pages.get(), 1);
     }
 }
 
@@ -1865,11 +1880,14 @@ fn inactive_peek_stays_while_another_client_reads_the_same_view() {
         inactive_clients(&mut pair, &[own.clone(), own.clone()]);
         inactive_clients(&mut pair, &[work.clone(), own]);
         assert!(
-            pair.view(0).inactive_peek.is_some(),
+            pair.view(0).toggles.inactive_peek.is_some(),
             "{mux:?}: a reader remains"
         );
         inactive_clients(&mut pair, &[work.clone(), work]);
-        assert!(pair.view(0).inactive_peek.is_some(), "{mux:?}: both left");
+        assert!(
+            pair.view(0).toggles.inactive_peek.is_some(),
+            "{mux:?}: both left"
+        );
     }
 }
 
@@ -1911,7 +1929,7 @@ fn inactive_peek_stays_open_in_the_focus_overlay_fold() {
         );
         rig.state.on_event(&mut rig.terminal, envelope);
         assert!(
-            pair.view(0).inactive_peek.is_some(),
+            pair.view(0).toggles.inactive_peek.is_some(),
             "{mux:?}: fused departure keeps the peek open"
         );
     }
@@ -2018,7 +2036,7 @@ fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isi
     pair.panes[1].state.on_snapshot();
     assert_eq!(pair.view(1).selected_pane, Some(target_pane));
     assert!(pair.view(1).focus_placement.is_some());
-    assert_eq!(pair.view(1).inactive_peek.is_some(), open);
+    assert_eq!(pair.view(1).toggles.inactive_peek.is_some(), open);
     pair.paint(1);
     let ui = &pair.panes[1].state.pane.ui;
     (
@@ -2067,7 +2085,7 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
             .unwrap();
         let outcome = inactive_input(&mut pair, Wakeup::MouseClick { column, row });
         assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
-        assert!(pair.view(0).expanded_groups.contains("old-01"));
+        assert!(pair.view(0).toggles.expanded_groups.contains("old-01"));
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
             v.state.offset_authoritative = true;
@@ -2088,7 +2106,7 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
         let text = inactive_frame(&mut pair, 1);
         assert!(text.contains("old-01"), "{mux:?}: {text}");
         assert!(
-            pair.view(1).inactive_peek.is_some(),
+            pair.view(1).toggles.inactive_peek.is_some(),
             "{mux:?}: jump keeps the peek open"
         );
         assert_eq!(pair.view(1).selected_pane, Some(target.clone()));
@@ -2114,7 +2132,7 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
         });
         pair.paint(1);
         assert!(
-            pair.view(1).expanded_groups.contains("old-01"),
+            pair.view(1).toggles.expanded_groups.contains("old-01"),
             "{mux:?}: the user's unfold survives focus leaving and hold expiry"
         );
         pair.sample_with(&[(1, 1)], |frame| {
@@ -2126,8 +2144,8 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
         rig.state
             .apply_input([Wakeup::Key(KeyAction::ToggleInactive)], &mut rig.terminal)
             .unwrap();
-        assert!(pair.view(1).inactive_peek.is_none());
-        assert!(!pair.view(1).expanded_groups.contains("old-01"));
+        assert!(pair.view(1).toggles.inactive_peek.is_none());
+        assert!(!pair.view(1).toggles.expanded_groups.contains("old-01"));
         pair.paint(1);
         let view = pair.view(1);
         let rig = &mut pair.panes[1];

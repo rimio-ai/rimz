@@ -975,10 +975,10 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         };
         let pane_ui = UiState::default();
         if let Some(open) = open {
-            ui.delegation_overrides.insert(row.id.clone(), open);
+            ui.toggles.delegation_overrides.insert(row.id.clone(), open);
         }
         if history {
-            ui.delegation_history.insert(row.id.clone(), turn);
+            ui.toggles.delegation_history.insert(row.id.clone(), turn);
         }
         let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 44);
         assert!(rendered.contains("subagents (9)"), "{rendered}");
@@ -1339,7 +1339,8 @@ fn all_older_children_open_in_one_click_without_a_lone_fold() {
         ..Default::default()
     };
     let pane_ui = UiState::default();
-    ui.delegation_overrides
+    ui.toggles
+        .delegation_overrides
         .insert(snapshot.worktree_groups[0].rows[0].id.clone(), true);
     let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
     assert!(text.contains("subagents (3)"), "{text}");

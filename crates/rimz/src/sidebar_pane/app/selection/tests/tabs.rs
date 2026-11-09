@@ -67,7 +67,7 @@ fn tabs_distinguish_two_logins_of_one_kind() {
     );
     snapshot.providers.remove(1);
     reconcile_dashboard(&mut ui, &snapshot);
-    assert!(ui.dashboard_tab.is_none());
+    assert!(ui.toggles.dashboard_tab.is_none());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .unwrap()
@@ -101,7 +101,8 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     );
     // The first pick captures the derived kind it began from.
     assert_eq!(
-        ui.dashboard_tab
+        ui.toggles
+            .dashboard_tab
             .as_ref()
             .unwrap()
             .derived_at_start
@@ -135,7 +136,8 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
         "← wraps back from the first tab"
     );
     assert_eq!(
-        ui.dashboard_tab
+        ui.toggles
+            .dashboard_tab
             .as_ref()
             .unwrap()
             .derived_at_start
@@ -164,7 +166,7 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
         let outcome = handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
 
         assert_eq!(outcome, InputOutcome::default(), "{label}");
-        assert!(ui.dashboard_tab.is_none(), "{label}");
+        assert!(ui.toggles.dashboard_tab.is_none(), "{label}");
         // With no tab pick the dashboard shows its first, derived account.
         assert_eq!(
             render::active_dashboard_tab(&snapshot, &ui)
@@ -223,7 +225,10 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
 
     // Re-deriving the same claude row keeps the pick.
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
-    assert!(ui.dashboard_tab.is_some(), "same derived kind: pick holds");
+    assert!(
+        ui.toggles.dashboard_tab.is_some(),
+        "same derived kind: pick holds"
+    );
 
     // The selected card turning out to run on another account of the same
     // provider keeps the pick: the dashboard follows the card's kind.
@@ -233,14 +238,14 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     std::sync::Arc::make_mut(&mut other_account.agents).push(agent);
     reconcile_selection(&mut ui, &other_account, Some(agent_pane.clone()));
     assert!(
-        ui.dashboard_tab.is_some(),
+        ui.toggles.dashboard_tab.is_some(),
         "same kind on another account: pick holds"
     );
 
     // A process-row selection derives no kind — the pick survives the hop.
     reconcile_selection(&mut ui, &snapshot, Some(process_pane));
     assert!(
-        ui.dashboard_tab.is_some(),
+        ui.toggles.dashboard_tab.is_some(),
         "a None derivation never ends the pick"
     );
 
@@ -252,7 +257,7 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     .name = "pi".to_owned();
     reconcile_selection(&mut ui, &moved, Some(agent_pane));
     assert!(
-        ui.dashboard_tab.is_none(),
+        ui.toggles.dashboard_tab.is_none(),
         "a genuine derived-kind change hands the tab back"
     );
     assert_eq!(
@@ -343,7 +348,7 @@ fn tab_pick_drops_when_its_panel_leaves_the_dashboard() {
     reconcile_selection(&mut ui, &shrunk, Some(agent_pane));
 
     assert!(
-        ui.dashboard_tab.is_none(),
+        ui.toggles.dashboard_tab.is_none(),
         "a pick whose panel left the dashboard is dropped"
     );
 }

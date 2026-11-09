@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot, workspace};
+use crate::sidebar_pane::render::PresentationToggles;
 
 #[test]
 fn compacting_non_actionable_rows_request_the_fast_grid() {
@@ -106,7 +107,7 @@ fn wheel_ease_overrides_fast_pet_help_and_fade_grids() {
     );
     ui.scrollbar.observe(0, ms(0));
     ui.scrollbar.observe(1, ms(100));
-    ui.help_visible = true;
+    ui.toggles.help_visible = true;
     assert_eq!(
         animation_interval(&snapshot, &ui, &pane_ui, ms(100), false),
         Some(scroll_ease::SCROLL_EASE_FRAME)
@@ -437,12 +438,14 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
     );
 
-    ui.delegation_overrides.insert(row_id.clone(), false);
+    ui.toggles
+        .delegation_overrides
+        .insert(row_id.clone(), false);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
-    ui.delegation_overrides.clear();
+    ui.toggles.delegation_overrides.clear();
     ui.selected_index = Some(usize::MAX);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
-    ui.delegation_overrides.insert(row_id.clone(), true);
+    ui.toggles.delegation_overrides.insert(row_id.clone(), true);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
 
     // A read done card quiet past the stale threshold: the click-open section
@@ -459,14 +462,14 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     let theme = Theme::fixed(false);
     let rolls = CostRolls::default();
     let mut ctx = test_row_ctx(&snapshot, &theme, 70, usize::MAX, 0, &rolls);
-    ctx.delegation_overrides = &ui.delegation_overrides;
+    ctx.delegation_overrides = &ui.toggles.delegation_overrides;
     let open =
         line_texts(&worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines)
             .join("\n");
     assert!(open.contains("cargo test"), "{open}");
-    ui.delegation_overrides.remove(&row_id);
+    ui.toggles.delegation_overrides.remove(&row_id);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
-    ui.delegation_overrides.insert(row_id, true);
+    ui.toggles.delegation_overrides.insert(row_id, true);
     let row = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0];
@@ -657,7 +660,10 @@ fn help_popup_keeps_animation_grid_hot() {
     let snapshot = snapshot(&ws);
     let ui = ViewState {
         selected_index: Some(0),
-        help_visible: true,
+        toggles: PresentationToggles {
+            help_visible: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();

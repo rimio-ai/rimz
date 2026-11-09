@@ -423,13 +423,13 @@ fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
         .unwrap()
         .id
         .clone();
-    ui.delegation_overrides.insert(first.clone(), false);
+    ui.toggles.delegation_overrides.insert(first.clone(), false);
     let closed = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(!closed.contains("first delegation"), "{closed}");
     assert!(closed.contains("second delegation"), "{closed}");
 
     snapshot.theme.display.card_density = CardDensityMode::Auto;
-    ui.delegation_overrides.insert(first, true);
+    ui.toggles.delegation_overrides.insert(first, true);
     let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(opened.contains("first delegation"), "{opened}");
     assert!(!opened.contains("second delegation"), "{opened}");
@@ -779,7 +779,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     assert!(folded.contains("map the render path"));
     assert!(folded.contains("+1 older"));
     assert!(!folded.contains("previous render audit"));
-    ui.delegation_history.insert(row_id, turn);
+    ui.toggles.delegation_history.insert(row_id, turn);
     let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 31);
     assert!(opened.contains("previous render audit"));
     assert!(!opened.contains("+1 older"));

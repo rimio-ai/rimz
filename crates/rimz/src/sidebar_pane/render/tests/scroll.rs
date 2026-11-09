@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use std::sync::Arc;
 
 #[test]
@@ -647,7 +648,9 @@ fn growth_above_keeps_expansions_until_freeze_expires() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
     let mut pane_ui = UiState::default();
-    ui.delegation_overrides.insert("codex-1".into(), true);
+    ui.toggles
+        .delegation_overrides
+        .insert("codex-1".into(), true);
     let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
     assert_eq!(
@@ -1262,7 +1265,10 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: true,
+            toggles: PresentationToggles {
+                help_visible: true,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -1302,7 +1308,10 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
             None,
             &ViewState {
                 selected_index: Some(0),
-                help_visible: true,
+                toggles: PresentationToggles {
+                    help_visible: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             &UiState::default(),

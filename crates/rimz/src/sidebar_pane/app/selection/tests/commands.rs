@@ -1,6 +1,7 @@
 use super::*;
 use crate::sidebar_pane::app::card_commands::reduce;
 use crate::sidebar_pane::commands::{CardDirection, CardReply, CardRequest, CardTarget};
+use crate::sidebar_pane::render::PresentationToggles;
 
 fn walk(direction: CardDirection, worktree: bool) -> CardRequest {
     CardRequest::Walk {
@@ -102,7 +103,7 @@ fn card_walk_skips_folded_rows_and_worktree_walk_wraps_nonempty_groups() {
         walk(CardDirection::Prev, true),
         "terminal_3",
     );
-    view.make_up_filter.query = Some("main".into());
+    view.toggles.make_up_filter.query = Some("main".into());
     view.selected_pane = None;
     view.selected_index = None;
     jump(
@@ -123,22 +124,31 @@ fn card_walk_skips_folded_rows_and_worktree_walk_wraps_nonempty_groups() {
 fn card_walk_uses_committed_query_and_needs_you_and_cancels_only_the_draft() {
     let snapshot = filterable_snapshot(&workspace());
     let mut view = ViewState {
-        help_visible: true,
-        search_draft: Some("no matches".into()),
+        toggles: PresentationToggles {
+            help_visible: true,
+            search_draft: Some("no matches".into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    view.make_up_filter.query = Some("feature".into());
-    view.make_up_filter.filter = Some(BodyFilter::NeedsYou);
+    view.toggles.make_up_filter.query = Some("feature".into());
+    view.toggles.make_up_filter.filter = Some(BodyFilter::NeedsYou);
     jump(
         &mut view,
         &snapshot,
         walk(CardDirection::Next, false),
         "terminal_3",
     );
-    assert!(!view.help_visible);
-    assert!(view.search_draft.is_none());
-    assert_eq!(view.make_up_filter.query.as_deref(), Some("feature"));
-    assert_eq!(view.make_up_filter.filter, Some(BodyFilter::NeedsYou));
+    assert!(!view.toggles.help_visible);
+    assert!(view.toggles.search_draft.is_none());
+    assert_eq!(
+        view.toggles.make_up_filter.query.as_deref(),
+        Some("feature")
+    );
+    assert_eq!(
+        view.toggles.make_up_filter.filter,
+        Some(BodyFilter::NeedsYou)
+    );
     jump(
         &mut view,
         &snapshot,
@@ -151,7 +161,7 @@ fn card_walk_uses_committed_query_and_needs_you_and_cancels_only_the_draft() {
 fn card_slot_ignores_lenses_folds_and_freeze_and_empty_slot_changes_nothing() {
     let mut snapshot = filterable_snapshot(&workspace());
     let mut view = ViewState::default();
-    view.make_up_filter.filter = Some(BodyFilter::NeedsYou);
+    view.toggles.make_up_filter.filter = Some(BodyFilter::NeedsYou);
     crate::sidebar_pane::app::layout_freeze::arm_freeze(&mut view, 0);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).reverse();
     jump(
@@ -161,7 +171,10 @@ fn card_slot_ignores_lenses_folds_and_freeze_and_empty_slot_changes_nothing() {
         "terminal_1",
     );
     assert_eq!(view.selected_index, None, "the hidden slot still focuses");
-    assert_eq!(view.make_up_filter.filter, Some(BodyFilter::NeedsYou));
+    assert_eq!(
+        view.toggles.make_up_filter.filter,
+        Some(BodyFilter::NeedsYou)
+    );
     let before = (
         view.selected_index,
         view.selected_pane.clone(),
@@ -210,7 +223,7 @@ fn card_last_tracks_only_distinct_card_baselines_and_refuses_a_departed_row() {
 fn card_needs_you_set_toggle_and_empty_refusal_preserve_the_lens() {
     let snapshot = filterable_snapshot(&workspace());
     let mut view = ViewState::default();
-    view.make_up_filter.query = Some("feature".into());
+    view.toggles.make_up_filter.query = Some("feature".into());
     let (outcome, reply) = reduce(
         &CardRequest::FilterNeedsYou { toggle: false },
         &mut view,
@@ -219,10 +232,16 @@ fn card_needs_you_set_toggle_and_empty_refusal_preserve_the_lens() {
     assert_eq!(reply, CardReply::Done);
     assert_eq!(
         outcome.effects,
-        vec![InputEffect::SyncFilter(view.make_up_filter.clone())]
+        vec![InputEffect::SyncFilter(view.toggles.make_up_filter.clone())]
     );
-    assert_eq!(view.make_up_filter.filter, Some(BodyFilter::NeedsYou));
-    assert_eq!(view.make_up_filter.query.as_deref(), Some("feature"));
+    assert_eq!(
+        view.toggles.make_up_filter.filter,
+        Some(BodyFilter::NeedsYou)
+    );
+    assert_eq!(
+        view.toggles.make_up_filter.query.as_deref(),
+        Some("feature")
+    );
     let (outcome, reply) = reduce(
         &CardRequest::FilterNeedsYou { toggle: false },
         &mut view,
@@ -244,16 +263,16 @@ fn card_needs_you_set_toggle_and_empty_refusal_preserve_the_lens() {
         .1,
         CardReply::Done
     );
-    assert_eq!(view.make_up_filter.filter, None);
+    assert_eq!(view.toggles.make_up_filter.filter, None);
     let empty = snapshot_with_panes(&workspace(), vec![pane("terminal_1", "tab_0", false)]);
-    let before = view.make_up_filter.clone();
+    let before = view.toggles.make_up_filter.clone();
     let (outcome, reply) = reduce(
         &CardRequest::FilterNeedsYou { toggle: true },
         &mut view,
         &empty,
     );
     assert!(matches!(reply, CardReply::Refused { .. }));
-    assert_eq!(view.make_up_filter, before);
+    assert_eq!(view.toggles.make_up_filter, before);
     assert!(
         outcome.effects.is_empty(),
         "an empty toggle writes no shared filter"
@@ -301,8 +320,11 @@ fn card_close_with_a_pane_names_that_rows_target_and_refuses_an_unknown_pane() {
     let mut view = ViewState {
         selected_index: Some(0),
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-        help_visible: true,
-        search_draft: Some("cla".into()),
+        toggles: PresentationToggles {
+            help_visible: true,
+            search_draft: Some("cla".into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let other = PaneId::from_parts(MuxName::Zellij, "terminal_2");
@@ -318,7 +340,9 @@ fn card_close_with_a_pane_names_that_rows_target_and_refuses_an_unknown_pane() {
         "the named pane wins over the highlight"
     );
     assert!(
-        view.help_visible && view.search_draft.as_deref() == Some("cla") && !outcome.redraw,
+        view.toggles.help_visible
+            && view.toggles.search_draft.as_deref() == Some("cla")
+            && !outcome.redraw,
         "another viewer's close leaves the routed view's help and draft alone"
     );
     let unknown = PaneId::from_parts(MuxName::Zellij, "terminal_99");
