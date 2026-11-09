@@ -1,6 +1,5 @@
 //! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
 
-use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -29,14 +28,6 @@ pub enum SendErr {
     Hibernate(#[from] crate::harness::hibernate::HibernateErr),
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
-    #[error(transparent)]
-    Atomic(#[from] crate::disk::atomic::AtomicErr),
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
     #[error(
