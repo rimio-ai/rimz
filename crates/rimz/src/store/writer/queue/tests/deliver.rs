@@ -834,7 +834,7 @@ fn assert_later_human_turn_does_not_confirm_launcher_steer(prompt: Option<&str>)
         };
         message.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
     });
-    // Fresh live steers reach write_batch without a boundary claim.
+    // Fresh live steers reach the pane write without a boundary claim.
     let sent = q.record_sent_batch(&[steer], "session").unwrap();
     assert_eq!(sent[0].status, MessageStatus::Sent);
     append_lifecycle(LifecycleSignal::TurnEnded {

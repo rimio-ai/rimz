@@ -1182,6 +1182,7 @@ fn dispatch_one(
             snapshot: state.snapshot,
             target: pane,
             bound,
+            card_status: state.card_status,
             records: std::slice::from_ref(&message),
             source: deliver::AttemptSource::Fresh {
                 durable_receiver: target.agent.is_some(),
@@ -1216,6 +1217,14 @@ fn dispatch_one(
             label: handle,
             message_id,
             reason: Some(ParkReason::TypingHeld { until }),
+        }),
+        deliver::AttemptOutcome::Deferred(deferral) => Ok(DispatchOutcome::Queued {
+            label: handle,
+            message_id,
+            reason: Some(match deferral {
+                send::Deferral::Status(status) => ParkReason::Status(status),
+                send::Deferral::ProviderStarting => ParkReason::ProviderStarting,
+            }),
         }),
         deliver::AttemptOutcome::CompactionPending => Ok(DispatchOutcome::CompactionPending {
             label: handle,
