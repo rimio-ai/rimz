@@ -13,7 +13,7 @@ rimz remote list [--json]            # alias: ls
 rimz remote ports [--json]
 ```
 
-Every subcommand also takes the [global flags](../cli.md#global-flags). `--mux`, `--zellij`, and `--tmux` matter on `connect`, `add`, and `update` only.
+Every subcommand also takes the [global flags](../cli.md#global-flags). `--mux`, `--zellij`, and `--tmux` matter on `add`, `update`, and a terminal `connect` only.
 
 ## Targets
 
@@ -50,7 +50,7 @@ By default the connection is supervised: RimZ keeps an SSH ControlMaster open, r
 | `--web-port <port>` | The local browser port for `--web`, by default derived from the session name in `8300..8399`. Requires `--web`. |
 | `--attach` | Connect even when stdin or stdout is not a terminal. |
 | `--no-attach`, `--print` | Print the `ssh` command instead of running it, to inspect or wrap it. |
-| `--mux <zellij\|tmux>`, `--zellij`, `--tmux` | Backend the host's `rimz` uses, overriding the alias's saved `mux`. |
+| `--mux <zellij\|tmux>`, `--zellij`, `--tmux` | Backend the host's `rimz` uses, overriding the alias's saved `mux`. Not passed to the host with `--web`. |
 
 Without `--attach` or `--print`, `connect` runs `ssh` only when both stdin and stdout are terminals; otherwise it prints the command on stdout and one notice on stderr explaining that nothing was connected and suggesting `--attach`. Explicit `--print` or `--no-attach` adds no fallback notice. The printed command runs directly in a shell without a local reconnect supervisor or an outer terminal bracket. `--web` has no command to print: without a terminal, pass `--attach` to run the tunnel; with `--print`, drop that flag.
 
@@ -70,7 +70,7 @@ On a supervised connection, the host's refusal names both versions and their dif
 
 ### Port forwarding
 
-A supervised terminal connection forwards a remote dev server started from the room, before or after you attach. At least one process owning the listener must carry the room's inherited environment. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. Agent CLIs' own room-started listeners qualify too; a server that strips its environment does not. The local end binds only `127.0.0.1`. It uses the same port when free; otherwise it tries nearby higher ports, then an OS-assigned port. A remap sends a terminal notification naming the local port, subject to notification preferences. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward. An older host without room-scoped reports keeps the first report as a baseline and forwards only newly appearing ports.
+A supervised terminal connection forwards a remote dev server started from the room, before or after you attach. At least one process owning the listener must carry the room's inherited environment. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. Agent CLIs' own room-started listeners qualify too; a server that strips its environment does not. The local end binds only `127.0.0.1`. It uses the same port when free; otherwise it tries the next 16 higher ports, then an OS-assigned port. A remap sends a terminal notification naming the local port, subject to notification preferences. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward. An older host without room-scoped reports keeps the first report as a baseline and forwards only newly appearing ports.
 
 Two ceilings bound a busy host: discovery keeps the 32 lowest qualifying room-started ports, and at most 16 forwards stay open at once. Other rooms' listeners do not consume the discovery cap. A remote port keeps its chosen local port for the whole connection, including server restarts, unless that local port becomes busy at reopen. A listener over the forward limit waits for a slot. An SSH refusal is retried only after the remote listener disappears from a report and returns. The guide walks through it in [Ports forward themselves](../../guide/remote.md#ports-forward-themselves); limits and timing are in [remote internals](../../internals/remote.md#port-auto-forwarding).
 
@@ -184,20 +184,20 @@ dev-box
 
 ## Install rimz on the host
 
-`rimz remote setup` installs this client's release on a host over SSH, dropping any prerelease or build suffix from the version to select its release tag. `--latest` selects the newest release instead. It takes a saved alias, a raw target, or a bare `[user@]host`, and needs only `ssh` locally.
+`rimz remote setup` installs this client's release on a host over SSH, dropping any prerelease or build suffix from the version to select its release tag. `--latest` selects the newest release instead. It takes a saved alias, a raw target, or a bare `[user@]host`, and needs only `ssh` locally. The host needs `uname`, `curl`, `mktemp`, `tar`, and `sha256sum` (Linux) or `shasum` (macOS).
 
 ```sh
 rimz remote setup dev-box
 ```
 
-On the host it runs these steps, and stops at the first that fails:
+The client runs one `ssh -t` session with `ConnectTimeout=10`. On the host it runs these steps, and stops at the first that fails:
 
 1. Detect the platform with `uname`. Prebuilt releases exist for Linux x86_64 and macOS (arm64 and x86_64); any other platform fails with `no prebuilt for <os>/<arch>`.
-2. Download the release archive and `SHA256SUMS` from `releases/download/v<X.Y.Z>/` with `curl`, into a temporary directory (`releases/latest/download/` with `--latest`).
+2. Download the release archive and `SHA256SUMS` from `https://github.com/rimio-ai/rimz/releases/download/v<X.Y.Z>/` with `curl`, into a temporary directory `~/.local/bin/.rimz-setup.XXXXXX` that is removed on exit (`releases/latest/download/` with `--latest`).
 3. Check the archive against `SHA256SUMS`.
 4. Install the binary to `~/.local/bin/rimz` with mode `0755`, replacing any binary there, and run `rimz --version`.
 
-Before connecting, stderr names the version being installed (or the latest release). On success the host prints `rimz <version> installed on <host> at ~/.local/bin/rimz`, using the installed binary's version, and the client names the `rimz remote connect` command to run next. A failure exits `1` and points at the [installation guide](../../guide/installation.md). If the pinned release does not exist (a development build ahead of releases), the download error names the missing tag and suggests rerunning with `--latest`. The default pin matches the host to your client after a version refusal. `connect` adds `~/.local/bin` to the `PATH` it runs `rimz` with, so the next connect finds the binary.
+Before connecting, stderr names the version being installed (or the latest release). On success the host prints `rimz <version> installed on <host> at ~/.local/bin/rimz`, using the installed binary's version, and the client names the `rimz remote connect` command to run next (with a `:<session-or-path>` placeholder after a bare host). A failure exits `1` and points at the [installation guide](../../guide/installation.md). If the pinned release does not exist (a development build ahead of releases), the download error names the missing tag and suggests rerunning with `--latest`. The default pin matches the host to your client after a version refusal. `connect` puts `~/.cargo/bin`, `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin` ahead of the host's `PATH` when it runs `rimz`, so the next connect finds the binary.
 
 ## Open a remote room in the browser
 
@@ -212,11 +212,11 @@ rimz: tunnel up — reconnects automatically; Ctrl-C stops
 It runs these steps:
 
 1. Run `rimz web open --print --json` on the host, which births the room if needed and ensures the host's shared browser daemon. When your terminal is interactive, the host asks its recovery question here.
-2. Bind a local browser port on `127.0.0.1`. Without `--web-port`, the port comes from the session name in `8300..8399`, so a room keeps the same URL between runs; a taken port moves to the next free one. With `--web-port`, that exact port is used and a taken port fails.
+2. Bind a local browser port on `127.0.0.1`. Without `--web-port`, the port comes from the session name in `8300..8399`, so a room keeps the same URL between runs; a taken port moves to the next free one in the range, and a full range fails with `no free local web tunnel port in 8300..8399`. With `--web-port`, that exact port is used and a taken port fails.
 3. Forward a second, ephemeral local port to the host's daemon over SSH.
 4. Relay browser traffic from the browser port to the forward, adding the host's Basic credential to each request. The credential is never printed and the browser shows no password prompt.
 5. Print the URL on stdout, open your browser best-effort, and print `rimz: tunnel up` on stderr.
 
-A supervised `--web` connection repeats steps 1 and 3 after a dropped link, prints `rimz: tunnel to <host> restored`, and keeps the same URL. With `--no-reconnect`, the command exits when the tunnel drops. `--web` does not forward dev-server ports. It refuses `--print` because a browser tunnel has no SSH command to print, and asks you to drop that flag. Without a terminal it instead asks you to pass `--attach` to run the tunnel anyway.
+A supervised `--web` connection repeats steps 1 and 3 after a dropped link, prints `rimz: tunnel to <host> restored`, and keeps the same URL. With `--no-reconnect`, step 5 prints `rimz: tunnel up — Ctrl-C stops`, and the command exits when the tunnel drops. `--web` does not forward dev-server ports, and does not pass `--mux`, `--zellij`, or `--tmux` to the host. It refuses `--print` because a browser tunnel has no SSH command to print, and asks you to drop that flag. Without a terminal it instead asks you to pass `--attach` to run the tunnel anyway.
 
 The browser room itself, and the host's `[web]` settings it needs, are [`rimz web`](./web.md). The relay and tunnel mechanics are in [web internals](../../internals/web.md#remote-rooms) and [remote internals](../../internals/remote.md#web-tunnels).
