@@ -1209,6 +1209,12 @@ pub trait AccountCapability: CoreCapability {
         false
     }
 
+    /// How a launch or loop refusal names the provider account behind an exact
+    /// binding of `scope`; `None` names it by kind and the scope's raw parts.
+    fn account_label(&self, _scope: &ProviderAccountScope) -> Option<String> {
+        None
+    }
+
     /// Resolve exact provider-account applicability and identity for a managed launch.
     fn resolve_managed_launch(
         &self,

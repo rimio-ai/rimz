@@ -414,6 +414,32 @@ fn go_console_windows_do_not_feed_kind_wide_capacity() {
 }
 
 #[test]
+fn display_label_asks_the_adapter_before_naming_raw_scope_parts() {
+    let label = |kind: &str, scope: ProviderAccountScope| {
+        ProviderAccountBinding::new(scope, "owner".to_owned())
+            .unwrap()
+            .display_label(kind)
+    };
+    let alibaba = |region| ProviderAccountScope::sub_provider("alibaba", region);
+    assert_eq!(label("qwen", alibaba("china")), "Qwen Alibaba China");
+    assert_eq!(
+        label("qwen", alibaba("international")),
+        "Qwen Alibaba International"
+    );
+    assert_eq!(
+        label(
+            "codex",
+            ProviderAccountScope::sub_provider("openai", "oauth")
+        ),
+        "codex openai oauth"
+    );
+    assert_eq!(
+        label("unregistered", ProviderAccountScope::KindWide),
+        "unregistered"
+    );
+}
+
+#[test]
 fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");

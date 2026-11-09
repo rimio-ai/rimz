@@ -28,7 +28,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentAccount, RoomLoginSet};
+use super::{AgentAccount, RoomLoginSet, find_definition};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
 use crate::ids::LoginKey;
@@ -212,13 +212,12 @@ impl ProviderAccountBinding {
     }
 
     fn display_label(&self, kind: &str) -> String {
-        let kind = match kind {
-            "qwen" => "Qwen",
-            other => other,
-        };
+        if let Some(label) =
+            find_definition(kind).and_then(|adapter| adapter.account_label(&self.scope))
+        {
+            return label;
+        }
         match self.scope.sub_provider_parts() {
-            Some(("alibaba", "international")) => format!("{kind} Alibaba International"),
-            Some(("alibaba", "china")) => format!("{kind} Alibaba China"),
             Some((provider, variant)) => format!("{kind} {provider} {variant}"),
             None => kind.to_owned(),
         }
