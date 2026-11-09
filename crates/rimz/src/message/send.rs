@@ -297,7 +297,9 @@ fn write_live(
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
         return Ok(
-            match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
+            match write_batch(
+                workspace, store, snapshot, writer, bound, batch, false, send,
+            )? {
                 PaneWrite::Sent => Receipt::Sent {
                     compacted: false,
                     interrupt: InterruptConfirmation::NotChecked,
@@ -333,6 +335,7 @@ fn write_live(
             writer,
             bound,
             std::slice::from_ref(&command),
+            false,
             send,
         ) {
             Ok(PaneWrite::Sent) => {
@@ -357,6 +360,7 @@ fn write_live(
                 store.release_message_claims(
                     std::slice::from_ref(&command),
                     "agent is waiting on input in its pane",
+                    false,
                     &workspace.session_name,
                 )?;
                 return Ok(Receipt::SkippedWaiting(reason));
@@ -365,6 +369,7 @@ fn write_live(
                 store.release_message_claims(
                     batch,
                     "pane write stopped: message claim no longer held",
+                    false,
                     &workspace.session_name,
                 )?;
                 return Ok(Receipt::ClaimLost);
@@ -387,7 +392,9 @@ fn write_live(
         }
     }
     Ok(
-        match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
+        match write_batch(
+            workspace, store, snapshot, writer, bound, batch, compacted, send,
+        )? {
             PaneWrite::Sent => Receipt::Sent {
                 compacted,
                 interrupt: InterruptConfirmation::NotChecked,
@@ -456,6 +463,10 @@ impl Pacer {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one live write under the caller's pane lock"
+)]
 fn write_batch(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -463,6 +474,7 @@ fn write_batch(
     writer: &PaneWriter,
     bound: Option<&AgentState>,
     batch: &[MessageRecord],
+    compacted: bool,
     send: &mut LiveSend,
 ) -> Result<PaneWrite> {
     // Dispatch and delivery claims always pass a non-empty batch.
@@ -482,6 +494,7 @@ fn write_batch(
         store.release_message_claims(
             batch,
             "pane write stopped: message claim no longer held",
+            compacted,
             &workspace.session_name,
         )?;
         return Ok(PaneWrite::ClaimLost);

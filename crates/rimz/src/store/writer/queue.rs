@@ -1022,6 +1022,7 @@ impl Store {
         &self,
         held: &[MessageRecord],
         note: &str,
+        compacted: bool,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         self.commit_queue(|queue| {
@@ -1033,9 +1034,11 @@ impl Store {
                 message.attempts = message.attempts.saturating_sub(1);
                 message.last_attempt_at = None;
                 message.retry_after = None;
-                // This claim was released because its compact command already
-                // fired; the fresh-window delivery must not fire it again.
-                message.auto_compact = None;
+                // A compact command that already fired must not fire again in
+                // the fresh window; one that never fired keeps its intent.
+                if compacted {
+                    message.auto_compact = None;
+                }
                 message.requeue(now, note);
                 MessageUpdate::Rewrite {
                     method: MessageEventMethod::Queued,
