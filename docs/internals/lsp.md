@@ -468,7 +468,7 @@ The `--no-tests` hidden count stays exact, since it counts dropped entries, so t
 
 ## Anchor checks and source reads
 
-`lsp/check.rs` extracts inline-code anchors with the Markdown parser, and repo-qualified anchors short-circuit as `external` before path resolution. Notes checks and `--fix` keep checkout-relative anchors, refusing `..`. `show` first tries the typed current-folder and checkout-root readings, without rewriting the anchor text or path used to recognize a bare line. Its suffix fallback, notes checks, and `--fix` share `crates/rimz/src/lsp/check.rs::resolve`:
+`lsp/check.rs` extracts inline-code anchors with the Markdown parser, and repo-qualified anchors short-circuit as `external` before path resolution. Notes checks and `--fix` keep checkout-relative anchors, refusing `..`. `show` reads an argument that is neither a position nor an anchor, but is a `::`-joined identifier, as a name: `Context::definitions` runs `def` on it through the server selected with no path, or `--server`, and each definition location is read as its position would be from the checkout root, since `position_text` prints it checkout-relative or absolute. For the rest, `show` first tries the typed current-folder and checkout-root readings, without rewriting the anchor text or path used to recognize a bare line. Its suffix fallback, notes checks, and `--fix` share `crates/rimz/src/lsp/check.rs::resolve`:
 
 1. An exact checkout-relative path that is a regular file on disk resolves, ignored by Git or not.
 2. Otherwise a unique component-boundary suffix over Git's tracked and untracked, non-ignored files resolves. Check reports it `short-path`, and `--fix` completes it without an outline or editor check.

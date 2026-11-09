@@ -142,14 +142,22 @@ fn is_identifier(text: &str) -> bool {
         && text.chars().all(identifier_char)
 }
 
+/// One or more identifiers joined by `::`, the names `show` looks up as `def` does.
+pub(super) fn is_qualified_name(text: &str) -> bool {
+    text.split("::").all(is_identifier)
+}
+
 /// Split `path:line:name`, or a qualified `path:line:A::B`, at its first `:line:` separator.
 fn line_name(raw: &str) -> Option<(&str, u32, &str)> {
     raw.match_indices(':').find_map(|(at, _)| {
         let rest = &raw[at + 1..];
         let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
         let name = rest.get(digits..)?.strip_prefix(':')?;
-        let named = is_identifier(name) || name.split("::").all(is_identifier);
-        (at > 0 && digits > 0 && named).then_some((&raw[..at], rest[..digits].parse().ok()?, name))
+        (at > 0 && digits > 0 && is_qualified_name(name)).then_some((
+            &raw[..at],
+            rest[..digits].parse().ok()?,
+            name,
+        ))
     })
 }
 
@@ -1431,6 +1439,26 @@ fn locations_with_spans(result: Value) -> Result<Vec<(Location, Option<Range>)>>
         .collect()
 }
 
+/// The `path:line:col` of each definition location, in the order `def` prints them.
+pub(super) fn definition_targets(root: &Path, result: Value) -> Result<Vec<String>> {
+    sorted_definitions(root, result)?
+        .into_iter()
+        .map(|(location, _)| position_text(root, &location.uri, location.range.start))
+        .collect()
+}
+
+/// Definition locations by displayed path and start, one per position.
+fn sorted_definitions(root: &Path, result: Value) -> Result<Vec<(Location, Option<Range>)>> {
+    let mut sorted = BTreeMap::new();
+    for (location, span) in locations_with_spans(result)? {
+        sorted.insert(
+            (displayed_path(root, &location.uri)?, location.range.start),
+            (location, span),
+        );
+    }
+    Ok(sorted.into_values().collect())
+}
+
 fn finish(lines: Vec<String>) -> String {
     if lines.is_empty() {
         "no results\n".into()
@@ -1751,15 +1779,8 @@ fn render_with_source(
     };
     match verb {
         Verb::Def => {
-            let mut sorted = BTreeMap::new();
-            for (location, span) in locations_with_spans(result)? {
-                sorted.insert(
-                    (displayed_path(root, &location.uri)?, location.range.start),
-                    (location, span),
-                );
-            }
             let mut lines = Vec::new();
-            for (location, span) in sorted.into_values() {
+            for (location, span) in sorted_definitions(root, result)? {
                 let mut line = position_text(root, &location.uri, location.range.start)?;
                 if let Some(span) = span.filter(|span| span.start != span.end) {
                     let [start, end] = span_lines(span);
