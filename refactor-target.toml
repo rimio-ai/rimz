@@ -6708,7 +6708,7 @@ reason = "Pass 13: translates one typed failure stage into flag grammar or remed
 [[verdict]]
 kind = "item"
 key = "agents::spending::SpendingWalker"
-reason = "Public with new, walk, walk_local, WalkRequest, SilentWalk, WalkStats, HeadlineSpec, SpendScope and the cache records for benches/hotpath.rs, performance/spending_incremental.rs and seed_perf_workspace.rs; cold/warm/incremental derive from cache stamps, generation and memo, not mode flags (pass 13)."
+reason = "Public with new, walk, WalkRequest, SilentWalk, WalkStats, HeadlineSpec, SpendScope and the cache records for benches/hotpath.rs, performance/spending_incremental.rs and seed_perf_workspace.rs; walk_local is reached only by tests (spending's own, sidebar/refresh/live_spend/tests.rs, store/round_trip.rs and performance/spending_incremental.rs); cold/warm/incremental derive from cache stamps, generation and memo, not mode flags (pass 13)."
 
 [[verdict]]
 kind = "item"
