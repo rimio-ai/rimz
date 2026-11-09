@@ -23,7 +23,7 @@ Read the shape before a subsystem. [DESIGN.md](../../DESIGN.md) states the atten
 
 ## The harness
 
-The harness spawns the fleet, addresses it, drives it, and reclaims what it leaves behind. It is a product area that spans several modules. Most of its code is in `harness/`. The rest is in `message/`, the top-level `address`, `transcript`, `worktree`, and `trust` modules, the supervised-run and workflow records in `store/`, and the CLI verbs that drive them. Start at [fleet.md](./harness/fleet.md), whose code table names the source files behind each page.
+The harness spawns the fleet, addresses it, drives it, and reclaims what it leaves behind. It is a product area that spans several modules. Most of its code is in `harness/`. The rest is in `launcher/`, `message/`, the top-level `address`, `transcript`, `worktree`, and `trust` modules, the supervised-run and workflow records in `store/`, and the CLI verbs that drive them. Start at [fleet.md](./harness/fleet.md), whose code table names the source files behind each page.
 
 | Page | What it owns |
 | --- | --- |
@@ -79,7 +79,7 @@ These pages cut across every subsystem above: where the evidence lands when some
 
 ## From source code to its page
 
-Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, which states the tree's boundaries and rules. The table links each contract from the tree's name. A top-level module without a row has no internals page: its `//!` header is its documentation, and the root [AGENTS.md code map](../../AGENTS.md#code-map) places it.
+Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, which states the tree's boundaries and rules. The table links each contract from the tree's name. A top-level module without a row has no page of its own: its `//!` header is its documentation, the pages that use it cite it by path, and the root [AGENTS.md code map](../../AGENTS.md#code-map) places it.
 
 | Source | Page |
 | --- | --- |
@@ -88,13 +88,16 @@ Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, whic
 | [`cli/`](../../crates/rimz/src/cli/AGENTS.md) | No internals page. The commands are in the [CLI reference](../reference/cli.md), the shared command grammar in [cli-scenes.md](../contributing/cli-scenes.md), and the house rules in [rust-conventions.md](../contributing/rust-conventions.md). |
 | `cli/stats/` | [stats.md](./stats.md) |
 | `daemon_view.rs`, `daemon_view/`, `daemon_content.rs` | [rimzd.md](./rimzd.md) |
-| [`diag/`](../../crates/rimz/src/diag/AGENTS.md), `observability/` | [diagnostics.md](./diagnostics.md) |
+| [`diag/`](../../crates/rimz/src/diag/AGENTS.md), `observability.rs`, `observability/` | [diagnostics.md](./diagnostics.md) |
 | `disk/` | [store.md § Where the code lives](./store.md#where-the-code-lives) |
 | `forge.rs`, `forge/` | [state.md § PR state](./sidebar/state.md#pr-state) |
 | [`harness/`](../../crates/rimz/src/harness/AGENTS.md) | [fleet.md](./harness/fleet.md), then the other [harness pages](#the-harness) |
+| `launcher/` | [fleet.md § Where the code lives](./harness/fleet.md#where-the-code-lives) |
 | `lsp/` | [lsp.md](./lsp.md) |
 | [`message/`](../../crates/rimz/src/message/AGENTS.md) | [messaging.md](./harness/messaging.md) |
 | [`mux/`](../../crates/rimz/src/mux/AGENTS.md) | [multiplexers.md](./multiplexers.md) |
+| `packs/` | No internals page. Sources, the manifest, and the installation record are in the [packs reference](../reference/cli/packs.md), and the record's durability in [store.md § Write classes](./store.md#write-classes) |
+| `pixel_wire.rs` | [pets.md § Pixel tier](./sidebar/pets.md#pixel-tier) |
 | `proc/cgroup.rs`, `proc/cgroup/` | [hibernate.md § Scopes](./harness/hibernate.md#scopes) |
 | [`remote/`](../../crates/rimz/src/remote/AGENTS.md) | [remote.md](./remote.md) |
 | `remote_control.rs`, `remote_control/` | [rimzd.md](./rimzd.md), and the remote-control sections of [adapter_claude.md](./agents/adapter_claude.md#remote-control) and [adapter_codex.md](./agents/adapter_codex.md#remote-control) |
