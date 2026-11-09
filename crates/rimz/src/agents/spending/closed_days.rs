@@ -303,7 +303,7 @@ impl ClosedDays {
         &mut self,
         paths: &SpendingHistoryPaths,
         accounts: &[HistoryAccount],
-    ) -> Result<(), AtomicErr> {
+    ) -> Result<ReadKey, AtomicErr> {
         let root = paths
             .history_root
             .parent()
@@ -349,7 +349,7 @@ impl ClosedDays {
             stamps,
         };
         if self.read_key.as_ref() == Some(&key) {
-            return Ok(());
+            return Ok(key);
         }
         self.segments
             .retain(|path, _| key.stamps.iter().any(|(file, _)| file == path));
@@ -400,37 +400,37 @@ impl ClosedDays {
                     .or_default()
                     .insert(start / DAY_SECS);
                 for stored in &day.rows {
-                    let (session, origin, entry) = match stored {
-                        StoredRow::Spend(row) => {
-                            (&row.session, row.origin.clone(), row.clone().into_entry())
-                        }
+                    let (session, origin, entry, rows) = match stored {
+                        StoredRow::Spend(row) => (
+                            &row.session,
+                            row.origin.clone(),
+                            row.clone().into_entry(),
+                            &mut index.rows,
+                        ),
                         StoredRow::SessionOnly { session, ts } => (
                             session,
                             None,
                             CachedEntry::new(*ts, 0.0, &Default::default()),
+                            &mut index.sessions,
                         ),
                     };
                     let session = match session {
                         StoredSession::Native(id) => StoredSession::Native(id.clone()),
                         StoredSession::File(path) => StoredSession::File(account.home.join(path)),
                     };
-                    let row = HistoryRow {
+                    rows.push(HistoryRow {
                         login: account.login.clone(),
                         kind: account.kind,
                         session,
                         origin,
                         entry,
-                    };
-                    match stored {
-                        StoredRow::Spend(_) => index.rows.push(row),
-                        StoredRow::SessionOnly { .. } => index.sessions.push(row),
-                    }
+                    });
                 }
             }
         }
         self.index = index;
-        self.read_key = Some(key);
-        Ok(())
+        self.read_key = Some(key.clone());
+        Ok(key)
     }
 
     pub(super) fn record(
@@ -442,7 +442,7 @@ impl ClosedDays {
         accounts: &[HistoryAccount],
         now_secs: u64,
     ) -> Result<(), AtomicErr> {
-        self.refresh(&hold.paths, accounts)?;
+        let read = self.refresh(&hold.paths, accounts)?;
         let incomplete = unread
             .iter()
             .map(|file| &file.login)
@@ -452,8 +452,7 @@ impl ClosedDays {
         }
         let key = RecordingKey {
             today: now_secs / DAY_SECS,
-            // refresh always seeds the read key, even for an empty store.
-            read: self.read_key.clone().expect("history refreshed above"),
+            read,
         };
         if self.recorded.as_ref() == Some(&key) {
             return Ok(());
@@ -525,11 +524,10 @@ impl ClosedDays {
         for record in grouped_days(cache, &all_files, recordable_account) {
             append_day(hold, &record)?;
         }
-        self.refresh(&hold.paths, accounts)?;
-        self.recorded = incomplete.is_empty().then(|| RecordingKey {
-            read: self.read_key.clone().expect("history refreshed above"),
-            ..key
-        });
+        let read = self.refresh(&hold.paths, accounts)?;
+        self.recorded = incomplete
+            .is_empty()
+            .then_some(RecordingKey { read, ..key });
         Ok(())
     }
 
@@ -551,14 +549,9 @@ impl ClosedDays {
         progress: &mut dyn FnMut(SpendProgress),
     ) -> Result<RebuildReport, RebuildErr> {
         let hold = rebuild::maintenance(req.history)?;
-        self.refresh(req.history, accounts)?;
+        let read = self.refresh(req.history, accounts)?;
         drop(hold);
-        // refresh seeds the read key even when no segments exist.
-        let account_keys = &self
-            .read_key
-            .as_ref()
-            .expect("history refreshed above")
-            .accounts;
+        let account_keys = &read.accounts;
         let mut days = match scope {
             RebuildScope::All => self
                 .effective_days()
@@ -628,14 +621,9 @@ impl ClosedDays {
         .collect::<BTreeMap<_, _>>();
 
         let hold = rebuild::maintenance(req.history)?;
-        self.refresh(req.history, accounts)?;
+        let read = self.refresh(req.history, accounts)?;
         let effective = self.effective_days();
-        // refresh seeds the read key even when no segments exist.
-        let account_keys = &self
-            .read_key
-            .as_ref()
-            .expect("history refreshed above")
-            .accounts;
+        let account_keys = &read.accounts;
         let mut seen = BTreeSet::new();
         for account in account_keys {
             if !seen.insert((account.kind, &account.identity)) {
