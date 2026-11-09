@@ -126,11 +126,12 @@ pub(in crate::backend::zellij) fn reconcile_until_converged(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let report = ZellijBackend::with_runtime_dir(xdg)
-            .reconcile_sidebars(opts, live)
+            .reconcile_sidebars(opts, live, rimz::mux::ReconcileScope::Full)
             .expect("reconcile_sidebars");
         let deferral_only = report.deferred > 0
             && SidebarRecovery {
                 deferred: report.deferred,
+                deferred_adds: report.deferred_adds,
                 ..Default::default()
             } == report;
         let transient = report == SidebarRecovery::default() || deferral_only;

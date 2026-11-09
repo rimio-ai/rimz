@@ -1480,6 +1480,11 @@ surface-budget = 110
 
 [[verdict]]
 kind = "item"
+key = "diag::record::SidebarRepairStep"
+reason = "The failed sidebar repair record names its operation, and mux failure entries carry the same vocabulary."
+
+[[verdict]]
+kind = "item"
 key = "diag::record::ViewFitTrigger"
 reason = "The host records one aggregate geometry repair per sweep or jump fit."
 
@@ -4861,17 +4866,22 @@ allowed-dependencies = [
     "mux",
     "wakeup",
 ]
-surface-budget = 2
+# MountProof returns the failed-proof cleanup's result to the reconcile executor (+1).
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/mux/reconcile.rs"
 allowed-dependencies = [
+    "diag::record",
     "ids",
     "mux",
 ]
 # SidebarLivenessSource and its sample method expose post-listing evidence (+2).
 # SidebarViewRepair exposes landed per-view effects (+1).
-surface-budget = 19
+# ReconcileScope narrows a pass to adds or duplicate closes; SidebarRepairFailure
+# records each failed operation; ReconcileAddErr and its unproven constructor carry
+# a failed add's pane and cleanup result from the backends (+4).
+surface-budget = 23
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
@@ -10289,6 +10299,21 @@ reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-102
 kind = "item"
 key = "mux::reconcile::SidebarViewRepair"
 reason = "SidebarRecovery exposes landed per-view effects for diagnostic emission and direct integration assertions."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::ReconcileScope"
+reason = "Launch, explicit repair and the host's duplicate heal choose which verdicts one pub reconcile_sidebars pass may plan."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::SidebarRepairFailure"
+reason = "SidebarRecovery exposes each refused add, cleanup kill or close for diagnostic emission and direct integration assertions."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::ReconcileAddErr"
+reason = "Signature floor on execute_reconcile_plan's add effect: a backend's failed add carries its pane and cleanup result; pub(super) is already its narrowest."
 
 [[verdict]]
 kind = "item"

@@ -26,10 +26,17 @@ fn sidebar_opts(harness: &Harness) -> SidebarPaneOptions {
     }
 }
 
+fn pristine_opts(harness: &Harness) -> SidebarPaneOptions {
+    SidebarPaneOptions {
+        pristine_birth: true,
+        ..sidebar_opts(harness)
+    }
+}
+
 #[derive(Default)]
 struct FakeSidebarMux {
     open_calls: Mutex<usize>,
-    reconcile_calls: Mutex<usize>,
+    reconcile_scopes: Mutex<Vec<ReconcileScope>>,
     fail_open: bool,
     publish_before_sample: bool,
     fail_reconcile: bool,
@@ -49,7 +56,14 @@ impl FakeSidebarMux {
     }
 
     fn reconcile_calls(&self) -> usize {
-        *self.reconcile_calls.lock().expect("reconcile calls")
+        self.reconcile_scopes().len()
+    }
+
+    fn reconcile_scopes(&self) -> Vec<ReconcileScope> {
+        self.reconcile_scopes
+            .lock()
+            .expect("reconcile scopes")
+            .clone()
     }
 }
 
@@ -78,8 +92,12 @@ impl SidebarMux for FakeSidebarMux {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
+        scope: ReconcileScope,
     ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
-        *self.reconcile_calls.lock().expect("reconcile calls") += 1;
+        self.reconcile_scopes
+            .lock()
+            .expect("reconcile scopes")
+            .push(scope);
         if self.fail_reconcile {
             return Err(crate::mux::MuxErr::Command {
                 program: "fake".to_owned(),
@@ -120,23 +138,26 @@ fn reconcile_samples_heartbeat_claims_inside_the_backend() {
         publish_before_sample: true,
         ..Default::default()
     };
-    reconcile_session(&backend, &sidebar_opts(&h), Duration::ZERO, || {
-        panic!("an unchanged pass must not request a diagnostic sink")
-    })
+    reconcile_session(
+        &backend,
+        &sidebar_opts(&h),
+        ReconcileScope::Full,
+        Duration::ZERO,
+        || panic!("an unchanged pass must not request a diagnostic sink"),
+    )
     .expect("reconcile")
     .expect("session lock available");
     assert_eq!(backend.reconcile_calls(), 1);
 }
 
 #[test]
-fn reconcile_records_only_landed_view_repairs() {
+fn reconcile_records_landed_repairs_and_failed_operations() {
     use crate::diag::DiagSink;
-    use crate::diag::record::{DiagEnvelope, DiagSeverity};
-    use crate::mux::{SidebarRecovery, SidebarViewRepair};
+    use crate::diag::record::{DiagEnvelope, DiagSeverity, SidebarRepairStep};
+    use crate::mux::{SidebarRecovery, SidebarRepairFailure, SidebarViewRepair};
     use std::cell::Cell;
 
     let repaired = SidebarRecovery {
-        failed: 1,
         repairs: vec![
             SidebarViewRepair {
                 view: "@0".to_owned(),
@@ -151,7 +172,49 @@ fn reconcile_records_only_landed_view_repairs() {
         ],
         ..Default::default()
     };
-    for recovery in [repaired, SidebarRecovery::default()] {
+    let failed = SidebarRecovery {
+        failed: 1,
+        failures: vec![
+            SidebarRepairFailure {
+                view: "@2".to_owned(),
+                step: SidebarRepairStep::Add,
+                pane: Some(PaneId::from_parts(MuxName::Tmux, "%88")),
+                error: "unproven".to_owned(),
+            },
+            SidebarRepairFailure {
+                view: "@2".to_owned(),
+                step: SidebarRepairStep::CleanupKill,
+                pane: Some(PaneId::from_parts(MuxName::Tmux, "%88")),
+                error: "kill failed".to_owned(),
+            },
+        ],
+        ..Default::default()
+    };
+    let repaired_wire = [
+        serde_json::json!({
+            "kind": "sidebar_view_repaired", "view": "@0",
+            "closed": ["tmux:%1"], "added": "tmux:%3",
+        }),
+        serde_json::json!({
+            "kind": "sidebar_view_repaired", "view": "@1", "closed": ["tmux:%2"],
+        }),
+    ];
+    let failed_wire = [
+        serde_json::json!({
+            "kind": "sidebar_view_repair_failed", "view": "@2", "step": "add",
+            "pane": "tmux:%88", "error": "unproven",
+        }),
+        serde_json::json!({
+            "kind": "sidebar_view_repair_failed", "view": "@2", "step": "cleanup_kill",
+            "pane": "tmux:%88", "error": "kill failed",
+        }),
+    ];
+    let cases = [
+        (repaired, &repaired_wire[..], DiagSeverity::Info),
+        (failed, &failed_wire[..], DiagSeverity::Warn),
+        (SidebarRecovery::default(), &[][..], DiagSeverity::Info),
+    ];
+    for (recovery, expected, severity) in cases {
         for fail_reconcile in [false, true] {
             let h = Harness::new();
             let opts = sidebar_opts(&h);
@@ -168,55 +231,48 @@ fn reconcile_records_only_landed_view_repairs() {
             );
             let log_path = sink.log_path().unwrap();
             let sink_requests = Cell::new(0);
-            let result = reconcile_session(&backend, &opts, Duration::ZERO, || {
-                sink_requests.set(sink_requests.get() + 1);
-                sink
-            });
+            let result = reconcile_session(
+                &backend,
+                &opts,
+                ReconcileScope::Full,
+                Duration::ZERO,
+                || {
+                    sink_requests.set(sink_requests.get() + 1);
+                    sink
+                },
+            );
             assert_eq!(backend.reconcile_calls(), 1);
             if fail_reconcile {
                 assert!(matches!(result, Err(SidebarReconcileErr::Mux(_))));
             } else {
                 assert_eq!(result.unwrap(), Some(recovery.clone()));
             }
-            if fail_reconcile || recovery.repairs.is_empty() {
+            if fail_reconcile || expected.is_empty() {
                 assert!(
                     !log_path.exists(),
-                    "an unchanged or failed pass must write nothing"
+                    "an unchanged pass or an outer error must write nothing"
                 );
                 assert_eq!(sink_requests.get(), 0);
                 continue;
             }
-            assert!(
-                log_path.exists(),
-                "landed view repairs must leave diagnostic records"
-            );
             assert_eq!(sink_requests.get(), 1);
             let records: Vec<DiagEnvelope> = std::fs::read_to_string(log_path)
                 .unwrap()
                 .lines()
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-            assert_eq!(records.len(), 2, "{records:?}");
             for record in &records {
                 assert_eq!(record.v, "rimz.diag.v1");
                 assert_eq!(record.workspace_id, h.workspace_id);
                 assert_eq!(record.session_name, "session");
-                assert_eq!(record.severity, DiagSeverity::Info);
+                assert_eq!(record.severity, severity);
             }
             assert_eq!(
                 records
                     .iter()
                     .map(|record| serde_json::to_value(&record.event).unwrap())
                     .collect::<Vec<_>>(),
-                [
-                    serde_json::json!({
-                        "kind": "sidebar_view_repaired", "view": "@0",
-                        "closed": ["tmux:%1"], "added": "tmux:%3",
-                    }),
-                    serde_json::json!({
-                        "kind": "sidebar_view_repaired", "view": "@1", "closed": ["tmux:%2"],
-                    }),
-                ]
+                expected
             );
         }
     }
@@ -233,8 +289,8 @@ fn sidebar_launch_skips_when_fresh_heartbeat_exists() {
     assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
     assert_eq!(backend.open_calls(), 0);
     assert_eq!(
-        backend.reconcile_calls(),
-        1,
+        backend.reconcile_scopes(),
+        [ReconcileScope::Full],
         "a fresh workspace producer still ensures this session's view",
     );
 }
@@ -257,12 +313,12 @@ fn fresh_sidebar_launch_skips_reconcile_while_session_lock_is_held() {
 }
 
 #[test]
-fn sidebar_launch_opens_once_without_heartbeat() {
+fn pristine_birth_without_heartbeat_opens_once_without_reconcile() {
     let h = Harness::new();
     h.ensure_runtime();
     let backend = FakeSidebarMux::default();
 
-    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+    let outcome = launch_sidebar(&backend, &h.runtime, &pristine_opts(&h), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
@@ -270,16 +326,111 @@ fn sidebar_launch_opens_once_without_heartbeat() {
 }
 
 #[test]
-fn sidebar_launch_replaces_old_protocol_heartbeat() {
+fn existing_session_without_heartbeat_only_adds_missing_sidebars() {
+    let h = Harness::new();
+    h.ensure_runtime();
+    let backend = FakeSidebarMux::default();
+
+    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::Unchanged);
+    assert_eq!(
+        backend.open_calls(),
+        0,
+        "a live session never splits blindly"
+    );
+    assert_eq!(backend.reconcile_scopes(), [ReconcileScope::AddMissing]);
+}
+
+#[test]
+fn existing_session_add_opens_only_when_the_pass_defers_an_add() {
+    let cases = [
+        (
+            crate::mux::SidebarRecovery {
+                recovered: 1,
+                ..Default::default()
+            },
+            SidebarLaunchOutcome::Opened,
+            0,
+        ),
+        (
+            crate::mux::SidebarRecovery {
+                deferred: 1,
+                deferred_adds: 1,
+                ..Default::default()
+            },
+            SidebarLaunchOutcome::Opened,
+            1,
+        ),
+        (
+            crate::mux::SidebarRecovery {
+                deferred: 1,
+                ..Default::default()
+            },
+            SidebarLaunchOutcome::Unchanged,
+            0,
+        ),
+    ];
+    for (recovery, expected, opens) in cases {
+        let h = Harness::new();
+        h.ensure_runtime();
+        let backend = FakeSidebarMux {
+            recovery,
+            ..Default::default()
+        };
+
+        let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+
+        assert_eq!(outcome, expected);
+        assert_eq!(backend.open_calls(), opens);
+        assert_eq!(backend.reconcile_scopes(), [ReconcileScope::AddMissing]);
+    }
+}
+
+#[test]
+fn existing_session_with_old_protocol_heartbeat_does_not_open() {
     let h = Harness::new();
     h.write_sidebar("sidebar.old.json", "rimz.plugin.v1");
     let backend = FakeSidebarMux::default();
 
     let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
 
-    assert_eq!(outcome, SidebarLaunchOutcome::Opened);
-    assert_eq!(backend.open_calls(), 1);
-    assert_eq!(backend.reconcile_calls(), 0);
+    assert_eq!(outcome, SidebarLaunchOutcome::Unchanged);
+    assert_eq!(backend.open_calls(), 0);
+    assert_eq!(backend.reconcile_scopes(), [ReconcileScope::AddMissing]);
+}
+
+#[test]
+fn existing_session_reconcile_error_fails_without_opening() {
+    let h = Harness::new();
+    h.ensure_runtime();
+    let backend = FakeSidebarMux {
+        fail_reconcile: true,
+        ..Default::default()
+    };
+
+    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::Failed);
+    assert_eq!(backend.open_calls(), 0);
+    assert_eq!(backend.reconcile_calls(), 1);
+}
+
+#[test]
+fn existing_session_launch_opens_nothing_while_session_lock_is_held() {
+    let h = Harness::new();
+    h.ensure_runtime();
+    let backend = FakeSidebarMux::default();
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(
+        &h.runtime.sidebar_reconcile_lock(backend.name(), "session"),
+    )
+    .unwrap();
+
+    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::Unchanged);
+    assert_eq!(backend.open_calls(), 0);
+    assert_eq!(backend.reconcile_calls(), 0, "the holder excludes launch");
 }
 
 #[test]
@@ -289,7 +440,7 @@ fn sidebar_launch_after_rebirth_purge_ignores_fresh_heartbeat() {
     let backend = FakeSidebarMux::default();
 
     purge_rebirth_heartbeats(&h.runtime);
-    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+    let outcome = launch_sidebar(&backend, &h.runtime, &pristine_opts(&h), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert!(!heartbeat.exists(), "rebirth purges the stale incarnation");
@@ -307,7 +458,7 @@ fn sidebar_launch_error_is_non_fatal() {
     h.ensure_runtime();
     let backend = FakeSidebarMux::failing();
 
-    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+    let outcome = launch_sidebar(&backend, &h.runtime, &pristine_opts(&h), None);
 
     assert_eq!(outcome, SidebarLaunchOutcome::Failed);
     assert_eq!(backend.open_calls(), 1);

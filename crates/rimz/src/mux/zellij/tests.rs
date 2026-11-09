@@ -2953,7 +2953,11 @@ fn reconcile_sidebars_requires_a_live_listing_before_any_mutation() {
     };
 
     backend
-        .reconcile_sidebars(&room.sidebar_options(200), &live)
+        .reconcile_sidebars(
+            &room.sidebar_options(200),
+            &live,
+            crate::mux::ReconcileScope::Full,
+        )
         .expect_err("a cached roster cannot license structural repair");
     let log = shim_log(&temp);
     assert_eq!(
@@ -3001,7 +3005,7 @@ fn reconcile_samples_liveness_once_after_the_native_listing() {
     opts.rimz_bin = shim.clone();
     let report = room
         .backend(&shim)
-        .reconcile_sidebars(&opts, &live)
+        .reconcile_sidebars(&opts, &live, crate::mux::ReconcileScope::Full)
         .unwrap();
     let log = shim_log(&temp);
     assert_eq!(live.samples.get(), 1);
@@ -3019,9 +3023,11 @@ fn reconcile_rejects_a_terminal_without_a_stable_tab_id() {
     let room = TestRoom::new();
     room.write_cache(9_999_999_999_999, None, None, vec![]);
     let (temp, shim) = support::pane_roster_shim(r#"[{"id":7,"tab_position":1,"title":"work"}]"#);
-    let result = room
-        .backend(&shim)
-        .reconcile_sidebars(&room.sidebar_options(240), &SidebarLiveness::default());
+    let result = room.backend(&shim).reconcile_sidebars(
+        &room.sidebar_options(240),
+        &SidebarLiveness::default(),
+        crate::mux::ReconcileScope::Full,
+    );
     assert!(
         result.is_err_and(|err| err.to_string().contains("stable tab id")),
         "unreadable live tab identities must fail the pass"
@@ -3037,21 +3043,62 @@ fn reconcile_rejects_a_terminal_without_a_stable_tab_id() {
 #[test]
 fn reconcile_sidebars_defers_detached_adds_and_geometry_repairs() {
     // fa15860b2: detached geometry repairs defer alongside missing-sidebar adds.
+    let (report, log) = detached_reconcile_with_off_spec_sidebar(true);
+    assert_eq!(
+        report,
+        crate::mux::SidebarRecovery {
+            deferred: 2,
+            deferred_adds: 1,
+            ..Default::default()
+        }
+    );
+    assert!(log.contains("action list-clients"), "{log}");
+    assert!(
+        !log.contains("new-pane") && !log.contains("resize"),
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_geometry_only_deferral_counts_no_deferred_add() {
+    let (report, log) = detached_reconcile_with_off_spec_sidebar(false);
+    assert_eq!(
+        report,
+        crate::mux::SidebarRecovery {
+            deferred: 1,
+            ..Default::default()
+        }
+    );
+    assert!(
+        !log.contains("new-pane") && !log.contains("resize"),
+        "{log}"
+    );
+}
+
+/// Reconcile a detached room whose tab 0 holds an off-spec sidebar, and with
+/// `sidebarless_tab` a second tab that has none.
+#[cfg(unix)]
+fn detached_reconcile_with_off_spec_sidebar(
+    sidebarless_tab: bool,
+) -> (crate::mux::SidebarRecovery, String) {
     let room = TestRoom::new();
-    let produced_at_ms = unix_now_ms();
-    room.write_cache(
-        produced_at_ms,
-        None,
-        None,
-        vec![
-            terminal_pane(1, 0, 50, 150, "rimz-sidebar"),
-            terminal_pane(2, 0, 150, 0, "work"),
-            terminal_pane(3, 1, 200, 0, "work"),
-        ],
-    );
-    let (temp, shim) = support::pane_roster_shim(
-        r#"[{"id":1,"tab_id":0,"tab_position":0,"pane_columns":50,"pane_x":150,"title":"rimz-sidebar"},{"id":2,"tab_id":0,"tab_position":0,"pane_columns":150,"pane_x":0,"title":"work"},{"id":3,"tab_id":1,"tab_position":1,"pane_columns":200,"pane_x":0,"title":"work"}]"#,
-    );
+    let mut panes = vec![
+        terminal_pane(1, 0, 50, 150, "rimz-sidebar"),
+        terminal_pane(2, 0, 150, 0, "work"),
+    ];
+    let mut listing = vec![
+        r#"{"id":1,"tab_id":0,"tab_position":0,"pane_columns":50,"pane_x":150,"title":"rimz-sidebar"}"#,
+        r#"{"id":2,"tab_id":0,"tab_position":0,"pane_columns":150,"pane_x":0,"title":"work"}"#,
+    ];
+    if sidebarless_tab {
+        panes.push(terminal_pane(3, 1, 200, 0, "work"));
+        listing.push(
+            r#"{"id":3,"tab_id":1,"tab_position":1,"pane_columns":200,"pane_x":0,"title":"work"}"#,
+        );
+    }
+    room.write_cache(unix_now_ms(), None, None, panes);
+    let (temp, shim) = support::pane_roster_shim(&format!("[{}]", listing.join(",")));
     let live = SidebarLiveness {
         claimed_panes: [PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")].into(),
         ..Default::default()
@@ -3060,21 +3107,9 @@ fn reconcile_sidebars_defers_detached_adds_and_geometry_repairs() {
     opts.rimz_bin = shim.clone();
     let report = room
         .backend(&shim)
-        .reconcile_sidebars(&opts, &live)
+        .reconcile_sidebars(&opts, &live, crate::mux::ReconcileScope::Full)
         .expect("detached reconcile");
-    assert_eq!(
-        report,
-        crate::mux::SidebarRecovery {
-            deferred: 2,
-            ..Default::default()
-        }
-    );
-    let log = shim_log(&temp);
-    assert!(log.contains("action list-clients"), "{log}");
-    assert!(
-        !log.contains("new-pane") && !log.contains("resize"),
-        "{log}"
-    );
+    (report, shim_log(&temp))
 }
 
 #[cfg(unix)]
@@ -3129,6 +3164,7 @@ exit 0
                     opts
                 },
                 &live,
+                crate::mux::ReconcileScope::Full,
             )
             .expect("live structural reconcile");
 
@@ -3213,7 +3249,7 @@ exit 0
     };
     let report = room
         .backend(&shim)
-        .reconcile_sidebars(&opts, &live)
+        .reconcile_sidebars(&opts, &live, crate::mux::ReconcileScope::Full)
         .expect("unknown geometry report");
     assert_eq!(report.misdocked, 1, "{report:?}");
     assert_eq!(report.redocked, 0, "no action succeeded: {report:?}");
@@ -3299,7 +3335,11 @@ exit 0
     );
     let report = room
         .backend(&shim)
-        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &SidebarLiveness::default(),
+            crate::mux::ReconcileScope::Full,
+        )
         .expect("reconcile");
     let log = shim_log(&temp);
     assert!(
@@ -3351,7 +3391,11 @@ exit 0
         opts.rimz_bin = shim.clone();
         let report = room
             .backend(&shim)
-            .reconcile_sidebars(&opts, &SidebarLiveness::default())
+            .reconcile_sidebars(
+                &opts,
+                &SidebarLiveness::default(),
+                crate::mux::ReconcileScope::Full,
+            )
             .expect("repair report");
         let log = shim_log(&temp);
         let adds: Vec<_> = log
@@ -3420,8 +3464,11 @@ fn reconcile_preserves_completed_counts_after_post_plan_read_failures() {
             ))
             .finish();
         let result = tracing::subscriber::with_default(subscriber, || {
-            room.backend(&shim)
-                .reconcile_sidebars(&opts, &SidebarLiveness::default())
+            room.backend(&shim).reconcile_sidebars(
+                &opts,
+                &SidebarLiveness::default(),
+                crate::mux::ReconcileScope::Full,
+            )
         });
         assert!(
             result.is_ok(),
@@ -3490,14 +3537,25 @@ fn reconcile_reports_missing_mount_heartbeat_without_a_parse_error() {
         ))
         .finish();
     let report = tracing::subscriber::with_default(subscriber, || {
-        room.backend(&shim)
-            .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        room.backend(&shim).reconcile_sidebars(
+            &opts,
+            &SidebarLiveness::default(),
+            crate::mux::ReconcileScope::Full,
+        )
     })
     .expect("failed mount proof is reported");
     assert_eq!(
         report,
         crate::mux::SidebarRecovery {
             failed: 1,
+            failures: vec![crate::mux::SidebarRepairFailure {
+                view: "40".to_owned(),
+                step: crate::diag::record::SidebarRepairStep::Add,
+                pane: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_9")),
+                error: "sidebar zellij:terminal_9 mounted in tab 40 but published no \
+                        current-build heartbeat within 6 s"
+                    .to_owned(),
+            }],
             ..Default::default()
         }
     );
@@ -3621,7 +3679,11 @@ exit 0
     );
     let report = room
         .backend(&shim)
-        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &SidebarLiveness::default(),
+            crate::mux::ReconcileScope::Full,
+        )
         .expect("repair report");
     let log = shim_log(&temp);
     assert_eq!(

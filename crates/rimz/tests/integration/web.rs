@@ -137,8 +137,17 @@ if [ "$1" = "-V" ]; then
 elif [ "$1" = "list-sessions" ]; then
   printf '%b\n' "$RIMZ_TEST_TMUX_SESSIONS"
 elif [ "$1" = "list-panes" ]; then
-  session=$(printf '%b' "$RIMZ_TEST_TMUX_SESSIONS" | head -n 1)
+  # PATH holds only this directory, so the session comes from builtins: the
+  # one `-t` names, else the first listed.
+  session=${RIMZ_TEST_TMUX_SESSIONS%%\\n*}
+  prev=
+  for arg; do
+    if [ "$prev" = "-t" ]; then session=$arg; fi
+    prev=$arg
+  done
   printf '%s,@1,%%1,sh,%s,%s,1,main,rimz-sidebar,0\n' "$session" "$RIMZ_TEST_TMUX_CWD" "$$"
+elif [ "$1" = "split-window" ]; then
+  printf '%s\n' "$RIMZ_TEST_TMUX_SPLIT_PANE"
 fi
 printf '%s\n' "$*" >> "$RIMZ_TEST_TMUX_LOG"
 exit 0
@@ -213,6 +222,10 @@ impl WebFixture {
             .env("RIMZ_WEB_FONTS_OFFLINE", "1")
             .env("RIMZ_TEST_TMUX_LOG", &self.tmux_log)
             .env("RIMZ_TEST_TMUX_SESSIONS", sessions)
+            .env(
+                "RIMZ_TEST_TMUX_SPLIT_PANE",
+                crate::common::room::TMUX_SHIM_SIDEBAR_PANE,
+            )
             .env("RIMZ_TEST_TMUX_CWD", &self.env.project_root);
         command
     }

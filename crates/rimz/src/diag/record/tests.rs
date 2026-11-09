@@ -134,6 +134,51 @@ fn sidebar_view_repairs_round_trip_and_distinguish_each_effect() {
 }
 
 #[test]
+fn sidebar_view_repair_failures_round_trip_as_warnings_per_operation() {
+    for (step, pane) in [
+        ("add", None),
+        ("cleanup_kill", Some("tmux:%88")),
+        ("close", Some("tmux:%3")),
+    ] {
+        let mut wire = serde_json::json!({
+            "kind": "sidebar_view_repair_failed", "view": "@12", "step": step,
+            "error": "kill-pane: can't find pane",
+        });
+        if let Some(pane) = pane {
+            wire["pane"] = pane.into();
+        }
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(decoded.is_ok(), "repair failure must decode: {decoded:?}");
+        let event = decoded.unwrap();
+        assert_eq!(event.severity(), DiagSeverity::Warn);
+        assert_eq!(event.kind_name(), "sidebar_view_repair_failed");
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+        let summary = event.summary();
+        assert!(
+            summary.contains("@12") && summary.contains(step),
+            "{summary}"
+        );
+        assert!(summary.contains("can't find pane"), "{summary}");
+        if let Some(pane) = pane {
+            assert!(summary.contains(pane), "{summary}");
+        }
+        for (field, value) in [
+            ("view", serde_json::json!("@13")),
+            (
+                "step",
+                serde_json::json!(if step == "add" { "close" } else { "add" }),
+            ),
+            ("pane", serde_json::json!("tmux:%99")),
+        ] {
+            let mut other = wire.clone();
+            other[field] = value;
+            let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+            assert_ne!(event.identity_key(), other.identity_key(), "{field}");
+        }
+    }
+}
+
+#[test]
 fn stale_presence_rosters_round_trip_and_group_by_session_and_writer() {
     let wire = serde_json::json!({
         "kind": "presence_roster_stale", "session_name": "room",
@@ -1398,6 +1443,15 @@ fn representative_events_keep_json_wire_shape() {
                 gate_reject_streak: 0,
                 health_failure_streak: 0,
                 dropped_msgs: 0,
+            },
+        ),
+        (
+            r#"{"kind":"sidebar_view_repair_failed","view":"@12","step":"cleanup_kill","pane":"tmux:%88","error":"kill-pane failed"}"#,
+            DiagEvent::SidebarViewRepairFailed {
+                view: "@12".to_owned(),
+                step: SidebarRepairStep::CleanupKill,
+                pane: Some(PaneId::from_parts(MuxName::Tmux, "%88")),
+                error: "kill-pane failed".to_owned(),
             },
         ),
     ];

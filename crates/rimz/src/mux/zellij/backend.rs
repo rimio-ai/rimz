@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
+use super::super::mount_proof::{MountProof, prove_sidebar_mount, sidebar_build_identity};
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::pane_topology::{
     PaneTopologyCache, PaneTopologyPane, ZellijPaneId, read_pane_topology_cache,
@@ -28,10 +28,10 @@ use crate::mux::tab_name::{TabNameIntent, TabOwnerRecord, ViewNaming};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
     CommandSpec, CompanionAppendErr, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr,
-    PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
-    ReconcilePaneRole, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed, SessionHealth,
-    SessionLiveness, SessionOptions, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    PaneCapture, PaneListOptions, PaneListing, ReconcileAddErr, ReconcileAddOutcome, ReconcilePane,
+    ReconcilePaneRole, ReconcileScope, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed,
+    SessionHealth, SessionLiveness, SessionOptions, SidebarLivenessSource, SidebarPaneOptions,
+    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
     memoized_version,
 };
@@ -1511,14 +1511,10 @@ impl MuxBackend for ZellijBackend {
         //   - Absent: first birth.
         //   - Exited: `attach` would resurrect a stale serialized layout (wrong
         //             geometry, suspended command panes), so delete and rebirth.
-        //   - Live + sidebar: healthy only when the caller still trusts a
-        //             fresh current-protocol heartbeat. If launch reached this
-        //             method after rejecting the heartbeat, the pane may be a
-        //             stale renderer with an incompatible snapshot schema.
-        //   - Live, no sidebar: the renderer self-closed or crashed (or a launch
-        //             was skipped and the session was born outside RimZ).
-        //             A sidebar-less rimz session is non-functional
-        //             and cannot gain a left pane in place, so rebirth it.
+        //   - Live: launch reaches this only when an in-place add into a tab
+        //             without a sidebar deferred because no client is attached,
+        //             and a detached screen drops that mount. A sidebar-less
+        //             rimz session is non-functional, so rebirth it.
         match self.session_state(&opts.session_name) {
             SessionLiveness::Absent => self.create_session_with_sidebar(opts, daemon),
             SessionLiveness::Exited => {
@@ -1613,6 +1609,7 @@ impl MuxBackend for ZellijBackend {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
+        scope: ReconcileScope,
     ) -> Result<SidebarRecovery> {
         let client_view = self
             .client_view(ClientFocusOptions {
@@ -1642,7 +1639,7 @@ impl MuxBackend for ZellijBackend {
         }
         let restoration = client_restoration_target(&panes, &client_view);
         let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
-        let plan = super::super::plan_reconcile(&views, &live);
+        let plan = super::super::plan_reconcile(&views, &live, scope);
         let planned_closes = plan.close_panes();
         let off_spec =
             off_spec_sidebars(&panes, &planned_closes, Some(opts.target), opts.max_percent);
@@ -1673,15 +1670,17 @@ impl MuxBackend for ZellijBackend {
                     output_error(format!("invalid sidebar tab id `{view}`: {err}"))
                 })?;
                 let added = self.add_sidebar_to_tab(opts, tab_id, replacing, &viewed_tabs)?;
-                if !prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
-                    if let Some(raw_id) = parse_zellij_raw(&added.pane) {
-                        self.cleanup_failed_add(opts, raw_id);
-                    }
-                }) {
-                    return Err(MuxErr::SidebarMountUnproven {
+                if let MountProof::Unproven { cleanup } =
+                    prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
+                        parse_zellij_raw(&added.pane)
+                            .map_or(Ok(()), |raw_id| self.cleanup_failed_add(opts, raw_id))
+                    })
+                {
+                    let error = MuxErr::SidebarMountUnproven {
                         pane: added.pane.to_string(),
                         view: format!("tab {tab_id}"),
-                    });
+                    };
+                    return Err(ReconcileAddErr::unproven(error, added.pane, cleanup));
                 }
                 if !replacing.is_empty() {
                     replacements.push((tab_id, added.pane.clone(), replacing.to_vec()));

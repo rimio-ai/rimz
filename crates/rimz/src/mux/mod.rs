@@ -32,10 +32,13 @@ pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub(crate) use keymap::register_room_keys;
 pub use pane_writer::{PaneWriter, exclude_pane_input};
 use reconcile::{
-    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
+    ReconcileAddErr, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
 };
-pub use reconcile::{SidebarLiveness, SidebarLivenessSource, SidebarRecovery, SidebarViewRepair};
+pub use reconcile::{
+    ReconcileScope, SidebarLiveness, SidebarLivenessSource, SidebarRecovery, SidebarRepairFailure,
+    SidebarViewRepair,
+};
 pub(crate) use selection::LiveSessions;
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
@@ -1267,7 +1270,10 @@ pub trait MuxBackend: Send + Sync {
     /// pane sends. The submit Enter is not included; callers follow with
     /// [`Self::send_key`] so the trailing `\r` lands outside the paste.
     fn paste_text(&self, pane: &PaneId, session: &str, text: &str) -> Result<()>;
-    /// Birth (or heal) the session's working view with its sidebar. When `daemon`
+    /// Birth the session's working view with its sidebar. Launch calls it for a
+    /// session it is creating, and for an existing session only when an
+    /// [`ReconcileScope::AddMissing`] pass deferred an add (a detached Zellij
+    /// room, which this rebirths). When `daemon`
     /// is `Some`, the session is born with that `sidebar | content | hosts…`
     /// view leading and the working view focused second. Zellij can move later
     /// tabs one position at a time, but births this leading view in place for
@@ -1332,19 +1338,24 @@ pub trait MuxBackend: Send + Sync {
         let _ = name;
         Vec::new()
     }
-    /// Converge every view (Zellij tab / tmux window) to one healthy sidebar per
-    /// working view: in a working view close duplicate or unresponsive sidebar
-    /// panes (those `live` does not claim) and re-add one if none survived; in an
-    /// orphan sidebar-only view (no working pane, no daemon host) close every
-    /// sidebar pane so a wedged renderer that never self-closed collapses with its
-    /// view. Views with daemon hosts are occupied too. All in place, without
-    /// disturbing working panes. In-place adds and repairs size to each view's
-    /// live target: the room override verbatim, otherwise the configured
-    /// percentage capped at `max_cols`. One best-effort pass: the first failed
-    /// verdict stops execution and counts it and every remaining one as failed.
-    /// Zellij keeps completed counts on post-execution read failures, adds one
-    /// failure, and still attempts focus restoration before returning the report.
-    /// Unlike [`Self::open_sidebar`], this never deletes or recreates the session.
+    /// Converge every view (Zellij tab / tmux window) toward one healthy sidebar
+    /// per working view, within `scope`. [`ReconcileScope::Full`]: in a working
+    /// view close duplicate or unresponsive sidebar panes (those `live` does not
+    /// claim) and re-add one if none survived; in an orphan sidebar-only view (no
+    /// working pane, no daemon host) close every sidebar pane so a wedged
+    /// renderer that never self-closed collapses with its view.
+    /// [`ReconcileScope::AddMissing`] only adds to an occupied view with no
+    /// sidebar pane; [`ReconcileScope::CloseDuplicates`] only closes the
+    /// duplicates beside a claimed sidebar. Views with daemon hosts are occupied
+    /// too. All in place, without disturbing working panes. In-place adds and
+    /// repairs size to each view's live target: the room override verbatim,
+    /// otherwise the configured percentage capped at `max_cols`. One best-effort
+    /// pass: the first failed verdict stops execution and counts it and every
+    /// remaining one as failed; each failed add, mount-proof cleanup kill, or
+    /// close is also listed in [`SidebarRecovery::failures`]. Zellij keeps
+    /// completed counts on post-execution read failures, adds one failure, and
+    /// still attempts focus restoration before returning the report. Unlike
+    /// [`Self::open_sidebar`], this never deletes or recreates the session.
     /// Samples `live` exactly once after the native pane listing used by the
     /// planner, before planning and before any sidebar add, close, or Zellij's
     /// pre-execution geometry repair.
@@ -1352,6 +1363,7 @@ pub trait MuxBackend: Send + Sync {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
+        scope: ReconcileScope,
     ) -> Result<SidebarRecovery>;
     /// Launch the daemon dashboard in one dedicated, named background view (tmux
     /// window / Zellij tab) of an existing session, born `sidebar | content |

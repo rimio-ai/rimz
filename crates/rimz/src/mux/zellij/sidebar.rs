@@ -291,7 +291,7 @@ impl ZellijBackend {
                 Ok(listing) => listing.panes,
                 Err(err) => {
                     if let Some(raw_id) = fallback_misdocked {
-                        self.cleanup_failed_add(opts, raw_id);
+                        let _ = self.cleanup_failed_add(opts, raw_id);
                     }
                     return Err(err);
                 }
@@ -360,7 +360,7 @@ impl ZellijBackend {
                     let cleanup = self.cleanup_missed_add(opts, tab_id, &before, hint, viewed_tabs);
                     if let Err(err) = result.map(|_| ()).and(cleanup) {
                         if let Some(raw_id) = fallback_misdocked {
-                            self.cleanup_failed_add(opts, raw_id);
+                            let _ = self.cleanup_failed_add(opts, raw_id);
                         }
                         return Err(err);
                     }
@@ -392,9 +392,9 @@ impl ZellijBackend {
             let raw_id = match mounted {
                 MountOutcome::Intended(raw_id) => raw_id,
                 MountOutcome::WrongTab(raw_id) => {
-                    self.cleanup_failed_add(opts, raw_id);
+                    let _ = self.cleanup_failed_add(opts, raw_id);
                     if let Some(previous) = fallback_misdocked {
-                        self.cleanup_failed_add(opts, previous);
+                        let _ = self.cleanup_failed_add(opts, previous);
                     }
                     return Err(super::output_error(format!(
                         "new-pane mounted sidebar terminal_{raw_id} outside target tab {tab_id}"
@@ -403,7 +403,7 @@ impl ZellijBackend {
             };
             let pane = PaneId::from(ZellijPaneId::Terminal(raw_id));
             if let Some(previous) = fallback_misdocked.take() {
-                self.cleanup_failed_add(opts, previous);
+                let _ = self.cleanup_failed_add(opts, previous);
             }
             if !replacing.is_empty() && anchor.is_some() {
                 // Its old neighbour still owns the left edge. Verify geometry
@@ -430,7 +430,7 @@ impl ZellijBackend {
             let (dock, retry) = match geometry {
                 Ok(outcome) => outcome,
                 Err(err) => {
-                    self.cleanup_failed_add(opts, raw_id);
+                    let _ = self.cleanup_failed_add(opts, raw_id);
                     return Err(err);
                 }
             };
@@ -515,7 +515,7 @@ impl ZellijBackend {
                     && is_sidebar_pane(pane)
                     && !before.contains(&pane.id)
                 {
-                    self.cleanup_failed_add(opts, pane.id);
+                    let _ = self.cleanup_failed_add(opts, pane.id);
                 }
             }
         }
@@ -865,12 +865,12 @@ impl ZellijBackend {
     }
 
     /// Undo a failed add for a pane that a fresh listing already proved is a
-    /// newly-created sidebar in the target tab: best-effort close it, then kill
-    /// the spawned serve pair attributed to that pane. A stdout-only
-    /// `new-pane` hint never reaches this path.
-    pub(super) fn cleanup_failed_add(&self, opts: &SidebarPaneOptions, raw_id: u64) {
+    /// newly-created sidebar in the target tab: close it, then kill the spawned
+    /// serve pair attributed to that pane, returning the close's result. A
+    /// stdout-only `new-pane` hint never reaches this path.
+    pub(super) fn cleanup_failed_add(&self, opts: &SidebarPaneOptions, raw_id: u64) -> Result<()> {
         let pane = PaneId::from(ZellijPaneId::Terminal(raw_id));
-        let _ = self.close_pane(&opts.session_name, &pane);
+        let closed = self.close_pane(&opts.session_name, &pane);
         let killed = super::super::recovery::kill_sidebar_serve_for_pane(
             opts.workspace_id.as_str(),
             &opts.session_name,
@@ -885,6 +885,7 @@ impl ZellijBackend {
                 "sidebar add cleanup: reaped the unmounted serve pair",
             );
         }
+        closed
     }
 
     /// Whether `session` has a persistent attached client. A real

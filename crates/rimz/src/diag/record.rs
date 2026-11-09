@@ -81,6 +81,25 @@ pub enum ViewFitTrigger {
     Jump,
 }
 
+/// The native operation a failed sidebar repair attempted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarRepairStep {
+    Add,
+    CleanupKill,
+    Close,
+}
+
+impl SidebarRepairStep {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::CleanupKill => "cleanup_kill",
+            Self::Close => "close",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarHostUnavailableCause {
@@ -639,6 +658,13 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         added: Option<PaneId>,
     },
+    SidebarViewRepairFailed {
+        view: String,
+        step: SidebarRepairStep,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane: Option<PaneId>,
+        error: String,
+    },
     PaneWinsizeRepaired {
         pane: PaneId,
         rows: u16,
@@ -829,6 +855,7 @@ impl DiagEvent {
             | Self::SubagentOrphanRepairFailed { .. }
             | Self::SubagentZoneLookupFailed { .. }
             | Self::SubagentPaneBindTimeout { .. }
+            | Self::SidebarViewRepairFailed { .. }
             | Self::ProviderStartupExit { .. }
             | Self::PaneCacheDivergence { .. }
             | Self::PresenceRosterStale { .. }
@@ -963,6 +990,7 @@ impl DiagEvent {
             Self::ScopedBindRestoreFailed { .. } => "scoped_bind_restore_failed",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
             Self::SidebarViewRepaired { .. } => "sidebar_view_repaired",
+            Self::SidebarViewRepairFailed { .. } => "sidebar_view_repair_failed",
             Self::HiddenViewsFitted { .. } => "hidden_views_fitted",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::RecoveryChildEnded { .. } => "recovery_child_ended",
@@ -1286,6 +1314,9 @@ impl DiagEvent {
             } => {
                 format!("{}:{view}:{added:?}:{closed:?}", self.kind_name())
             }
+            Self::SidebarViewRepairFailed {
+                view, step, pane, ..
+            } => format!("{}:{view}:{}:{pane:?}", self.kind_name(), step.as_str()),
             Self::HiddenViewsFitted { trigger, .. } => format!("{}:{trigger:?}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
@@ -1901,6 +1932,21 @@ impl DiagEvent {
                     .map(ToString::to_string)
                     .unwrap_or_else(|| "none".to_owned());
                 format!("view {view} repaired: closed [{closed}]; added {added}")
+            }
+            Self::SidebarViewRepairFailed {
+                view,
+                step,
+                pane,
+                error,
+            } => {
+                let pane = pane
+                    .as_ref()
+                    .map(|pane| format!(" of {pane}"))
+                    .unwrap_or_default();
+                format!(
+                    "view {view} sidebar {}{pane} failed: {error}",
+                    step.as_str()
+                )
             }
             Self::HiddenViewsFitted {
                 trigger,

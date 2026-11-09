@@ -1909,7 +1909,9 @@ fi
         temp: &temp,
         samples: Cell::new(0),
     };
-    let report = backend.reconcile_sidebars(&opts, &live).unwrap();
+    let report = backend
+        .reconcile_sidebars(&opts, &live, crate::mux::ReconcileScope::Full)
+        .unwrap();
     let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
     assert_eq!(live.samples.get(), 1);
     assert!(

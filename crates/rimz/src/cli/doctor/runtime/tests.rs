@@ -218,6 +218,23 @@ fn sidebar_view_repairs_are_recovered_information() {
 }
 
 #[test]
+fn sidebar_view_repair_failures_need_investigation_as_warnings() {
+    let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+        "kind": "sidebar_view_repair_failed", "view": "@0", "step": "close",
+        "pane": "tmux:%1", "error": "kill-pane: can't find pane",
+    }));
+    assert!(
+        event.is_ok(),
+        "doctor must recognize a failed view repair: {event:?}"
+    );
+    let event = event.unwrap();
+    assert_eq!(
+        classify_diagnostic(&event, event.severity()),
+        (model::DoctorState::Investigate, model::DoctorImpact::Warn)
+    );
+}
+
+#[test]
 fn frozen_presence_roster_is_an_actionable_warning() {
     let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
         "kind": "presence_roster_stale", "session_name": "frozen-room",

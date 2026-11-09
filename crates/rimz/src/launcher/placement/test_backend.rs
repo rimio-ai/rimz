@@ -185,6 +185,7 @@ impl m::MuxBackend for Backend {
         &self,
         _opts: &m::SidebarPaneOptions,
         _live: &dyn m::SidebarLivenessSource,
+        _scope: m::ReconcileScope,
     ) -> m::Result<m::SidebarRecovery> {
         panic!("unexpected reconcile_sidebars")
     }

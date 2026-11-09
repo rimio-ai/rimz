@@ -465,7 +465,7 @@ Each attachment owns its heartbeat lease in the host, naming the host's room soc
 
 `rimz`, `rimz start`, and cwd-based `rimz attach` ensure the workspace session exists, then launch sidebars best-effort. Both backends run the same renderer. On Zellij, the birth layout's `new_tab_template` carries a left `rimz-sidebar` pane, so every tab is born with one. On tmux, RimZ splits a left sidebar into the first window and repeats the split from an `after-new-window` hook ([multiplexers.md](../multiplexers.md#the-sidebar-and-the-after-new-window-hook)).
 
-Launch is idempotent by heartbeat. Only readable, current-protocol, fresh heartbeats count as live, so a crashed or upgraded sidebar does not block relaunch. `sidebar-launch.lock` serializes check-then-spawn, so concurrent attaches do not each spawn one.
+Launch is idempotent by heartbeat. Only readable, current-protocol, fresh heartbeats count as live, so a crashed or upgraded sidebar does not block relaunch. For a session being born, `sidebar-launch.lock` serializes check-then-spawn, so concurrent attaches do not each spawn one. An existing session with no fresh heartbeat never gets a blind split: launch adds a sidebar only to each occupied view that has none, under the session's reconcile lock ([multiplexers.md](../multiplexers.md#one-sidebar-per-view)).
 
 ### Drawing
 
