@@ -819,7 +819,7 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     };
     server
         .backend
-        .reconcile_sidebars(&reload_opts, &liveness)
+        .reconcile_sidebars(&reload_opts, &liveness, rimz::mux::ReconcileScope::Full)
         .expect("reconcile_sidebars");
     assert_eq!(
         left_pane_width(&server, "verdict:0"),
@@ -1094,6 +1094,72 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
         server.display(explicit_work.pane_id.raw(), "#{pane_start_command}"),
         explicit_command,
         "explicit-command tabs keep their original process",
+    );
+}
+
+#[test]
+fn stale_heartbeat_launch_adds_only_where_a_tmux_window_has_no_sidebar() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-stale");
+    server.tmux(&["new-window", "-d", "-t", "rimz-stale:"]);
+    let workspace = TempDir::new().expect("workspace");
+    let workspace_id = WorkspaceId::from_project_root(workspace.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), workspace.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    assert!(!rimz::sidebar::fresh_sidebar_present(&runtime));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = SidebarPaneOptions {
+        runtime: runtime.clone(),
+        workspace_id: workspace_id.clone(),
+        project_root: workspace.path().to_path_buf(),
+        cwd: workspace.path().to_path_buf(),
+        ..sidebar_opts(server._tempdir.path(), "rimz-stale", stub, Some(80))
+    };
+    assert!(!opts.pristine_birth, "the session already exists");
+    let sidebars_per_window = || {
+        let panes = server
+            .backend
+            .list_panes(PaneListOptions {
+                session_name: Some("rimz-stale".to_owned()),
+                ..Default::default()
+            })
+            .expect("list_panes")
+            .panes;
+        let mut windows = std::collections::BTreeMap::new();
+        for pane in &panes {
+            let count = windows.entry(pane.view_id.clone()).or_insert(0);
+            if pane.is_rimz_sidebar() {
+                *count += 1;
+            }
+        }
+        (windows.into_values().collect::<Vec<_>>(), panes.len())
+    };
+
+    assert_eq!(
+        launch_sidebar_if_needed(&server.backend, &runtime, &opts, None),
+        SidebarLaunchOutcome::Opened,
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let (sidebars, pane_count) = loop {
+        let observed = sidebars_per_window();
+        if observed.0 == [1, 1] || std::time::Instant::now() >= deadline {
+            break observed;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(sidebars, [1, 1], "each sidebar-less window gains one");
+
+    // No heartbeat is fresh, as when one aged out during birth's work.
+    assert!(!rimz::sidebar::fresh_sidebar_present(&runtime));
+    assert_eq!(
+        launch_sidebar_if_needed(&server.backend, &runtime, &opts, None),
+        SidebarLaunchOutcome::Unchanged,
+    );
+    assert_eq!(
+        sidebars_per_window(),
+        (vec![1, 1], pane_count),
+        "a window that shows a sidebar never gains a second",
     );
 }
 

@@ -74,6 +74,10 @@ pub fn date_heartbeat_as_live(path: &std::path::Path) {
 /// it cannot import the constant; keep the two in step.
 pub const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
+/// The pane id a tmux shim prints for a sidebar `split-window`, which
+/// [`ShimRoom::watch_tmux`] names in the heartbeat it publishes.
+pub const TMUX_SHIM_SIDEBAR_PANE: &str = "%2";
+
 /// Publish the renderer's first heartbeat after birth (not before the rebirth
 /// purge), and answer topology requests as the presence plugin would.
 pub struct ShimRoom {
@@ -114,6 +118,10 @@ impl ShimRoom {
         })
     }
 
+    /// Answers each sidebar `split-window` for `session_name` as the mounted
+    /// renderer would: a heartbeat from [`TMUX_SHIM_SIDEBAR_PANE`], the pane id
+    /// the shim prints, at the build of the binary the split runs, so the
+    /// reconcile add's mount proof passes.
     pub fn watch_tmux(
         runtime: rimz::RuntimePaths,
         session_name: &str,
@@ -123,16 +131,31 @@ impl ShimRoom {
         let expected = format!("split-window with sidebar serve and --session-name {session_name}");
         Self::watch_trace(trace, expected, move |line| {
             let args = line.split_whitespace().collect::<Vec<_>>();
-            if args.first() == Some(&"split-window")
-                && args.windows(2).any(|pair| pair == ["sidebar", "serve"])
-                && args
+            let Some(serve) = args
+                .windows(2)
+                .position(|pair| pair == ["sidebar", "serve"])
+            else {
+                return false;
+            };
+            if args.first() != Some(&"split-window")
+                || serve == 0
+                || !args
                     .windows(2)
                     .any(|pair| pair == ["--session-name", &session_name])
             {
-                seed_sidebar_heartbeat(&runtime, MuxName::Tmux, &session_name, "seeded");
-                return true;
+                return false;
             }
-            false
+            let path = seed_sidebar_heartbeat(&runtime, MuxName::Tmux, &session_name, "seeded");
+            let mut heartbeat =
+                rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&path).expect("read seed");
+            heartbeat.pane_id = Some(PaneId::from_parts(MuxName::Tmux, TMUX_SHIM_SIDEBAR_PANE));
+            let build = rimz::build_id::of_file(std::path::Path::new(args[serve - 1]))
+                .expect("build id of the split's sidebar binary");
+            heartbeat.build = Some(build);
+            rimz::disk::atomic::write_temp_then_rename_cache(&path, &heartbeat)
+                .expect("write mounted heartbeat");
+            date_heartbeat_as_live(&path);
+            true
         })
     }
 

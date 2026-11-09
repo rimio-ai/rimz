@@ -1469,7 +1469,6 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
     };
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let zellij_log = env.project_root.join("zellij-live.log");
-    let _room = ShimRoom::watch(&env, &zellij_log);
 
     let mut unattended = env.rimz();
     configure_actionable_hooks(&mut unattended, &env, &bin_dir, &zellij_log, &sessions);
@@ -1576,6 +1575,13 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
             EventKind::SessionDeath(_) | EventKind::SessionRebirth
         )),
         "a live settlement writes no session event"
+    );
+    // The listed room's one tab holds its sidebar, so each start's add pass
+    // defers only geometry and must neither inspect nor rebirth the session.
+    let trace = std::fs::read_to_string(&zellij_log).expect("zellij trace");
+    assert!(
+        !trace.contains("\trimz:dump_topology") && !trace.contains("\tdelete-session"),
+        "{trace}"
     );
 }
 

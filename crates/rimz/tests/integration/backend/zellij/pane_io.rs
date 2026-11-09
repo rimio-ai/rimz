@@ -126,7 +126,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     let mut liveness = SidebarLiveness::default();
     liveness.claimed_panes.insert(sidebar_pane.clone());
     let report = backend
-        .reconcile_sidebars(&opts, &liveness)
+        .reconcile_sidebars(&opts, &liveness, rimz::mux::ReconcileScope::Full)
         .expect("reconcile fullscreen tab");
     assert_eq!(report.misdocked, 0, "fullscreen geometry is not a misdock");
     assert_eq!(report.redocked, 0, "fullscreen geometry is not repaired");

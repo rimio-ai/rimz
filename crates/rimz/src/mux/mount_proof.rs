@@ -49,25 +49,34 @@ pub(super) fn sidebar_build_identity(opts: &SidebarPaneOptions) -> crate::mux::R
     })
 }
 
+/// Whether a newly-added pane proved its mount, and the cleanup's result when not.
+#[derive(Debug)]
+pub(super) enum MountProof {
+    Verified,
+    Unproven { cleanup: crate::mux::Result<()> },
+}
+
 /// Prove a newly-added pane belongs to the current build. Failed proof invokes
-/// backend-native best-effort cleanup before the caller constructs its exact
-/// transport error.
+/// backend-native cleanup and returns its result, so the caller can report a
+/// failed kill beside its exact transport error.
 pub(super) fn prove_sidebar_mount(
     opts: &SidebarPaneOptions,
     mux: MuxName,
     pane: &PaneId,
     build: &str,
-    cleanup: impl FnOnce(),
-) -> bool {
+    cleanup: impl FnOnce() -> crate::mux::Result<()>,
+) -> MountProof {
     finish_mount_proof(wait_for_sidebar_heartbeat(opts, mux, pane, build), cleanup)
 }
 
-fn finish_mount_proof(verified: bool, cleanup: impl FnOnce()) -> bool {
+fn finish_mount_proof(
+    verified: bool,
+    cleanup: impl FnOnce() -> crate::mux::Result<()>,
+) -> MountProof {
     if verified {
-        true
+        MountProof::Verified
     } else {
-        cleanup();
-        false
+        MountProof::Unproven { cleanup: cleanup() }
     }
 }
 
@@ -78,9 +87,33 @@ mod tests {
     #[test]
     fn failed_mount_proof_cleans_up_only_after_failure() {
         let cleaned = std::cell::Cell::new(0);
-        assert!(finish_mount_proof(true, || cleaned.set(cleaned.get() + 1)));
+        let clean = || {
+            cleaned.set(cleaned.get() + 1);
+            Ok(())
+        };
+        assert!(matches!(
+            finish_mount_proof(true, clean),
+            MountProof::Verified
+        ));
         assert_eq!(cleaned.get(), 0);
-        assert!(!finish_mount_proof(false, || cleaned.set(cleaned.get() + 1)));
+        assert!(matches!(
+            finish_mount_proof(false, clean),
+            MountProof::Unproven { cleanup: Ok(()) }
+        ));
         assert_eq!(cleaned.get(), 1);
+    }
+
+    #[test]
+    fn failed_mount_proof_surfaces_a_failed_cleanup_kill() {
+        let proof = finish_mount_proof(false, || {
+            Err(crate::mux::MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "kill-pane refused".to_owned(),
+            })
+        });
+        let MountProof::Unproven { cleanup: Err(err) } = proof else {
+            panic!("a failed cleanup kill must reach the caller: {proof:?}");
+        };
+        assert!(err.to_string().contains("kill-pane refused"), "{err}");
     }
 }

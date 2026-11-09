@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
+use super::super::mount_proof::{MountProof, prove_sidebar_mount, sidebar_build_identity};
 use super::TmuxBackend;
 use super::layout::{Layout, Refusal};
 use super::options::{
@@ -21,11 +21,12 @@ use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
     CompanionAppendErr, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture,
-    PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result,
-    ResumeTab, ResumeTabShape, ResumeTabUnconfirmed, SessionOptions, SidebarLivenessSource,
-    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions, WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend,
-    execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    PaneListOptions, PaneListing, ReconcileAddErr, ReconcileAddOutcome, ReconcilePane,
+    ReconcilePaneRole, ReconcileScope, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed,
+    SessionOptions, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery, SplitDirection,
+    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
+    confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
+    memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -1043,6 +1044,7 @@ impl MuxBackend for TmuxBackend {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
+        scope: ReconcileScope,
     ) -> Result<SidebarRecovery> {
         let view_cols = match self.widest_client_size(&opts.session_name) {
             Some((cols, _)) => Some(cols),
@@ -1096,7 +1098,7 @@ impl MuxBackend for TmuxBackend {
                 role,
             })
         }));
-        let plan = super::super::plan_reconcile(&views, &live);
+        let plan = super::super::plan_reconcile(&views, &live, scope);
         let planned_closes = plan.close_panes();
         let mutated_views = plan.add_views();
         let mut report = SidebarRecovery::default();
@@ -1108,16 +1110,20 @@ impl MuxBackend for TmuxBackend {
             false,
             |window, _replacing| {
                 let pane = self.add_sidebar_to_window(opts, window)?;
-                if prove_sidebar_mount(opts, MuxName::Tmux, &pane, &build, || {
-                    let _ = self.kill_pane(&pane);
+                match prove_sidebar_mount(opts, MuxName::Tmux, &pane, &build, || {
+                    self.kill_pane(&pane)
                 }) {
-                    mounted.insert(pane.raw().to_owned());
-                    Ok(ReconcileAddOutcome::Verified(pane))
-                } else {
-                    Err(MuxErr::SidebarMountUnproven {
-                        pane: format!("pane `{pane}`"),
-                        view: format!("window `{window}`"),
-                    })
+                    MountProof::Verified => {
+                        mounted.insert(pane.raw().to_owned());
+                        Ok(ReconcileAddOutcome::Verified(pane))
+                    }
+                    MountProof::Unproven { cleanup } => {
+                        let error = MuxErr::SidebarMountUnproven {
+                            pane: format!("pane `{pane}`"),
+                            view: format!("window `{window}`"),
+                        };
+                        Err(ReconcileAddErr::unproven(error, pane, cleanup))
+                    }
                 }
             },
             |pane| self.kill_pane(pane),

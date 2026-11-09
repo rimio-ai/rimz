@@ -622,6 +622,47 @@ fn concurrent_attach_reconciles_keep_the_first_mounted_sidebar() {
     );
 }
 
+#[test]
+fn stale_heartbeat_launch_leaves_an_attached_room_with_its_sidebar_in_place() {
+    require_zellij!();
+    let fixture = RepairRoom::new("stalelaunch");
+    fixture.birth(
+        r#"tab name="work" split_direction="vertical" {
+    pane size="25%" name="rimz-sidebar" cwd=CWD { command STUB; }
+    pane cwd=CWD { command "sleep"; args "600"; }
+}"#,
+    );
+    let _client = AttachedClient::attach(&fixture.room, 180, 50);
+    let before = expect_list_panes(fixture.room.path(), fixture.room.name());
+    let work = before
+        .panes
+        .iter()
+        .find(|pane| pane.tab_name.as_deref() == Some("work") && !pane.is_sidebar())
+        .expect("work pane")
+        .id;
+    assert!(!rimz::sidebar::fresh_sidebar_present(&fixture.opts.runtime));
+    assert!(!fixture.opts.pristine_birth, "the session already exists");
+
+    let outcome = rimz::sidebar::launch_sidebar_if_needed(
+        fixture.room.backend(),
+        &fixture.opts.runtime,
+        &fixture.opts,
+        None,
+    );
+
+    assert_eq!(outcome, rimz::sidebar::SidebarLaunchOutcome::Unchanged);
+    let after = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert!(
+        after.panes.iter().any(|pane| pane.id == work),
+        "the live session was reborn: {after:?}"
+    );
+    assert_eq!(
+        after.panes.iter().filter(|pane| pane.is_sidebar()).count(),
+        1,
+        "{after:?}"
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct TerminalState {
     tab_id: u64,
@@ -900,7 +941,11 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     // attached to mount its missing sidebar.
     let report = room
         .backend()
-        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &SidebarLiveness::default(),
+            rimz::mux::ReconcileScope::Full,
+        )
         .expect("reconcile_sidebars");
 
     assert_eq!(report.deferred, 1, "the detached session's add is deferred");
@@ -1506,7 +1551,11 @@ fn assert_replacement_preserves_work_rectangles(daemon: bool) {
     let _mirror = topology_cache_mirror(xdg, &opts.workspace_id, name);
     let report = room
         .backend()
-        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &SidebarLiveness::default(),
+            rimz::mux::ReconcileScope::Full,
+        )
         .expect("replace");
     assert_eq!(
         work_pane_geometry(xdg, name),

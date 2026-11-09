@@ -66,7 +66,11 @@ sleep 600
     for _ in 0..2 {
         let report = server
             .backend
-            .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+            .reconcile_sidebars(
+                &opts,
+                &rimz::mux::SidebarLiveness::default(),
+                rimz::mux::ReconcileScope::Full,
+            )
             .unwrap();
         assert_eq!(
             report.failed, 0,
@@ -180,7 +184,11 @@ fn recovered_sidebar_starts_in_session_directory() {
     server.tmux(&["kill-pane", "-t", sidebar.raw()]);
     let report = server
         .backend
-        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &rimz::mux::SidebarLiveness::default(),
+            rimz::mux::ReconcileScope::Full,
+        )
         .unwrap();
     assert_eq!(report.recovered, 1);
     let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);
@@ -218,6 +226,7 @@ fn reconcile_without_client_or_probe_leaves_width_seed_alone() {
                 claimed_panes: [sidebar.clone()].into(),
                 ..Default::default()
             },
+            rimz::mux::ReconcileScope::Full,
         )
         .expect("reconcile_sidebars");
 
@@ -287,6 +296,7 @@ fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
                 claimed_panes: [sidebar.clone()].into(),
                 ..Default::default()
             },
+            rimz::mux::ReconcileScope::Full,
         )
         .expect("reconcile_sidebars");
 
@@ -337,6 +347,7 @@ fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
                 claimed_panes: sidebars.into_iter().collect(),
                 ..Default::default()
             },
+            rimz::mux::ReconcileScope::Full,
         )
         .expect("unchanged reconcile");
     assert_eq!(
@@ -373,7 +384,7 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "90");
     let report = server
         .backend
-        .reconcile_sidebars(&opts, &liveness)
+        .reconcile_sidebars(&opts, &liveness, rimz::mux::ReconcileScope::Full)
         .expect("reconcile wide sidebar");
     assert_eq!(report.redocked, 1);
     assert_eq!(
@@ -384,7 +395,7 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "74"]);
     let report = server
         .backend
-        .reconcile_sidebars(&opts, &liveness)
+        .reconcile_sidebars(&opts, &liveness, rimz::mux::ReconcileScope::Full)
         .expect("reconcile manually resized sidebar");
     assert_eq!(report.redocked, 1);
     assert_eq!(
@@ -460,6 +471,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
                 claimed_panes: [a_claimed].into(),
                 ..Default::default()
             },
+            rimz::mux::ReconcileScope::Full,
         )
         .expect("reconcile_sidebars");
     assert_eq!(report.closed, 1, "foreign same-window sidebar is closed");
@@ -568,7 +580,11 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
     };
     let report = server
         .backend
-        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .reconcile_sidebars(
+            &opts,
+            &rimz::mux::SidebarLiveness::default(),
+            rimz::mux::ReconcileScope::Full,
+        )
         .expect("reconcile_sidebars");
     assert_eq!(report.recovered, 1);
     server.wait_for_pane_command(session, "rimz-sidebar");
@@ -677,6 +693,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
             },
             // No live sidebars known: the orphan's pane is unclaimed, so it closes.
             &rimz::mux::SidebarLiveness::default(),
+            rimz::mux::ReconcileScope::Full,
         )
         .expect("reconcile_sidebars");
     assert_eq!(report.closed, 1, "the orphan's lone sidebar pane is closed");

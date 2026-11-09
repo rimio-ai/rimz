@@ -40,7 +40,8 @@ use crate::disk::paths::RuntimePaths;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId};
 use crate::mux::{
-    DaemonView, MuxBackend, SidebarLiveness, SidebarLivenessSource, SidebarPaneOptions,
+    DaemonView, MuxBackend, ReconcileScope, SidebarLiveness, SidebarLivenessSource,
+    SidebarPaneOptions, SidebarRecovery,
 };
 use crate::wakeup::heartbeat::{
     SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, SidebarSize, fresh_sidebar_heartbeats,
@@ -100,6 +101,9 @@ pub fn live_sidebar_size(runtime: &RuntimePaths, session: &str) -> Option<Sideba
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarLaunchOutcome {
     SkippedFresh,
+    /// An existing session's pass added no sidebar: every occupied view already
+    /// had one, or another pass held the session's reconcile lock.
+    Unchanged,
     Opened,
     Failed,
 }
@@ -115,7 +119,8 @@ trait SidebarMux {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
-    ) -> crate::mux::Result<crate::mux::SidebarRecovery>;
+        scope: ReconcileScope,
+    ) -> crate::mux::Result<SidebarRecovery>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -149,8 +154,9 @@ impl<T: MuxBackend + ?Sized> SidebarMux for T {
         &self,
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
-    ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
-        MuxBackend::reconcile_sidebars(self, opts, live)
+        scope: ReconcileScope,
+    ) -> crate::mux::Result<SidebarRecovery> {
+        MuxBackend::reconcile_sidebars(self, opts, live, scope)
     }
 }
 
@@ -308,8 +314,10 @@ pub(crate) fn purge_rebirth_heartbeats(rt: &RuntimePaths) {
     }
 }
 
-/// Launch the workspace sidebar daemon if no fresh one is present, coalescing
-/// concurrent attaches through the single-flight election. `daemon` is forwarded
+/// Launch the workspace sidebar daemon if no fresh one is present. A session
+/// being born coalesces concurrent attaches through the single-flight
+/// election; an existing session only adds a sidebar to each occupied view
+/// that has none, under its reconcile lock. `daemon` is forwarded
 /// to a session (re)birth so `rimz start` can lead the session with the daemon
 /// view (Zellij's only way to order it first); every other caller passes `None`.
 pub fn launch_sidebar_if_needed(
@@ -334,11 +342,18 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
         ensure_session_view(backend, opts);
         return SidebarLaunchOutcome::SkippedFresh;
     }
+    // A heartbeat read before birth's work can go stale before this point, so
+    // an existing session's views are read again under the reconcile lock and
+    // only a view with no sidebar gains one. A second pass sees the first's
+    // pane in its own listing, so these launches need no election.
+    if !opts.pristine_birth {
+        return add_missing_sidebars(backend, runtime, opts, daemon);
+    }
     // Serialize check-then-launch through the shared single-flight election so
-    // two concurrent attaches to one shared session can't both spawn a daemon.
-    // A peer that finds a fresh heartbeat while polling skips; the winner holds
-    // the lock until its daemon publishes one. No lock dir or a wedged producer
-    // falls to a local launch, and the reconcile pass reaps the loser.
+    // two concurrent births of one session can't both spawn a daemon. A peer
+    // that finds a fresh heartbeat while polling skips; the winner holds the
+    // lock until its daemon publishes one. No lock dir or a wedged producer
+    // falls to a local launch.
     let lock_path = runtime.lock_path("sidebar-launch.lock");
     let _guard =
         match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
@@ -351,10 +366,58 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
             Coalesced::Produce(guard) => Some(guard),
             Coalesced::ProduceLocal => None,
         };
+    open_sidebar(backend, runtime, opts, daemon)
+}
+
+/// Add a sidebar to each occupied view of an existing session that has none.
+/// Only a deferred add (a detached Zellij room) falls back to
+/// [`MuxBackend::open_sidebar`]; a failed pass never does, since that would
+/// split blindly beside a sidebar the pass could not list.
+fn add_missing_sidebars<B: SidebarMux + ?Sized>(
+    backend: &B,
+    runtime: &RuntimePaths,
+    opts: &SidebarPaneOptions,
+    daemon: Option<&DaemonView>,
+) -> SidebarLaunchOutcome {
+    match reconcile_session(
+        backend,
+        opts,
+        ReconcileScope::AddMissing,
+        Duration::from_secs(2),
+        || {
+            crate::diag::DiagSink::for_workspace(
+                opts.workspace_id.clone(),
+                &opts.session_name,
+                None,
+            )
+        },
+    ) {
+        Ok(Some(report)) if report.deferred_adds > 0 => {
+            open_sidebar(backend, runtime, opts, daemon)
+        }
+        Ok(Some(report)) if report.recovered > 0 => SidebarLaunchOutcome::Opened,
+        Ok(Some(_)) => SidebarLaunchOutcome::Unchanged,
+        Ok(None) => {
+            log_reconcile_skipped(backend, opts);
+            SidebarLaunchOutcome::Unchanged
+        }
+        Err(err) => {
+            log_reconcile_error(backend, opts, err);
+            SidebarLaunchOutcome::Failed
+        }
+    }
+}
+
+fn open_sidebar<B: SidebarMux + ?Sized>(
+    backend: &B,
+    runtime: &RuntimePaths,
+    opts: &SidebarPaneOptions,
+    daemon: Option<&DaemonView>,
+) -> SidebarLaunchOutcome {
     match backend.open_sidebar(opts, daemon) {
         Ok(()) => {
-            // Hold the election lock (`_guard`) until the new daemon publishes
-            // its heartbeat, so an attach polling behind us reads it and skips.
+            // A birth's caller holds the election lock until the new daemon
+            // publishes its heartbeat, so an attach polling behind it skips.
             // This short election wait only coalesces launches; a slow daemon
             // falls to reconciliation. Room birth separately retains its room
             // claim while waiting for its own session's heartbeat.
@@ -391,7 +454,7 @@ pub(crate) fn reconcile_session_sidebars(
     opts: &SidebarPaneOptions,
     wait: Duration,
 ) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
-    reconcile_session(backend, opts, wait, || {
+    reconcile_session(backend, opts, ReconcileScope::Full, wait, || {
         crate::diag::DiagSink::for_workspace(opts.workspace_id.clone(), &opts.session_name, None)
     })
 }
@@ -420,6 +483,7 @@ impl SidebarLivenessSource for SessionLiveness<'_> {
 fn reconcile_session<B: SidebarMux + ?Sized>(
     backend: &B,
     opts: &SidebarPaneOptions,
+    scope: ReconcileScope,
     wait: Duration,
     make_sink: impl FnOnce() -> crate::diag::DiagSink,
 ) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
@@ -442,38 +506,82 @@ fn reconcile_session<B: SidebarMux + ?Sized>(
         workspace_id: opts.workspace_id.as_str(),
         session_name: &opts.session_name,
     };
-    let report = backend.reconcile_sidebars(opts, &live)?;
-    if !report.repairs.is_empty() {
-        let sink = make_sink();
-        for repair in &report.repairs {
-            sink.emit(crate::diag::record::DiagEvent::SidebarViewRepaired {
-                view: repair.view.clone(),
-                closed: repair.closed.clone(),
-                added: repair.added.clone(),
-            });
-        }
-    }
+    let report = backend.reconcile_sidebars(opts, &live, scope)?;
+    record_sidebar_repairs(&report, make_sink);
     Ok(Some(report))
 }
 
+/// Write one `sidebar_view_repaired` record per view with landed effects and
+/// one `sidebar_view_repair_failed` record per failed operation. A report with
+/// neither requests no sink.
+fn record_sidebar_repairs(
+    report: &SidebarRecovery,
+    make_sink: impl FnOnce() -> crate::diag::DiagSink,
+) {
+    use crate::diag::record::DiagEvent;
+    if report.repairs.is_empty() && report.failures.is_empty() {
+        return;
+    }
+    let sink = make_sink();
+    for repair in &report.repairs {
+        sink.emit(DiagEvent::SidebarViewRepaired {
+            view: repair.view.clone(),
+            closed: repair.closed.clone(),
+            added: repair.added.clone(),
+        });
+    }
+    for failure in &report.failures {
+        sink.emit(DiagEvent::SidebarViewRepairFailed {
+            view: failure.view.clone(),
+            step: failure.step,
+            pane: failure.pane.clone(),
+            error: failure.error.clone(),
+        });
+    }
+}
+
 fn ensure_session_view<B: SidebarMux + ?Sized>(backend: &B, opts: &SidebarPaneOptions) {
-    match reconcile_session(backend, opts, Duration::from_secs(2), || {
-        crate::diag::DiagSink::for_workspace(opts.workspace_id.clone(), &opts.session_name, None)
-    }) {
+    match reconcile_session(
+        backend,
+        opts,
+        ReconcileScope::Full,
+        Duration::from_secs(2),
+        || {
+            crate::diag::DiagSink::for_workspace(
+                opts.workspace_id.clone(),
+                &opts.session_name,
+                None,
+            )
+        },
+    ) {
         Ok(Some(_)) => {}
-        Ok(None) => tracing::debug!(
-            session = %opts.session_name,
-            mux = %backend.name(),
-            "sidebar reconcile skipped; another pass holds the session lock",
-        ),
-        Err(SidebarReconcileErr::Mux(crate::mux::MuxErr::SessionNotFound { session })) => {
+        Ok(None) => log_reconcile_skipped(backend, opts),
+        Err(err) => log_reconcile_error(backend, opts, err),
+    }
+}
+
+fn log_reconcile_skipped<B: SidebarMux + ?Sized>(backend: &B, opts: &SidebarPaneOptions) {
+    tracing::debug!(
+        session = %opts.session_name,
+        mux = %backend.name(),
+        "sidebar reconcile skipped; another pass holds the session lock",
+    );
+}
+
+fn log_reconcile_error<B: SidebarMux + ?Sized>(
+    backend: &B,
+    opts: &SidebarPaneOptions,
+    err: SidebarReconcileErr,
+) {
+    match err {
+        SidebarReconcileErr::Mux(crate::mux::MuxErr::SessionNotFound { session }) => {
             tracing::debug!(
                 session = %session,
                 mux = %backend.name(),
                 "sidebar reconcile skipped; session not addressable yet (pre-attach gate will rebirth it)",
             )
         }
-        Err(err) => tracing::warn!(
+        err => tracing::warn!(
             session = %opts.session_name,
             mux = %backend.name(),
             error = %err,
