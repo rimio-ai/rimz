@@ -6970,7 +6970,7 @@ reason = "Opt-in account-refresh diagnostic timing (cfbfe3b50) stays outside cac
 [[verdict]]
 kind = "item"
 key = "sidebar::refresh::git_refs::resolve"
-reason = "In-process loose/packed ref resolution avoids hot-lane git forks (5ff74b470); its single interface already hides the filesystem rules (pass 15b)."
+reason = "In-process loose/packed ref resolution avoids hot-lane git forks (5ff74b470); it and the HEAD-free trunk entry share one trunk ladder that hides the filesystem rules (pass 15b)."
 
 [[verdict]]
 kind = "item"

@@ -436,7 +436,7 @@ These files are the multiplexer's side of the channel, written outside the sideb
 
 The fetch worker publishes process metrics and group roots alongside pane production. The cache refresher owns the rest, and asks the separately elected spending service to refresh spend.
 
-The project-root trunk lane publishes `lanes/trunk-state.json` separately from per-worktree diff stats and emits through a detached helper. Its baseline and single-flight contract live in [Trunk and worktree signals](../harness/loops.md#trunk-and-worktree-signals).
+The project-root trunk lane publishes `lanes/trunk-state.json` separately from per-worktree diff stats and emits through a detached helper. It reads the trunk ref without HEAD, forking `git for-each-ref` only in a reftable repository whose stack or trunk setting changed. Its baseline and single-flight contract live in [Trunk and worktree signals](../harness/loops.md#trunk-and-worktree-signals).
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
