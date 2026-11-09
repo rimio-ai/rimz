@@ -8,7 +8,8 @@
 #
 # `zellij-tile` deliberately stays on the oldest supported Zellij plugin API so
 # the vendored wasm loads on every supported host. Raise its ignored ceiling
-# only when RimZ's minimum Zellij version moves with it.
+# only when RimZ's minimum Zellij version moves with it. `zellij-utils` must
+# stay on `zellij-tile`'s version, so it carries the same ceiling.
 
 version: 2
 updates:
@@ -31,6 +32,9 @@ updates:
           - "patch"
     ignore:
       - dependency-name: "zellij-tile"
+        versions:
+          - ">= 0.45"
+      - dependency-name: "zellij-utils"
         versions:
           - ">= 0.45"
 
