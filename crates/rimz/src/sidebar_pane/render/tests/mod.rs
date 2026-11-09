@@ -7,6 +7,7 @@ use crate::config::{AnimationSpec, GlyphRole, ScrollbarMode};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportRequest;
 use crate::store::snapshot::{SidebarProviderPanel, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;
@@ -1175,7 +1176,10 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let ui = ViewState {
         selected_index: Some(0),
         scroll_offset: 99,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();

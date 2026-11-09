@@ -1,5 +1,7 @@
 use super::*;
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportIntent;
+use crate::sidebar_pane::render::ViewportRequest;
 use std::sync::Arc;
 
 #[test]
@@ -10,7 +12,10 @@ fn moving_a_view_keeps_banner_geometry_on_the_pane() {
     let mut source = ViewState {
         selected_index: Some(4),
         scroll_offset: 8,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_source = UiState::default();
@@ -30,7 +35,10 @@ fn a_portable_view_keeps_scroll_zone_relative_anchors_across_geometries() {
     let snapshot = overflowing_fleet();
     let mut source = ViewState {
         scroll_offset: 12,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_source = UiState::default();
@@ -252,7 +260,7 @@ fn select_card(snapshot: &SidebarSnapshot, ui: &mut ViewState, id: &str) {
         armed_ms: fixed_now().as_millisecond(),
     });
     ui.selected_index = ui.visible_roster(snapshot).ordinal_of_id(id);
-    ui.own_input_reveal = true;
+    ui.viewport.own_input_reveal = true;
     assert!(ui.selected_index.is_some(), "selection exists");
 }
 
@@ -265,7 +273,7 @@ fn shared_placement_preserves_the_sources_expanded_selection() {
     let mut target = ViewState::default();
     let mut pane_target = UiState::default();
     select_card(&snapshot, &mut target, "codex-1");
-    target.focus_placement = Some(
+    target.viewport.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-1",
             "viewport_row": before as isize - pane_source.scroll_zone_top as isize,
@@ -293,7 +301,7 @@ fn shared_placement_replaces_the_destinations_previous_selection() {
     select_card(&snapshot, &mut target, "codex-2");
     paint_card_row(&snapshot, &mut target, &mut pane_target, "task-3", 45);
     select_card(&snapshot, &mut target, "codex-3");
-    target.focus_placement = Some(
+    target.viewport.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-3",
             "viewport_row": before as isize - pane_source.scroll_zone_top as isize,
@@ -318,7 +326,7 @@ fn shared_placement_with_no_opening_set_overrides_local_holds() {
     select_card(&snapshot, &mut target, "codex-1");
     let held_row = paint_card_row(&snapshot, &mut target, &mut pane_target, "task-1", 45);
     assert!(!target.held_expansions.is_empty());
-    target.focus_placement = Some(
+    target.viewport.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-1",
             "viewport_row": held_row as isize - pane_target.scroll_zone_top as isize,
@@ -367,20 +375,20 @@ fn authoritative_offset_keeps_a_pending_jumps_held_set_but_not_its_target() {
         select_card(&snapshot, &mut view, "codex-11");
         let jump = placement("codex-11", 0, &["codex-0"]);
         if authority_first {
-            view.offset_authoritative = true;
-            view.focus_placement = Some(jump);
+            view.request(ViewportIntent::Hold);
+            view.request(ViewportIntent::Jump(jump));
         } else {
-            view.focus_placement = Some(jump);
-            view.offset_authoritative = true;
+            view.request(ViewportIntent::Jump(jump));
+            view.request(ViewportIntent::Hold);
         }
         view
     };
     let mut unrequested = ViewState::default();
     select_card(&snapshot, &mut unrequested, "codex-11");
-    unrequested.own_input_reveal = false;
+    unrequested.viewport.own_input_reveal = false;
     assert!(unrequested.entry_stops(&snapshot, parent).is_empty());
     let mut directed = unrequested.clone();
-    directed.focus_placement = Some(placement("codex-11", 0, &["codex-0"]));
+    directed.viewport.focus_placement = Some(placement("codex-11", 0, &["codex-0"]));
     let directed = compose_lines(&snapshot, None, &directed, &pane_ui, &theme, 54, 45);
     assert!(
         directed.scroll_offset > 0,
@@ -388,7 +396,7 @@ fn authoritative_offset_keeps_a_pending_jumps_held_set_but_not_its_target() {
     );
     for authority_first in [true, false] {
         let view = arm(authority_first);
-        assert!(view.own_input_reveal);
+        assert!(view.viewport.own_input_reveal);
         assert!(!view.entry_stops(&snapshot, parent).is_empty());
         let composed = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 45);
         assert_eq!(
@@ -418,7 +426,7 @@ fn a_mismatched_placement_snaps_without_a_shared_target() {
     let mut terminal = Terminal::new(TestBackend::new(54, 20)).unwrap();
     draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
     view.scroll_offset += 3;
-    view.offset_authoritative = true;
+    view.viewport.offset_authoritative = true;
     view.scroll_ease.arm();
     draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
     assert!(view.scroll_ease.in_flight());
@@ -426,7 +434,7 @@ fn a_mismatched_placement_snaps_without_a_shared_target() {
     let control = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 20);
     assert!(control.scroll_ease.in_flight());
     let other = snapshot.rows().nth(4).unwrap().id.clone();
-    view.focus_placement = Some(placement(&other, 0, &[]));
+    view.viewport.focus_placement = Some(placement(&other, 0, &[]));
     let composed = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 20);
     assert!(!composed.scroll_ease.in_flight());
     assert_eq!(composed.scroll_offset, control.scroll_offset);
@@ -626,7 +634,7 @@ fn authoritative_wheel_paint_keeps_a_frozen_expansion() {
         before
     );
     ui.scroll_offset += 3;
-    ui.offset_authoritative = true;
+    ui.viewport.offset_authoritative = true;
     ui.scroll_ease.arm();
     paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     assert!(!ui.held_expansions.is_empty());
@@ -665,7 +673,7 @@ fn growth_above_keeps_expansions_until_freeze_expires() {
 
     // The already-open card above gains children, making room to collapse.
     let grown = delegation_fleet(&[0, 1]);
-    assert!(!ui.offset_authoritative);
+    assert!(!ui.viewport.offset_authoritative);
     assert_eq!(
         paint_card_row(&grown, &mut ui, &mut pane_ui, "task-2", 45),
         before
@@ -885,7 +893,10 @@ fn banner_appearance_and_disappearance_keep_the_card_row() {
     let mut ui = ViewState {
         selected_index: Some(4),
         scroll_offset: 8,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -935,7 +946,10 @@ fn wheel_peek_anchors_the_top_visible_card_not_the_offscreen_selection() {
     let mut ui = ViewState {
         selected_index: Some(0),
         scroll_offset: 12,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1011,7 +1025,10 @@ fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
         selected_index: Some(2),
         scroll_offset: 6,
         frame_ms: ms(40),
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1039,7 +1056,10 @@ fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let mut ui = ViewState {
         scroll_offset: 9,
         frame_ms: ms(40),
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1073,7 +1093,10 @@ fn wheel_banner_height_uses_the_target_throughout_the_glide() {
     let theme = Theme::fixed(false);
     let mut ui = ViewState {
         scroll_offset: 99,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1117,7 +1140,10 @@ fn no_selection_holds_the_clamped_scroll_after_own_input() {
     let snapshot = overflowing_fleet();
     let mut ui = ViewState {
         scroll_offset: 4,
-        own_input_reveal: true,
+        viewport: ViewportRequest {
+            own_input_reveal: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1191,7 +1217,10 @@ fn entry_reveal_nudges_both_lines_inside_a_card_taller_than_the_viewport() {
     let view = ViewState {
         selected_index: Some(0),
         entry_cursor: Some(EntryCursor::SubAgent(panes.last().unwrap().clone())),
-        own_input_reveal: true,
+        viewport: ViewportRequest {
+            own_input_reveal: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let theme = Theme::fixed(false);
@@ -1327,7 +1356,10 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     // this frame doubles as the settled witness: no scroll activity, no bar.
     let ui = ViewState {
         selected_index: Some(5),
-        own_input_reveal: true,
+        viewport: ViewportRequest {
+            own_input_reveal: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1415,7 +1447,10 @@ fn render_scroll_manual_offset_holds() {
         &ViewState {
             selected_index: Some(0),
             scroll_offset: 6,
-            offset_authoritative: true,
+            viewport: ViewportRequest {
+                offset_authoritative: true,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -1478,8 +1513,11 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         &ViewState {
             selected_index: Some(0),
             scroll_offset: 9,
-            offset_authoritative: true,
             scrollbar: scrolled_fade(9, 0),
+            viewport: ViewportRequest {
+                offset_authoritative: true,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),

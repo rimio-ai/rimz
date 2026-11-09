@@ -608,7 +608,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         assert_eq!(view.toggles.make_up_filter.query.as_deref(), Some("kept"));
         assert_eq!(view.selected_index, Some(0), "key input was consumed");
         assert_eq!(view.scroll_offset, 4, "scroll input was consumed");
-        assert!(!view.offset_authoritative, "scroll input was consumed");
+        assert!(!view.authoritative_offset(), "scroll input was consumed");
         assert_eq!(view.browse, None, "key input was consumed");
     }
 

@@ -73,7 +73,7 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     .unwrap();
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     rig.state.fold_transition(PaneState::apply_focus_anchor);
-    assert!(rig.view().ui().focus_placement.is_some());
+    assert!(rig.view().ui().pending_jump().is_some());
     (rig, rx, id)
 }
 
@@ -129,7 +129,7 @@ fn exact_landing_emits_no_displacement() {
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(rig.view().ui().pending_jump().is_none());
     assert!(rx.try_recv().is_err());
 }
 
@@ -185,7 +185,7 @@ fn landing_is_judged_only_at_the_paint_that_consumed_it() {
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(rig.view().ui().pending_jump().is_none());
 
     rig.view().ui().selected_index = Some(0);
     rig.view().ui().selected_pane = pane;
@@ -199,7 +199,7 @@ fn landing_is_judged_only_at_the_paint_that_consumed_it() {
 #[test]
 fn missing_landing_row_records_null_from_the_post_paint_zone() {
     let (mut rig, rx, id) = landing(Some(3), false);
-    rig.view().ui().focus_placement = None;
+    rig.view().ui().request(ViewportIntent::DropJump);
     rig.view().ui().drawn_selection = Some(id);
     rig.state.pane.ui.painted_rows.clear();
     rig.state.pane.ui.scroll_zone_top = 7;

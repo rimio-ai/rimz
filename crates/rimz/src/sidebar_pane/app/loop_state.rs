@@ -2340,11 +2340,7 @@ impl LoopState {
             return Ok(());
         }
         source.view.scroll_ease.cancel();
-        source.view.offset_authoritative = false;
-        source.view.inactive_reveal = false;
-        source.view.reveal_row = None;
-        source.view.focus_placement = None;
-        source.view.own_input_reveal = false;
+        source.view.viewport = render::ViewportRequest::default();
         self.pane.paint.refresh_view(
             &mut self.pane.ui,
             &source.view,
@@ -3120,7 +3116,7 @@ impl PaneState {
             let entry_changed = v.state.entry_cursor != previous_entry;
             if selected_row != previous_row || entry_changed {
                 v.context.pending_input_focus = None;
-                v.state.own_input_reveal = true;
+                v.state.request(render::ViewportIntent::OwnInput);
                 v.context.focus_marker = None;
                 v.state.focus_marker_ready = false;
             }
@@ -3542,7 +3538,7 @@ impl PaneState {
         push: Option<&FocusPush>,
     ) -> Option<PushVerdict> {
         let portable_matches =
-            ui.last_focus_anchor_ms == anchor.issued_at_ms && ui.focus_placement.is_none();
+            ui.last_focus_anchor_ms == anchor.issued_at_ms && ui.pending_jump().is_none();
         if self.painted_focus_anchor_ms != anchor.issued_at_ms
             || !portable_matches
             || push

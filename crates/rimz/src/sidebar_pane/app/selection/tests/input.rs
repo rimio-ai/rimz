@@ -1167,7 +1167,7 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
     for open in [true, false] {
         handle_key(action, &mut view, &mut ui, &snapshot);
         assert_eq!(view.toggles.inactive_peek.is_some(), open);
-        assert!(view.inactive_reveal);
+        assert!(view.reveals_inactive());
         paint(&mut view, &mut ui, &snapshot, 24);
         if open {
             assert!(view.scroll_offset > offset);
@@ -1205,9 +1205,9 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
     let (snapshot, selected) = inactive_click_snapshot(6);
     let mut ui = render::ViewState {
         scroll_offset: usize::MAX,
-        offset_authoritative: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
@@ -1254,7 +1254,7 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
     }
     ui.toggles.inactive_peek = Some(Default::default());
     ui.scroll_offset = usize::MAX;
-    ui.offset_authoritative = true;
+    ui.request(ViewportIntent::Hold);
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
     let (_, header) = pane_ui
         .interactions
@@ -1493,7 +1493,7 @@ fn inactive_pages_keep_the_viewport_and_reset_on_close() {
         }
         let label = format!("+{} older", 25 - shown);
         view.scroll_offset = usize::MAX;
-        view.offset_authoritative = true;
+        view.request(ViewportIntent::Hold);
         paint(&mut view, &mut ui, &snapshot, 40);
         let offset = view.scroll_offset;
         let roster = ui.painted_roster.clone();
@@ -1532,7 +1532,7 @@ fn closing_inactive_from_the_bottom_drops_its_expansions_and_reveals_the_chip() 
     handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
     paint(&mut view, &mut ui, &snapshot, 24);
     view.scroll_offset = usize::MAX;
-    view.offset_authoritative = true;
+    view.request(ViewportIntent::Hold);
     paint(&mut view, &mut ui, &snapshot, 24);
     assert!(
         ui.interactions
@@ -1647,7 +1647,7 @@ fn folded_inactive_receipt_member_and_separator_clicks_focus_their_targets() {
         );
         assert!(ui.toggles.expanded_groups.contains("inactive"));
         assert_eq!(ui.selected_pane, Some(expected));
-        assert_eq!(ui.reveal_row.as_deref(), Some(member));
+        assert_eq!(ui.revealed_row(), Some(member));
         assert!(ui.toggles.inactive_peek.is_some());
     }
 }
@@ -1686,7 +1686,7 @@ fn folded_inactive_receipt_member_without_a_pane_expands_without_focus() {
     );
     assert!(ui.toggles.expanded_groups.contains("inactive"));
     assert_eq!(ui.selected_pane, Some(selected));
-    assert_eq!(ui.reveal_row, None);
+    assert_eq!(ui.revealed_row(), None);
     assert!(ui.toggles.inactive_peek.is_some());
 }
 
@@ -1725,7 +1725,7 @@ fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
     );
     assert!(ui.toggles.expanded_groups.contains("inactive"));
     assert_eq!(ui.selected_pane, Some(selected));
-    assert_eq!(ui.reveal_row, None);
+    assert_eq!(ui.revealed_row(), None);
 }
 
 #[test]
@@ -1768,13 +1768,13 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let (snapshot, selected) = inactive_expansion_snapshot(6);
     let mut ui = render::ViewState {
-        offset_authoritative: true,
         toggles: PresentationToggles {
             inactive_peek: Some(Default::default()),
             ..Default::default()
         },
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     let theme = pane_ui.theme(&snapshot.theme);
@@ -1801,9 +1801,9 @@ fn inactive_click_keeps_viewport_when_first_receipt_already_fits() {
     let (mut snapshot, _) = inactive_click_snapshot(0);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
     let mut ui = render::ViewState {
-        offset_authoritative: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     let mut pane_ui = UiState::default();
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
     assert_eq!(ui.scroll_offset, 0);
@@ -1828,9 +1828,9 @@ fn inactive_click_pins_chip_when_receipt_outgrows_viewport() {
     let (snapshot, selected) = inactive_click_snapshot(6);
     let mut ui = render::ViewState {
         scroll_offset: usize::MAX,
-        offset_authoritative: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     let theme = pane_ui.theme(&snapshot.theme);
@@ -2453,7 +2453,7 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     );
     assert!(ui.scroll_offset > 0);
     assert_eq!(ui.selected_pane, Some(selected.clone()));
-    assert_eq!(ui.reveal_row, None, "one draw consumes the reveal");
+    assert_eq!(ui.revealed_row(), None, "one draw consumes the reveal");
 
     ui.toggles.make_up_filter =
         BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running));
@@ -2473,7 +2473,7 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     );
     assert_eq!(ui.selected_pane, Some(selected));
     paint(&mut ui, &mut pane_ui, &snapshot, 18);
-    assert_eq!(ui.reveal_row, None);
+    assert_eq!(ui.revealed_row(), None);
 }
 #[test]
 fn only_own_input_ends_the_wheel_peek_on_selection_change() {
@@ -2514,7 +2514,7 @@ fn only_own_input_ends_the_wheel_peek_on_selection_change() {
     reconcile_selection(&mut ui, &snapshot, Some(second));
     paint(&mut ui, &mut pane_ui, &snapshot, 14);
     assert_eq!(pane_ui.painted_rows, peek);
-    ui.own_input_reveal = true;
+    ui.request(ViewportIntent::OwnInput);
     paint(&mut ui, &mut pane_ui, &snapshot, 14);
     assert!(ui.scroll_offset < offset);
     assert!(pane_ui.interactions.line_for_row(1).is_some());
@@ -2549,9 +2549,9 @@ fn help_key_opens_without_touching_the_viewport() {
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = render::ViewState {
         scroll_offset: 6,
-        offset_authoritative: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     let mut pane_ui = UiState::default();
 
     handle_key(KeyAction::Help, &mut ui, &mut pane_ui, &snapshot);
@@ -2618,9 +2618,9 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
     let snapshot = snapshot_with_panes(&ws, panes);
     let mut ui = render::ViewState {
         scroll_offset: 3,
-        offset_authoritative: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::Hold);
     ui.toggles
         .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
@@ -2882,11 +2882,11 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
 
     // Selecting the last row keeps it visible in the short viewport while the
     // fresh unread lead stays reachable through the jump banner.
-    let ui = render::ViewState {
+    let mut ui = render::ViewState {
         selected_index: Some(9),
-        own_input_reveal: true,
         ..Default::default()
     };
+    ui.request(ViewportIntent::OwnInput);
     let mut pane_ui = UiState::default();
     let theme = pane_ui.theme(&snapshot.theme);
     let following =

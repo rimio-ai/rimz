@@ -46,7 +46,8 @@ pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Alert, EntryCursor, FrameTime, PresentationToggles, UiState, ViewState,
+    Alert, EntryCursor, FrameTime, PresentationToggles, UiState, ViewState, ViewportIntent,
+    ViewportRequest,
 };
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
@@ -150,11 +151,7 @@ fn draw_into(
     ui.scroll_zone_top = top_height;
     ui.banner_shown = composed.banner_shown;
     ui.anchor_clamped = composed.anchor_clamped;
-    view.offset_authoritative = false;
-    view.inactive_reveal = false;
-    view.reveal_row = None;
-    view.focus_placement = None;
-    view.own_input_reveal = false;
+    view.viewport = ViewportRequest::default();
     // Never wrapped: composed line `i` is buffer row `i` for every map stored above, and a line
     // wider than the pane is cut at its edge.
     let paragraph = Paragraph::new(Text::from(composed.lines));

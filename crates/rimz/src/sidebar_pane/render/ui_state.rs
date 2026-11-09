@@ -184,25 +184,12 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// these local candidates and the previous selection.
     /// Forked views retain these sources and the drawn selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
-    /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
-    /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
-    pub(in crate::sidebar_pane) offset_authoritative: bool,
-    /// Armed when the user toggles the inactive peek. The next draw reveals the
-    /// chip and its first newly shown receipt, if any, then consumes it.
-    pub(in crate::sidebar_pane) inactive_reveal: bool,
-    /// The row a banner, focus marker, or inactive-group click reveals minimally
-    /// on the next draw, then consumed.
-    pub(in crate::sidebar_pane) reveal_row: Option<String>,
-    /// A fresh shared click placement and its source opening set for the next
-    /// draw to land, then consumed.
-    pub(in crate::sidebar_pane) focus_placement: Option<FocusPlacement>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so
     /// its later acceptance cannot seed the viewport a second time. `0` before
     /// any jump handoff.
     pub(in crate::sidebar_pane) last_focus_anchor_ms: u64,
-    /// This sidebar's input changed the card or entry selection, or its requested focus landed.
-    /// The next draw may reveal that stop, then consumes the mark.
-    pub(in crate::sidebar_pane) own_input_reveal: bool,
+    /// What the next paint does with the viewport, issued through [`Self::request`].
+    pub(in crate::sidebar_pane) viewport: ViewportRequest,
     /// The loop owns the dwell clock; render only consumes readiness.
     pub(in crate::sidebar_pane) focus_marker_ready: bool,
     /// The row id a manual mark-unread just reopened while it is the focused
@@ -231,6 +218,53 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// A refusal from the last in-pane key, cleared by the next key.
     pub(in crate::sidebar_pane) notice: Option<String>,
     pub(in crate::sidebar_pane) toggles: PresentationToggles,
+}
+
+/// The one-paint viewport facts input and jumps leave for the next draw, which clears them.
+/// They accumulate across input passes until that draw, and a hidden mirror draws none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct ViewportRequest {
+    /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
+    /// paint; explicit row and inactive-chip reveals can still nudge their target into view.
+    pub(super) offset_authoritative: bool,
+    /// Armed when the user toggles the inactive peek. The next draw reveals the
+    /// chip and its first newly shown receipt, if any, then consumes it.
+    pub(super) inactive_reveal: bool,
+    /// The row a banner, focus marker, or inactive-group click reveals minimally
+    /// on the next draw, then consumed.
+    pub(super) reveal_row: Option<String>,
+    /// A fresh shared click placement and its source opening set for the next
+    /// draw to land, then consumed.
+    pub(super) focus_placement: Option<FocusPlacement>,
+    /// This sidebar's input changed the card or entry selection, or its requested focus landed.
+    /// The next draw may reveal that stop, then consumes the mark.
+    pub(super) own_input_reveal: bool,
+}
+
+/// What a caller asks of the next paint's viewport. Each intent changes only the facts it
+/// names, so every other pending fact survives. Only input dispatch, and an arrival landing
+/// the user's own wheel glide (`LandGlide`), issue an intent that sets authority: a change the
+/// user did not ask for never does. An authoritative offset suppresses a pending
+/// jump's scroll target but keeps its held set.
+pub(in crate::sidebar_pane) enum ViewportIntent {
+    /// A wheel tick: the offset is authoritative and glides there.
+    Wheel,
+    /// The offset stays where it is, without a glide.
+    Hold,
+    /// `Hold`, revealing this row minimally; `None` replaces a pending row reveal.
+    RevealRow(Option<String>),
+    /// `Hold`, revealing the inactive chip and its first newly shown receipt.
+    RevealInactive,
+    /// A jump's placement for the landing paint, replacing any pending one, without a glide.
+    Jump(FocusPlacement),
+    /// Drop the pending jump placement.
+    DropJump,
+    /// This sidebar's input changed the selection: the next draw may reveal that stop.
+    OwnInput,
+    /// An entry step: the offset is no longer authoritative, and pending reveals wait.
+    EntryStep,
+    /// A view arriving mid-glide lands the glide's target as authoritative.
+    LandGlide,
 }
 
 /// The presentation choices a user makes in a client view. They travel with the view across
@@ -348,6 +382,64 @@ impl ViewState {
         self.head_anchor = Some((self.animation_phase, refresh_ms));
     }
 
+    pub(in crate::sidebar_pane) fn request(&mut self, intent: ViewportIntent) {
+        let viewport = &mut self.viewport;
+        match intent {
+            ViewportIntent::Wheel => {
+                viewport.offset_authoritative = true;
+                self.scroll_ease.arm();
+            }
+            ViewportIntent::Hold => {
+                viewport.offset_authoritative = true;
+                self.scroll_ease.cancel();
+            }
+            ViewportIntent::RevealRow(row) => {
+                viewport.reveal_row = row;
+                self.request(ViewportIntent::Hold);
+            }
+            ViewportIntent::RevealInactive => {
+                viewport.inactive_reveal = true;
+                self.request(ViewportIntent::Hold);
+            }
+            ViewportIntent::Jump(placement) => {
+                viewport.focus_placement = Some(placement);
+                self.scroll_ease.cancel();
+            }
+            ViewportIntent::DropJump => viewport.focus_placement = None,
+            ViewportIntent::OwnInput => viewport.own_input_reveal = true,
+            ViewportIntent::EntryStep => viewport.offset_authoritative = false,
+            ViewportIntent::LandGlide if self.scroll_ease.in_flight() => {
+                self.request(ViewportIntent::Hold);
+            }
+            ViewportIntent::LandGlide => {}
+        }
+    }
+
+    /// The pending jump placement, whatever the offset mode.
+    pub(in crate::sidebar_pane) fn pending_jump(&self) -> Option<&FocusPlacement> {
+        self.viewport.focus_placement.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn authoritative_offset(&self) -> bool {
+        self.viewport.offset_authoritative
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn reveals_inactive(&self) -> bool {
+        self.viewport.inactive_reveal
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn revealed_row(&self) -> Option<&str> {
+        self.viewport.reveal_row.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn reveals_own_input(&self) -> bool {
+        self.viewport.own_input_reveal
+    }
+
     pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {
         if self
             .layout_key
@@ -374,8 +466,7 @@ impl ViewState {
             .and_then(|index| roster.row(index))
             .map(|row| &row.id);
         let shared = self
-            .focus_placement
-            .as_ref()
+            .pending_jump()
             .filter(|placement| Some(&placement.row_id) == selected_id)
             .map(|placement| &placement.held);
         let mut held = shared.unwrap_or(&self.held_expansions).clone();
@@ -708,10 +799,10 @@ mod tests {
         view.frame_ms = FrameTime::from_millis(900);
         view.selected_index = Some(3);
         view.scroll_offset += 4;
-        view.offset_authoritative = true;
-        view.reveal_row = Some("row".into());
-        view.inactive_reveal = true;
-        view.own_input_reveal = true;
+        view.viewport.offset_authoritative = true;
+        view.viewport.reveal_row = Some("row".into());
+        view.viewport.inactive_reveal = true;
+        view.viewport.own_input_reveal = true;
         assert_bumps(
             &mut view,
             &changed,

@@ -61,8 +61,7 @@ fn card_less_mirror_pair(mux: MuxName, keys: &[&str]) -> super::scroll::SharedPa
             }),
         );
         v.state.scroll_offset = 0;
-        v.state.offset_authoritative = true;
-        v.state.scroll_ease.cancel();
+        v.state.request(ViewportIntent::Hold);
     });
     repaint_source(&mut pair);
     pair.clock
@@ -294,7 +293,7 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
                     )
                     .swap(0, 1);
                     v.state.scroll_offset = 0;
-                    v.state.offset_authoritative = true;
+                    v.state.request(ViewportIntent::Hold);
                 }),
                 "scroll" => {
                     let source = &mut pair.panes[0];
@@ -568,8 +567,7 @@ fn hidden_mirrors_coalesce_at_grant_to_the_latest_layout() {
         for offset in [3, 6] {
             pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
                 v.state.scroll_offset = offset;
-                v.state.offset_authoritative = true;
-                v.state.scroll_ease.cancel();
+                v.state.request(ViewportIntent::Hold);
             });
             repaint_source(&mut pair);
             pair.clock.advance(Duration::from_millis(150));
@@ -691,8 +689,7 @@ fn hidden_mirror_preserves_view_and_arrival_obligations() {
         let mut pair = mirror_pair(mux);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = 3;
-            v.state.offset_authoritative = true;
-            v.state.scroll_ease.cancel();
+            v.state.request(ViewportIntent::Hold);
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));
@@ -2626,24 +2623,16 @@ fn arm_pending_fact(v: &mut ViewBorrow<'_>, fact: PendingFact) {
     let view = &mut *v.state;
     match fact {
         PendingFact::None => {}
-        PendingFact::Authority => view.offset_authoritative = true,
-        PendingFact::InactiveReveal => {
-            view.offset_authoritative = true;
-            view.inactive_reveal = true;
-        }
-        PendingFact::RowReveal => {
-            view.offset_authoritative = true;
-            view.reveal_row = Some(below);
-        }
-        PendingFact::Placement => {
-            view.focus_placement = Some(
-                serde_json::from_value(serde_json::json!({
-                    "row_id": selected, "viewport_row": 5, "held": [],
-                }))
-                .unwrap(),
-            );
-        }
-        PendingFact::OwnInput => view.own_input_reveal = true,
+        PendingFact::Authority => view.request(ViewportIntent::Hold),
+        PendingFact::InactiveReveal => view.request(ViewportIntent::RevealInactive),
+        PendingFact::RowReveal => view.request(ViewportIntent::RevealRow(Some(below))),
+        PendingFact::Placement => view.request(ViewportIntent::Jump(
+            serde_json::from_value(serde_json::json!({
+                "row_id": selected, "viewport_row": 5, "held": [],
+            }))
+            .unwrap(),
+        )),
+        PendingFact::OwnInput => view.request(ViewportIntent::OwnInput),
         PendingFact::Glide => {
             view.scroll_ease.arm();
             view.scroll_ease.observe(
@@ -2681,8 +2670,7 @@ fn hidden_mirrors_draw_none_of_the_sources_pending_viewport_request() {
                 rows[0].pane = None;
                 Arc::make_mut(&mut v.context.current.worktree_groups).push(inactive);
                 v.state.scroll_offset = 9;
-                v.state.offset_authoritative = true;
-                v.state.scroll_ease.cancel();
+                v.state.request(ViewportIntent::Hold);
                 v.context.focus_marker = Some(FocusMarker::Ready);
             });
             repaint_source(&mut pair);

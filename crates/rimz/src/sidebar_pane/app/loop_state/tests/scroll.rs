@@ -184,8 +184,7 @@ fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
 
 fn paint_scrolled(source: &mut Rig, offset: usize) {
     source.view().ui().scroll_offset = offset;
-    source.view().ui().offset_authoritative = true;
-    source.view().ui().scroll_ease.cancel();
+    source.view().ui().request(ViewportIntent::Hold);
     source.view().ui().toggles.inactive_peek = Some(Default::default());
     source.state.pane.dirty = true;
     paint_at(source, 0);
@@ -2486,7 +2485,7 @@ fn assert_shared_placement_from_history(previous: usize) {
         .unwrap();
 
     assert_eq!(destination.view().ui().selected_pane, Some(target_pane));
-    assert!(destination.view().ui().focus_placement.is_none());
+    assert!(destination.view().ui().pending_jump().is_none());
     assert_eq!(
         destination
             .state
@@ -2578,7 +2577,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     switched.focused_pane = Some(target.clone());
     switched.viewed_panes = vec![target];
     rig.fold(switched, SnapshotSource::Produced);
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(rig.view().ui().pending_jump().is_none());
     paint_at(&mut rig, 100);
     assert_eq!(
         y(&rig),
@@ -2651,8 +2650,8 @@ fn cleared_anchor_without_push_keeps_the_viewport_on_the_first_target_fold() {
     switched.viewed_panes = vec![anchor.pane_id.clone()];
     rig.fold(switched, SnapshotSource::Produced);
     assert_eq!(rig.view().ui().selected_pane, Some(anchor.pane_id));
-    assert!(!rig.view().ui().own_input_reveal);
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(!rig.view().ui().reveals_own_input());
+    assert!(rig.view().ui().pending_jump().is_none());
     assert_eq!(rig.view().ui().last_focus_anchor_ms, 0);
 }
 
@@ -2747,7 +2746,7 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
         rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
 
         assert_eq!(rig.view().ui().selected_pane, Some(anchor.pane_id));
-        assert!(rig.view().ui().focus_placement.is_none());
+        assert!(rig.view().ui().pending_jump().is_none());
         assert!(rig.state.pane.ui.anchor_clamped);
         let report = assert_push_report(&ack, &rig, PushVerdict::Displaced, !cached);
         assert_eq!(
@@ -2911,7 +2910,7 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
     rig.observe_paint(rig.state.pane.clock.now());
     rig.view().ui().drawn_selection = Some(row_id);
     assert!(
-        rig.view().ui().focus_placement.is_some(),
+        rig.view().ui().pending_jump().is_some(),
         "placement has not been consumed by a paint"
     );
     rig.observe_paint(rig.state.pane.clock.now());
@@ -2954,7 +2953,7 @@ fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
         .unwrap();
     assert!(effect.effects.contains(&InputEffect::Focus(target)));
     // Deliberately bypass anchoring to exercise the detector at an actual paint.
-    rig.view().ui().offset_authoritative = true;
+    rig.view().ui().request(ViewportIntent::Hold);
     rig.view().ui().scroll_offset += 1;
     rig.state.pane.dirty = true;
     paint_at(&mut rig, 0);
@@ -3024,7 +3023,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         )
         .unwrap();
         rig.state.fold_transition(PaneState::apply_focus_anchor);
-        assert!(rig.view().ui().focus_placement.is_some());
+        assert!(rig.view().ui().pending_jump().is_some());
         rig.state.pane.dirty = true;
         paint_at(&mut rig, 0);
         let theme = {
@@ -3088,14 +3087,16 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
         let placed_id = rows[placed].id.clone();
         let target = rows[selected].clone();
         rig.view().ui().selected_index = Some(selected);
-        rig.view().ui().own_input_reveal = true;
+        rig.view().ui().request(ViewportIntent::OwnInput);
         rig.view().ui().selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
         rig.view().ui().scroll_offset = 0;
-        rig.view().ui().focus_placement = Some(FocusPlacement {
-            row_id: placed_id,
-            viewport_row,
-            held: std::collections::BTreeSet::new(),
-        });
+        rig.view()
+            .ui()
+            .request(ViewportIntent::Jump(FocusPlacement {
+                row_id: placed_id,
+                viewport_row,
+                held: std::collections::BTreeSet::new(),
+            }));
         rig.state.pane.dirty = true;
         paint_at(&mut rig, 0);
         assert!(
@@ -3317,7 +3318,7 @@ fn queued_wheel_ticks_paint_once_at_the_final_offset() {
         assert_eq!(paints(&output), 1);
         assert_eq!(rig.view().ui().selected_pane, selected);
         assert!(
-            !rig.view().ui().offset_authoritative,
+            !rig.view().ui().authoritative_offset(),
             "paint consumed the wheel intent"
         );
         assert!(rig.view().ui().freeze.is_some());
@@ -3526,12 +3527,15 @@ fn glide_arrival_lands_the_glide_over_a_pending_placement() {
             .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
             .map(|row| row.id.clone())
             .expect("a selection");
-        v.state.focus_placement = Some(
+        // A jump cancels the glide, so the glide is put back to hold both at arrival.
+        let glide = v.state.scroll_ease;
+        v.state.request(ViewportIntent::Jump(
             serde_json::from_value(serde_json::json!({
                 "row_id": row, "viewport_row": -40, "held": [],
             }))
             .unwrap(),
-        );
+        ));
+        v.state.scroll_ease = glide;
     });
     pair.sample(&[(1, 1)]);
     pair.paint(1);

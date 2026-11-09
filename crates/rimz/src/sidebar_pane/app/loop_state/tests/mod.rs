@@ -4,6 +4,7 @@ use crate::sidebar_pane::app::fixtures::{
     pane, serve_config, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::app::input::KeyAction;
+use crate::sidebar_pane::render::ViewportIntent;
 use crate::sidebar_pane::view::BodyFilter;
 use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
