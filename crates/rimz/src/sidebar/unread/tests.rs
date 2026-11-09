@@ -332,7 +332,7 @@ fn cold_start_opens_silently() {
 fn mark_rows_unread_skips_process_rows_without_panicking() {
     // `opened_unread` asserts an agent status; a process row carries none.
     // The durable path must skip it rather than unwind, whether the target
-    // came from the renderer's `M` key.
+    // came from the renderer's `m` key.
     // (Regression: R1-01.)
     let (_dir, runtime) = runtime();
     let rows = vec![
