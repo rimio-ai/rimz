@@ -1385,7 +1385,7 @@ fn sweep_entry(
 
 #[test]
 fn parses_git_worktree_porcelain() {
-    let raw = "\
+    let raw = b"\
 worktree /code/query-engine
 HEAD abc
 branch refs/heads/main
@@ -1395,19 +1395,97 @@ HEAD def
 branch refs/heads/swift-otter
 
 ";
+    let rows = vec![
+        WorktreeRow {
+            path: PathBuf::from("/code/query-engine"),
+            branch: Some("main".to_owned()),
+        },
+        WorktreeRow {
+            path: PathBuf::from("/code/query-engine-worktrees/swift-otter"),
+            branch: Some("swift-otter".to_owned()),
+        },
+    ];
+    assert_eq!(parse_worktree_list(raw, b'\n'), rows);
+    let nul: Vec<u8> = raw
+        .iter()
+        .map(|byte| if *byte == b'\n' { 0 } else { *byte })
+        .collect();
+    assert_eq!(parse_worktree_list(&nul, 0), rows);
+}
+
+#[test]
+fn worktree_porcelain_keeps_path_bytes_in_both_separator_modes() {
+    use std::os::unix::ffi::OsStrExt;
+    let odd: &[u8] = b" lead \"quoted\"\rcarriage\xfftrail ";
+    let mut fields: Vec<Vec<u8>> = Vec::new();
+    for path in [b"/main".as_slice(), odd] {
+        fields.push([b"worktree ".as_slice(), path].concat());
+        fields.push(b"HEAD abc".to_vec());
+        fields.push(b"branch refs/heads/b".to_vec());
+        fields.push(Vec::new());
+    }
+    let expected = |paths: &[&[u8]]| -> Vec<WorktreeRow> {
+        paths
+            .iter()
+            .map(|path| WorktreeRow {
+                path: PathBuf::from(OsStr::from_bytes(path)),
+                branch: Some("b".to_owned()),
+            })
+            .collect()
+    };
+    for separator in [b'\n', 0] {
+        let raw: Vec<u8> = fields
+            .iter()
+            .flat_map(|field| [&field[..], &[separator]].concat())
+            .collect();
+        assert_eq!(
+            parse_worktree_list(&raw, separator),
+            expected(&[b"/main", odd]),
+            "separator {separator}"
+        );
+    }
+    let raw = b"worktree /wt\nwith newline\0branch refs/heads/b\0\0";
     assert_eq!(
-        parse_worktree_list(raw),
-        vec![
-            WorktreeRow {
-                path: PathBuf::from("/code/query-engine"),
-                branch: Some("main".to_owned())
-            },
-            WorktreeRow {
-                path: PathBuf::from("/code/query-engine-worktrees/swift-otter"),
-                branch: Some("swift-otter".to_owned())
-            }
+        parse_worktree_list(raw, 0),
+        expected(&[b"/wt\nwith newline"])
+    );
+}
+
+#[test]
+fn worktree_listing_drops_z_only_on_a_usage_error() {
+    use std::os::unix::process::ExitStatusExt;
+    let exit = |code: i32, stdout: &[u8]| std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: stdout.to_vec(),
+        stderr: Vec::new(),
+    };
+    let mut calls: Vec<Vec<String>> = Vec::new();
+    let rows = list_worktrees_with(Path::new("/repo"), |args| {
+        calls.push(args.iter().map(|arg| (*arg).to_owned()).collect());
+        Ok(if args.contains(&"-z") {
+            exit(129, b"")
+        } else {
+            exit(0, b"worktree /repo \n\n")
+        })
+    })
+    .unwrap();
+    assert_eq!(rows[0].path, PathBuf::from("/repo "));
+    assert_eq!(
+        calls,
+        [
+            vec!["worktree", "list", "--porcelain", "-z"],
+            vec!["worktree", "list", "--porcelain"]
         ]
     );
+
+    let mut calls = 0;
+    let err = list_worktrees_with(Path::new("/repo"), |_| {
+        calls += 1;
+        Ok(exit(128, b""))
+    })
+    .unwrap_err();
+    assert!(matches!(err, WorktreeErr::Git { args, .. } if args == "worktree list --porcelain -z"));
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -1949,6 +2027,44 @@ fn discovery_returns_owned_identity_before_explicit_inspection() {
     .expect("inspect");
     assert!(inspected.dirty());
     assert_eq!(inspected.landed, LandedVerdict::Unlanded);
+}
+
+#[test]
+fn discovery_finds_a_managed_checkout_whose_path_ends_in_a_space() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("create");
+    let moved = std::fs::canonicalize(dir.path()).unwrap().join("moved ");
+    git_run(
+        &repo,
+        [
+            "worktree",
+            "move",
+            created.marker.worktree_path.to_str().unwrap(),
+            moved.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let discovered = discover_owned(&repo).expect("discover");
+
+    assert_eq!(
+        discovered
+            .iter()
+            .map(|owned| &owned.path)
+            .collect::<Vec<_>>(),
+        [&moved]
+    );
 }
 
 #[test]

@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
@@ -1415,15 +1416,14 @@ pub fn landing_plan(repo_root: &Path, config: &WorktreeConfig, name: &str) -> Re
         .ok_or_else(|| WorktreeErr::NoLandingTarget {
             name: name.to_owned(),
         })?;
-    let target_checkout =
-        parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?)
-            .into_iter()
-            .find(|row| row.branch.as_deref() == Some(target.as_str()))
-            .map(|row| row.path)
-            .ok_or_else(|| WorktreeErr::TargetNotCheckedOut {
-                name: name.to_owned(),
-                target: target.clone(),
-            })?;
+    let target_checkout = list_worktrees(repo_root)?
+        .into_iter()
+        .find(|row| row.branch.as_deref() == Some(target.as_str()))
+        .map(|row| row.path)
+        .ok_or_else(|| WorktreeErr::TargetNotCheckedOut {
+            name: name.to_owned(),
+            target: target.clone(),
+        })?;
     Ok(LandingPlan {
         managed,
         target,
@@ -1725,7 +1725,7 @@ fn git_error_detail(err: WorktreeErr) -> String {
 
 pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     ensure_repo(repo_root)?;
-    let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+    let rows = list_worktrees(repo_root)?;
     owned_worktrees(&rows)
 }
 
@@ -1777,10 +1777,7 @@ fn discover_owned_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<Manage
 fn worktree_rows_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<WorktreeRow>> {
     let Some(git_dir) = git_admin_dir_from_checkout_metadata(repo_root)? else {
         ensure_repo(repo_root)?;
-        return Ok(parse_worktree_list(&git_stdout(
-            repo_root,
-            ["worktree", "list", "--porcelain"],
-        )?));
+        return list_worktrees(repo_root);
     };
     let common = std::fs::read_to_string(git_dir.join("commondir"))
         .map(|text| git_dir.join(text.trim()))
@@ -1797,8 +1794,7 @@ fn worktree_rows_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<Worktre
     });
     if !fresh {
         ensure_repo(repo_root)?;
-        let rows =
-            parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+        let rows = list_worktrees(repo_root)?;
         cache.insert(
             repo_root.to_path_buf(),
             OwnedWorktreeRows {
@@ -1894,13 +1890,56 @@ fn leave_worktree_before_removal(repo_root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
+/// Git's exit status for a usage error, such as an option it does not know.
+const GIT_USAGE_EXIT: i32 = 129;
+
+/// Every worktree checkout root of `repo_root`, in git's order, each path's
+/// bytes exactly as git printed them.
+pub(crate) fn worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>> {
+    Ok(list_worktrees(repo_root)?
+        .into_iter()
+        .map(|row| row.path)
+        .collect())
+}
+
+fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeRow>> {
+    list_worktrees_with(repo_root, |args| {
+        crate::proc::git_command(repo_root)
+            .args(args)
+            .env("LC_ALL", "C")
+            .output()
+    })
+}
+
+/// `git worktree list --porcelain -z`, so a path holding a newline survives;
+/// git before 2.36 refuses `-z` as a usage error, and only then is the
+/// newline form read instead.
+fn list_worktrees_with(
+    repo_root: &Path,
+    mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
+) -> Result<Vec<WorktreeRow>> {
+    const ARGS: [&str; 4] = ["worktree", "list", "--porcelain", "-z"];
+    let (mut args, mut separator) = (&ARGS[..], b'\0');
+    let mut output = run(args)?;
+    if output.status.code() == Some(GIT_USAGE_EXIT) {
+        (args, separator) = (&ARGS[..3], b'\n');
+        output = run(args)?;
+    }
+    let output = git_success(repo_root, args, output)?;
+    Ok(parse_worktree_list(&output.stdout, separator))
+}
+
+/// Porcelain fields end at `separator` (NUL under `-z`, else a newline) and an
+/// empty field ends a record. Nothing is trimmed: a path keeps its bytes.
+fn parse_worktree_list(raw: &[u8], separator: u8) -> Vec<WorktreeRow> {
     let mut rows = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut branch: Option<String> = None;
-    for line in raw.lines().chain(std::iter::once("")) {
-        let line = line.trim();
-        if line.is_empty() {
+    for field in raw
+        .split(|byte| *byte == separator)
+        .chain(std::iter::once(&[][..]))
+    {
+        if field.is_empty() {
             if let Some(path) = path.take() {
                 rows.push(WorktreeRow {
                     path,
@@ -1909,10 +1948,11 @@ fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
             }
             continue;
         }
-        if let Some(rest) = line.strip_prefix("worktree ") {
-            path = Some(PathBuf::from(rest));
-        } else if let Some(rest) = line.strip_prefix("branch ") {
-            branch = Some(rest.strip_prefix("refs/heads/").unwrap_or(rest).to_owned());
+        if let Some(rest) = field.strip_prefix(b"worktree ") {
+            path = Some(PathBuf::from(OsStr::from_bytes(rest)));
+        } else if let Some(rest) = field.strip_prefix(b"branch ") {
+            let rest = String::from_utf8_lossy(rest);
+            branch = Some(rest.strip_prefix("refs/heads/").unwrap_or(&rest).to_owned());
         }
     }
     rows
@@ -2838,6 +2878,14 @@ where
         .args(&args)
         .env("LC_ALL", "C")
         .output()?;
+    git_success(cwd, &args, output)
+}
+
+fn git_success(
+    cwd: &Path,
+    args: &[&str],
+    output: std::process::Output,
+) -> Result<std::process::Output> {
     if output.status.success() {
         return Ok(output);
     }

@@ -85,24 +85,12 @@ fn list_group_roots(project_root: &Path, root_class: RootClass) -> Vec<PathBuf> 
     }
 }
 
-/// Parse `git -C <root> worktree list --porcelain` into the absolute checkout
-/// root of every worktree — main and linked alike — from its `worktree <path>`
-/// lines. Linked worktrees report absolute paths, so a checkout outside the
-/// project root is captured here exactly as the reducer needs it.
+/// The absolute checkout root of every worktree, main and linked alike, as
+/// `git worktree list` reports them. Linked worktrees report absolute paths,
+/// so a checkout outside the project root is captured here exactly as the
+/// reducer needs it; a failed listing reads as none.
 fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
-    let output = crate::proc::git_command(project_root)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success());
-    let Some(output) = output else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.strip_prefix("worktree "))
-        .map(|path| PathBuf::from(path.trim()))
-        .collect()
+    crate::worktree::worktree_paths(project_root).unwrap_or_default()
 }
 
 #[cfg(test)]

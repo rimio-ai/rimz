@@ -4672,7 +4672,8 @@ path = "crates/rimz/src/worktree"
 # WorkflowRunHolder and ProtectionSet::insert_workflow_run carry caller-gathered run pins (+2).
 # emit_worktree_created moves here from launcher::checkout so the harness can signal creation (+1).
 # create_for_loop_fire names and marks a loop fire's fresh tree for the scheduler (+1).
-surface-budget = 88
+# worktree_paths shares the lossless `git worktree list` decoder with the sidebar (+1).
+surface-budget = 89
 
 [[verdict]]
 kind = "item"
@@ -4698,6 +4699,11 @@ reason = "Launch compilation preserves the failing ancestor's metadata path in t
 kind = "item"
 key = "worktree::discover_owned_cached"
 reason = "Host condition probes and task firing share stat-gated, 60-second-bounded Git rows while CLI discovery remains fresh."
+
+[[verdict]]
+kind = "item"
+key = "worktree::worktree_paths"
+reason = "The one lossless `git worktree list` decoder (NUL fields, newline form only on git's usage error) serves the sidebar's group roots, so no path is trimmed or lossily decoded there."
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]

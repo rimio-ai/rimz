@@ -291,3 +291,33 @@ fn group_roots_dispatch_follows_the_root_class() {
     assert!(list_group_roots(room.path(), RootClass::Directory).is_empty());
     assert!(list_group_roots(room.path(), RootClass::Marker).is_empty());
 }
+
+#[test]
+fn list_worktree_roots_keeps_each_path_byte_for_byte() {
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let main = base.join("main");
+    std::fs::create_dir_all(&main).unwrap();
+    assert!(git(&main, &["init", "-q"]));
+    let _ = git(&main, &["config", "user.email", "t@example.com"]);
+    let _ = git(&main, &["config", "user.name", "t"]);
+    assert!(git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]));
+    let trailing_space = base.join("wt ");
+    let non_utf8 = base.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
+    for (index, path) in [&trailing_space, &non_utf8].into_iter().enumerate() {
+        let added = Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args(["worktree", "add", "-q", "-b", &format!("b{index}")])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(added.success());
+    }
+
+    assert_eq!(
+        list_worktree_roots(&main),
+        vec![main.clone(), trailing_space, non_utf8]
+    );
+}
