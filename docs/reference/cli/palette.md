@@ -1,6 +1,6 @@
 # Palette
 
-`rimz palette` searches the room's live cards and offers the commands you can run on them. The bottom line shows the exact `rimz` command Enter runs. Use it in the current terminal, or open it over your work:
+`rimz palette` searches the room's live cards, offers the commands you can run on them, and launches new agents. The bottom line shows the exact `rimz` command Enter runs. Use it in the current terminal, or open it over your work:
 
 ```sh
 rimz palette
@@ -19,7 +19,7 @@ The first character of the query selects the mode. `--mode` only seeds that quer
 | no prefix | Cards | Focus the selected pane. |
 | `>` | Commands | Run the selected command. |
 | `#` | Worktrees | Focus the group's first live card. |
-| `+` | New agent | Nothing yet. The placeholder says this arrives in a later release. |
+| `+` | New agent | Move to the next [launch step](#launch-an-agent); on the last, launch. |
 
 Type to filter. Up/Down and Ctrl-p/Ctrl-n move the selection; Enter runs it. Esc and Ctrl-c leave without running anything, with exit status 0. There is no mouse interaction. The view supports terminals of at least 32 columns by 8 rows.
 
@@ -28,6 +28,21 @@ Card search matches subsequences of the handle, pet name, provider kind, worktre
 The list refreshes about every two seconds, keeping the selected row by identity while it remains present. Worktree mode lists the snapshot's groups, including the root and external places, but omits groups without a live candidate. It does not change a shell's directory.
 
 With nothing selected, the bottom line reads `nothing to run`. If no sidebar has published the room yet, cards are empty and a notice names `rimz sidebar repair`; the palette does not start a sidebar itself.
+
+## Launch an agent
+
+The `+` mode launches one agent in four steps: profile, where, name (only for a new worktree), and prompt. Enter moves to the next step; Enter on the prompt launches, and an empty prompt launches with none. Backspace on an empty field returns to the previous step, and on the profile step it erases the query as in every mode, so erasing the `+` returns to cards. Past the profile step, typed characters belong to the field: a `>` or `#` in a prompt is text.
+
+- **Profile** lists the profiles `rimz agents profiles` lists, matched by subsequence against name, model, and description.
+- **Where** lists the current checkout first, then the root checkout when it is not the current one, then the other RimZ-owned worktrees, then `new worktree from trunk`. The current checkout is that of the opener's card; an opener with no card, such as a plain shell, means the root checkout. An unmanaged checkout appears only when it is the current one. Worktree entries appear only when the room is a Git repository. Typing filters by name and branch.
+- **Name** names the new worktree. An empty name generates one. A name that breaks the [worktree name rules](./agents.md#channel-worktree-and-placement), or names a worktree the where step lists, shows why and Enter does nothing.
+- **Prompt** is optional free text, delivered as the launch's prompt.
+
+The bottom line shows the command Enter will run at every step, built from the selections so far: `rimz agents launch <profile>`, then `-w NAME` for a RimZ-owned worktree, `--cwd PATH` for an unmanaged current checkout, nothing for the root checkout, or `-w [NAME] --from-trunk` for a new worktree, then the prompt as the last word. A new worktree is cut [as team launches cut theirs](./agents.md#channel-worktree-and-placement). The palette does not check a prompt; one the launch refuses fails with the launch's own message.
+
+Launches are offered only while the room's multiplexer session is live, read when the palette first enters the `+` mode, together with the profiles and worktrees; otherwise the profile step shows the refusal naming `rimz start` and `rimz attach`.
+
+The launch leaves the palette view and runs in its terminal, so the launch's own questions (entering an existing worktree, a cross-repository worktree, project trust) are answered there. It runs without the palette's pane, so it opens a new tab and takes focus rather than replacing the popup. On success the palette closes; on failure the output stays until a key is pressed.
 
 ## Commands
 

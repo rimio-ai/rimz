@@ -1,5 +1,6 @@
 //! Search the room's published cards and run explicit RimZ commands.
 
+mod launch;
 mod model;
 mod ui;
 
@@ -7,6 +8,7 @@ mod ui;
 mod tests;
 
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -20,8 +22,10 @@ use rimz::ids::{MuxClientId, MuxName, PaneId};
 use rimz::mux::{ClientFocusOptions, ClientView, PopupRequest};
 use rimz::sidebar::consumer::{PublishedSnapshotReader, published_frame_exists};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
+use rimz::workspace::ResolvedWorkspace;
 
 use super::{Ctx, GlobalFlags};
+use launch::LaunchSetup;
 use model::{Action, ChildOutcome, Effect, PaletteState, candidates};
 use ui::{PaletteTheme, render};
 
@@ -109,7 +113,7 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
         .clone()
         .or_else(|| rimz::mux::own_pane_id(mux));
     if !args.popup {
-        return run_terminal(&ctx, args.mode, opener);
+        return run_terminal(&ctx, args.mode, mux, opener);
     }
     let backend = rimz::mux::backend_for(mux);
     let mut typing_pane = None;
@@ -215,7 +219,7 @@ fn popup_args(
     argv
 }
 
-fn run_terminal(ctx: &Ctx, mode: Mode, opener: Option<PaneId>) -> Result<()> {
+fn run_terminal(ctx: &Ctx, mode: Mode, mux: MuxName, opener: Option<PaneId>) -> Result<()> {
     let mut guard = Some(TerminalModeGuard::enable(
         MouseCapture::Off,
         Screen::Alternate,
@@ -227,8 +231,13 @@ fn run_terminal(ctx: &Ctx, mode: Mode, opener: Option<PaneId>) -> Result<()> {
     let mut state = PaletteState::new(mode, opener, &ctx.workspace.session_name);
     let mut reader =
         PublishedSnapshotReader::new(ctx.runtime().clone(), &ctx.workspace.session_name, None);
+    let mut launch_loaded = false;
     let mut next_refresh = Instant::now();
     loop {
+        if !launch_loaded && state.mode() == Mode::New {
+            state = state.with_launch(load_launch(ctx, mux));
+            launch_loaded = true;
+        }
         if Instant::now() >= next_refresh {
             refresh(&mut state, &mut reader, ctx);
             next_refresh = Instant::now() + REFRESH_INTERVAL;
@@ -251,29 +260,22 @@ fn run_terminal(ctx: &Ctx, mode: Mode, opener: Option<PaneId>) -> Result<()> {
             KeyCode::Down => state.move_selection(1),
             KeyCode::Char('p') if control => state.move_selection(-1),
             KeyCode::Char('n') if control => state.move_selection(1),
-            KeyCode::Backspace => {
-                let mut query = state.query.clone();
-                query.pop();
-                state.set_query(query);
-            }
+            KeyCode::Backspace => state.backspace(),
             KeyCode::Char(character)
                 if !key
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                let mut query = state.query.clone();
-                query.push(character);
-                state.set_query(query);
+                state.type_char(character);
             }
-            KeyCode::Enter => {
-                let show = state
-                    .selected_action()
-                    .is_some_and(|action| action.effect == Effect::Show);
-                if show {
+            KeyCode::Enter if state.advance() => {
+                let effect = state.selected_action().map(|action| action.effect);
+                let show = effect == Some(Effect::Show);
+                if show || effect == Some(Effect::Launch) {
                     drop(guard.take());
                 }
                 state.activate(|action| run_child(ctx, action));
-                if show {
+                if show || (effect == Some(Effect::Launch) && state.notice.is_some()) {
                     if let Some(notice) = &state.notice {
                         writeln!(super::render::err(), "{notice}")?;
                     }
@@ -299,18 +301,102 @@ fn refresh(state: &mut PaletteState, reader: &mut PublishedSnapshotReader, ctx: 
     }
 }
 
+/// Reads the `+` mode's inputs the first time the palette enters it, so other modes open without
+/// loading definitions or listing worktrees.
+fn load_launch(ctx: &Ctx, mux: MuxName) -> LaunchSetup {
+    let unavailable = rimz::room::require_live_mux(Some(mux), &ctx.workspace)
+        .err()
+        .map(|error| error.to_string());
+    match MachineConfig::load_with_agent_spec_sources() {
+        Ok((machine, sources)) => launch_setup(
+            &machine,
+            &sources,
+            &ctx.workspace.project_root,
+            unavailable,
+            false,
+        ),
+        Err(error) => LaunchSetup {
+            unavailable: Some(format!("loading machine config: {error:#}")),
+            ..LaunchSetup::default()
+        },
+    }
+}
+
+/// The `+` mode's inputs: the profiles `rimz agents profiles` lists, and the managed trees when
+/// the room's root is a Git repository.
+fn launch_setup(
+    machine: &MachineConfig,
+    sources: &rimz::config::AgentSpecSources,
+    project_root: &Path,
+    unavailable: Option<String>,
+    new_worktree: bool,
+) -> LaunchSetup {
+    let reports = super::profile_report::available_profiles(
+        &machine.agents.profiles,
+        &machine.agents.commands,
+        sources,
+        rimz::config::effective::ProfileScope::Agents,
+    );
+    let (_, standalone) =
+        super::profile_report::partition_team_profiles(reports, &machine.agents.teams);
+    let profiles = standalone
+        .into_iter()
+        .map(|report| launch::Profile {
+            name: report.name,
+            model: report.model.unwrap_or_default(),
+            description: report.description.unwrap_or_default(),
+        })
+        .collect();
+    let trees = rimz::worktree::discover_owned(project_root)
+        .ok()
+        .map(|owned| {
+            owned
+                .into_iter()
+                .map(|tree| launch::Tree {
+                    name: tree.marker.name,
+                    path: tree.marker.worktree_path,
+                    branch: tree.branch.unwrap_or_default(),
+                })
+                .collect()
+        });
+    LaunchSetup {
+        profiles,
+        root: project_root.to_owned(),
+        trees,
+        unavailable,
+        new_worktree,
+    }
+}
+
+fn child_command(program: &Path, workspace: &ResolvedWorkspace, args: &[String]) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&workspace.project_root)
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ));
+    command
+}
+
+/// A launch runs in the palette's terminal so its prompts can be answered, and without the
+/// palette's pane, which placement would otherwise replace.
+fn launch_command(program: &Path, workspace: &ResolvedWorkspace, args: &[String]) -> Command {
+    let mut command = child_command(program, workspace, args);
+    command.env_remove("TMUX_PANE").env_remove("ZELLIJ_PANE_ID");
+    command
+}
+
 fn run_child(ctx: &Ctx, action: &Action) -> ChildOutcome {
     let outcome = (|| -> Result<_> {
-        let mut command = Command::new(std::env::current_exe()?);
-        command
-            .args(&action.args)
-            .current_dir(&ctx.workspace.project_root)
-            .envs(rimz::workspace::pin_env(
-                &ctx.workspace.workspace_id,
-                &ctx.workspace.project_root,
-            ));
+        let program = std::env::current_exe()?;
+        let mut command = match action.effect {
+            Effect::Launch => launch_command(&program, &ctx.workspace, &action.args),
+            Effect::Act | Effect::Show => child_command(&program, &ctx.workspace, &action.args),
+        };
         let (status, stderr) = match action.effect {
-            Effect::Show => (command.status()?, String::new()),
+            Effect::Show | Effect::Launch => (command.status()?, String::new()),
             Effect::Act => {
                 let output = command.stdin(Stdio::null()).output()?;
                 (

@@ -12,8 +12,10 @@ use rimz::store::snapshot::{
     SidebarWorktreeGroup,
 };
 
+use super::launch::*;
 use super::model::*;
 use super::*;
+use std::path::PathBuf;
 
 fn pane(id: u32) -> PaneId {
     PaneId::from_parts(rimz::MuxName::Tmux, format!("%{id}"))
@@ -130,8 +132,181 @@ fn cards() -> Vec<Candidate> {
             branch: "feature/keyboard".to_owned(),
             pr: Some(42),
             group_key: "feature".to_owned(),
+            checkout: None,
         })
         .collect()
+}
+
+fn setup() -> LaunchSetup {
+    LaunchSetup {
+        profiles: ["coder", "reviewer"]
+            .map(|name| Profile {
+                name: name.to_owned(),
+                model: "gpt-5".to_owned(),
+                description: format!("{name} profile"),
+            })
+            .into(),
+        root: PathBuf::from("/project"),
+        trees: Some(
+            ["feature", "docs"]
+                .map(|name| Tree {
+                    name: name.to_owned(),
+                    path: PathBuf::from(format!("/project-worktrees/{name}")),
+                    branch: format!("{name}/branch"),
+                })
+                .into(),
+        ),
+        unavailable: None,
+        new_worktree: false,
+    }
+}
+
+fn launch_state(setup: LaunchSetup, checkout: Option<&str>) -> PaletteState {
+    let mut state = PaletteState::new(Mode::New, Some(pane(1)), "room").with_launch(setup);
+    let mut source = cards();
+    source[0].checkout = checkout.map(PathBuf::from);
+    state.refresh(source, true);
+    state
+}
+
+fn type_text(state: &mut PaletteState, text: &str) {
+    for character in text.chars() {
+        state.type_char(character);
+    }
+}
+
+fn labels(state: &PaletteState) -> Vec<String> {
+    state
+        .entries()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect()
+}
+
+/// What a printed launch parses to: profile, `-w` value, `--from-trunk`, `--cwd`, prompt.
+type Parsed = (
+    String,
+    Option<String>,
+    bool,
+    Option<PathBuf>,
+    Option<String>,
+);
+
+fn parse_launch(args: &[String]) -> Parsed {
+    let matches = <crate::cli::Cli as clap::CommandFactory>::command()
+        .try_get_matches_from(std::iter::once("rimz").chain(args.iter().map(String::as_str)))
+        .unwrap_or_else(|error| panic!("{args:?}: {error}"));
+    let launch = matches
+        .subcommand_matches("agents")
+        .and_then(|agents| agents.subcommand_matches("launch"))
+        .unwrap_or_else(|| panic!("{args:?} is not an agents launch"));
+    (
+        launch
+            .get_one::<String>("spec")
+            .cloned()
+            .unwrap_or_default(),
+        launch.get_one::<String>("worktree").cloned(),
+        launch.get_flag("from_trunk"),
+        launch.get_one::<PathBuf>("cwd").cloned(),
+        launch.get_one::<String>("prompt").cloned(),
+    )
+}
+
+struct Walk {
+    checkout: Option<&'static str>,
+    new_worktree: bool,
+    place: usize,
+    name: &'static str,
+    prompt: &'static str,
+    parsed: Parsed,
+}
+
+fn walks() -> Vec<Walk> {
+    let parsed = |worktree: Option<&str>, from_trunk, cwd: Option<&str>, prompt: Option<&str>| {
+        (
+            "coder".to_owned(),
+            worktree.map(str::to_owned),
+            from_trunk,
+            cwd.map(PathBuf::from),
+            prompt.map(str::to_owned),
+        )
+    };
+    vec![
+        Walk {
+            checkout: Some("/project"),
+            new_worktree: false,
+            place: 0,
+            name: "",
+            prompt: "",
+            parsed: parsed(None, false, None, None),
+        },
+        Walk {
+            checkout: Some("/project-worktrees/feature"),
+            new_worktree: false,
+            place: 0,
+            name: "",
+            prompt: "fix the login",
+            parsed: parsed(Some("feature"), false, None, Some("fix the login")),
+        },
+        Walk {
+            checkout: Some("/elsewhere"),
+            new_worktree: false,
+            place: 0,
+            name: "",
+            prompt: "it's \"quoted\" -w x",
+            parsed: parsed(
+                None,
+                false,
+                Some("/elsewhere"),
+                Some("it's \"quoted\" -w x"),
+            ),
+        },
+        Walk {
+            checkout: None,
+            new_worktree: false,
+            place: 2,
+            name: "",
+            prompt: "",
+            parsed: parsed(Some("docs"), false, None, None),
+        },
+        Walk {
+            checkout: None,
+            new_worktree: true,
+            place: 3,
+            name: "feat/x",
+            prompt: "ship it",
+            parsed: parsed(Some("feat/x"), true, None, Some("ship it")),
+        },
+        Walk {
+            checkout: None,
+            new_worktree: true,
+            place: 3,
+            name: "",
+            prompt: "two words",
+            parsed: parsed(Some(""), true, None, Some("two words")),
+        },
+    ]
+}
+
+/// The palette at each step of `walk`, the last one ready to launch.
+fn walk_states(walk: &Walk) -> Vec<PaletteState> {
+    let mut setup = setup();
+    setup.new_worktree = walk.new_worktree;
+    let mut state = launch_state(setup, walk.checkout);
+    let mut states = vec![state.clone()];
+    assert!(!state.advance());
+    state.selected = walk.place;
+    states.push(state.clone());
+    assert!(!state.advance());
+    if state.launch_step() == Some(Step::Name) {
+        type_text(&mut state, walk.name);
+        states.push(state.clone());
+        assert!(!state.advance());
+    }
+    assert_eq!(state.launch_step(), Some(Step::Prompt));
+    type_text(&mut state, walk.prompt);
+    states.push(state.clone());
+    states
 }
 
 #[test]
@@ -623,11 +798,293 @@ fn footer_is_exactly_the_action_passed_to_runner_in_each_mode() {
         });
         assert!(ran);
     }
-    let mut state = PaletteState::new(Mode::New, None, "room");
-    assert_eq!(state.entries().len(), 1);
+    for walk in walks() {
+        for mut state in walk_states(&walk) {
+            let footer = state.footer();
+            assert!(footer.starts_with("$ rimz agents launch coder"), "{footer}");
+            let mut ran = false;
+            state.activate(|action| {
+                assert_eq!(footer, format!("$ {}", action.command_line()));
+                assert_eq!(
+                    shlex::split(footer.trim_start_matches("$ ")).unwrap()[1..],
+                    action.args
+                );
+                assert_eq!(action.effect, Effect::Launch);
+                ran = true;
+                ChildOutcome::Success
+            });
+            assert!(ran && state.closed, "{footer}");
+        }
+    }
+}
+
+#[test]
+fn launch_commands_parse_to_the_selected_profile_place_and_prompt() {
+    for walk in walks() {
+        let states = walk_states(&walk);
+        let action = states.last().unwrap().selected_action().unwrap();
+        assert_eq!(
+            parse_launch(&action.args),
+            walk.parsed,
+            "{}",
+            action.command_line()
+        );
+    }
+}
+
+#[test]
+fn where_step_lists_current_then_root_then_trees_then_new() {
+    let new = "new worktree from trunk";
+    for (checkout, new_worktree, expected, selected) in [
+        (
+            Some("/project-worktrees/feature"),
+            false,
+            vec!["feature", "project", "docs", new],
+            0,
+        ),
+        (
+            Some("/project"),
+            false,
+            vec!["project", "feature", "docs", new],
+            0,
+        ),
+        (None, false, vec!["project", "feature", "docs", new], 0),
+        (None, true, vec!["project", "feature", "docs", new], 3),
+        (
+            Some("/elsewhere"),
+            false,
+            vec!["/elsewhere", "project", "feature", "docs", new],
+            0,
+        ),
+    ] {
+        let mut setup = setup();
+        setup.new_worktree = new_worktree;
+        let mut state = launch_state(setup, checkout);
+        assert!(!state.advance());
+        assert_eq!(state.launch_step(), Some(Step::Where));
+        assert_eq!(labels(&state), expected, "{checkout:?}");
+        assert_eq!(state.selected, selected, "{checkout:?}");
+    }
+    let mut no_repo = setup();
+    no_repo.trees = None;
+    let mut state = launch_state(no_repo, None);
+    assert_eq!(state.footer(), "$ rimz agents launch coder");
+    assert!(!state.advance());
+    assert_eq!(labels(&state), ["project"]);
+}
+
+/// A tree's marker keeps the configured `dir` unresolved (`<root>/../<root>-worktrees/NAME`)
+/// while a card names its checkout normalized, as a live room records them.
+#[test]
+fn where_step_matches_marker_and_card_spellings_of_one_checkout() {
+    let new = "new worktree from trunk";
+    let mut marker_spelling = setup();
+    for tree in marker_spelling.trees.as_mut().unwrap() {
+        tree.path = PathBuf::from(format!("/project/../project-worktrees/{}", tree.name));
+    }
+    for (checkout, expected, footer) in [
+        (
+            "/project-worktrees/feature",
+            vec!["feature", "project", "docs", new],
+            "$ rimz agents launch coder -w feature",
+        ),
+        (
+            "/project-worktrees/../project",
+            vec!["project", "feature", "docs", new],
+            "$ rimz agents launch coder",
+        ),
+    ] {
+        let mut state = launch_state(marker_spelling.clone(), Some(checkout));
+        assert_eq!(state.footer(), footer, "{checkout}");
+        assert!(!state.advance());
+        assert_eq!(labels(&state), expected, "{checkout}");
+    }
+}
+
+#[test]
+fn name_step_refuses_invalid_and_listed_names_and_leaves_empty_to_generate() {
+    let mut setup = setup();
+    setup.new_worktree = true;
+    let mut state = launch_state(setup, None);
+    assert_eq!(state.footer(), "$ rimz agents launch coder -w --from-trunk");
+    state.advance();
+    state.advance();
+    assert_eq!(state.launch_step(), Some(Step::Name));
+    for (name, reason) in [
+        ("bad name", "invalid worktree name `bad name`"),
+        (
+            "docs",
+            "worktree `docs` is listed; pick it in the where step",
+        ),
+    ] {
+        type_text(&mut state, name);
+        assert_eq!(state.footer(), "nothing to run", "{name}");
+        assert!(
+            labels(&state)[0].starts_with(reason),
+            "{name}: {:?}",
+            labels(&state)
+        );
+        assert!(!state.advance());
+        assert_eq!(state.launch_step(), Some(Step::Name));
+        for _ in name.chars() {
+            state.backspace();
+        }
+    }
+    assert_eq!(state.footer(), "$ rimz agents launch coder -w --from-trunk");
+    state.advance();
+    assert_eq!(state.launch_step(), Some(Step::Prompt));
+}
+
+#[test]
+fn launch_step_keys_step_back_on_empty_fields_and_keep_mode_characters_as_text() {
+    let mut state = launch_state(setup(), None);
+    type_text(&mut state, "rev");
+    assert_eq!(labels(&state), ["reviewer"]);
+    state.advance();
+    state.advance();
+    type_text(&mut state, "> #x");
+    assert_eq!(state.mode(), Mode::New);
+    assert_eq!(state.footer(), "$ rimz agents launch reviewer '> #x'");
+    for _ in 0..4 {
+        state.backspace();
+    }
+    assert_eq!(state.launch_step(), Some(Step::Prompt));
+    state.backspace();
+    assert_eq!(state.launch_step(), Some(Step::Where));
+    state.backspace();
+    assert_eq!(state.launch_step(), None);
+    assert_eq!(state.query, "+rev");
+    assert_eq!(state.footer(), "$ rimz agents launch reviewer");
+    for _ in 0..4 {
+        state.backspace();
+    }
+    assert_eq!(state.mode(), Mode::Cards);
+}
+
+#[test]
+fn launches_are_offered_only_in_a_live_room() {
+    let mut setup = setup();
+    let refusal =
+        "no live RimZ room `room`; run `rimz start` first or enter one with `rimz attach`";
+    setup.unavailable = Some(refusal.to_owned());
+    let mut state = launch_state(setup, None);
+    assert_eq!(labels(&state), [refusal]);
     assert_eq!(state.footer(), "nothing to run");
-    state.activate(|_| panic!("placeholder must not run"));
-    assert!(!state.closed);
+    assert!(!state.advance());
+    assert_eq!(state.launch_step(), None);
+}
+
+#[test]
+fn launch_child_inherits_the_terminal_without_the_palettes_pane() {
+    let workspace = ResolvedWorkspace {
+        workspace_id: rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+        project_root: PathBuf::from("/project"),
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Repo,
+        worktree_root: PathBuf::from("/project"),
+        worktree_branch: None,
+        session_name: "room".to_owned(),
+        mux_hint: None,
+    };
+    let args = ["agents".to_owned(), "launch".to_owned(), "coder".to_owned()];
+    let command = launch_command(std::path::Path::new("/bin/rimz"), &workspace, &args);
+    let envs = command
+        .get_envs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for key in ["TMUX_PANE", "ZELLIJ_PANE_ID"] {
+        assert_eq!(envs.get(std::ffi::OsStr::new(key)), Some(&None), "{key}");
+    }
+    for (key, value) in rimz::workspace::pin_env(&workspace.workspace_id, &workspace.project_root) {
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new(&key)),
+            Some(&Some(std::ffi::OsStr::new(&value))),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        command.get_current_dir(),
+        Some(std::path::Path::new("/project"))
+    );
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        args.each_ref().map(std::ffi::OsStr::new)
+    );
+}
+
+#[test]
+fn printed_profiles_and_trees_resolve_to_the_entries_shown() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=rimz@example.test",
+                "-c",
+                "user.name=RimZ Test",
+            ])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{args:?}: {status:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    let mut machine = rimz::config::MachineConfig::default();
+    machine.agents.worktree.dir = home.path().join("trees").display().to_string();
+    rimz::worktree::create(
+        &repo,
+        &machine.agents.worktree,
+        Some("docs"),
+        None,
+        None,
+        false,
+        rimz::worktree::LaunchBase::Configured,
+    )
+    .unwrap();
+    machine.agents.profiles.0.insert(
+        "coder".to_owned(),
+        toml::from_str("agent = 'codex'\ndescription = 'writes code'").unwrap(),
+    );
+    let setup = launch_setup(
+        &machine,
+        &rimz::config::AgentSpecSources::default(),
+        &repo,
+        None,
+        false,
+    );
+    assert_eq!(
+        setup
+            .profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .collect::<Vec<_>>(),
+        ["coder"]
+    );
+    let mut state = PaletteState::new(Mode::New, None, "room").with_launch(setup);
+    state.refresh(Vec::new(), true);
+    state.advance();
+    state.selected = 1;
+    let args = state.selected_action().unwrap().args;
+    assert_eq!(labels(&state)[1], "docs");
+    let layout = rimz::harness::spec::parse_layout_spec(
+        &args[2],
+        &machine.agents.profiles,
+        &machine.agents.commands,
+    )
+    .unwrap();
+    assert_eq!(layout.agent_kinds().collect::<Vec<_>>(), ["codex"]);
+    let owned = rimz::worktree::discover_owned(&repo).unwrap();
+    assert_eq!(args[3..], ["-w", "docs"]);
+    assert_eq!(
+        owned
+            .iter()
+            .map(|tree| tree.marker.name.as_str())
+            .collect::<Vec<_>>(),
+        [args[4].as_str()]
+    );
 }
 
 #[test]
@@ -775,9 +1232,9 @@ fn renders_complete_cards_selection_and_command_at_normal_and_minimum_size() {
 }
 
 #[test]
-fn command_target_and_new_placeholder_render_without_inventing_an_action() {
-    for mode in [Mode::Commands, Mode::New] {
-        let state = PaletteState::new(mode, None, "room");
+fn command_target_renders_without_inventing_an_action() {
+    {
+        let state = PaletteState::new(Mode::Commands, None, "room");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let theme = PaletteTheme::resolve(&ThemeConfig::default(), false, true);
         terminal
@@ -790,13 +1247,6 @@ fn command_target_and_new_placeholder_render_without_inventing_an_action() {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(
-            text.contains(if mode == Mode::Commands {
-                "no card"
-            } else {
-                "later release"
-            }),
-            "{text}"
-        );
+        assert!(text.contains("no card"), "{text}");
     }
 }
