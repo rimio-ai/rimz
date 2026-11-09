@@ -652,6 +652,16 @@ impl crate::agents::capabilities::AccountCapability for QwenAdapter {
         .any(|region| region.label() == sub_provider)
     }
 
+    fn account_label(&self, scope: &super::ProviderAccountScope) -> Option<String> {
+        [
+            selection::AlibabaRegion::International,
+            selection::AlibabaRegion::China,
+        ]
+        .into_iter()
+        .find(|region| region.scope() == *scope)
+        .map(|region| region.account_label().to_owned())
+    }
+
     fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         account::probe(login_env)
     }

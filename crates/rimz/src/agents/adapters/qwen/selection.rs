@@ -24,7 +24,7 @@ pub(super) enum AlibabaRegion {
 }
 
 impl AlibabaRegion {
-    fn scope(self) -> ProviderAccountScope {
+    pub(super) fn scope(self) -> ProviderAccountScope {
         ProviderAccountScope::sub_provider("alibaba", self.variant())
     }
 
@@ -32,6 +32,13 @@ impl AlibabaRegion {
         match self {
             Self::International => "international",
             Self::China => "china",
+        }
+    }
+
+    pub(super) fn account_label(self) -> &'static str {
+        match self {
+            Self::International => "Qwen Alibaba International",
+            Self::China => "Qwen Alibaba China",
         }
     }
 
