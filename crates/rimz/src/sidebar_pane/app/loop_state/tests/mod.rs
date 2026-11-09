@@ -442,7 +442,7 @@ impl Rig {
 
     /// Bring the renderer back on screen by viewing a sibling pane.
     fn watch(&mut self) {
-        self.view().ctx().current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
+        self.view().ctx().current.viewed_panes = vec![pane("terminal_9", "tab_0").pane_id];
         self.set_plane_viewed(true);
     }
 
@@ -736,7 +736,7 @@ fn stamped_roster_event_can_prove_topology_from_before_renderer_start() {
 fn own_view() -> crate::store::snapshot::SidebarOwnView {
     crate::store::snapshot::SidebarOwnView {
         sibling_count: 1,
-        working_pane_ids: vec![pane("terminal_9", "tab_0", false).pane_id],
+        working_pane_ids: vec![pane("terminal_9", "tab_0").pane_id],
         own_view_is_daemon: false,
     }
 }
@@ -750,7 +750,7 @@ fn empty_own_view() -> crate::store::snapshot::SidebarOwnView {
 }
 
 fn process_snapshot(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
-    let mut snapshot = snapshot_with_panes(ws, vec![pane("terminal_9", "tab_0", false)]);
+    let mut snapshot = snapshot_with_panes(ws, vec![pane("terminal_9", "tab_0")]);
     snapshot.panes_observed_at_ms = Some(observed_at_ms);
     snapshot
 }
@@ -787,8 +787,8 @@ fn animating_agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 /// Two sibling panes in one tab with `active` focused — the fixture every
 /// focus-anchor test resolves its anchor against.
 fn snapshot_with_focused_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapshot {
-    let first = pane("terminal_1", "tab_0", false);
-    let second = pane("terminal_2", "tab_0", false);
+    let first = pane("terminal_1", "tab_0");
+    let second = pane("terminal_2", "tab_0");
     let working_pane_ids = vec![first.pane_id.clone(), second.pane_id.clone()];
     let mut snapshot = snapshot_with_panes(ws, vec![first, second]);
     snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {

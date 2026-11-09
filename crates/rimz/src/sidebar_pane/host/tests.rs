@@ -819,12 +819,12 @@ fn hidden_reveal(
         use crate::sidebar_pane::app::fixtures::pane;
         let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
         for (id, tab) in [(&visible_id, "tab_visible"), (&hidden_id, "tab_hidden")] {
-            let mut sidebar = pane(id.raw(), tab, false);
+            let mut sidebar = pane(id.raw(), tab);
             sidebar.pane_id = id.clone();
             sidebar.command = Some("rimz-sidebar".into());
             panes.push(sidebar);
             if id == &visible_id || snapshot.own_view.as_ref().unwrap().sibling_count != 0 {
-                let mut sibling = pane(&format!("{}_peer", id.raw()), tab, false);
+                let mut sibling = pane(&format!("{}_peer", id.raw()), tab);
                 if mux == MuxName::Tmux {
                     sibling.pane_id = crate::ids::PaneId::from_parts(
                         mux,
@@ -1387,12 +1387,8 @@ esac
         let mut snapshot = snapshot_with_panes(
             &workspace(),
             vec![
-                pane("terminal_11", "tab_1", false),
-                pane(
-                    "terminal_12",
-                    if cross_tab { "tab_2" } else { "tab_1" },
-                    false,
-                ),
+                pane("terminal_11", "tab_1"),
+                pane("terminal_12", if cross_tab { "tab_2" } else { "tab_1" }),
             ],
         );
         Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[1].name =

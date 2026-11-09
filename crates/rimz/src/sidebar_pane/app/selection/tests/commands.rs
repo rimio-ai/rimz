@@ -63,7 +63,7 @@ fn card_walk_skips_folded_rows_and_worktree_walk_wraps_nonempty_groups() {
     let snapshot = snapshot_with_panes(
         &workspace(),
         (1..=8)
-            .map(|n| pane(&format!("terminal_{n}"), "tab_0", false))
+            .map(|n| pane(&format!("terminal_{n}"), "tab_0"))
             .collect(),
     );
     let mut view = ViewState {
@@ -264,7 +264,7 @@ fn card_needs_you_set_toggle_and_empty_refusal_preserve_the_lens() {
         CardReply::Done
     );
     assert_eq!(view.toggles.make_up_filter.filter, None);
-    let empty = snapshot_with_panes(&workspace(), vec![pane("terminal_1", "tab_0", false)]);
+    let empty = snapshot_with_panes(&workspace(), vec![pane("terminal_1", "tab_0")]);
     let before = view.toggles.make_up_filter.clone();
     let (outcome, reply) = reduce(
         &CardRequest::FilterNeedsYou { toggle: true },

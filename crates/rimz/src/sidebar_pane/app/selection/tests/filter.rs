@@ -935,12 +935,12 @@ fn n_walks_the_searched_roster_and_the_inbox_without_a_search() {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let mut waiting = snapshot.worktree_groups[0].rows[0].clone();
     waiting.id = "waiting".to_owned();
-    waiting.pane = Some(pane("terminal_11", "tab_0", false));
+    waiting.pane = Some(pane("terminal_11", "tab_0"));
     waiting.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
     let mut outside = waiting.clone();
     outside.id = "outside".to_owned();
     outside.name = "other".to_owned();
-    outside.pane = Some(pane("terminal_12", "tab_0", false));
+    outside.pane = Some(pane("terminal_12", "tab_0"));
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .extend([waiting, outside]);
     let mut ui = ViewState::default();

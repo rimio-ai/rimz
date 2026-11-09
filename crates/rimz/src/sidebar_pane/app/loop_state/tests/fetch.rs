@@ -155,7 +155,7 @@ fn renderer_local_reconciliation_state_forces_full_content() {
         }),
         ("focus_repair", |state, _, _| {
             state.pending_focus_repair = Some(PendingFocusRepair {
-                pane_id: pane("terminal_9", "tab_0", false).pane_id,
+                pane_id: pane("terminal_9", "tab_0").pane_id,
                 generation: 1,
                 clients: Vec::new(),
                 sent_at_ms: crate::utils::time::unix_now_ms(),
@@ -196,7 +196,7 @@ fn renderer_local_reconciliation_state_forces_full_content() {
 fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
     let clock = LoopClock::play(Timestamp::from_second(1_700_000_000).unwrap());
     let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
-    let mut process = pane("terminal_9", "tab_0", false);
+    let mut process = pane("terminal_9", "tab_0");
     process.command = Some("sh".to_owned());
     let pane_id = process.pane_id.clone();
     let mut snapshot = snapshot_with_panes(&rig.ws, vec![process]);
@@ -275,7 +275,7 @@ fn a_body_filter_save_reaches_origin_and_peer_in_memory_only_with_effects() {
 #[test]
 fn synthetic_fold_releases_baseline_after_overlay_expires() {
     let mut rig = Rig::new();
-    let mut process = pane("terminal_9", "tab_0", false);
+    let mut process = pane("terminal_9", "tab_0");
     process.command = Some("sh".to_owned());
     let pane_id = process.pane_id.clone();
     let snapshot = snapshot_with_panes(&rig.ws, vec![process]);
@@ -370,9 +370,9 @@ fn carried_baseline_holds_without_a_frame() {
 }
 
 fn carried_baseline_fold(case: &str) {
-    let own = pane("terminal_10", "tab_0", false).pane_id;
-    let selected = pane("terminal_9", "tab_0", false).pane_id;
-    let other = pane("terminal_11", "tab_0", false).pane_id;
+    let own = pane("terminal_10", "tab_0").pane_id;
+    let selected = pane("terminal_9", "tab_0").pane_id;
+    let other = pane("terminal_11", "tab_0").pane_id;
     let mut rig = Rig::with_baseline(
         Some(own.clone()),
         BodyLens::default(),
@@ -452,8 +452,8 @@ fn carried_baseline_fold(case: &str) {
 
 #[test]
 fn pre_tab_fold_seeds_without_selection() {
-    let shell = pane("terminal_9", "tab_0", true);
-    let own = pane("terminal_10", "tab_1", false);
+    let shell = pane("terminal_9", "tab_0");
+    let own = pane("terminal_10", "tab_1");
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     enable_focus_trace(&mut rig);
     rig.runtime.ensure_dirs().unwrap();
@@ -493,8 +493,8 @@ fn pre_tab_fold_seeds_without_selection() {
 
 #[test]
 fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
-    let own = pane("terminal_10", "tab_1", false);
-    let shell = pane("terminal_11", "tab_1", true);
+    let own = pane("terminal_10", "tab_1");
+    let shell = pane("terminal_11", "tab_1");
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     enable_focus_trace(&mut rig);
     let output = FrameOutput::default();
@@ -665,8 +665,8 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
 
 #[test]
 fn new_tab_shell_row_seats_selection_on_the_first_produced_fold() {
-    let own = pane("terminal_10", "tab_1", false);
-    let shell = pane("terminal_11", "tab_1", true);
+    let own = pane("terminal_10", "tab_1");
+    let shell = pane("terminal_11", "tab_1");
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     enable_focus_trace(&mut rig);
     let mut snapshot = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
@@ -700,7 +700,7 @@ fn new_shell_row_moves_past_cap_selection_without_a_rowless_fold() {
     let mut rig = Rig::new();
     enable_focus_trace(&mut rig);
     let mut panes = (1..=7)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect::<Vec<_>>();
     let prior_focus = panes.last().unwrap().pane_id.clone();
     let mut prior = snapshot_with_panes(&rig.ws, panes.clone());
@@ -708,7 +708,7 @@ fn new_shell_row_moves_past_cap_selection_without_a_rowless_fold() {
     rig.fold(prior, SnapshotSource::Produced);
     assert_eq!(rig.view().ui().selected_pane, Some(prior_focus.clone()));
 
-    let shell = pane("terminal_11", "tab_1", true);
+    let shell = pane("terminal_11", "tab_1");
     panes.push(shell.clone());
     let mut snapshot = snapshot_with_panes(&rig.ws, panes);
     snapshot.panes_produced_at_ms = Some(2);
@@ -741,7 +741,7 @@ fn new_shell_row_moves_past_cap_selection_without_a_rowless_fold() {
 fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
     let mut rig = Rig::new();
     enable_focus_trace(&mut rig);
-    let shell = pane("terminal_11", "tab_1", true);
+    let shell = pane("terminal_11", "tab_1");
     let mut pulled = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
     let now_ms = crate::utils::time::unix_now_ms();
     pulled.panes_produced_at_ms = Some(now_ms - 2);
@@ -774,7 +774,7 @@ fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
 
 #[test]
 fn seed_commits_before_delivery_and_keeps_the_final_correction() {
-    let own = pane("terminal_10", "tab_0", false);
+    let own = pane("terminal_10", "tab_0");
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     rig.state.pane.config.refresh_ms_override = Some(37);
     rig.runtime.ensure_dirs().unwrap();
@@ -877,7 +877,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
     )[0]
     .name = "corrected-card".into();
-    let corrected_pane = pane("terminal_11", "tab_0", false);
+    let corrected_pane = pane("terminal_11", "tab_0");
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
     )[0]
@@ -925,7 +925,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
 
 #[test]
 fn seed_listing_the_own_pane_seats_its_focus_at_once() {
-    let own = pane("terminal_10", "tab_0", false);
+    let own = pane("terminal_10", "tab_0");
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     rig.runtime.ensure_dirs().unwrap();
 
@@ -958,10 +958,7 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
     let mut rig = Rig::new();
     let snapshot = snapshot_with_panes(
         &rig.ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     let press = Wakeup::Press {
@@ -981,7 +978,7 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
     assert_eq!(rig.view().ui().selected_index, Some(0));
     assert_eq!(
         rig.view().ui().selected_pane,
-        Some(pane("terminal_1", "tab_0", false).pane_id)
+        Some(pane("terminal_1", "tab_0").pane_id)
     );
     rig.input(KeyAction::Top);
     rig.state
@@ -1136,7 +1133,7 @@ fn disabled_observer_extracts_no_signature() {
 
 #[test]
 fn only_watched_metrics_and_presence_publications_fold_immediately() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
 
     for watched in [true, false] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
@@ -1177,7 +1174,7 @@ fn only_watched_metrics_and_presence_publications_fold_immediately() {
 
 #[test]
 fn room_events_send_no_pane_request() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
 
     for watched in [true, false] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
@@ -1194,7 +1191,7 @@ fn room_events_send_no_pane_request() {
 
 #[test]
 fn maintenance_watchdog_requests_one_unwatched_fetch() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
     rig.hide();
 
@@ -1213,7 +1210,7 @@ fn maintenance_watchdog_requests_one_unwatched_fetch() {
 
 #[test]
 fn own_reveal_requests_fresh_panes() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.hide();
 
@@ -1319,7 +1316,7 @@ fn search_commit_writes_and_dispatches_the_lens() {
 #[test]
 fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-    let own = pane("terminal_1", "tab_0", false).pane_id;
+    let own = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own.clone());
     rig.view().ctx().current = agent_snapshot(&rig.ws);
     rig.state
@@ -1366,7 +1363,7 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
         query: Some("cla".to_owned()),
     };
     let mut rig = Rig::with_filter(committed.clone());
-    let committed_pane = Some(pane("terminal_9", "tab_0", false).pane_id);
+    let committed_pane = Some(pane("terminal_9", "tab_0").pane_id);
     let mut snapshot = agent_snapshot(&rig.ws);
     snapshot.focused_pane = committed_pane.clone();
     rig.fold(snapshot, SnapshotSource::Produced);
@@ -1603,7 +1600,7 @@ fn empty_body_filter_auto_clear_updates_the_shared_file() {
 
 #[test]
 fn focus_out_closes_help_popup() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     let snapshot = snapshot_with_focused_pane(&rig.ws, own_pane.clone());
     rig.set_pulled(&snapshot);

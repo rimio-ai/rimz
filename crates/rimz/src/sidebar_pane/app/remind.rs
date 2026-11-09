@@ -141,7 +141,7 @@ mod tests {
             checkout: None,
             id: raw.to_owned(),
             name: "claude".to_owned(),
-            pane: Some(pane(raw, "tab_0", false)),
+            pane: Some(pane(raw, "tab_0")),
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             channel: None,

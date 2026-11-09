@@ -109,7 +109,7 @@ fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let mut last = snapshot.worktree_groups[0].rows[0].clone();
     last.id = "last-agent".into();
-    last.pane = Some(pane("terminal_11", "tab_0", false));
+    last.pane = Some(pane("terminal_11", "tab_0"));
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .push(last);
     for (index, row) in std::sync::Arc::make_mut(
@@ -672,7 +672,7 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     let parent_id = rows[0].id.clone();
     let mut own_card = rows[0].clone();
     own_card.id = "child-own-card".into();
-    own_card.pane = Some(pane("terminal_child", "tab_0", false));
+    own_card.pane = Some(pane("terminal_child", "tab_0"));
     own_card.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
     rows.push(own_card);
     let mut ui = render::ViewState {
@@ -1860,7 +1860,7 @@ fn inactive_click_pins_chip_when_receipt_outgrows_viewport() {
 fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let ws = workspace();
     let panes = (0..9)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -1911,7 +1911,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
 #[test]
 fn more_unfold_survives_focus_entering_and_leaving_the_capped_tail() {
     let panes = (0..7)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect();
     let mut snapshot = snapshot_with_panes(&workspace(), panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -1943,7 +1943,7 @@ fn more_unfold_survives_focus_entering_and_leaving_the_capped_tail() {
 #[test]
 fn process_only_inactive_group_keeps_its_more_unfold_below_the_closed_chip() {
     let panes = (0..7)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect();
     let mut snapshot = snapshot_with_panes(&workspace(), panes);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].inactive =
@@ -1966,7 +1966,7 @@ fn process_only_inactive_group_keeps_its_more_unfold_below_the_closed_chip() {
 fn more_unfold_drops_when_the_tail_is_unread_or_non_idle() {
     for unread in [true, false] {
         let panes = (0..7)
-            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
             .collect();
         let mut snapshot = snapshot_with_panes(&workspace(), panes);
         let group_key = snapshot.worktree_groups[0].key.clone();
@@ -2000,7 +2000,7 @@ fn group_toggle_preserves_the_wheel_offset() {
     let ws = workspace();
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
     let panes = (0..9)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -2034,7 +2034,7 @@ fn group_toggle_preserves_the_viewport_through_a_selection_fold() {
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
     let next = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let panes = (0..9)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -2064,10 +2064,7 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_0", "tab_0", false),
-            pane("terminal_1", "tab_0", false),
-        ],
+        vec![pane("terminal_0", "tab_0"), pane("terminal_1", "tab_0")],
     );
     for row in std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -2118,10 +2115,7 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
 
     let mut ui = render::ViewState {
@@ -2153,10 +2147,7 @@ fn slot_and_last_keys_select_through_the_reducer_and_refuse_into_the_notice() {
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let mut snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_1", "tab_0", false),
-        ],
+        vec![pane("terminal_2", "tab_0"), pane("terminal_1", "tab_0")],
     );
 
     // Birth slot 2 is the first visible row, even when a lens hides it.
@@ -2229,10 +2220,7 @@ fn slot_and_last_keys_select_through_the_reducer_and_refuse_into_the_notice() {
     // land on it.
     let mut snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -2271,10 +2259,7 @@ fn arrow_key_reports_immediate_ui_change() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(0),
@@ -2326,7 +2311,7 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
 #[test]
 fn dismiss_key_requests_alert_dismissal() {
     let ws = workspace();
-    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0")]);
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
 
@@ -2383,7 +2368,7 @@ fn wheel_scroll_steps_the_offset_without_moving_selection() {
 fn banner_without_a_lead_falls_back_to_top_without_focusing() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0")]);
     let mut ui = render::ViewState {
         scroll_offset: 42,
         selected_pane: Some(target),
@@ -2412,7 +2397,7 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     let mut snapshot = snapshot_with_panes(
         &ws,
         (0..24)
-            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
             .collect(),
     );
     let agent = clickable_block_snapshot(&ws).worktree_groups[0].rows[0].clone();
@@ -2483,7 +2468,7 @@ fn only_own_input_ends_the_wheel_peek_on_selection_change() {
     let snapshot = snapshot_with_panes(
         &ws,
         (0..20)
-            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
             .collect(),
     );
     let mut ui = ViewState::default();
@@ -2524,10 +2509,7 @@ fn arrow_browse_reveals_an_offscreen_pick() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
@@ -2546,7 +2528,7 @@ fn arrow_browse_reveals_an_offscreen_pick() {
 #[test]
 fn help_key_opens_without_touching_the_viewport() {
     let ws = workspace();
-    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0")]);
     let mut ui = render::ViewState {
         scroll_offset: 6,
         ..Default::default()
@@ -2563,7 +2545,7 @@ fn help_key_opens_without_touching_the_viewport() {
 #[test]
 fn other_key_is_noop_when_help_is_closed() {
     let ws = workspace();
-    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0")]);
     let mut ui = render::ViewState {
         selected_index: Some(1),
         scroll_offset: 6,
@@ -2584,9 +2566,9 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     let snapshot = snapshot_with_panes(
         &ws,
         vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", false),
+            pane("terminal_1", "tab_0"),
+            pane("terminal_2", "tab_0"),
+            pane("terminal_3", "tab_0"),
         ],
     );
     let mut ui = ViewState::default();
@@ -2613,7 +2595,7 @@ fn top_and_bottom_keys_browse_to_the_ends() {
 fn screen_edge_keys_browse_to_the_painted_window_edges() {
     let ws = workspace();
     let panes = (1..=12)
-        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
         .collect();
     let snapshot = snapshot_with_panes(&ws, panes);
     let mut ui = render::ViewState {
@@ -2651,12 +2633,12 @@ fn page_keys_step_by_whole_and_half_visible_row_counts_and_clamp() {
     let snapshot = snapshot_with_panes(
         &ws,
         vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", false),
-            pane("terminal_4", "tab_0", false),
-            pane("terminal_5", "tab_0", false),
-            pane("terminal_6", "tab_0", false),
+            pane("terminal_1", "tab_0"),
+            pane("terminal_2", "tab_0"),
+            pane("terminal_3", "tab_0"),
+            pane("terminal_4", "tab_0"),
+            pane("terminal_5", "tab_0"),
+            pane("terminal_6", "tab_0"),
         ],
     );
     let mut ui = render::ViewState {
@@ -2735,7 +2717,7 @@ fn page_keys_step_by_whole_and_half_visible_row_counts_and_clamp() {
 #[test]
 fn page_and_screen_edge_keys_noop_before_first_paint() {
     let ws = workspace();
-    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0")]);
     for action in [
         KeyAction::PageUp,
         KeyAction::PageDown,
@@ -3000,7 +2982,7 @@ fn reveal_step_snapshot() -> SidebarSnapshot {
     let mut snapshot = snapshot_with_panes(
         &workspace(),
         (0..24)
-            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
             .collect(),
     );
     let agent = delegation_snapshot().worktree_groups[0].rows[0].clone();

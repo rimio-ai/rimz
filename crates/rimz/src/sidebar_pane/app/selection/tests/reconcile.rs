@@ -27,10 +27,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let active_snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", true),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = ViewState::default();
 
@@ -42,10 +39,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
 
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = ViewState::default();
 
@@ -62,9 +56,9 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
     let snapshot = snapshot_with_panes(
         &ws,
         vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", true),
+            pane("terminal_1", "tab_0"),
+            pane("terminal_2", "tab_0"),
+            pane("terminal_3", "tab_0"),
         ],
     );
     let mut ui = render::ViewState {
@@ -83,10 +77,7 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
     let held = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(0),
@@ -108,10 +99,7 @@ fn selection_reanchors_to_its_pane_after_a_reorder() {
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_2", "tab_0", true),
-            pane("terminal_1", "tab_0", false),
-        ],
+        vec![pane("terminal_2", "tab_0"), pane("terminal_1", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(1),
@@ -136,10 +124,7 @@ fn frameless_fold_holds_browse_until_its_pane_returns() {
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let framed = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
@@ -174,10 +159,7 @@ fn frameless_fold_holds_baseline_until_its_pane_returns() {
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let framed = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
@@ -226,10 +208,7 @@ fn frameless_anchor_withholds_index_without_dropping_the_pane() {
 
     let framed = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_1", "tab_0", false),
-        ],
+        vec![pane("terminal_2", "tab_0"), pane("terminal_1", "tab_0")],
     );
     anchor_selection(&mut ui, &framed);
 
@@ -245,10 +224,7 @@ fn selection_drops_when_its_pane_leaves_the_room() {
     let gone = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(1),

@@ -1126,7 +1126,7 @@ fn source_baseline_landing_probe(mux: MuxName, retain_baseline: bool) {
     let published = rig.views.lock().fold.clone().unwrap();
     let mut panes = published.frame.as_ref().unwrap().to_pane_refs();
     for (id, command) in [(&source_pane, "rimz-sidebar"), (&source_work, "zsh")] {
-        let mut entry = pane(id.raw(), "tab_source", false);
+        let mut entry = pane(id.raw(), "tab_source");
         entry.pane_id = id.clone();
         entry.command = Some(command.into());
         panes.push(entry);
@@ -1629,11 +1629,11 @@ impl Rig {
     ) -> FetchUpdate {
         let own = self.state.pane.config.own_pane.clone();
         let view = snapshot.own_view.as_ref().unwrap();
-        let mut panes = vec![pane(own.raw(), "tab_0", false)];
+        let mut panes = vec![pane(own.raw(), "tab_0")];
         panes.extend(
             view.working_pane_ids
                 .iter()
-                .map(|id| pane(id.raw(), "tab_0", false)),
+                .map(|id| pane(id.raw(), "tab_0")),
         );
         let frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
         FetchUpdate::Shared {
@@ -1722,7 +1722,7 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
 }
 
 fn hidden_rig() -> Rig {
-    let mut rig = Rig::with_own_pane(pane("terminal_1", "tab_0", false).pane_id);
+    let mut rig = Rig::with_own_pane(pane("terminal_1", "tab_0").pane_id);
     let mut snapshot = agent_snapshot(&rig.ws);
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
@@ -1823,14 +1823,14 @@ fn first_focus_reveal_reads_siblings_after_dwell() {
     rows[0].unread = true;
     let mut sibling = rows[0].clone();
     sibling.id = "sibling".into();
-    sibling.pane = Some(pane("terminal_10", "tab_0", false));
+    sibling.pane = Some(pane("terminal_10", "tab_0"));
     rows.push(sibling);
     snapshot
         .own_view
         .as_mut()
         .unwrap()
         .working_pane_ids
-        .push(pane("terminal_10", "tab_0", false).pane_id);
+        .push(pane("terminal_10", "tab_0").pane_id);
     snapshot.own_view.as_mut().unwrap().sibling_count = 2;
     rig.lazy_fold(snapshot, SnapshotSource::Produced);
     defer_name(&mut rig, "reveal");
@@ -1902,17 +1902,17 @@ fn defer_name(rig: &mut Rig, name: &str) {
 fn one_watched_of_fifty_seven_folds_across_data_ticks() {
     let mut rigs: Vec<_> = (0..57)
         .map(|index| {
-            let own = pane(&format!("sidebar_{index}"), &format!("tab_{index}"), false).pane_id;
+            let own = pane(&format!("sidebar_{index}"), &format!("tab_{index}")).pane_id;
             let mut rig = Rig::with_own_pane(own.clone());
             let mut snapshot = agent_snapshot(&rig.ws);
             snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
                 sibling_count: 1,
                 working_pane_ids: vec![
-                    pane(&format!("working_{index}"), &format!("tab_{index}"), false).pane_id,
+                    pane(&format!("working_{index}"), &format!("tab_{index}")).pane_id,
                 ],
                 own_view_is_daemon: false,
             });
-            snapshot.viewed_panes = vec![pane("sidebar_0", "tab_0", false).pane_id];
+            snapshot.viewed_panes = vec![pane("sidebar_0", "tab_0").pane_id];
             snapshot.focused_pane = None;
             rig.lazy_fold(snapshot, SnapshotSource::Produced);
             settle_width(&mut rig);

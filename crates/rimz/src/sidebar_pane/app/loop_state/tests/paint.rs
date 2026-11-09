@@ -356,7 +356,7 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
         );
     }
 
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
     rig.state.pane.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
     let snapshot = rig.state.views.mirror().clone();

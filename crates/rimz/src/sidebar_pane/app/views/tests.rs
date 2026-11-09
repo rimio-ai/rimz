@@ -636,7 +636,6 @@ fn frame(clients: &[(u32, u32)]) -> PaneFrame {
             let mut sidebar_pane = crate::sidebar_pane::app::fixtures::pane(
                 &format!("terminal_{sidebar}"),
                 &format!("tab_{sidebar}"),
-                false,
             );
             sidebar_pane.command = Some("rimz-sidebar".into());
             panes.push(sidebar_pane);
@@ -644,7 +643,6 @@ fn frame(clients: &[(u32, u32)]) -> PaneFrame {
         panes.push(crate::sidebar_pane::app::fixtures::pane(
             &format!("terminal_{working}"),
             &format!("tab_{sidebar}"),
-            false,
         ));
     }
     let clients: Vec<_> = clients
@@ -774,11 +772,8 @@ fn toggle_back_matches_the_cli_rule_on_one_listing() {
     let mut listing: Vec<crate::pane::PaneRef> = Vec::new();
     for tab in &frame.tabs {
         for state in &tab.panes {
-            let mut entry = crate::sidebar_pane::app::fixtures::pane(
-                state.pane_id.raw(),
-                tab.view_id.as_str(),
-                false,
-            );
+            let mut entry =
+                crate::sidebar_pane::app::fixtures::pane(state.pane_id.raw(), tab.view_id.as_str());
             entry.pane_id = state.pane_id.clone();
             entry.command = state.current.command.clone();
             listing.push(entry);
@@ -810,11 +805,7 @@ fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
         &ws,
         (0..20)
             .map(|index| {
-                crate::sidebar_pane::app::fixtures::pane(
-                    &format!("terminal_{index}"),
-                    "tab_0",
-                    false,
-                )
+                crate::sidebar_pane::app::fixtures::pane(&format!("terminal_{index}"), "tab_0")
             })
             .collect(),
     );

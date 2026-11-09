@@ -75,7 +75,7 @@ fn row(id: &str, raw_pane: &str) -> SidebarRow {
         checkout: None,
         id: id.to_owned(),
         name: id.to_owned(),
-        pane: Some(pane(raw_pane, "tab_0", false)),
+        pane: Some(pane(raw_pane, "tab_0")),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         channel: None,
@@ -164,7 +164,7 @@ fn row_ids<'a>(current: &'a SidebarSnapshot, group_key: &str) -> Vec<&'a str> {
 fn frozen_row(id: &str, raw_pane: &str) -> FrozenRow {
     FrozenRow {
         id: id.to_owned(),
-        pane: Some(pane(raw_pane, "tab_0", false).pane_id.to_string()),
+        pane: Some(pane(raw_pane, "tab_0").pane_id.to_string()),
     }
 }
 
@@ -274,7 +274,7 @@ fn focused_status_changes_keep_the_captured_rank_without_timing_out() {
                 stamped_row("other", "terminal_2", AgentStatus::Waiting, 10),
             ],
         )]);
-        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let focused = pane("terminal_1", "tab_0").pane_id;
         let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
         rig.present(previous.clone(), std::slice::from_ref(&focused), false);
         let expected = row_ids(&rig.context.current, "a")
@@ -314,7 +314,7 @@ fn a_focus_entry_captures_the_previous_rank_before_this_folds_ask() {
             stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
         ],
     )]);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
     let mut next = previous;
     let row = &mut std::sync::Arc::make_mut(
@@ -337,7 +337,7 @@ fn a_prompt_lifting_a_focused_cooling_card_does_not_move_it() {
             cold,
         ],
     )]);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
     rig.present(previous.clone(), std::slice::from_ref(&focused), false);
     let mut next = previous;
@@ -361,7 +361,7 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
             stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
         ],
     )]);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
     rig.present(previous.clone(), std::slice::from_ref(&focused), false);
     let mut next = previous;
@@ -432,7 +432,7 @@ fn a_focused_old_shell_becoming_an_agent_keeps_its_rank_even_during_a_freeze() {
             },
         ],
     )]);
-    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let focused = pane("terminal_2", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
     rig.present(previous.clone(), std::slice::from_ref(&focused), false);
     arm_freeze(&mut rig.ui, rig.clock.now_ms() as i64);
@@ -463,7 +463,7 @@ fn a_fresh_shell_keeps_its_painted_index_through_launch_release_and_expiry() {
                 stamped_row("calm", "terminal_3", AgentStatus::Idle, 10),
             ],
         )]);
-        let old_focus = pane("terminal_3", "tab_0", false).pane_id;
+        let old_focus = pane("terminal_3", "tab_0").pane_id;
         let mut rig = if first_fetch {
             HoldRig::new(hold_snapshot(Vec::new()), None)
         } else {
@@ -602,8 +602,8 @@ fn reconciled_shell_slot_survives_launch_focus_release_and_freeze_expiry() {
 #[test]
 fn a_launch_in_a_focused_group_keeps_its_group_rank_through_deferred_regrouping() {
     let mut previous = inactivity_boundary();
-    let focused = pane("terminal_3", "tab_0", false).pane_id;
-    let cooling = pane("terminal_2", "tab_0", false).pane_id;
+    let focused = pane("terminal_3", "tab_0").pane_id;
+    let cooling = pane("terminal_2", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), None);
     rig.present(previous.clone(), &[focused.clone(), cooling.clone()], false);
     assert_eq!(
@@ -640,7 +640,7 @@ fn releasing_focus_arms_the_existing_deadline_then_settles_the_card() {
                 stamped_row("focused", "terminal_1", AgentStatus::Running, 10),
             ],
         )]);
-        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let focused = pane("terminal_1", "tab_0").pane_id;
         let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
         rig.present(previous.clone(), std::slice::from_ref(&focused), false);
         let mut next = previous;
@@ -678,7 +678,7 @@ fn refocusing_before_the_release_freeze_settles_keeps_the_held_rank() {
             cold,
         ],
     )]);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), Some(focused.clone()));
     rig.present(previous.clone(), std::slice::from_ref(&focused), false);
     let mut next = previous;
@@ -709,7 +709,7 @@ fn first_fetch_and_new_panes_capture_from_the_current_snapshot() {
                 vec![stamped_row("other", "terminal_2", AgentStatus::Running, 20)],
             )]
         });
-        let focused = pane("terminal_1", "tab_0", false).pane_id;
+        let focused = pane("terminal_1", "tab_0").pane_id;
         let mut rig = HoldRig::new(previous, Some(focused.clone()));
         let mut next = hold_snapshot(vec![group(
             "a",
@@ -743,7 +743,7 @@ fn only_focused_rows_hold_and_a_disappearing_row_releases_its_hold() {
             stamped_row("other", "terminal_2", AgentStatus::Idle, 10),
         ],
     )]);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut rig = HoldRig::new(previous.clone(), None);
     rig.present(previous.clone(), std::slice::from_ref(&focused), false);
     let mut next = previous;
@@ -1002,7 +1002,7 @@ fn first_fetch_admits_inactive_groups_while_initial_focus_arms_freeze() {
     next.sort_groups_for_presentation();
     assert!(inactive_group(&next, "b"));
     let clock = super::super::clock::LoopClock::play(next.now);
-    let focused = pane("terminal_1", "tab_0", false).pane_id;
+    let focused = pane("terminal_1", "tab_0").pane_id;
     let mut ui = ViewState::default();
 
     let (presented, _, _) = reconcile_fold(next, &previous, &mut ui, &clock, Some(focused.clone()));
@@ -1104,7 +1104,7 @@ fn unread_lens_clears_and_persists_while_freeze_is_held() {
         vec![agent_row("a1", "terminal_1", AgentStatus::Running), unread],
     )]);
     let clock = super::super::clock::LoopClock::play(previous.now);
-    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let focused = pane("terminal_2", "tab_0").pane_id;
     let filter = crate::sidebar::body_filter::BodyFilter::Unread;
     let mut ui = ViewState::default();
     ui.toggles.make_up_filter.filter = Some(filter);
@@ -1148,7 +1148,7 @@ fn viewed_active_group_waits_until_selection_moves_and_the_hold_releases() {
     for focused in [false, true] {
         let previous = inactivity_boundary();
         let clock = super::super::clock::LoopClock::play(previous.now);
-        let viewed = pane("terminal_2", "tab_0", false).pane_id;
+        let viewed = pane("terminal_2", "tab_0").pane_id;
         let mut ui = ViewState::default();
         if !focused {
             ui.selected_pane = Some(viewed.clone());
@@ -1168,7 +1168,7 @@ fn viewed_active_group_waits_until_selection_moves_and_the_hold_releases() {
         assert_eq!(ui.selected_pane, Some(viewed));
 
         ui.last_order = capture_order(&held, &ui);
-        let other = pane("terminal_1", "tab_0", false).pane_id;
+        let other = pane("terminal_1", "tab_0").pane_id;
         ui.selected_pane = Some(other.clone());
         ui.baseline_pane = Some(other.clone());
         arm_freeze(&mut ui, clock.now_ms() as i64);
@@ -1194,7 +1194,7 @@ fn viewing_an_existing_inactive_group_keeps_membership_and_order() {
     previous.now += std::time::Duration::from_secs(1);
     previous.sort_groups_for_presentation();
     let clock = super::super::clock::LoopClock::play(previous.now);
-    let focused = pane("terminal_2", "tab_0", false).pane_id;
+    let focused = pane("terminal_2", "tab_0").pane_id;
     let mut next = previous.clone();
     next.focused_pane = Some(focused.clone());
     let mut ui = ViewState::default();

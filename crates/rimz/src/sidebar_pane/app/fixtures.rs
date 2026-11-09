@@ -37,7 +37,7 @@ pub(super) fn fold(
         }
         for id in &view.working_pane_ids {
             if !panes.iter().any(|pane| pane.pane_id == *id) {
-                let mut working = pane(id.raw(), &tab, false);
+                let mut working = pane(id.raw(), &tab);
                 working.pane_id = id.clone();
                 panes.push(working);
             }
@@ -49,7 +49,7 @@ pub(super) fn fold(
             .chain(sidebars)
         {
             if !panes.iter().any(|pane| pane.pane_id == id) {
-                let mut sidebar = pane(id.raw(), &tab, false);
+                let mut sidebar = pane(id.raw(), &tab);
                 sidebar.pane_id = id;
                 sidebar.command = Some("rimz-sidebar".into());
                 panes.push(sidebar);
@@ -60,7 +60,7 @@ pub(super) fn fold(
             .filter(|pane| pane.view_id.as_ref() == Some(&tab) && Some(&pane.pane_id) != own)
             .count();
         for index in siblings..view.sibling_count {
-            let mut chrome = pane(&format!("fixture_chrome_{index}"), &tab, false);
+            let mut chrome = pane(&format!("fixture_chrome_{index}"), &tab);
             if let Some(own) = own {
                 chrome.pane_id = PaneId::from_parts(own.mux(), chrome.pane_id.raw());
             }
@@ -102,10 +102,7 @@ pub(super) fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
     let second_work = PaneId::from_parts(MuxName::Zellij, "terminal_12");
     let mut snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_11", "tab_1", false),
-            pane("terminal_12", "tab_1", false),
-        ],
+        vec![pane("terminal_11", "tab_1"), pane("terminal_12", "tab_1")],
     );
     snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 3,
@@ -169,7 +166,7 @@ pub(crate) fn snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(ws.clone(), Vec::new(), Timestamp::UNIX_EPOCH)
 }
 
-pub(crate) fn pane(raw: &str, view: &str, _focused: bool) -> PaneRef {
+pub(crate) fn pane(raw: &str, view: &str) -> PaneRef {
     PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, raw),
         session_name: "rimz-test".to_owned(),
@@ -260,7 +257,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         checkout: None,
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
-        pane: Some(pane("terminal_9", "tab_0", false)),
+        pane: Some(pane("terminal_9", "tab_0")),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         channel: None,
