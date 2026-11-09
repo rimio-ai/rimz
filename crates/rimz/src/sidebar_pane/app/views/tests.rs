@@ -800,3 +800,64 @@ fn toggle_back_matches_the_cli_rule_on_one_listing() {
         assert_eq!(toggle_back(&frame, &pane(sidebar)), rule, "the key agrees");
     }
 }
+
+#[test]
+fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
+    use crate::sidebar_pane::render;
+    let clock = clock();
+    let ws = crate::sidebar_pane::app::fixtures::workspace();
+    let snapshot = crate::sidebar_pane::app::fixtures::snapshot_with_panes(
+        &ws,
+        (0..20)
+            .map(|index| {
+                crate::sidebar_pane::app::fixtures::pane(
+                    &format!("terminal_{index}"),
+                    "tab_0",
+                    false,
+                )
+            })
+            .collect(),
+    );
+    let placement: crate::mux::focus_anchor::FocusPlacement =
+        serde_json::from_value(serde_json::json!({
+            "row_id": snapshot.worktree_groups[0].rows[12].id,
+            "viewport_row": 2,
+            "held": [snapshot.worktree_groups[0].rows[3].id],
+        }))
+        .unwrap();
+    for in_flight in [false, true] {
+        let mut views = Views::default();
+        sample(&mut views, &clock, &[(1, 10), (2, 10)]);
+        let source = views.input(&pane(10), clock.now());
+        source
+            .expanded_groups
+            .insert(snapshot.worktree_groups[0].key.clone());
+        source.selected_index = Some(12);
+        if in_flight {
+            source.scroll_ease.arm();
+            source.scroll_ease.observe(0, render::FrameTime::default());
+            source.scroll_ease.arm();
+            source.scroll_ease.observe(9, render::FrameTime::default());
+            assert!(source.scroll_ease.in_flight());
+        } else {
+            source.scroll_ease.arm();
+        }
+        source.scroll_offset = 9;
+        source.offset_authoritative = false;
+        source.reveal_row = Some(snapshot.worktree_groups[0].rows[18].id.clone());
+        source.inactive_reveal = true;
+        source.focus_placement = Some(placement.clone());
+        source.own_input_reveal = true;
+        let expected = format!("{source:?}");
+        sample(&mut views, &clock, &[(1, 10), (2, 20)]);
+        let fork = views.paint(&pane(20), clock.now()).clone();
+        assert_eq!(format!("{fork:?}"), expected, "in flight: {in_flight}");
+        let source = views.paint(&pane(10), clock.now()).clone();
+        let mut ui = render::UiState::default();
+        let theme = ui.theme(&snapshot.theme);
+        let compose = |view: &render::ViewState| {
+            render::compose_lines(&snapshot, None, view, &ui, theme.as_ref(), 54, 20)
+        };
+        assert_eq!(compose(&fork), compose(&source), "in flight: {in_flight}");
+    }
+}

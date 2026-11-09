@@ -2924,3 +2924,162 @@ fn effect_keys_carry_the_selected_rows_pane_or_their_own_effect() {
     assert_eq!(redraw.effects, vec![InputEffect::Repaint]);
     assert!(redraw.redraw, "a repaint paints at once");
 }
+
+/// Row 1 is an agent with a child entry, row 18 the waiting unread lead, and a closed
+/// inactive group follows, so the selection, a row reveal and an inactive reveal each place
+/// the viewport somewhere else.
+fn reveal_step_snapshot() -> SidebarSnapshot {
+    let mut snapshot = snapshot_with_panes(
+        &workspace(),
+        (0..24)
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .collect(),
+    );
+    let agent = delegation_snapshot().worktree_groups[0].rows[0].clone();
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    let rows = std::sync::Arc::make_mut(&mut groups[0].rows);
+    rows[1].card = agent.card.clone();
+    rows[1].as_agent_mut().unwrap().sub_agents[0].pane =
+        Some("zellij:terminal_child".parse().unwrap());
+    rows[18].card = agent.card;
+    rows[18].as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    rows[18].unread = true;
+    let mut inactive = groups[0].clone();
+    inactive.key = "inactive".to_owned();
+    inactive.label = "inactive".to_owned();
+    inactive.inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
+    inactive.cohort_effort = Some(Default::default());
+    inactive.rows = vec![filter_row(
+        true,
+        "done",
+        "claude",
+        Some(crate::agents::AgentStatus::Success),
+        "terminal_done",
+        "/repo/inactive",
+    )]
+    .into();
+    groups.push(inactive);
+    snapshot
+}
+
+/// A settled viewport four wheel ticks down with row 1 selected: row 1, row 18 and the
+/// inactive chip are all off screen.
+fn revealing_view(snapshot: &SidebarSnapshot) -> (ViewState, UiState) {
+    let parent = snapshot.worktree_groups[0].rows[1].id.clone();
+    let mut view = ViewState {
+        delegation_overrides: std::collections::BTreeMap::from([(parent, true)]),
+        ..Default::default()
+    };
+    view.expanded_groups
+        .insert(snapshot.worktree_groups[0].key.clone());
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, snapshot, Some(pane_of(snapshot, 1)));
+    paint(&mut view, &mut ui, snapshot, 18);
+    for _ in 0..4 {
+        handle_scroll(true, &mut view, &mut ui);
+    }
+    paint(&mut view, &mut ui, snapshot, 18);
+    view.frame_ms = crate::sidebar_pane::render::FrameTime::from_millis(100);
+    paint(&mut view, &mut ui, snapshot, 18);
+    let shown = composed(&view, &mut ui, snapshot);
+    assert!(shown.1.line_for_row(1).is_none());
+    assert!(shown.1.line_for_row(18).is_none());
+    assert!(
+        shown
+            .1
+            .line_for_target(&HitTarget::ToggleInactive)
+            .is_none()
+    );
+    (view, ui)
+}
+
+/// The offset and hit map the next paint would draw, without writing anything back.
+fn composed(
+    view: &ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+) -> (usize, render::FrameInteractions) {
+    let theme = ui.theme(&snapshot.theme);
+    let frame = render::compose_lines(snapshot, None, view, ui, theme.as_ref(), 54, 18);
+    (frame.scroll_offset, frame.interactions)
+}
+
+fn click_target(
+    target: HitTarget,
+    view: &mut ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+) {
+    let painted = std::mem::replace(
+        &mut ui.interactions,
+        render::FrameInteractions::from_parts(
+            vec![None],
+            vec![render::HitRegion::whole_line(0, target)],
+        ),
+    );
+    handle_mouse_click(0, 0, view, ui, snapshot);
+    ui.interactions = painted;
+}
+
+/// Step into row 1's child entry, which withdraws an authoritative offset.
+fn entry_step(view: &mut ViewState, ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    let before = view.entry_cursor.clone();
+    handle_key(KeyAction::Down, view, ui, snapshot);
+    assert_ne!(view.entry_cursor, before, "the step changed the entry");
+}
+
+#[test]
+fn an_entry_step_leaves_a_row_reveal_dormant_until_the_next_wheel_tick() {
+    let snapshot = reveal_step_snapshot();
+    let (mut view, mut ui) = revealing_view(&snapshot);
+    click_target(HitTarget::UnreadBanner, &mut view, &mut ui, &snapshot);
+    let (revealed, hits) = composed(&view, &mut ui, &snapshot);
+    assert!(hits.line_for_row(18).is_some());
+    entry_step(&mut view, &mut ui, &snapshot);
+    assert!(composed(&view, &mut ui, &snapshot).0 < revealed);
+    handle_scroll(false, &mut view, &mut ui);
+    assert_eq!(composed(&view, &mut ui, &snapshot).0, revealed);
+}
+
+#[test]
+fn an_entry_step_leaves_an_inactive_reveal_dormant_until_the_next_wheel_tick() {
+    let snapshot = reveal_step_snapshot();
+    let (mut view, mut ui) = revealing_view(&snapshot);
+    handle_key(KeyAction::ToggleInactive, &mut view, &mut ui, &snapshot);
+    let (revealed, hits) = composed(&view, &mut ui, &snapshot);
+    assert!(hits.line_for_target(&HitTarget::ToggleInactive).is_some());
+    entry_step(&mut view, &mut ui, &snapshot);
+    assert!(composed(&view, &mut ui, &snapshot).0 < revealed);
+    handle_scroll(false, &mut view, &mut ui);
+    assert_eq!(composed(&view, &mut ui, &snapshot).0, revealed);
+}
+
+#[test]
+fn a_later_row_reveal_replaces_a_dormant_one_even_with_none() {
+    let snapshot = reveal_step_snapshot();
+    let group = snapshot.worktree_groups[0].key.clone();
+    for marker in [true, false] {
+        let (mut view, mut ui) = revealing_view(&snapshot);
+        click_target(HitTarget::UnreadBanner, &mut view, &mut ui, &snapshot);
+        let replacement = if marker {
+            HitTarget::FocusMarker
+        } else {
+            HitTarget::ExpandGroup {
+                key: group.clone(),
+                row: "absent".to_owned(),
+            }
+        };
+        click_target(replacement, &mut view, &mut ui, &snapshot);
+        let (replaced, hits) = composed(&view, &mut ui, &snapshot);
+        assert!(hits.line_for_row(18).is_none(), "marker {marker}");
+        assert_eq!(hits.line_for_row(1).is_some(), marker, "marker {marker}");
+        entry_step(&mut view, &mut ui, &snapshot);
+        handle_scroll(false, &mut view, &mut ui);
+        let expected = if marker { replaced } else { view.scroll_offset };
+        assert_eq!(
+            composed(&view, &mut ui, &snapshot).0,
+            expected,
+            "marker {marker}"
+        );
+    }
+}
