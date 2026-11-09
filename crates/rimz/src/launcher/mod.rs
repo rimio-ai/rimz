@@ -325,7 +325,7 @@ pub fn prepare_layout(
     {
         leader.workflow.clone_from(&request.workflow);
     }
-    // A team keeps its leader's run but launches as a resident team task does.
+    // A team keeps its leader's run but launches as a staying loop task's team does.
     if !request
         .leader_run
         .as_ref()
@@ -668,7 +668,7 @@ pub fn prepare_layout(
 }
 
 /// A workflow `stay` step a loop task started, or one naming a team (validation admits no
-/// other run-bearing team), launches through the layout path a resident launch takes.
+/// other run-bearing team), launches through the layout path, keeping its leader's run.
 fn resident_leader(request: &LayoutRequest, leader: &LeaderRun) -> bool {
     if leader.lifecycle != crate::store::run::RunLifecycle::Session || request.workflow.is_none() {
         return false;

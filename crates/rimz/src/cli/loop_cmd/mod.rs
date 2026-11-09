@@ -222,7 +222,7 @@ struct AddArgs {
     /// File containing the judge's question.
     #[arg(long, value_name = "PATH")]
     judge_prompt_file: Option<PathBuf>,
-    /// Ask again this long after a resident guard declines.
+    /// Ask again this long after a deduping task's guard declines.
     #[arg(long, value_name = "DUR")]
     judge_recheck: Option<String>,
     /// Cap for the judge; default 5m, independent of --timeout.
@@ -428,7 +428,7 @@ struct EjectArgs {
 
 #[derive(Debug, Args)]
 struct ShowArgs {
-    /// Print the task, worktree conditions, launch ledger and run history as JSON.
+    /// Print the task, worktree conditions, launch memory and run history as JSON.
     #[arg(long)]
     json: bool,
     /// Unfold the WORKTREES table: every declined checkout with its judge's reason, and every launched checkout with its leader.

@@ -51,7 +51,7 @@ A fourth trap is in the file rather than the spawn, and it costs more than the h
 
 An empty `when` matches every notification. Add one clause and it has to match; add several and all of them do. Each takes a list, and one value matching is enough for its clause.
 
-`kind` names notification kinds: the four agent statuses (`waiting`, `failed`, `paused`, `success`), `coalesced` for a batch of them, `reminder` for the 60-second nudge, `loop_disabled` when a scheduled task disables itself after three failed fires ([loops](./loops.md#budgets-and-strikes)), and `link_lost` or `link_restored` when a supervised SSH link drops or recovers ([remote](./remote.md#a-link-that-heals-itself)).
+`kind` names notification kinds: the four agent statuses (`waiting`, `failed`, `paused`, `success`), `coalesced` for a batch of them, `reminder` for the 60-second nudge, `loop_disabled` when a scheduled task disables itself after three failed runs ([loops](./loops.md#budgets-and-strikes)), and `link_lost` or `link_restored` when a supervised SSH link drops or recovers ([remote](./remote.md#a-link-that-heals-itself)).
 
 `worktree` glob-matches the agent's branch, or its worktree path when it has no branch. `handle` glob-matches its handle or role, with or without the leading `@`. So `when = { kind = ["waiting"], handle = ["@planner"], worktree = ["release/*"] }` sends one agent's questions on a release branch to your phone, while the noisy experiment beside it stays quiet.
 

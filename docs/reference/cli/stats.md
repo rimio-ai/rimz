@@ -157,7 +157,7 @@ The `Empty-dir trust: N` category counts automatic folder-trust grants on the em
 
 `Untrusted cwd: N` counts `untrusted_cwd_fallback` events under `untrusted_cwd_fallbacks`: fresh explicit-cwd children started privately instead of stopping at an undecided folder-trust screen. Each event records `kind`, account `login`, original `target`, private `cwd`, and optional `profile`. The benefit names the provider, account, target, and profile; the forensic line adds the private cwd. Explicit `--empty-dir` launches do not count as fallbacks.
 
-The `Judge declines: N` category counts fresh judge declines, not later fires held by the same decision. Each `judge_decline` event carries `task`, `checkout`, judge `profile` and `kind`, `reason`, and optional `cost_usd`. Its timeline line names the task, profile, reason, checkout, and recorded cost. Manual fire, a new true condition edge, or an elapsed recheck can produce a fresh decline ([resident judge memory](./loop.md#waits-and-checks)).
+The `Judge declines: N` category counts each judge decline in a run a loop task started, once: a run that then waits out the decline adds none until its judge answers again. Each `judge_decline` event carries `task`, `checkout`, judge `profile` and `kind`, `reason`, and optional `cost_usd`. Its timeline line names the task, profile, reason, checkout, and recorded cost. A new true condition edge or an elapsed recheck asks the judge again, and a manual fire starts a fresh run ([guard declines](./loop.md#waits-and-checks)).
 
 The `Keepalive: N` category counts delivered pings. Each `cache_keepalive` event carries `kind`, `agent_id`, optional `label`, `idle_secs`, `waits`, optional `horizon_secs`, `message_id`, `delivered`, optional `error`, and `capped` (true on the ping that told the agent the keepalive maximum was reached; its `◷` line ends with `, limit reached`). `horizon_secs` is the [keep-warm](../../guide/configuration.md#keep-warm) finite maximum that was holding the agent (the resolved `max`, including the global default, or the keepalive cap for a `while` with no resolved maximum); its timeline line reads `holding warm (2h)`. `waits` counts all pending waits, including subagent and team waits. Failed attempts appear with `--all` without increasing the count.
 
@@ -185,7 +185,7 @@ The header counts each kind's held or failed attempts beside it, for example `Au
 
 | Mark | Assist |
 | --- | --- |
-| `▶` | Resident launch: a scheduled task opened its agents. |
+| `▶` | Resident launch: an older record of a scheduled task opening its agents; loop-started runs record `workflow_start`. |
 | `↘` | Tier fallback: the profile used the next available model. |
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
 | `◷` | Cache keepalive: idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |

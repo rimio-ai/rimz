@@ -1009,7 +1009,7 @@ pub struct AgentState {
     /// cohort for resume; routing uses the launch-stamped `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
-    /// Resident loop task whose subscriptions this prompt leader arms at registration.
+    /// Loop task whose workflow run launched this agent, carried from its launch record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
     /// Workflow attempt this agent launched for. The launcher copies the pin onto

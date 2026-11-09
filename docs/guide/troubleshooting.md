@@ -407,15 +407,15 @@ A remote room is plain SSH under a supervisor that reconnects itself when the li
 
 ## Scheduled and scripted work isn't running
 
-### A loop keeps reporting "previous run still active"
+### A loop keeps reporting "still active"
 
-The task's previous runner still owns its overlap lock. By default later fires record `overlapped` instead of stacking another turn; a non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) retains triggers as `deferred` until that run ends, unless a queue is full. Run `rimz loop show <name>` to see the holder PID and start age when known, the linked run id when recorded, and waiting fires, then release the lock:
+The task's previous run is still live, or another fire still holds the task's admission lock. By default a later fire records `overlapped`, naming the blocking run, instead of starting another; a non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) keeps triggers as `deferred` until that run ends, unless a queue is full. Run `rimz loop show <name>` to see the live run and the waiting fires, then stop it:
 
 ```sh
 rimz loop stop <name>
 ```
 
-Stop gives durable cancellation a grace period, except for check-only runs, which receive SIGTERM immediately. It sends SIGTERM only when the same holder still owns the lock, and reports success once that holder releases it. During a shell or headless-judge check, the runner forwards SIGTERM to the check's process group and waits for its exit, bounded by the check's own timeout. A lock that survives both stop steps exits with status `1` and prints its path and holder PID; inspect that process and terminate it yourself when safe. Stop never escalates to SIGKILL. Waiting triggers are kept and start after release; the receipt names `rimz loop pause <name>` to drop them instead.
+Stop cancels each live run the task started, as `rimz workflow cancel <run>` does, and that run's own report then starts the next waiting trigger. A fire still holding the admission lock gets a grace period and then SIGTERM; a lock that survives both exits with status `1` and prints its path and holder PID, so inspect that process and terminate it yourself when safe. Stop never escalates to SIGKILL. Waiting triggers are kept; the receipt names `rimz loop pause <name>` to drop them instead.
 
 ### A clock task never fired
 

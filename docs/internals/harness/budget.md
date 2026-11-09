@@ -22,7 +22,7 @@ Four scopes live in this module. The sidebar producer evaluates account and flee
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `evaluate_turn_scope` |
 | Room fleet | every agent under one project root | machine config `harness.budget`, or `rimz budget` | `/day` only | `evaluate_daily_scope` |
 | Provider account | one history pool, across every room that runs on it | machine config `[accounts.budget].<kind>`, a standalone named account's `budget`, or `rimz budget --account` for one pool | `/day`, or `/month` for API-key billing | `evaluate_daily_scope` |
-| Loop task | one task's scheduled runs | the task's `--budget-per-day` | `/day` only | `run_log::daily_budget_gate` ([loops.md § One fire](./loops.md#one-fire)) |
+| Loop task | one task's runs | the task's `--budget-per-day` | `/day` only | `run_log::reserved_budget_gate`, or `run_log::daily_budget_gate` for an unguarded delivery ([loops.md § One fire](./loops.md#one-fire)) |
 
 A history pool is `default` together with every shared account of a kind, or one standalone account on its own. `DailyBudgetScope::account` maps a login to its pool through `LoginCatalog::pool`, so a cap, a ledger, and the agents it binds always agree on the pool.
 
@@ -183,7 +183,7 @@ Interactive work gets a park and a waiver. Automation gets a refusal before it s
 
 Supervised runs check the gate at the top of every attempt, so a retry ladder stops as soon as a cap closes mid-sequence. Exit `125` has a second source: a non-workflow turn run already under way whose agent is parked by any cap ends as `budget_exceeded` through the helper in [The park](#the-park). Both callers also check an exact managed-launch provider quota, and that gate belongs to [providers.md](../agents/providers.md).
 
-A loop fire checks its task's own daily cap first, in `run_log::daily_budget_gate`. The ladder and the reservation rule are [loops.md § One fire](./loops.md#one-fire).
+A loop fire that starts a run checks its task's own daily cap under its admission lease, in `run_log::reserved_budget_gate`; an unguarded delivery checks it first, in `run_log::daily_budget_gate`. The ladder and the reservation rule are [loops.md § One fire](./loops.md#one-fire).
 
 ## The CLI surface
 

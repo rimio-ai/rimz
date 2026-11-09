@@ -1148,7 +1148,7 @@ BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/de
 "$BIN" loop remove acheck
 ```
 
-`haiku` stands for any profile of yours that resolves to one Claude or Codex agent. `loop fire` reports ``judge `haiku` declined`` and starts nothing, and `loop logs` holds the judge's verdict, reason, cost, and tokens. For the other polarity, ask a question that is true and pass `--on fail`: the fire reports ``judge `haiku` passed`` and still starts nothing.
+`haiku` stands for any profile of yours that resolves to one Claude or Codex agent. `loop fire` starts the task's workflow run, whose judge declines and ends it before the agent step, and `loop logs` holds the judge's verdict, reason, and cost. For the other polarity, ask a question that is true and pass `--on fail`: the judge passes, and that run also ends before the agent step.
 
 ## Traps
 
