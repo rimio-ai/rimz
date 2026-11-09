@@ -1047,6 +1047,10 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
             for row in rows.as_array_mut().unwrap() {
                 if row["kind"] == "pi" {
                     assert!(row["probed_at"].is_string());
+                }
+                // A failed claude probe retries 10 s later, so under load any row's probe
+                // time can move between two snapshots.
+                if row["probed_at"].is_string() {
                     row["probed_at"] = json!("<probe time>");
                 }
             }
