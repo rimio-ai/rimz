@@ -110,12 +110,15 @@ pub enum LifecycleSignal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
     },
-    /// A turn ended. `errored` always wins (the failure is the attention
-    /// signal); a clean end with `parked_on_background` is the main thread
-    /// parking on still-in-flight work, not a true turn end, so it stays
-    /// running rather than painting a false success. A `turn_id` matching
-    /// the superseded turn marks a late report from an earlier turn. A
-    /// non-parked end records its id so matching tools cannot reopen the turn.
+    /// A turn ended, carrying two independent facts. `errored` is the outcome,
+    /// which status reads: an errored end fails the row whether or not it
+    /// parked. `parked_on_background` says whether the turn closes, which turn
+    /// closure, the terminal disposition and subagent correlation read: a
+    /// parked end is the main thread waiting on still-in-flight work, so it
+    /// closes nothing, and a clean parked end stays running rather than
+    /// painting a false success. A `turn_id` matching the superseded turn
+    /// marks a late report from an earlier turn. A non-parked end records its
+    /// id so matching tools cannot reopen the turn.
     TurnEnded {
         errored: bool,
         parked_on_background: bool,
@@ -612,46 +615,38 @@ fn map_status(
     prior_status: Option<AgentStatus>,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
+    use AgentStatus::{Failed, Idle, Running, Success, Waiting};
+    let prior = prior_status.unwrap_or(Idle);
     match signal {
-        LifecycleSignal::Registered => AgentStatus::Idle,
-        LifecycleSignal::TurnStarted { .. } => AgentStatus::Running,
-        LifecycleSignal::SubagentStarted => match prior_status {
-            Some(terminal @ (AgentStatus::Success | AgentStatus::Failed)) => {
-                *kind = TransitionKind::Ignored {
-                    reason: "subagent start after a terminal stop",
-                };
-                terminal
-            }
-            _ => AgentStatus::Running,
-        },
-        LifecycleSignal::AwaitingInput { .. } => AgentStatus::Waiting,
-        // `stale_ask_close` returned early for every other prior state.
-        LifecycleSignal::AskResolved { .. } => AgentStatus::Running,
+        LifecycleSignal::Registered | LifecycleSignal::TurnInterrupted { .. } => Idle,
+        // `stale_ask_close` returned early for every prior state of an
+        // `AskResolved` but `Waiting`.
+        LifecycleSignal::TurnStarted { .. } | LifecycleSignal::AskResolved { .. } => Running,
+        LifecycleSignal::SubagentStarted if matches!(prior, Success | Failed) => {
+            *kind = TransitionKind::Ignored {
+                reason: "subagent start after a terminal stop",
+            };
+            prior
+        }
+        LifecycleSignal::SubagentStarted => Running,
+        LifecycleSignal::AwaitingInput { .. } => Waiting,
+        // The main thread parked on background work — not a turn end, so the
+        // row stays live. A designed edge, tagged `Normal`.
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            ..
+        } => Running,
         // A finished child resolves to a terminal verdict, so the parent's
         // expanded list reads `✓`/`!` instead of a resting `○`.
-        LifecycleSignal::SubagentStopped { errored } => {
+        LifecycleSignal::TurnEnded { errored, .. }
+        | LifecycleSignal::SubagentStopped { errored } => {
             if *errored {
-                AgentStatus::Failed
+                Failed
             } else {
-                AgentStatus::Success
+                Success
             }
         }
-        LifecycleSignal::TurnEnded {
-            errored,
-            parked_on_background,
-            ..
-        } => {
-            if *errored {
-                AgentStatus::Failed
-            } else if *parked_on_background {
-                // The main thread parked on background work — not a turn end, so
-                // the row stays live. A designed edge, tagged `Normal`.
-                AgentStatus::Running
-            } else {
-                AgentStatus::Success
-            }
-        }
-        LifecycleSignal::TurnInterrupted { .. } => AgentStatus::Idle,
         LifecycleSignal::ToolUsed { .. } => reconcile_activity(
             prior_status,
             prior_status.map_or(
@@ -660,54 +655,31 @@ fn map_status(
             ),
             kind,
         ),
-        // Status preserved; only the head is stamped. Waiting is the one status
-        // compaction resolves rather than preserves: a compaction runs only once
-        // the native prompt has released the pane, so the signal is proof the ask
-        // the row was blocked on is gone — including the dismissal (`esc`) that
-        // reaches RimZ through no hook of its own.
-        LifecycleSignal::Compacting => match prior_status {
-            Some(AgentStatus::Waiting) => {
-                *kind = TransitionKind::Reconciled {
-                    from: AgentStatus::Waiting,
-                    reason: "compaction began while an ask was open",
-                };
-                AgentStatus::Running
-            }
-            other => other.unwrap_or(AgentStatus::Idle),
-        },
-        LifecycleSignal::CompactionEnded { failed: true, .. }
-        | LifecycleSignal::CompactionEnded { auto: None, .. } => {
-            if prior_status == Some(AgentStatus::Waiting) {
-                AgentStatus::Running
-            } else {
-                prior_status.unwrap_or(AgentStatus::Idle)
-            }
+        // Compaction preserves status; only the head is stamped. Waiting is the
+        // one status it resolves rather than preserves: a compaction runs only
+        // once the native prompt has released the pane, so the signal is proof
+        // the ask the row was blocked on is gone — including the dismissal
+        // (`esc`) that reaches RimZ through no hook of its own.
+        LifecycleSignal::Compacting if prior == Waiting => {
+            *kind = TransitionKind::Reconciled {
+                from: Waiting,
+                reason: "compaction began while an ask was open",
+            };
+            Running
         }
-        LifecycleSignal::CompactionEnded {
-            auto: Some(true),
-            failed: false,
-        } => match prior_status {
-            // An automatic close resumes only the turn it interrupted; one that
-            // lands on a resting row interrupted nothing, so it opens no turn.
-            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
-            other => other.unwrap_or(AgentStatus::Idle),
-        },
+        LifecycleSignal::CompactionEnded { .. } if prior == Waiting => Running,
+        // A stale running row rests: the manual close proves the user typed at
+        // the prompt, and no Stop will end the turn the row remembers. An
+        // automatic close resumes only the turn it interrupted, so it preserves.
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
-        } => match prior_status {
-            Some(AgentStatus::Waiting) => AgentStatus::Running,
-            // A stale running row rests: the manual close proves the user typed
-            // at the prompt, and no Stop will end the turn the row remembers.
-            Some(AgentStatus::Running) | None => AgentStatus::Idle,
-            Some(resting) => resting,
-        },
+        } if prior == Running => Idle,
+        LifecycleSignal::Compacting | LifecycleSignal::CompactionEnded { .. } => prior,
         // A session ending mid-turn delivered nothing, matching
         // `terminal_disposition` and the supervised run's failed verdict.
-        LifecycleSignal::Ended => match prior_status {
-            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Failed,
-            other => other.unwrap_or(AgentStatus::Idle),
-        },
+        LifecycleSignal::Ended if matches!(prior, Running | Waiting) => Failed,
+        LifecycleSignal::Ended => prior,
         // Handled above.
         LifecycleSignal::Lost => unreachable!("legacy lost marker returns early"),
     }
