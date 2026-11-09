@@ -272,7 +272,7 @@ fn bad_prefix_and_unknown_keymap_warn_and_use_defaults() {
     let machine = config("[room]\nstyle='rimz'\n[keys]\nkeymap='unknown'\n");
     assert_eq!(
         machine.notices.key_bindings["keys.keymap"],
-        "keys.keymap: expected rimz; using the rimz keymap"
+        "keys.keymap: expected rimz, tmux, zellij, or vim; using the rimz keymap"
     );
     assert_eq!(
         action(&machine.room_keymap(), KeyMode::Normal, "Alt+j").as_deref(),
@@ -455,4 +455,207 @@ fn motion_actions_are_exactly_the_sticky_set() {
             "worktree.prev",
         ]
     );
+}
+
+const CARD_LAYER: &str = concat!(
+    "Alt+j card.next\nAlt+k card.prev\nAlt+J worktree.next\nAlt+K worktree.prev\n",
+    "Alt+? filter.needs_you\nAlt+n palette.new_agent\nAlt+1 card.slot.1\nAlt+2 card.slot.2\n",
+    "Alt+3 card.slot.3\nAlt+4 card.slot.4\nAlt+5 card.slot.5\nAlt+6 card.slot.6\n",
+    "Alt+7 card.slot.7\nAlt+8 card.slot.8\nAlt+9 card.slot.9\nAlt+; card.last\n"
+);
+
+const SLOTS: &str = concat!(
+    "1 card.slot.1\n2 card.slot.2\n3 card.slot.3\n4 card.slot.4\n5 card.slot.5\n",
+    "6 card.slot.6\n7 card.slot.7\n8 card.slot.8\n9 card.slot.9\n"
+);
+
+const FOCUS: &str = concat!(
+    "h pane.focus.left\nj pane.focus.down\nk pane.focus.up\nl pane.focus.right\n",
+    "Left pane.focus.left\nDown pane.focus.down\nUp pane.focus.up\nRight pane.focus.right\n"
+);
+
+const RESIZE: &str = concat!(
+    "h pane.resize.left\nj pane.resize.down\nk pane.resize.up\nl pane.resize.right\n",
+    "Left pane.resize.left\nDown pane.resize.down\nUp pane.resize.up\nRight pane.resize.right\n",
+    "Esc mode.exit\nEnter mode.exit\n"
+);
+
+const MOVE: &str = concat!(
+    "h pane.swap.left\nj pane.swap.down\nk pane.swap.up\nl pane.swap.right\n",
+    "Left pane.swap.left\nDown pane.swap.down\nUp pane.swap.up\nRight pane.swap.right\n",
+    "Esc mode.exit\nEnter mode.exit\n"
+);
+
+/// Resolve `keymap` with no `[keys] prefix` and compare all six modes row for row.
+fn assert_bundled(keymap: &str, prefix: KeyChord, scrollback: KeyScrollback, modes: [&str; 6]) {
+    let machine = config(&format!(
+        "[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\n"
+    ));
+    assert!(
+        machine.notices.key_bindings.is_empty(),
+        "{keymap}: {:?}",
+        machine.notices
+    );
+    let map = machine.room_keymap();
+    assert_eq!(
+        map.style,
+        Some(RoomKeyStyle { prefix, scrollback }),
+        "{keymap}"
+    );
+    assert_eq!(map.modes.len(), 6, "{keymap} carries all six modes");
+    for (mode, rows) in KeyMode::ALL.into_iter().zip(modes) {
+        let rows = rows.replace("<prefix>", &prefix.to_string());
+        let resolved: BTreeMap<_, _> = map.modes[&mode]
+            .iter()
+            .map(|(key, action)| (key.to_string(), action.to_string()))
+            .collect();
+        let expected: BTreeMap<_, _> = rows
+            .lines()
+            .map(|row| {
+                let (key, action) = row.split_once(' ').unwrap();
+                (key.to_owned(), action.to_owned())
+            })
+            .collect();
+        assert_eq!(
+            expected.len(),
+            rows.lines().count(),
+            "{keymap} {mode}: duplicate row"
+        );
+        assert_eq!(resolved, expected, "{keymap} {mode}");
+    }
+}
+
+#[test]
+fn tmux_keymap_matches_every_contract_binding() {
+    let prefix = format!(
+        "{SLOTS}{}",
+        concat!(
+            "<prefix> pane.send_prefix\n\" pane.split.down\n% pane.split.right\nc tab.new\n",
+            "n tab.next\np tab.prev\nl card.last\n; card.last\no pane.focus.next\n",
+            "Left pane.focus.left\nDown pane.focus.down\nUp pane.focus.up\n",
+            "Right pane.focus.right\n{ pane.swap.left\n} pane.swap.right\nz pane.zoom\n",
+            "[ mode.scrollback\nx card.close\nX pane.close\nu card.reopen\nd session.detach\n",
+            "? keys.help\n: palette.commands\nw palette.cards\nf palette.cards\nj card.next\n",
+            "k card.prev\nJ worktree.next\nK worktree.prev\nN palette.new_agent\n",
+            "r mode.resize\nEsc mode.exit\n"
+        )
+    );
+    assert_bundled(
+        "tmux",
+        KeyChord::Ctrl('b'),
+        KeyScrollback::Native,
+        [
+            &format!("{CARD_LAYER}<prefix> mode.prefix"),
+            &prefix,
+            "",
+            "",
+            RESIZE,
+            MOVE,
+        ],
+    );
+}
+
+#[test]
+fn zellij_keymap_matches_every_contract_binding() {
+    let prefix = concat!(
+        "<prefix> mode.exit\nEsc mode.exit\nEnter mode.exit\np mode.pane\nt mode.tab\n",
+        "r mode.resize\nm mode.move\ns mode.scrollback\nd session.detach\n/ palette.cards\n",
+        ": palette.commands\nx card.close\nu card.reopen\n? keys.help\n"
+    );
+    let pane = format!(
+        "{FOCUS}{}",
+        concat!(
+            "p pane.focus.next\nn pane.split.right\nr pane.split.right\nd pane.split.down\n",
+            "x card.close\nX pane.close\nf pane.zoom\nEsc mode.exit\nEnter mode.exit\n"
+        )
+    );
+    let tab = format!(
+        "{SLOTS}{}",
+        concat!(
+            "h tab.prev\nk tab.prev\nLeft tab.prev\nUp tab.prev\nl tab.next\nj tab.next\n",
+            "Right tab.next\nDown tab.next\nn tab.new\nEsc mode.exit\nEnter mode.exit\n"
+        )
+    );
+    assert_bundled(
+        "zellij",
+        KeyChord::Ctrl('g'),
+        KeyScrollback::Native,
+        [
+            &format!(
+                "{CARD_LAYER}Alt+h pane.focus.left\nAlt+l pane.focus.right\n<prefix> mode.prefix"
+            ),
+            prefix,
+            &pane,
+            &tab,
+            RESIZE,
+            MOVE,
+        ],
+    );
+}
+
+#[test]
+fn vim_keymap_matches_every_contract_binding() {
+    let prefix = format!(
+        "{FOCUS}{}",
+        concat!(
+            "<prefix> pane.focus.next\nw pane.focus.next\np card.last\nH pane.swap.left\n",
+            "J pane.swap.down\nK pane.swap.up\nL pane.swap.right\ns pane.split.down\n",
+            "n pane.split.down\nv pane.split.right\nc card.close\nq card.close\no pane.zoom\n",
+            "t tab.next\nT tab.prev\ne tab.new\nN mode.scrollback\n: palette.commands\n",
+            "/ palette.cards\nr mode.resize\nu card.reopen\nd session.detach\n? keys.help\n",
+            "Esc mode.exit\n"
+        )
+    );
+    let resize = format!(
+        "{RESIZE}{}",
+        "< pane.resize.left\n> pane.resize.right\n+ pane.resize.down\n- pane.resize.up\n"
+    );
+    assert_bundled(
+        "vim",
+        KeyChord::Alt('w'),
+        KeyScrollback::Vi,
+        [
+            &format!("{CARD_LAYER}<prefix> mode.prefix"),
+            &prefix,
+            "",
+            "",
+            &resize,
+            MOVE,
+        ],
+    );
+}
+
+#[test]
+fn every_keymap_takes_a_configured_prefix_and_warns_with_its_own_default() {
+    for (keymap, default) in [
+        ("rimz", "Alt+p"),
+        ("tmux", "Ctrl+b"),
+        ("zellij", "Ctrl+g"),
+        ("vim", "Alt+w"),
+    ] {
+        let machine = config(&format!(
+            "[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\nprefix='Ctrl+a'\n"
+        ));
+        assert!(machine.notices.key_bindings.is_empty(), "{keymap}");
+        let map = machine.room_keymap();
+        assert_eq!(
+            action(&map, KeyMode::Normal, "Ctrl+a").as_deref(),
+            Some("mode.prefix")
+        );
+        assert_eq!(action(&map, KeyMode::Normal, default), None, "{keymap}");
+        let machine = config(&format!(
+            "[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\nprefix='Esc'\n"
+        ));
+        assert_eq!(
+            machine.notices.key_bindings["keys.prefix"],
+            format!(
+                "keys.prefix: expected a modified chord such as Alt+p, not a terminal key alias; \
+                 using {default}"
+            )
+        );
+        assert_eq!(
+            action(&machine.room_keymap(), KeyMode::Normal, default).as_deref(),
+            Some("mode.prefix")
+        );
+    }
 }

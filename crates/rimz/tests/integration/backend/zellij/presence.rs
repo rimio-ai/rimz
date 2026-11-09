@@ -2089,3 +2089,72 @@ fn rimz_keymap_clears_bindings_and_keeps_modes_per_client() {
         "tab.new inherits the focused pane cwd",
     );
 }
+
+#[test]
+fn zellij_keymap_holds_pane_mode_across_motions_and_exits_to_normal() {
+    use rimz::mux::ClientFocusOptions;
+    use rimz::pane::RoomMode;
+    use std::collections::BTreeMap;
+
+    require_zellij!();
+    let room = LiveZellijSession::new("zellij-keys");
+    let zellij_config = room.path().join(".config/zellij/config.kdl");
+    std::fs::write(
+        &zellij_config,
+        format!(
+            "{}\ndefault_mode \"locked\"\n",
+            std::fs::read_to_string(&zellij_config).unwrap()
+        ),
+    )
+    .unwrap();
+    let wasm = presence_wasm_artifact();
+    seed_presence_permissions(room.path(), &wasm);
+    std::fs::write(room.path().join(".zshrc"), "").unwrap();
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let mut opts = sidebar_opts(room.name(), room.path(), real_rimz.clone(), 120);
+    opts.workspace_id = WorkspaceId::from_project_root(room.path());
+    let state = rimz::StatePaths::for_project_root_under(room.path(), room.path()).unwrap();
+    opts.runtime = rimz::RuntimePaths::for_state_under(&state, room.path());
+    publish_room_bin(room.path(), &opts);
+    let machine: rimz::config::MachineConfig =
+        toml::from_str("[room]\nstyle='rimz'\n[keys]\nkeymap='zellij'").unwrap();
+    let presence = rimz::mux::PresencePluginOptions {
+        session_name: room.name().to_owned(),
+        workspace_id: opts.workspace_id,
+        wasm,
+        rimz_bin: real_rimz,
+        keymap: machine.room_keymap(),
+        project_root: room.path().to_path_buf(),
+        session_options: Vec::new(),
+    };
+    let mut client = AttachedClient::create_and_attach(&room, 120, 40);
+    room.backend()
+        .converge_presence_plugin_for(&presence)
+        .unwrap();
+    let id = client.view().clients[0].client_id.clone();
+    let wait_modes = |expected: BTreeMap<_, RoomMode>| {
+        let context = format!("client-local room modes {expected:?}");
+        poll_until(
+            SPAWN_TIMEOUT,
+            || {
+                room.backend()
+                    .client_view(ClientFocusOptions {
+                        session_name: Some(room.name().to_owned()),
+                        ..Default::default()
+                    })
+                    .map_err(|err| err.to_string())
+            },
+            |view| view.presence.client_modes == expected,
+            &context,
+        )
+    };
+    client.send(b"\x07");
+    wait_modes([(id.clone(), RoomMode::Prefix)].into());
+    client.send(b"p");
+    wait_modes([(id.clone(), RoomMode::Pane)].into());
+    client.send(b"h");
+    std::thread::sleep(Duration::from_millis(500));
+    wait_modes([(id, RoomMode::Pane)].into());
+    client.send(b"\x1b");
+    wait_modes(BTreeMap::new());
+}
