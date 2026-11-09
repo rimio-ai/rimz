@@ -108,6 +108,8 @@ pub enum SidebarHostUnavailableCause {
     Rejected,
     ReplyUnreadable,
     Lost,
+    /// The supervisor's terminal stopped delivering input while attached.
+    InputLost,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

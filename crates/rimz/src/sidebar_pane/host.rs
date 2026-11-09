@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 mod reload;
 
@@ -331,6 +331,12 @@ impl Host {
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => break,
             };
+            if let Some(lane) = self.plane.ended_lane() {
+                error!(session = %self.room.session_name, lane,
+                    "sidebar host leaving: an essential lane ended; supervisors start the next host");
+                self.drain(false);
+                break;
+            }
             let mut requested_reload = false;
             for event in first.into_iter().chain(inbox.try_iter()) {
                 match event {
@@ -392,6 +398,13 @@ impl Host {
     /// again must find no host here and start the next one, not be turned
     /// away by this one.
     fn begin_drain(&self) {
+        self.drain(true);
+    }
+
+    /// Stop taking panes and close each. `reattach` tells every supervisor to
+    /// attach again at once; without it each reads the close as a lost host
+    /// and retries on its backoff.
+    fn drain(&self, reattach: bool) {
         let attachments = lock(&self.attachments);
         if self.draining.swap(true, Ordering::SeqCst) {
             return;
@@ -407,7 +420,7 @@ impl Host {
             warn!(error = %err, "sidebar host room socket removal failed");
         }
         for live in attachments.values() {
-            live.leaving.store(true, Ordering::SeqCst);
+            live.leaving.store(reattach, Ordering::SeqCst);
             live.close.close();
         }
         let _ = self.events.send(Event::Wake);

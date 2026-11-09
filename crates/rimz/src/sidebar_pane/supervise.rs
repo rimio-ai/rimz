@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::reload::{RecordChange, RecordWatch, record_poll_interval};
-use crate::sidebar_pane::app::EventForwarder;
+use crate::sidebar_pane::app::{EventForwarder, ForwarderEnd};
 use crate::sidebar_pane::attach::Control;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 use tracing::debug;
@@ -207,6 +207,7 @@ pub fn run(config: SupervisorConfig) -> Result<()> {
             Err(failure) => failure,
             Ok(RoundExit::Stopped) => continue,
             Ok(RoundExit::HostLost) => AttachFailure::Lost,
+            Ok(RoundExit::InputLost) => AttachFailure::InputLost,
             Ok(RoundExit::OrphanReaped) => {
                 record_pane_gone(&config, &diag);
                 modes.preserve_for_handoff();
@@ -298,6 +299,8 @@ enum AttachFailure {
     ReplyUnreadable,
     #[error("host went away")]
     Lost,
+    #[error("terminal input stopped")]
+    InputLost,
 }
 
 impl AttachFailure {
@@ -311,6 +314,7 @@ impl AttachFailure {
             Self::Rejected(reason) => (SidebarHostUnavailableCause::Rejected, reason.clone()),
             Self::ReplyUnreadable => (SidebarHostUnavailableCause::ReplyUnreadable, String::new()),
             Self::Lost => (SidebarHostUnavailableCause::Lost, String::new()),
+            Self::InputLost => (SidebarHostUnavailableCause::InputLost, String::new()),
         }
     }
 }
@@ -373,7 +377,8 @@ impl Attached {
     /// back to whichever process paints next.
     fn watch(mut self, monitor: HostMonitor<'_>) -> (RoundExit, Duration) {
         let started = monitor.started;
-        let exit = watch_host(&mut self.link, monitor);
+        let forwarder = &self.forwarder;
+        let exit = watch_host(&mut self.link, monitor, || forwarder.ended());
         let duration = started.elapsed();
         drop(self.link);
         self.forwarder.stop();
@@ -381,7 +386,11 @@ impl Attached {
     }
 }
 
-fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> RoundExit {
+fn watch_host(
+    link: &mut HostLink,
+    monitor: HostMonitor<'_>,
+    forwarder_end: impl Fn() -> Option<ForwarderEnd>,
+) -> RoundExit {
     loop {
         if monitor.stopped.load(Ordering::SeqCst) {
             return RoundExit::Stopped;
@@ -392,6 +401,12 @@ fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> RoundExit {
             HostEvent::Control(Control::Baseline(pane)) => *monitor.baseline_pane = pane,
             HostEvent::Lost => return RoundExit::HostLost,
             HostEvent::Quiet => {}
+        }
+        // A host word or EOF read in this poll decided the round above.
+        match forwarder_end() {
+            Some(ForwarderEnd::Input) => return RoundExit::InputLost,
+            Some(ForwarderEnd::Stream) => return RoundExit::HostLost,
+            None => {}
         }
         reap_exited_children();
         let now = Instant::now();
@@ -477,6 +492,8 @@ enum RoundExit {
     OrphanReaped,
     /// The room host painting this pane went away without a word.
     HostLost,
+    /// This pane's terminal stopped delivering input.
+    InputLost,
 }
 
 fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Duration) {

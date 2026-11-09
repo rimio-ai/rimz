@@ -167,7 +167,7 @@ Each view remembers one previous card in host memory. An explicit focus input be
 
 The host is the only painter, so the supervisor refuses early when it could never reach one. First, `crates/rimz/src/cli/sidebar.rs::serve` refuses outside a mux pane: `rimz sidebar serve` runs only in the sidebar pane the room spawns. Inside a pane, after the no-room check, `crates/rimz/src/sidebar_pane/supervise.rs::run` refuses non-terminal stdout with `error: rimz sidebar serve: stdout is not a terminal; the sidebar pane command must run in a pane` on stderr and a non-zero exit. An unavailable `RuntimePaths` likewise exits non-zero with its `PathErr` message. These checks precede socket or terminal-mode work. The supervisor then initializes the runtime directories before starting a host, and the detached command uses the shared runtime root as its working directory.
 
-Every other failure to reach the host follows one notice-and-retry path: a failed start, an unanswered socket (`HOST_WAIT`, 2 seconds), a rejected hello, an unreadable or late reply (`REPLY_WAIT`, 5 seconds), and a lost attachment. The supervisor clears the screen and homes the cursor with plain stdio control bytes, then writes two uncolored lines in raw mode with `\r\n`: `sidebar: <cause>` and `retrying in <N>s`. It writes only after a failed round, never before the first attempt or while attached, and the next attachment paints over the notice. N is the upcoming backoff in whole seconds, at least 1. Delays double from 1 second to 60 seconds and reset after an attachment has run for a stable minute. A workspace-record change interrupts the wait.
+Every other failure to reach the host follows one notice-and-retry path: a failed start, an unanswered socket (`HOST_WAIT`, 2 seconds), a rejected hello, an unreadable or late reply (`REPLY_WAIT`, 5 seconds), a lost attachment, and an attached round whose input forwarder stopped. A forwarder whose terminal event source failed ends the round as `terminal input stopped`; one whose write to the stream failed ends it as a lost host. A host word or end of stream read in the same poll decides the round instead. The supervisor clears the screen and homes the cursor with plain stdio control bytes, then writes two uncolored lines in raw mode with `\r\n`: `sidebar: <cause>` and `retrying in <N>s`. It writes only after a failed round, never before the first attempt or while attached, and the next attachment paints over the notice. N is the upcoming backoff in whole seconds, at least 1. Delays double from 1 second to 60 seconds and reset after an attachment has run for a stable minute. A workspace-record change interrupts the wait.
 
 | Cause shown | Diagnostic `cause` |
 | --- | --- |
@@ -176,8 +176,9 @@ Every other failure to reach the host follows one notice-and-retry path: a faile
 | `host rejected this pane: <reason verbatim from Reply::Reject>` | `rejected` |
 | `host reply unreadable` | `reply_unreadable` |
 | `host went away` | `lost` |
+| `terminal input stopped` | `input_lost` |
 
-Each failed round emits the identity-rate-limited `sidebar_host_unavailable` record with the cause, reason, attached duration when lost, and upcoming retry delay ([diagnostic fields](../diagnostics.md#supervisor-kinds)). A lost host costs even a mature attachment a one-second notice before retrying.
+Each failed round emits the identity-rate-limited `sidebar_host_unavailable` record with the cause, reason, attached duration when an accepted attachment was lost or its input stopped, and upcoming retry delay ([diagnostic fields](../diagnostics.md#supervisor-kinds)). A lost host costs even a mature attachment a one-second notice before retrying.
 
 Terminal modes survive every exit except a confirmed self-close. Self-close restores them. SIGTERM, pane-gone cleanup, and build exec preserve them for the pane handoff. An attachment's close removes its runtime files, and a stopping supervisor also removes its per-instance files.
 
@@ -187,10 +188,11 @@ The supervisor that finds no host takes the session's spawn lock and starts one.
 
 At startup the host calls `setsid` and raises its open-file soft limit toward the hard limit (`crates/rimz/src/sidebar_pane/host.rs::raise_open_file_limit`). The target is 65,536, retried at macOS's 10,240, and a refusal warns in the host log. The sizing reason is on `OPEN_FILE_TARGET`. The host then holds the session's host lock for life. A second host for the same session waits out its predecessor (`SUCCESSION_WAIT`, 12 seconds) and exits if that one stays.
 
-The host leaves in three ways:
+The host leaves in four ways:
 
 - Idle. With no connection for ten seconds it exits.
 - Reload. When the workspace record names a verified build other than its own, or a batch of reload requests finds a byte-different target, it removes its sockets, sends `reload` on every stream, and waits until its attachments have let go or `DRAIN_GRACE` (10 seconds) passes, whichever comes first. Supervisors then find no host and start the recorded build's.
+- Lane death. When the fetch worker or the cache refresher thread ends, which only an unwind does while the host serves, the host notices within one poll (1 second). It logs an error naming the lane, removes its sockets, closes every stream without a control word, admits no pane, and leaves after its attachments let go or `DRAIN_GRACE` passes. Each supervisor reads a lost host, shows `host went away`, and starts the next host on its backoff curve, so a panic that repeats every cycle cannot spin hosts.
 - Teardown. The room teardown sweep kills it like any other process carrying the session's tokens.
 
 A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build.
@@ -199,13 +201,13 @@ Reload requests reach the host inbox directly: room reload words and envelopes, 
 
 ### Shared lanes
 
-The host starts its lanes when its first pane subscribes. The fetch worker skips an empty subscriber set, and the cache refresher skips a pass with no pane. Heartbeats remain per-pane liveness and wakeup hints, never ownership votes.
+The host starts its lanes when its first pane subscribes. The fetch worker skips an empty subscriber set, and the cache refresher skips a pass with no pane. The fetch worker and the cache refresher are essential: neither returns while the host lives, and the end of either ends the host ([lane death](#host-lifetime-and-reload)). The other lanes are latency or enrichment behind the fetch backstop, and the host keeps serving without them. Heartbeats remain per-pane liveness and wakeup hints, never ownership votes.
 
 | Thread | Owns |
 | --- | --- |
-| Fetch worker | Pane and workspace publication, group roots, notifications, unread reconciliation, and tab-status names. |
+| Fetch worker (essential) | Pane and workspace publication, group roots, notifications, unread reconciliation, and tab-status names. |
 | Mirror dispatcher | Ranked hidden-layout offers, with four shared slots and a 150 ms input-rest deadline. |
-| Cache refresher | Consumes the fetch worker's sampled fold for TTL-gated git, PR, accounts, usage, credits, cohort effort and unattended recovery. Due tasks, messages and daemon-view repair still run when fold acquisition fails ([rimzd.md](../rimzd.md#who-repairs-and-when)). |
+| Cache refresher (essential) | Consumes the fetch worker's sampled fold for TTL-gated git, PR, accounts, usage, credits, cohort effort and unattended recovery. Due tasks, messages and daemon-view repair still run when fold acquisition fails ([rimzd.md](../rimzd.md#who-repairs-and-when)). |
 | tmux control-mode watch | One tmux presence stream for the session. |
 | Transcript watch | Filesystem watches on live sessions whose adapters declare transcript-tail context. |
 | Observer writer | Frame-anomaly emission and real-world cross-checks when diagnostics are enabled. |
@@ -261,7 +263,7 @@ One cycle runs these steps on the worker ([`FetchWorker::run_cycle`](../../../cr
 
 Every published fold becomes `Views.fold`, the seed for new attachments, and a failure keeps the previous one. Accepted producer inputs reach shared memory before publication, even when a later fold fails.
 
-A produce runs behind a panic guard. An unwind costs one failed outcome, the loop holds its last good frame, and the next cycle refolds cold from a fresh rollup cursor instead of trusting a base the panic may have torn.
+A produce runs behind a panic guard. An unwind costs one failed outcome, the loop holds its last good frame, and the next cycle refolds cold from a fresh rollup cursor instead of trusting a base the panic may have torn. A panic anywhere else in the cycle (the fast fold, the input read, a publication) ends the worker, and the host then leaves through [lane death](#host-lifetime-and-reload).
 
 ### Publication and replay
 
@@ -836,6 +838,7 @@ Each degradation has one owner, and none leaves a wrong verdict that outlives th
 | Clock skew | Event expiry uses receiver time, so no event lives forever. | A future-stamped event can mis-order an overlay across several pulls, and expires `EVENT_STORE_TTL` (12 s) after receipt. |
 | Cold host: no fold yet | Memory starts empty with each host. | The placeholder remains until the first fold. |
 | Panicking produce | The panic guard catches the unwind and discards the fold cursor. | One failed outcome. The next cycle refolds cold. |
+| Panicking fetch worker or cache refresher outside a guard | The host notices the ended lane within one poll and closes every stream without a word. | Each supervisor shows `host went away` and starts a fresh host on its backoff curve. |
 | Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and the worker's data backstop keeps folding until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
 | Hook drainer unreachable for 10 seconds | The wrapper's runtime lease keeps the affected cards identifiable without reading diagnostics. | A separate drainer alert keeps the rest of the sidebar usable. After a 3-second recovery hold it lingers until dismissed. |
 

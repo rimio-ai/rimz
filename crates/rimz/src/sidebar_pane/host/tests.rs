@@ -50,13 +50,16 @@ impl Room {
     }
 
     fn with_mux_timing(mux: MuxName, timing: Timing) -> Self {
+        Self::with_plane(mux, timing, DataPlane::detached())
+    }
+
+    fn with_plane(mux: MuxName, timing: Timing, plane: DataPlane) -> Self {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let workspace_id: WorkspaceId = workspace();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let mut room = serve_config(&workspace_id).room;
         room.mux = mux;
-        let plane = DataPlane::detached();
         let socket_path = runtime.sidebar_host_socket_path(room.mux, &room.session_name);
         let host = Host::new(
             room,
@@ -1110,6 +1113,59 @@ fn reloads_every_pane_then_ends(via_socket: bool) {
         !room.host.socket_path.exists(),
         "the next host binds a path this one no longer answers on"
     );
+}
+
+#[test]
+fn an_essential_lane_ending_loses_every_pane_and_ends_the_host() {
+    let (end_fetch, fetch_ends) = std::sync::mpsc::channel::<()>();
+    let (_keep_refresh, refresh_ends) = std::sync::mpsc::channel::<()>();
+    let plane = DataPlane::with_lanes(
+        move || {
+            let _ = fetch_ends.recv();
+        },
+        move || {
+            let _ = refresh_ends.recv();
+        },
+    );
+    let room = Room::with_plane(MuxName::Zellij, brisk(), plane);
+    let listener = listen(&room);
+    let wake_path = room
+        .runtime
+        .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name);
+    let wake = bind_wake_socket(&wake_path).unwrap();
+    let host = room.host.clone();
+    let serving = std::thread::spawn(move || host.serve(listener, wake, || None));
+
+    let mut ptys = [Pty::open(40, 12), Pty::open(31, 9)];
+    let mut panes = Vec::new();
+    for pty in &mut ptys {
+        let instance_id = SidebarInstanceId::new();
+        let stream = UnixStream::connect(&room.host.socket_path).unwrap();
+        attach::send_hello(&stream, &hello(&instance_id), pty.slave().as_fd()).unwrap();
+        let mut replies = BufReader::new(stream);
+        assert!(matches!(
+            attach::read_line::<Reply>(&mut replies).unwrap(),
+            Some(Reply::Accept { .. })
+        ));
+        painted(pty);
+        panes.push(Pane {
+            instance_id,
+            replies,
+        });
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!serving.is_finished(), "live lanes keep the host serving");
+
+    drop(end_fetch);
+    eventually("the host stops serving", || serving.is_finished());
+    for pane in panes {
+        let instance_id = pane.instance_id.clone();
+        assert_eq!(pane.controls(), [], "a lost host says no word");
+        assert!(!room.has_runtime_files(&instance_id));
+    }
+    serving.join().unwrap();
+    assert!(!wake_path.exists());
+    assert!(!room.host.socket_path.exists());
 }
 
 #[test]

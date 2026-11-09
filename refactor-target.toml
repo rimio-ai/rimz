@@ -4083,7 +4083,8 @@ reason = "The sidebar frame CLI prints matching physical rows from the library's
 path = "crates/rimz/src/sidebar_pane/app"
 # FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
 # RoomConfig separates room-owned settings from pane identity (+1).
-surface-budget = 15
+# ForwarderEnd tells the supervisor whether its terminal or its attach stream ended a round (+1).
+surface-budget = 16
 
 [[verdict]]
 kind = "item"
