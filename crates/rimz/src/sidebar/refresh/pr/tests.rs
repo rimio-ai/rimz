@@ -1136,6 +1136,58 @@ fn target_assembly_retries_failed_origin_reads() {
 }
 
 #[test]
+fn origin_memo_keeps_only_the_repositories_the_last_pass_reached() {
+    let repos = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    for (index, repo) in repos.iter().enumerate() {
+        let url = format!("https://github.com/org/repo{index}.git");
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["remote", "add", "origin", &url],
+            &[
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "base",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(repo.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+    let paths = repos
+        .iter()
+        .map(|repo| repo.path().display().to_string())
+        .collect::<Vec<_>>();
+    let mut state = super::super::ProducerRefreshState::default();
+    let mut assemble = |needed: &[String]| {
+        build_targets(
+            &BTreeMap::new(),
+            needed,
+            &DiffStatsCache::default(),
+            &mut state,
+        )
+        .len()
+    };
+    assert_eq!(assemble(&paths), 2);
+    assert_eq!(assemble(&paths[..1]), 1);
+    assert_eq!(
+        state.pr_origins.keys().cloned().collect::<Vec<_>>(),
+        vec![repos[0].path().join(".git").canonicalize().unwrap()]
+    );
+}
+
+#[test]
 fn target_assembly_falls_back_for_symbolic_branch_refs() {
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {

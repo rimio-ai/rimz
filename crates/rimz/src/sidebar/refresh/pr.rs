@@ -415,6 +415,7 @@ fn build_targets(
 ) -> Vec<Target> {
     let mut targets = Vec::new();
     let mut seen_branches = BTreeSet::new();
+    let mut reached = BTreeSet::new();
     for path in needed {
         let worktree = Path::new(path);
         let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
@@ -445,6 +446,7 @@ fn build_targets(
                 .get(path)
                 .and_then(|entry| entry.trunk.as_deref()),
         );
+        reached.insert(common_dir.clone());
         let stamp = std::fs::metadata(common_dir.join("config"))
             .ok()
             .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
@@ -532,6 +534,9 @@ fn build_targets(
         }
         targets.push(target);
     }
+    state
+        .pr_origins
+        .retain(|common_dir, _| reached.contains(common_dir));
     targets
 }
 
