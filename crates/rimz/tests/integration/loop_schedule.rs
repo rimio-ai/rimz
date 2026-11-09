@@ -9381,6 +9381,72 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
             .unwrap();
         assert_eq!(marker.loop_task.as_deref(), Some(*task));
     }
+
+    // A fleet budget that closes while the guard runs passes the runner's own
+    // gate and refuses the launch itself, after the fire handed its tree over.
+    let closed = env.home_root.join("closed-fleet-budget.json");
+    let ledger = rimz::harness::budget::DailyBudgetLedger {
+        override_spec: Some("0/day".parse().expect("budget")),
+        ..Default::default()
+    };
+    std::fs::write(&closed, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    let record = env.state_path_for(&env.project_root).fleet_budget_record;
+    let quote = |path: &Path| {
+        shlex::try_quote(path.to_str().unwrap())
+            .unwrap()
+            .into_owned()
+    };
+    let close = format!(
+        "{guard} && mkdir -p {} && mv {} {}",
+        quote(record.parent().unwrap()),
+        quote(&closed),
+        quote(&record),
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "refused",
+            "--agent",
+            "codex",
+            "--prompt",
+            "repair",
+            "--every",
+            "1h",
+            "--check",
+            &close,
+            "--on",
+            "success",
+            "--verify",
+            "true",
+            "--worktree",
+            "night",
+        ],
+    );
+    let turns = turn.turn_dirs().len();
+    let output = turn.fire(&env, "refused", false);
+    let refused = last_loop_record(&env);
+    assert_eq!(refused.result, LoopRunResult::BudgetSkipped, "{refused:?}");
+    assert!(
+        refused
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("fleet budget")),
+        "{refused:?}"
+    );
+    let tree =
+        rimz::utils::path::normalize_path_lexical(&refused.worktree.expect("fire worktree").path);
+    let guarded = std::fs::read_to_string(&guards).unwrap();
+    assert_eq!(
+        guarded.lines().last(),
+        Some(tree.display().to_string().as_str())
+    );
+    assert_eq!(turn.turn_dirs().len(), turns, "no turn ran: {output:?}");
+    assert!(
+        !tree.exists(),
+        "the refused launch's clean tree stays: {output:?}"
+    );
 }
 
 #[cfg(unix)]
