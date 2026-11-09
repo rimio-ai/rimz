@@ -807,7 +807,6 @@ impl SpendingWalker {
         }
         if changed {
             self.cache.mark_changed();
-            self.memo = None;
         }
         if self.cache.dirty
             && persist
