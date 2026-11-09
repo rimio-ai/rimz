@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -38,6 +39,11 @@ pub(super) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Decode a typed payload by borrow, defaulting every field when it does not fit the type.
+pub(super) fn decode_or_default<T: DeserializeOwned + Default>(payload: &Value) -> T {
+    T::deserialize(payload).unwrap_or_default()
 }
 
 pub(crate) fn non_empty_trimmed(value: &str) -> Option<String> {

@@ -8,7 +8,7 @@ Amp exposes no command-hook, statusline, or interactive RPC protocol, so RimZ ow
 | --- | --- |
 | `mod.rs` | `AMP_DESCRIPTOR` (the `static AgentSpec`), the coverage declarations, the hook catalog `AMP_HOOKS`, `AmpAdapter::decode_hook`, the plugin path (`amp_plugin_path`, `amp_config_home`), and `parse_amp_version` |
 | `plugin.ts` | the plugin RimZ installs, embedded as `PLUGIN_SOURCE` |
-| `payloads.rs` | `AmpHookPayload`, the typed envelope, and its tolerant `parse_payload` |
+| `payloads.rs` | `AmpHookPayload`, the typed envelope, decoded tolerantly |
 | `account.rs` | the secret-safe credential presence probe |
 | `tests.rs` | launch and resume argv, lifecycle mapping, the edit-proof fallback, the final answer, install and uninstall, and the strings `plugin.ts` must keep |
 
@@ -24,7 +24,7 @@ The plugin turns four Amp plugin events and one thread-state change into five wi
 | `agent.end` | `agent_end` | `TurnEnded` or `TurnInterrupted` | `status`, `last_assistant_message` |
 | thread state enters `awaiting-approval` | `permission_ask` | `AwaitingInput { Permission }` | none |
 
-Every envelope carries `hook_event_name`, `session_id` (the Amp thread id, `T-…`), and `cwd` (the workspace root, else the runtime's working directory). `parse_payload` defaults every field when the payload does not deserialize, and an envelope without a non-blank `session_id` attaches no observation.
+Every envelope carries `hook_event_name`, `session_id` (the Amp thread id, `T-…`), and `cwd` (the workspace root, else the runtime's working directory). The decode (`crates/rimz/src/agents/payload.rs::decode_or_default`) defaults every field when the payload does not deserialize, and an envelope without a non-blank `session_id` attaches no observation.
 
 ### Model and effort
 

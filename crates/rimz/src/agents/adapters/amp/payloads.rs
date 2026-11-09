@@ -1,7 +1,6 @@
 //! Typed payload for the RimZ-owned Amp plugin wire.
 
 use serde::Deserialize;
-use serde_json::Value;
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct AmpHookPayload {
@@ -14,19 +13,20 @@ pub(super) struct AmpHookPayload {
     pub last_assistant_message: Option<String>,
 }
 
-pub(super) fn parse_payload(payload: &Value) -> AmpHookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::payload::decode_or_default;
     use serde_json::json;
 
     #[test]
     fn payload_parse_is_tolerant() {
-        assert!(parse_payload(&json!("junk")).session_id.is_none());
-        let parsed = parse_payload(&json!({
+        assert!(
+            decode_or_default::<AmpHookPayload>(&json!("junk"))
+                .session_id
+                .is_none()
+        );
+        let parsed = decode_or_default::<AmpHookPayload>(&json!({
             "session_id": "T-abc123",
             "unknown": true,
             "files_modified": true

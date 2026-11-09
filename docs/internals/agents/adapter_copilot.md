@@ -39,7 +39,7 @@ Every installed command has the form `RIMZ_AGENT_PID=$PPID rimz hooks feed --sou
 
 A child session's `userPromptSubmitted` and `agentStop` become `SubagentStarted` and `SubagentStopped` once the child is joined to its parent ([Subagents](#subagents)). The native `subagentStart` and `subagentStop` hooks are not installed: the first carries no child ID, and the second repeats what the child's `agentStop` reports.
 
-Hook payloads decode through `payloads::parse_payload`, which accepts camelCase and snake_case field names. A payload that fails to deserialize as a whole decodes as an empty payload, so it carries no session and produces no observation. Routing reads the worktree from `worktree_path`, else `cwd`.
+Hook payloads decode into `payloads::CopilotHookPayload` through the shared `crates/rimz/src/agents/payload.rs::decode_or_default`; the payload accepts camelCase and snake_case field names. A payload that fails to deserialize as a whole decodes as an empty payload, so it carries no session and produces no observation. Routing reads the worktree from `worktree_path`, else `cwd`.
 
 ### Prompt-seeded starts
 

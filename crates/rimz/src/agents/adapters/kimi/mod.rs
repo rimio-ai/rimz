@@ -10,6 +10,7 @@ mod transcript;
 mod wire;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
@@ -497,7 +498,7 @@ impl crate::agents::capabilities::HookCapability for KimiAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let parsed = payloads::parse(payload);
+        let parsed: payloads::KimiHookPayload = decode_or_default(payload);
         let ask = kimi_ask_kind(self, event_name, &parsed);
         let questions = kimi_questions(event_name, &parsed);
         let mut decoded = decode_catalog_hook(KIMI_HOOKS, event_name, ask);

@@ -980,7 +980,7 @@ where
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|call| serde_json::from_value(call.clone()).ok())
+        .filter_map(|call| Deserialize::deserialize(call).ok())
         .collect())
 }
 
@@ -997,7 +997,7 @@ where
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|question| serde_json::from_value::<ToolQuestion>(question.clone()).ok())
+        .filter_map(|question| ToolQuestion::deserialize(question).ok())
         .filter(|question| !question.question.trim().is_empty())
         .collect())
 }

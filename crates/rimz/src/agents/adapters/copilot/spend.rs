@@ -436,7 +436,7 @@ where
         .into_iter()
         .flatten()
         .filter_map(|(model, metric)| {
-            serde_json::from_value(metric.clone())
+            Deserialize::deserialize(metric)
                 .ok()
                 .map(|metric| (model.clone(), metric))
         })

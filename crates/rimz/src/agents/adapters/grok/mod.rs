@@ -8,6 +8,7 @@ mod spend;
 mod transcript;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
@@ -373,7 +374,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let canonical = canonical_event_name(event_name);
-        let parsed = payloads::parse(payload);
+        let parsed: payloads::HookPayload = decode_or_default(payload);
         let ask_kind = (canonical == "Notification")
             .then(|| notification_ask(&parsed))
             .flatten();

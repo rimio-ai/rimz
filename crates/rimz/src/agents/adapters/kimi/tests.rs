@@ -149,7 +149,7 @@ fn main_wire_observation(event: &str, records: &[Value]) -> Option<AgentLifecycl
         &KimiAdapter,
         event,
         &payload,
-        &payloads::parse(&payload),
+        &decode_or_default(&payload),
         Some(dir.path()),
         None,
     )

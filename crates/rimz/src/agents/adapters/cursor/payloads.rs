@@ -81,10 +81,6 @@ pub(super) struct CursorHookPayload {
     pub cache_write_tokens: Option<u64>,
 }
 
-pub(super) fn parse_payload(payload: &Value) -> CursorHookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 impl CursorHookPayload {
     pub(super) fn model_param(&self, id: &str) -> Option<&str> {
         self.model_params.iter().find_map(|param| {
@@ -131,6 +127,6 @@ where
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .filter_map(|value| Deserialize::deserialize(value).ok())
         .collect())
 }

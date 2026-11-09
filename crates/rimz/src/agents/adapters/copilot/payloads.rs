@@ -144,10 +144,6 @@ impl CopilotHookError {
     }
 }
 
-pub(super) fn parse_payload(payload: &Value) -> CopilotHookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 fn deserialize_optional_tool_args<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
 where
     D: Deserializer<'de>,
@@ -165,11 +161,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::payload::decode_or_default;
     use serde_json::json;
 
     #[test]
     fn parses_native_and_compatible_field_names() {
-        let native = parse_payload(&json!({
+        let native = decode_or_default::<CopilotHookPayload>(&json!({
             "sessionId": "native",
             "toolName": "edit",
             "toolArgs": { "path": "a.rs" },
@@ -181,7 +178,7 @@ mod tests {
         assert_eq!(native.tool_name.as_deref(), Some("edit"));
         assert_eq!(native.transcript_path.as_deref(), Some("/tmp/events.jsonl"));
 
-        let compatible = parse_payload(&json!({
+        let compatible = decode_or_default::<CopilotHookPayload>(&json!({
             "session_id": "compatible",
             "tool_name": "bash",
             "tool_input": "{\"command\":\"true\"}",
@@ -195,12 +192,16 @@ mod tests {
             Some("/tmp/compatible/events.jsonl")
         );
         assert_eq!(compatible.tool_args, Some(json!({ "command": "true" })));
-        assert!(parse_payload(&json!(null)).session_id.is_none());
+        assert!(
+            decode_or_default::<CopilotHookPayload>(&json!(null))
+                .session_id
+                .is_none()
+        );
     }
 
     #[test]
     fn a_failure_error_string_does_not_discard_the_rest_of_the_payload() {
-        let payload = parse_payload(&json!({
+        let payload = decode_or_default::<CopilotHookPayload>(&json!({
             "sessionId": "session",
             "toolName": "bash",
             "error": "command failed"
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn normalizes_singular_batched_and_mixed_tool_calls() {
-        let singular = parse_payload(&json!({
+        let singular = decode_or_default::<CopilotHookPayload>(&json!({
             "toolName": "bash",
             "toolArgs": "{\"command\":\"true\"}"
         }));
@@ -226,7 +227,7 @@ mod tests {
         assert_eq!(selected.name, Some("bash"));
         assert_eq!(selected.args, Some(&json!({"command":"true"})));
 
-        let batched = parse_payload(&json!({
+        let batched = decode_or_default::<CopilotHookPayload>(&json!({
             "toolCalls": [
                 {"name":"edit","args":{"path":"a.rs"}},
                 {"toolName":"ask_user","toolArgs":"{\"question\":\"Ship?\"}"}
@@ -238,7 +239,7 @@ mod tests {
         assert_eq!(selected.args, Some(&json!({"question":"Ship?"})));
         assert!(calls.any_named(&["edit"]));
 
-        let mixed = parse_payload(&json!({
+        let mixed = decode_or_default::<CopilotHookPayload>(&json!({
             "toolName":"view",
             "toolCalls":[{"name":"create","args":"{\"path\":\"b.rs\"}"}]
         }));

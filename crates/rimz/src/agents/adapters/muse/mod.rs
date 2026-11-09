@@ -17,6 +17,7 @@ use crate::agents::definition::{
     SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use crate::agents::hook_types::{HookEventSpec, decode_catalog_hook};
+use crate::agents::payload::decode_or_default;
 use crate::agents::{
     AgentLifecycleObservation, AgentSpec, AskKind, HookIngressAcceptance, HookIngressDecision,
     HookIngressIgnoreReason, HookOutput, HookRouting, LifecycleSignal, Result, SanitizedPrompt,
@@ -316,7 +317,7 @@ impl HookCapability for MuseAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let parsed = payloads::parse(payload);
+        let parsed: payloads::HookPayload = decode_or_default(payload);
         let ask = (event_name == "PermissionRequest").then_some(AskKind::Permission);
         let mut decoded = decode_catalog_hook(MUSE_HOOKS, event_name, ask);
         let agent_id = parsed.session_id.map(AgentSessionId::from);

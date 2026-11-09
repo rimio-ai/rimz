@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits};
@@ -600,7 +601,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             "thread/read",
             json!({ "threadId": session_id, "includeTurns": false }),
         )?;
-        let parsed: ThreadReadResponse = serde_json::from_value(result.clone())
+        let parsed: ThreadReadResponse = Deserialize::deserialize(&result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
         Ok(parsed
             .thread

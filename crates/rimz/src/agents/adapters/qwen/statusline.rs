@@ -95,7 +95,7 @@ where
     Ok(models
         .iter()
         .filter_map(|(model, value)| {
-            serde_json::from_value(value.clone())
+            Deserialize::deserialize(value)
                 .ok()
                 .map(|metrics| (model.clone(), metrics))
         })

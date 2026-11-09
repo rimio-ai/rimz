@@ -146,14 +146,6 @@ pub struct CodexPostCompact {
     pub trigger: CompactTrigger,
 }
 
-// ── Parse helpers ──────────────────────────────────────────────────────────
-
-/// Parse one typed hook payload, defaulting every field when the payload does
-/// not fit the type.
-pub(super) fn parse<T: serde::de::DeserializeOwned + Default>(payload: &Value) -> T {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -162,29 +154,30 @@ mod tests {
 
     use super::*;
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
+    use crate::agents::payload::decode_or_default;
 
     #[test]
     fn wire_catalog_parses_flatten_depth_enums_and_tolerates_drift() {
         // The doubly-flattened common fields reach through `common.common`, an
         // unknown future field is ignored, and the session-source enum maps.
-        let session: CodexSessionStart = parse(&json!({
+        let session: CodexSessionStart = decode_or_default(&json!({
             "session_id": "s1",
             "source": "startup",
             "future_openai_field": true,
         }));
         assert_eq!(session.source, SessionSource::Startup);
         assert_eq!(
-            parse::<CodexSessionStart>(&json!({"source": "compact"})).source,
+            decode_or_default::<CodexSessionStart>(&json!({"source": "compact"})).source,
             SessionSource::Compact
         );
 
         // `#[serde(default)]` makes a sparse payload deserialize cleanly.
-        let sparse: CodexStop = parse(&json!({}));
+        let sparse: CodexStop = decode_or_default(&json!({}));
         assert_eq!(sparse.last_assistant_message, None);
 
         // The richer tool/subagent/compaction catalog entries pick up their
         // enrichment fields and map the compaction-trigger enum.
-        let subagent: CodexSubagentStop = parse(&json!({
+        let subagent: CodexSubagentStop = decode_or_default(&json!({
             "agent_id": "child-1",
             "agent_type": "code-reviewer",
             "agent_transcript_path": "/tmp/child.jsonl",
@@ -200,7 +193,7 @@ mod tests {
         assert_eq!(subagent.stop_hook_active, Some(true));
         assert_eq!(subagent.last_assistant_message.as_deref(), Some("done"));
         assert!(
-            parse::<CodexPermissionRequest>(&json!({
+            decode_or_default::<CodexPermissionRequest>(&json!({
                 "session_id": "root",
                 "agent_id": "child-1",
                 "agent_type": "reviewer",
@@ -210,7 +203,7 @@ mod tests {
             .tool_input
             .is_some()
         );
-        let prompt: CodexUserPromptSubmit = parse(&json!({
+        let prompt: CodexUserPromptSubmit = decode_or_default(&json!({
             "session_id": "root",
             "agent_id": "child-1",
             "agent_type": "reviewer",
@@ -218,7 +211,7 @@ mod tests {
         }));
         assert_eq!(prompt.child.agent_id.as_deref(), Some("child-1"));
         assert_eq!(
-            parse::<CodexPostCompact>(&json!({"trigger": "manual"})).trigger,
+            decode_or_default::<CodexPostCompact>(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
         );
 

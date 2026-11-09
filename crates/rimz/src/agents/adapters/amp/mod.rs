@@ -8,6 +8,7 @@ mod account;
 mod payloads;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -279,7 +280,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
         let mut decoded = decode_catalog_hook(AMP_HOOKS, event_name, ask_kind);
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::AmpHookPayload = decode_or_default(payload);
         let session_id = parsed
             .session_id
             .as_deref()

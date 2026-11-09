@@ -1,7 +1,6 @@
 //! Tolerant Grok Build hook payloads.
 
 use serde::Deserialize;
-use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -32,10 +31,6 @@ pub(super) struct HookPayload {
     pub subagent_id: Option<String>,
     pub subagent_type: Option<String>,
     pub description: Option<String>,
-}
-
-pub(super) fn parse(payload: &Value) -> HookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
 }
 
 pub(super) fn notification_label(payload: &HookPayload) -> Option<&str> {

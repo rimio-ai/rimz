@@ -138,15 +138,6 @@ pub struct ClaudePermissionRequest {
     pub tool_name: Option<String>,
 }
 
-// ── Parse helpers ──────────────────────────────────────────────────────────
-//
-// Returns `T::default()` on deserialization failure, matching the current
-// silent-`None` behavior of the raw `payload.get("field").and_then(...)` chains.
-
-pub(super) fn parse<T: serde::de::DeserializeOwned + Default>(payload: &Value) -> T {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -155,13 +146,14 @@ mod tests {
 
     use super::*;
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
+    use crate::agents::payload::decode_or_default;
 
     /// The parse layer's job beyond serde field-mapping: flatten nested common
     /// fields to depth, fall back on unknown enum variants, tolerate future keys
     /// and sparse payloads, and carry typed vecs / trigger enums.
     #[test]
     fn parse_helpers_flatten_default_and_tolerate_drift() {
-        let session = parse::<ClaudeSessionStart>(&json!({
+        let session = decode_or_default::<ClaudeSessionStart>(&json!({
             "session_id": "sess-1",
             "model": "claude-opus-4-8",
             "source": "startup",
@@ -172,16 +164,16 @@ mod tests {
         assert_eq!(session.source, SessionSource::Startup);
         // An unknown source variant falls back rather than failing the parse.
         assert_eq!(
-            parse::<ClaudeSessionStart>(&json!({"source": "brand_new_source"})).source,
+            decode_or_default::<ClaudeSessionStart>(&json!({"source": "brand_new_source"})).source,
             SessionSource::Unknown
         );
 
-        let sparse = parse::<ClaudeStop>(&json!({}));
+        let sparse = decode_or_default::<ClaudeStop>(&json!({}));
         assert!(sparse.background_tasks.is_none());
         assert!(sparse.session_crons.is_empty());
         assert_eq!(sparse.common.common.session_id, None);
 
-        let stop = parse::<ClaudeStop>(&json!({
+        let stop = decode_or_default::<ClaudeStop>(&json!({
             "background_tasks": [
                 {"id": "t1", "status": "running", "description": "linting"},
                 {"id": "t2", "status": "completed", "description": "done"}
@@ -201,7 +193,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse::<ClaudePostCompact>(&json!({"trigger": "manual"})).trigger,
+            decode_or_default::<ClaudePostCompact>(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
         );
     }

@@ -19,6 +19,7 @@ use crate::agents::{
     AgentLifecycleObservation, AskKind, HookOutput, HookRouting, LifecycleSignal, PresetArgMatcher,
     Result, SanitizedPrompt, optional_payload_string, sanitize_user_prompt,
 };
+use serde::Deserialize;
 use serde_json::Value;
 
 static MINIMAX_SPEC: AgentSpec = AgentSpec {
@@ -381,7 +382,7 @@ impl HookCapability for MiniMaxAdapter {
         decoded.set_routing(HookRouting::session(agent_id.clone()));
         let turn_id = optional_payload_string(payload, &["turn_id"]);
         let signal = match event_name {
-            "SessionStart" => serde_json::from_value::<SessionSource>(payload["source"].clone())
+            "SessionStart" => SessionSource::deserialize(&payload["source"])
                 .unwrap_or_default()
                 .session_start_signal(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id },
@@ -408,7 +409,7 @@ impl HookCapability for MiniMaxAdapter {
             },
             "PreCompact" => LifecycleSignal::Compacting,
             "PostCompact" => LifecycleSignal::CompactionEnded {
-                auto: serde_json::from_value::<CompactTrigger>(payload["trigger"].clone())
+                auto: CompactTrigger::deserialize(&payload["trigger"])
                     .unwrap_or_default()
                     .auto_flag(),
                 failed: false,
