@@ -360,3 +360,45 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         "seed"
     );
 }
+
+#[test]
+fn a_plane_reports_an_essential_lane_once_its_thread_ends() {
+    for ending in ["fetch worker", "cache refresher"] {
+        let (end_fetch, fetch_ends) = std::sync::mpsc::channel::<()>();
+        let (end_refresh, refresh_ends) = std::sync::mpsc::channel::<()>();
+        let plane = DataPlane::with_lanes(
+            move || {
+                let _ = fetch_ends.recv();
+            },
+            move || {
+                let _ = refresh_ends.recv();
+            },
+        );
+        assert_eq!(plane.ended_lane(), None, "lanes not yet started");
+        let _subscription = plane.subscribe(
+            &serve_config(&workspace()),
+            std::sync::mpsc::sync_channel(8).0,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(plane.ended_lane(), None, "both lanes still run");
+
+        let (mut fetch, mut refresh) = (Some(end_fetch), Some(end_refresh));
+        if ending == "fetch worker" {
+            fetch = None;
+        } else {
+            refresh = None;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while plane.ended_lane().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(plane.ended_lane(), Some(ending));
+        drop((fetch, refresh));
+    }
+    let detached = DataPlane::detached();
+    let _subscription = detached.subscribe(
+        &serve_config(&workspace()),
+        std::sync::mpsc::sync_channel(8).0,
+    );
+    assert_eq!(detached.ended_lane(), None, "a detached plane has no lanes");
+}

@@ -1608,3 +1608,27 @@ fn summary_attributes_row_presence_gap_at_missing_edge() {
         "observed row_presence_flap on agent:a; gap 15ms; pulled row present=true; pulled pane present=true"
     );
 }
+
+#[test]
+fn lost_terminal_input_is_its_own_host_unavailable_cause_on_the_wire() {
+    let event = DiagEvent::SidebarHostUnavailable {
+        cause: SidebarHostUnavailableCause::InputLost,
+        reason: String::new(),
+        attached_ms: Some(1_500),
+        retry_ms: 1_000,
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+    assert_eq!(wire["cause"], "input_lost");
+    let decoded = serde_json::from_value::<DiagEvent>(wire).unwrap();
+    assert_eq!(decoded.identity_key(), event.identity_key());
+    assert_ne!(
+        event.identity_key(),
+        DiagEvent::SidebarHostUnavailable {
+            cause: SidebarHostUnavailableCause::Lost,
+            reason: String::new(),
+            attached_ms: Some(1_500),
+            retry_ms: 1_000,
+        }
+        .identity_key()
+    );
+}

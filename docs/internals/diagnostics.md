@@ -115,7 +115,7 @@ The carry kinds attribute a pane-source fault precisely, and the distinction mat
 
 The supervisor kinds come from `sidebar_pane::supervise`, which holds one tab's sidebar pane and attaches it to the room host ([state.md](./sidebar/state.md#host-unavailable)).
 
-- `sidebar_host_unavailable` records one failed host round. `cause` is `start_failed`, `no_answer`, `rejected`, `reply_unreadable`, or `lost`. `reason` is the raw rejection text or the start error and log suffix, and empty for the fixed-message causes. `attached_ms` is present only for a lost accepted attachment, measured before detach cleanup. `retry_ms` is the delay about to be slept.
+- `sidebar_host_unavailable` records one failed host round. `cause` is `start_failed`, `no_answer`, `rejected`, `reply_unreadable`, `lost`, or `input_lost`. `reason` is the raw rejection text or the start error and log suffix, and empty for the fixed-message causes. `attached_ms` is present only for an accepted attachment that was lost or whose input stopped, measured before detach cleanup. `retry_ms` is the delay about to be slept.
 - `supervisor_pane_gone` carries `pane_id` when the watchdog confirms the pane is gone and supervision ends.
 - `supervisor_convergence` carries `target_build` before preflight. It is not proof that exec succeeded, and a refusal follows as `supervisor_preflight_rejected` with its reason.
 - `renderer_exit` carries `cause: self_close_empty_tab` for a confirmed self-close. Retained logs also hold `degraded_gave_up`, a cause no current code writes.

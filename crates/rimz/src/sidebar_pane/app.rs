@@ -56,7 +56,7 @@ pub(super) use self::backend::PaneBackend;
 pub(super) use self::backend::tests::Pty;
 pub(super) use self::input::{Wakeup, decode_wakeup};
 pub(super) use self::plane::{DataPlane, RoomEvents};
-pub(super) use self::socket::EventForwarder;
+pub(super) use self::socket::{EventForwarder, ForwarderEnd};
 
 #[cfg(feature = "testkit")]
 pub use fetch::{ConcurrentFanout, FanoutThread, IdleCycleFixture};

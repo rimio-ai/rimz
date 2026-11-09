@@ -38,7 +38,7 @@ mod heal;
 #[cfg(feature = "testkit")]
 pub use concurrent::{ConcurrentFanout, FanoutThread};
 
-/// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery.
+/// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery, as an unwind elsewhere in the cycle does by ending the worker.
 ///
 /// The cursor may be torn and is reset. Producer attempts and accepted inputs remain committed in memory; metrics replace their history only after a completed sample, and projection publication records success only after the atomic write.
 fn run_produce_guarded<T>(

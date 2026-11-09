@@ -31,7 +31,11 @@ fn link_to_a_host_saying(controls: Vec<Control>) -> HostLink {
     HostLink::open(pane, &hello, output.as_fd(), Duration::from_secs(10)).unwrap()
 }
 
-fn watch(mut link: HostLink) -> RoundExit {
+fn watch(link: HostLink) -> RoundExit {
+    watch_ending(link, None)
+}
+
+fn watch_ending(mut link: HostLink, forwarder_end: Option<ForwarderEnd>) -> RoundExit {
     let workspace = crate::sidebar_pane::app::fixtures::workspace();
     watch_host(
         &mut link,
@@ -44,7 +48,81 @@ fn watch(mut link: HostLink) -> RoundExit {
             watchdog: &mut PaneWatchdog::from_config(&supervisor_config(&workspace)),
             stopped: &AtomicBool::new(false),
         },
+        || forwarder_end,
     )
+}
+
+/// A host that says `controls` and then stays connected and silent until the sender drops.
+fn link_to_a_host_holding(controls: Vec<Control>) -> (HostLink, std::sync::mpsc::Sender<()>) {
+    use crate::sidebar_pane::attach::{self, ControlLine, Reply};
+    use std::os::fd::AsFd;
+
+    let (pane, host) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (hold, held) = std::sync::mpsc::channel::<()>();
+    let config = supervisor_config(&crate::sidebar_pane::app::fixtures::workspace());
+    thread::spawn(move || {
+        let _hello = attach::recv_hello(&host).unwrap().unwrap();
+        attach::write_line(&host, &Reply::Accept { build: None }).unwrap();
+        for control in controls {
+            attach::write_line(&host, &ControlLine { control }).unwrap();
+        }
+        let _ = held.recv();
+    });
+    let hello = host_link::hello_for(&config, None, None);
+    let output = std::fs::File::create("/dev/null").unwrap();
+    let link = HostLink::open(pane, &hello, output.as_fd(), Duration::from_secs(10)).unwrap();
+    (link, hold)
+}
+
+/// The round's outcome against a held host, or `None` when it has not ended in 5 s.
+fn round_with_forwarder_end(controls: Vec<Control>, end: ForwarderEnd) -> Option<RoundExit> {
+    let (link, _hold) = link_to_a_host_holding(controls);
+    let (done, outcome) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = done.send(watch_ending(link, Some(end)));
+    });
+    outcome.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn a_forwarder_whose_terminal_failed_ends_the_round_as_input_lost() {
+    assert_eq!(
+        round_with_forwarder_end(Vec::new(), ForwarderEnd::Input),
+        Some(RoundExit::InputLost)
+    );
+}
+
+#[test]
+fn a_forwarder_whose_stream_failed_ends_the_round_as_host_lost() {
+    assert_eq!(
+        round_with_forwarder_end(Vec::new(), ForwarderEnd::Stream),
+        Some(RoundExit::HostLost)
+    );
+}
+
+#[test]
+fn a_host_word_in_the_same_poll_decides_over_a_forwarder_end() {
+    assert_eq!(
+        round_with_forwarder_end(vec![Control::Reload], ForwarderEnd::Stream),
+        Some(RoundExit::Reload)
+    );
+}
+
+#[test]
+fn lost_terminal_input_has_its_own_notice_and_cause() {
+    let (cause, reason) = AttachFailure::InputLost.diagnostic();
+    assert_eq!(
+        (
+            AttachFailure::InputLost.to_string(),
+            serde_json::to_value(cause).unwrap(),
+            reason
+        ),
+        (
+            "terminal input stopped".to_owned(),
+            serde_json::json!("input_lost"),
+            String::new()
+        )
+    );
 }
 
 #[test]

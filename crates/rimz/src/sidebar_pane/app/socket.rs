@@ -3,8 +3,8 @@
 use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::RuntimePaths;
@@ -52,9 +52,19 @@ pub(super) fn send_input(stream: &mut UnixStream, word: &str) -> io::Result<()> 
     stream.write_all(format!("{word}\n").as_bytes())
 }
 
+/// Why a forwarder stopped forwarding before it was asked to stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) enum ForwarderEnd {
+    /// The terminal's event source failed.
+    Input,
+    /// The attach stream failed or tore a word.
+    Stream,
+}
+
 /// The supervisor's terminal input forwarding for one host attachment.
 pub(in crate::sidebar_pane) struct EventForwarder {
     stop: Arc<AtomicBool>,
+    ended: Arc<OnceLock<ForwarderEnd>>,
     thread: std::thread::JoinHandle<()>,
 }
 
@@ -64,10 +74,23 @@ impl EventForwarder {
         let _ = send_input(&mut stream, "resize");
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let ended = Arc::new(OnceLock::new());
+        let end = ended.clone();
         let thread = std::thread::spawn(move || {
-            forward_events(stream, FORWARDER_STOP_POLL, &stopped);
+            if let Some(reason) = forward_events(stream, FORWARDER_STOP_POLL, &stopped) {
+                let _ = end.set(reason);
+            }
         });
-        Self { stop, thread }
+        Self {
+            stop,
+            ended,
+            thread,
+        }
+    }
+
+    /// Why the forwarder ended on its own, once it has.
+    pub(in crate::sidebar_pane) fn ended(&self) -> Option<ForwarderEnd> {
+        self.ended.get().copied()
     }
 
     /// Returns once the thread has left the terminal's event source.
@@ -77,7 +100,12 @@ impl EventForwarder {
     }
 }
 
-fn forward_events(mut stream: UnixStream, poll: Duration, stop: &AtomicBool) {
+/// Forward until stopped (`None`) or until the terminal or the stream fails.
+fn forward_events(
+    mut stream: UnixStream,
+    poll: Duration,
+    stop: &AtomicBool,
+) -> Option<ForwarderEnd> {
     while !stop.load(Ordering::SeqCst) {
         let encoded = match event::poll(poll) {
             Ok(true) => match event::read() {
@@ -89,13 +117,13 @@ fn forward_events(mut stream: UnixStream, poll: Duration, stop: &AtomicBool) {
                 Ok(_) => None,
                 Err(err) => {
                     warn!(error = %err, "event waker stopping: event read failed");
-                    return;
+                    return Some(ForwarderEnd::Input);
                 }
             },
             Ok(false) => None,
             Err(err) => {
                 warn!(error = %err, "event waker stopping: event poll failed");
-                return;
+                return Some(ForwarderEnd::Input);
             }
         };
         if let Some(encoded) = encoded
@@ -105,7 +133,8 @@ fn forward_events(mut stream: UnixStream, poll: Duration, stop: &AtomicBool) {
                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
             )
         {
-            return;
+            return Some(ForwarderEnd::Stream);
         }
     }
+    None
 }

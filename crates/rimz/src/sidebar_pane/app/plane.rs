@@ -37,9 +37,18 @@ pub(in crate::sidebar_pane) struct DataPlane {
     fit: Option<super::focus_push::FitView>,
     /// The plane's threads, until the first pane starts them.
     lanes: Mutex<Option<Lanes>>,
+    /// The started lanes whose end ends the host.
+    essential: Mutex<Option<EssentialLanes>>,
 }
 
-type Lanes = Box<dyn FnOnce() + Send>;
+type Lanes = Box<dyn FnOnce() -> EssentialLanes + Send>;
+
+/// The fetch worker and the cache refresher. Neither returns while the plane
+/// lives, so a finished thread is one that unwound.
+struct EssentialLanes {
+    fetch: std::thread::JoinHandle<()>,
+    refresh: std::thread::JoinHandle<()>,
+}
 
 #[derive(Clone)]
 pub(in crate::sidebar_pane) struct RoomEvents {
@@ -185,7 +194,7 @@ impl DataPlane {
             if diag.is_enabled() {
                 observe::writer::spawn(runtime.clone(), diag.clone(), observe_rx);
             }
-            spawn_fetch_worker(
+            let fetch = spawn_fetch_worker(
                 config.clone(),
                 runtime.clone(),
                 diag.clone(),
@@ -196,7 +205,7 @@ impl DataPlane {
                 host_data.clone(),
                 observer,
             );
-            cache_refresh::spawn(
+            let refresh = cache_refresh::spawn(
                 config.clone(),
                 runtime.clone(),
                 diag.clone(),
@@ -225,6 +234,7 @@ impl DataPlane {
             }
             // The host watches every session whose adapter declares transcript-tail context, so mid-turn token and cost updates repaint without waiting for the next hook or tick. Latency only: the tick backstop stays truth.
             transcript_watch::spawn(runtime);
+            EssentialLanes { fetch, refresh }
         });
         *lock(&plane.lanes) = Some(lanes);
         plane
@@ -250,6 +260,7 @@ impl DataPlane {
             observe_tx,
             fit: None,
             lanes: Mutex::new(None),
+            essential: Mutex::new(None),
         };
         (plane, request_rx, observe_rx)
     }
@@ -258,6 +269,33 @@ impl DataPlane {
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn detached() -> Self {
         Self::idle().0
+    }
+
+    /// A detached plane whose first pane starts `fetch` and `refresh` as its essential lanes.
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn with_lanes(
+        fetch: impl FnOnce() + Send + 'static,
+        refresh: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        let plane = Self::idle().0;
+        *lock(&plane.lanes) = Some(Box::new(move || EssentialLanes {
+            fetch: std::thread::spawn(fetch),
+            refresh: std::thread::spawn(refresh),
+        }));
+        plane
+    }
+
+    /// The essential lane that has ended, if any. Lanes not yet started count as alive.
+    pub(in crate::sidebar_pane) fn ended_lane(&self) -> Option<&'static str> {
+        let essential = lock(&self.essential);
+        let lanes = essential.as_ref()?;
+        if lanes.fetch.is_finished() {
+            Some("fetch worker")
+        } else if lanes.refresh.is_finished() {
+            Some("cache refresher")
+        } else {
+            None
+        }
     }
 
     #[cfg(test)]
@@ -307,18 +345,16 @@ impl DataPlane {
             // Room workers inherit their creator's Linux comm. Keep their CPU out of the
             // attachment samples by starting them from a separately named thread.
             let mut pending = Some(start);
-            std::thread::scope(|scope| {
-                let _ = std::thread::Builder::new()
+            let started = std::thread::scope(|scope| {
+                let thread = std::thread::Builder::new()
                     .name("rimz-plane".into())
-                    .spawn_scoped(scope, || {
-                        if let Some(start) = pending.take() {
-                            start();
-                        }
-                    });
+                    .spawn_scoped(scope, || pending.take().map(|start| start()))
+                    .ok()?;
+                thread
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
             });
-            if let Some(start) = pending {
-                start();
-            }
+            *lock(&self.essential) = started.or_else(|| pending.map(|start| start()));
         }
         Subscription {
             fetch: FetchHandle::new(self.request_tx.clone(), completion),
