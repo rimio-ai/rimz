@@ -10,7 +10,7 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
-use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+use crate::agents::state::{SoftCompactMark, SoftCompactProgress, TransitionMode};
 use crate::agents::{AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -986,8 +986,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         (input.event_name == Some("rimz.agent-resumed")).then_some(input.event.timestamp);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
-    let state_snapshot = input.observation.state_snapshot == Some(true);
-    let ends_session_shells = !state_snapshot
+    let mode = crate::store::message::transition_mode(input.observation);
+    let snapshot = mode == TransitionMode::Snapshot;
+    let ends_session_shells = !snapshot
         && matches!(
             &input.signal,
             lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
@@ -999,7 +1000,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.signal,
         input.observation.prompt.as_deref(),
         input.observation.ask_queue.as_ref(),
-        state_snapshot,
+        mode,
     );
     if ended_at.is_some()
         && crate::store::session_death::reaped_end_rests_at_idle(
@@ -1118,7 +1119,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if ends_session_shells {
         state.background_shells.clear();
     }
-    if !state_snapshot && let Some(report) = &input.observation.background_shells {
+    if !snapshot && let Some(report) = &input.observation.background_shells {
         report.apply(&mut state.background_shells);
     }
     state.trim_ended_text();
@@ -1315,7 +1316,7 @@ fn fold_lifecycle(
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
     ask_queue: Option<&crate::agents::AskQueueEdit>,
-    state_snapshot: bool,
+    mode: TransitionMode,
 ) -> bool {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
@@ -1325,19 +1326,14 @@ fn fold_lifecycle(
         opened_turn,
         ping,
         ..
-    } = AgentState::transition(
-        prior,
-        &signal,
-        prompt.is_some_and(crate::store::message::prompt_is_keepalive_only),
-        state_snapshot,
-    );
+    } = AgentState::transition(prior, &signal, mode);
     if let (Some(edge), Some(prior)) = (ping, prior) {
         carry_across_ping(state, prior, timestamp, edge);
         return false;
     }
     state.status = next.status;
     state.phase = next.phase;
-    if state_snapshot {
+    if mode == TransitionMode::Snapshot {
         if let Some(prior) = prior {
             state.registered_at = prior.registered_at;
             state.turn_ended_at = prior.turn_ended_at;
@@ -1456,8 +1452,7 @@ fn fold_lifecycle(
     // Any other prompt ends the run even when it resumes a parked row. An inert
     // ping opens its run in `carry_across_ping`, including on a parked row.
     let turn_started = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. });
-    let keepalive_turn =
-        turn_started && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only);
+    let keepalive_turn = turn_started && mode == TransitionMode::KeepaliveEdge;
     if turn_started && !keepalive_turn {
         state.last_prompt_at = Some(timestamp);
     }

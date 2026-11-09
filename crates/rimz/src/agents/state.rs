@@ -1375,6 +1375,19 @@ fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
+/// How [`AgentState::transition`] reads an observation, as the store
+/// classifies it once. A snapshot reports current state, so it carries no
+/// keepalive reading: snapshot precedes keepalive by construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransitionMode {
+    /// An ordinary lifecycle edge.
+    Edge,
+    /// An edge whose prompt is made only of cache-keepalive sections.
+    KeepaliveEdge,
+    /// A current-state report: no edge, no compaction-bracket close.
+    Snapshot,
+}
+
 impl AgentState {
     /// Prefer the provider's live fast-mode reading over the launch setting.
     pub fn fast_mode(&self) -> bool {
@@ -1876,16 +1889,16 @@ impl AgentState {
     /// (opened from rest by a prompt that is only cache-keepalive pings) is no
     /// work of the agent's: its open and its close are no-ops for the lifecycle,
     /// so every audit row and derived signal sees the agent exactly as it was.
-    /// `keepalive_prompt` says the signal's prompt is made only of keepalive
-    /// sections, as the store classifies it. `state_snapshot` reports current
-    /// state without taking an edge or closing a compaction bracket.
+    /// The store classifies the `mode`: a [`TransitionMode::Snapshot`] reports
+    /// current state without taking an edge or closing a compaction bracket,
+    /// whatever its prompt; a [`TransitionMode::KeepaliveEdge`] carries a
+    /// prompt made only of keepalive sections.
     pub(crate) fn transition(
         prior: Option<&Self>,
         signal: &LifecycleSignal,
-        keepalive_prompt: bool,
-        state_snapshot: bool,
+        mode: TransitionMode,
     ) -> Transition {
-        if state_snapshot {
+        if mode == TransitionMode::Snapshot {
             return Self::snapshot_transition(prior.map(Self::lifecycle).as_ref(), signal);
         }
         let stepped = lifecycle::step(
@@ -1905,7 +1918,7 @@ impl AgentState {
         let ping = match signal {
             LifecycleSignal::TurnStarted { .. } if !stale => ((prior.ping_turn
                 || (prior.rests_in_lifecycle() && prior.compacting_since.is_none()))
-                && keepalive_prompt)
+                && mode == TransitionMode::KeepaliveEdge)
                 .then_some(PingEdge::Open),
             LifecycleSignal::TurnEnded { turn_id, .. }
             | LifecycleSignal::TurnInterrupted { turn_id }

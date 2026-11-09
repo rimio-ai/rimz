@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::state::TransitionMode;
 use crate::agents::{AgentLifecycleObservation, AskKind, LifecycleSignal};
 
 fn fixture(state: RaisedAskState) -> (tempfile::TempDir, StatePaths, Entry<RaisedAsk>) {
@@ -58,7 +59,8 @@ fn observe(
         "session",
         crate::agents::AgentStatus::Running,
     );
-    let transition = AgentState::transition(Some(&prior), &observation.signal, false, false);
+    let transition =
+        AgentState::transition(Some(&prior), &observation.signal, TransitionMode::Edge);
     super::observe(paths, kind, observation, Some(transition), at, human, reply)
 }
 

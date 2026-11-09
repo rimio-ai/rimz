@@ -347,11 +347,7 @@ fn lifecycle_transition(
     Some(AgentState::transition(
         prior,
         &observation.signal,
-        observation
-            .prompt
-            .as_deref()
-            .is_some_and(crate::store::message::prompt_is_keepalive_only),
-        observation.state_snapshot == Some(true),
+        crate::store::message::transition_mode(observation),
     ))
 }
 
@@ -363,7 +359,7 @@ fn derive_lifecycle_events(
     login: Option<&LoginName>,
     staged: &mut Vec<StagedLifecycleEvent>,
 ) {
-    if intent.observation.state_snapshot == Some(true) {
+    if intent.observation.is_state_snapshot() {
         return;
     }
     if matches!(

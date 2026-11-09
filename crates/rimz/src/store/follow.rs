@@ -281,7 +281,7 @@ impl EventFollower {
             let kind = AgentKind::new_unchecked(envelope.source.clone());
             let key = (kind.clone(), agent_id.clone());
             let prior = self.states.get(&key);
-            if observation.state_snapshot == Some(true) {
+            if observation.is_state_snapshot() {
                 let next = AgentState::snapshot_transition(
                     prior.map(|state| &state.lifecycle),
                     &observation.signal,

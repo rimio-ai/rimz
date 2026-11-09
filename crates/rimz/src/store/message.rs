@@ -7,7 +7,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentCardRef, AgentState, AgentStatus};
+use crate::agents::state::TransitionMode;
+use crate::agents::{AgentCardRef, AgentLifecycleObservation, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, RunId, WorkspaceId};
 use crate::transcript::SectionOrigin;
 
@@ -1411,6 +1412,20 @@ pub fn prompt_is_keepalive_only(prompt: &str) -> bool {
             parse_message_header(section.trim_start())
                 .is_some_and(|(kind, ..)| kind == HeaderKind::Notice(HarnessNotice::CacheKeepalive))
         })
+}
+
+/// How the lifecycle reads an observation: a state snapshot first, then a
+/// keepalive-only prompt's edge, else an ordinary edge.
+pub(super) fn transition_mode(observation: &AgentLifecycleObservation) -> TransitionMode {
+    let keepalive = observation
+        .prompt
+        .as_deref()
+        .is_some_and(prompt_is_keepalive_only);
+    match (observation.is_state_snapshot(), keepalive) {
+        (true, _) => TransitionMode::Snapshot,
+        (false, true) => TransitionMode::KeepaliveEdge,
+        (false, false) => TransitionMode::Edge,
+    }
 }
 
 /// True when every section of a non-blank prompt is a `WAIT` or `SIGNAL` wake notice.

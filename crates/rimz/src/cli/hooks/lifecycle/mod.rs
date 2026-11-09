@@ -111,7 +111,7 @@ pub(super) fn handle_lifecycle_frame(
             )?;
             let derived = if let Some(recorded) = recorded.as_ref().filter(|recorded| {
                 recorded.receipt.side_conversation.is_none()
-                    && recorded.observation.state_snapshot != Some(true)
+                    && !recorded.observation.is_state_snapshot()
                     && recorded.observation.agent_id.is_some()
                     && recorded.observation.parent_agent_id.is_none()
             }) {
@@ -130,7 +130,7 @@ pub(super) fn handle_lifecycle_frame(
         })?
     };
     if let Some(recorded) = recorded.as_ref()
-        && recorded.observation.state_snapshot == Some(true)
+        && recorded.observation.is_state_snapshot()
     {
         merge_observed_context(store, agent, decoded);
         if recorded.receipt.rotation_due {
