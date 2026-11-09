@@ -113,7 +113,7 @@ max-items = 3
 
 ## Ending a pass
 
-After the final rebase, set the contract's `base` to the branch's new merge base and run `atlas diff --expect` again; trunk commits otherwise count as changed paths.
+After the final rebase, set the contract's `base` to the branch's new merge base and run `atlas diff --expect` again; trunk commits otherwise count as changed paths. Then confirm the pass label is still unused in trunk's ledger and commit subjects, relabel if not, and re-cite every ledger row's commit hash from the rebased branch.
 
 The last commit, `docs(refactor): record pass N`, carries the durable state, every number measured on the tree it ships:
 
