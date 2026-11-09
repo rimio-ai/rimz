@@ -18,8 +18,7 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    FetchHandle, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
-    spawn_fetch_worker,
+    FetchHandle, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, spawn_fetch_worker,
 };
 use super::input::Wakeup;
 use super::{RoomConfig, ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
@@ -203,7 +202,7 @@ impl DataPlane {
                 diag.clone(),
                 host_data,
                 requests,
-                move || lock(&subscribers).values().next().map(data_tick),
+                subscribers,
             );
             // tmux fast path: record control-mode events once and fan out in memory. The plane
             // asks the producer to verify structural changes; the poll stays the presence backstop.

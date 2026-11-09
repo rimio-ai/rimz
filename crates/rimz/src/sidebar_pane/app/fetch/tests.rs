@@ -4021,39 +4021,68 @@ fn completion_and_wakes_use_frozen_membership_but_content_is_room_shared() {
 }
 
 #[test]
-fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
+fn the_room_tick_is_the_shortest_subscribed_tick() {
     let fixture = FetchFixture::new();
-    let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 60, wake_channel().0);
-    let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 1, wake_channel().0);
-    subscribe(&subscribers, eldest);
-    subscribe(&subscribers, younger);
-    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
-
-    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(60));
-    unsubscribe(&subscribers, "01");
-    sink.begin_cycle();
-    assert_eq!(
-        data_tick(&sink.cycle[0]),
-        Duration::from_secs(1),
-        "the next eldest's tick takes over"
-    );
+    let tick = |subscribers: &Subscribers| room_tick(subscribers.lock().unwrap().values());
+    for (ticks, shortest) in [([60, 1], "02"), ([1, 60], "01")] {
+        let subscribers = Subscribers::default();
+        assert_eq!(tick(&subscribers), None, "no subscriber, no tick");
+        let (eldest, _eldest_rx) =
+            subscriber(&fixture, "01", "terminal_7", ticks[0], wake_channel().0);
+        let (younger, _younger_rx) =
+            subscriber(&fixture, "02", "terminal_8", ticks[1], wake_channel().0);
+        subscribe(&subscribers, eldest);
+        subscribe(&subscribers, younger);
+        assert_eq!(
+            tick(&subscribers),
+            Some(Duration::from_secs(1)),
+            "{ticks:?}"
+        );
+        unsubscribe(&subscribers, shortest);
+        assert_eq!(
+            tick(&subscribers),
+            Some(Duration::from_secs(60)),
+            "the remaining pane's tick takes over ({ticks:?})"
+        );
+    }
 }
 
 #[test]
-fn the_worker_tick_follows_age_not_magnitude() {
-    let fixture = FetchFixture::new();
-    let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 1, wake_channel().0);
-    let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 60, wake_channel().0);
-    subscribe(&subscribers, eldest);
-    subscribe(&subscribers, younger);
-    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
+fn production_starts_at_the_shortest_subscribed_tick_in_either_order() {
+    for ticks in [[60, 1], [1, 60]] {
+        let fixture = FetchFixture::new();
+        let frame = crate::sidebar::frame::assemble_frame(
+            vec![pane("terminal_7", "tab_1")],
+            crate::utils::time::unix_now_ms() - 3_000,
+            "rimz-test",
+        );
+        fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
+        let subscribers = Subscribers::default();
+        let (eldest, _eldest_rx) =
+            subscriber(&fixture, "01", "terminal_7", ticks[0], wake_channel().0);
+        let (younger, _younger_rx) =
+            subscriber(&fixture, "02", "terminal_8", ticks[1], wake_channel().0);
+        subscribe(&subscribers, eldest);
+        subscribe(&subscribers, younger);
+        let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
+        let mut worker = fixture.worker();
+        worker.session_listed = |_, _| true;
+        let last_attempt = Instant::now() - Duration::from_secs(2);
+        worker.producer_cadence.last_attempt = Some(last_attempt);
 
-    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(1));
-    unsubscribe(&subscribers, "01");
-    sink.begin_cycle();
-    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(60));
+        worker.run_cycle(
+            &fixture.state,
+            FetchRequest::default(),
+            CycleTrigger::Backstop,
+            true,
+            &mut sink,
+        );
+        assert_ne!(
+            worker.producer_cadence.last_attempt,
+            Some(last_attempt),
+            "a 3 s old frame is due at the room's 1 s tick (ticks {ticks:?})"
+        );
+    }
 }
 
 #[test]

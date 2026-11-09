@@ -17,7 +17,7 @@ use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::RoomConfig;
-use super::fetch::{FetchRequest, HostData, WorkspaceFold};
+use super::fetch::{FetchRequest, HostData, Subscribers, WorkspaceFold, room_tick};
 use super::timing::tick_for;
 
 const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
@@ -70,9 +70,18 @@ pub(super) fn spawn(
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,
     requests: Sender<FetchRequest>,
-    data_tick: impl Fn() -> Option<Duration> + Send + 'static,
+    subscribers: Subscribers,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag, data, requests, data_tick))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, data, requests, subscribers))
+}
+
+fn refresh_tick(subscribers: &Subscribers) -> Option<Duration> {
+    room_tick(
+        subscribers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values(),
+    )
 }
 
 fn refresh_loop(
@@ -81,7 +90,7 @@ fn refresh_loop(
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,
     requests: Sender<FetchRequest>,
-    data_tick: impl Fn() -> Option<Duration>,
+    subscribers: Subscribers,
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));
@@ -93,12 +102,17 @@ fn refresh_loop(
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
     let mut last_message_sweep = None;
+    let idle_interval = tick_for(config.tick_seconds);
+    let mut interval = refresh_tick(&subscribers).unwrap_or(idle_interval);
     loop {
-        let interval = data_tick().unwrap_or_else(|| tick_for(config.tick_seconds));
         std::thread::sleep(interval);
-        if data_tick().is_none() {
+        // Read after the sleep: membership may have changed during it, and this
+        // read sets both the pass's budget and the next sleep.
+        let Some(tick) = refresh_tick(&subscribers) else {
+            interval = idle_interval;
             continue;
-        }
+        };
+        interval = tick;
         let state = StatePaths::for_workspace(config.workspace_id.clone());
         let result = refresh_pass(
             &data,
