@@ -53,80 +53,57 @@ pub(crate) fn refresh_spending_cache(
         } = spending_file;
         let key = file.to_string_lossy().into_owned();
         let entry = cache.files.get(&key);
-        let Some(stat) = adapter.transcript_stat(file) else {
-            if entry.is_none() {
-                unread_files.push(spending_file);
-            }
-            finished_files += 1;
-            (callbacks.tick)(
-                cache,
-                SpendProgress {
-                    finished_files,
-                    total_files,
-                },
-            );
-            continue;
-        };
-        let override_origin = origin_overrides
-            .get(file)
-            .and_then(|origin| normalized_absolute_path(origin));
-        let prior_origin = entry.and_then(|entry| entry.origin_path.clone());
-        let parse_origin = override_origin.or(prior_origin);
-        let heals = entry.is_some_and(|entry| {
-            has_healed_unknown(entry, prices, now_secs)
-                || !adapter.spend_pricing_is_current(&entry.cursor)
-        });
-        let resume = match refresh_decision(entry, stat, heals, now_secs) {
-            RefreshDecision::Unchanged => {
-                let mut changed = false;
-                if let Some(entry) = cache.files.get_mut(&key)
-                    && let Some(origin) = parse_origin.as_deref()
-                    && stamp_file_origin(entry, origin)
-                {
-                    changed = true;
+        if let Some(stat) = adapter.transcript_stat(file) {
+            let override_origin = origin_overrides
+                .get(file)
+                .and_then(|origin| normalized_absolute_path(origin));
+            let prior_origin = entry.and_then(|entry| entry.origin_path.clone());
+            let parse_origin = override_origin.or(prior_origin);
+            let heals = entry.is_some_and(|entry| {
+                has_healed_unknown(entry, prices, now_secs)
+                    || !adapter.spend_pricing_is_current(&entry.cursor)
+            });
+            match refresh_decision(entry, stat, heals, now_secs) {
+                RefreshDecision::Parse { resume } => {
+                    stats.parse_jobs = stats.parse_jobs.saturating_add(1);
+                    stats.parse_bytes = stats.parse_bytes.saturating_add(
+                        resume
+                            .as_ref()
+                            .map_or(stat.len, |cursor| stat.len.saturating_sub(cursor.offset)),
+                    );
+                    parsed_files.push(spending_file);
+                    jobs.push(SpendingParseJob {
+                        adapter,
+                        file,
+                        key,
+                        stat,
+                        resume,
+                        parse_origin,
+                        now_secs,
+                    });
+                    continue;
                 }
-                if changed {
-                    cache.mark_changed();
+                RefreshDecision::Unchanged => {
+                    if let Some(origin) = parse_origin.as_deref()
+                        && let Some(entry) = cache.files.get_mut(&key)
+                        && stamp_file_origin(entry, origin)
+                    {
+                        cache.mark_changed();
+                    }
                 }
-                finished_files += 1;
-                (callbacks.tick)(
-                    cache,
-                    SpendProgress {
-                        finished_files,
-                        total_files,
-                    },
-                );
-                continue;
+                RefreshDecision::SkipOutOfWindow => {}
             }
-            RefreshDecision::SkipOutOfWindow => {
-                finished_files += 1;
-                (callbacks.tick)(
-                    cache,
-                    SpendProgress {
-                        finished_files,
-                        total_files,
-                    },
-                );
-                continue;
-            }
-            RefreshDecision::Parse { resume } => resume,
-        };
-        stats.parse_jobs = stats.parse_jobs.saturating_add(1);
-        stats.parse_bytes = stats.parse_bytes.saturating_add(
-            resume
-                .as_ref()
-                .map_or(stat.len, |cursor| stat.len.saturating_sub(cursor.offset)),
+        } else if entry.is_none() {
+            unread_files.push(spending_file);
+        }
+        finished_files += 1;
+        (callbacks.tick)(
+            cache,
+            SpendProgress {
+                finished_files,
+                total_files,
+            },
         );
-        parsed_files.push(spending_file);
-        jobs.push(SpendingParseJob {
-            adapter,
-            file,
-            key,
-            stat,
-            resume,
-            parse_origin,
-            now_secs,
-        });
     }
 
     let before = (!cache.files.is_empty() && !cache.fill_in_progress).then(|| {
