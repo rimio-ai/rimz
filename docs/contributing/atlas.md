@@ -167,6 +167,8 @@ min-decisions = 40
 
 A `[[rehome]]` row sets exactly one form: `item` and `to`, or `from`, `to` and `min-decisions`. The logic form is for logic that leaves a module which stays, such as a CLI entry whose workflow moves to its library owner. `from` and `to` are module paths, neither inside the other, each with production files inside the contract's `paths`; `to` may be new at current, and a side with no functions measures `0`. The row measures [decisions](#vocabulary) on both revisions and lands when `from` falls by at least `min-decisions` and `to` rises by no more than `from` fell: the logic moved, rather than splitting in place or growing branches on the way. The detail prints both counts, and a drift names the condition that failed. Like `[[cx]]`, the row needs `rust-code-analysis-cli`.
 
+A logic row holds only when the target gains no more decisions than the source loses. A move that replaces raw reads with a typed reading the caller matches on adds that match's branches and fails it, so prove such a move with item rows.
+
 The row proves where decisions went, not that the destination is a good interface: cap the destination with an `[[esc]]` row and prove the edge call got lighter with an `[[assembly]]` row. A `to` that only holds the moved body behind a request type is a pass-through by the deletion test, whatever the row says.
 
 ### Complexity rows
