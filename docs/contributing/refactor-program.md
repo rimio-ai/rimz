@@ -99,7 +99,7 @@ to = "message"
 max-items = 3
 ```
 
-`paths` names every module the pass edits, callers included; `diff --expect` fails on a change outside them, which keeps the pass reviewable.
+`paths` names every module the pass edits, callers included; `diff --expect` fails on a change outside them, which keeps the pass reviewable. The paths cover every file `rimz lsp refs --all` lists for each signature the plan changes, test files included.
 
 **Execute.** In a worktree on a branch named for the pass: pins first, then the steps in plan order, one commit per step or bundled module. `cargo xtask check` while iterating, `cargo xtask gate` before hand-off, higher tiers per [AGENTS.md → Testing](../../AGENTS.md#testing); a pass touching `benches/` or a walker's `pub` wire also runs `cargo xtask perf -- --no-run`. `cargo xtask atlas conform --ratchet` passes at every commit; take a surface-budget change only from the block `--ratchet` prints when it fails, and add its admission comment only when the tightened budget still sits above base. Rules the compiler and gates enforce:
 
