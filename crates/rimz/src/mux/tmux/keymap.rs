@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::config::keys::{
-    KeyAction, KeyActionName, KeyChord, KeyDirection, KeyMode, KeySplitDirection, RoomKeymap,
+    KeyAction, KeyActionName, KeyChord, KeyDirection, KeyMode, KeyScrollback, KeySplitDirection,
+    RoomKeymap,
 };
 
 use super::TmuxBackend;
@@ -102,7 +103,10 @@ fn keymap_commands(
         commands.push(words(&["unbind-key", "-a", "-T", table(mode)]));
     }
     let prefix = keymap.style.map(|style| style.prefix);
-    if keymap.style.is_some() {
+    if keymap
+        .style
+        .is_some_and(|style| style.scrollback == KeyScrollback::Vi)
+    {
         if prior_mode_keys.is_none() {
             commands.push(words(&[
                 "set-option",
@@ -547,6 +551,35 @@ mod tests {
                 ["select-pane", "-D"]
             );
         }
+    }
+
+    #[test]
+    fn native_scrollback_leaves_mode_keys_and_restores_a_recorded_value() {
+        let config: MachineConfig = toml::from_str("[room]\nstyle='rimz'").unwrap();
+        let mut keymap = config.room_keymap();
+        keymap.style.as_mut().unwrap().scrollback = KeyScrollback::Native;
+        let run = |options: &[(&str, &str)]| -> Vec<Vec<String>> {
+            let options: Vec<_> = options
+                .iter()
+                .map(|(name, value)| words(&[name, value]))
+                .collect();
+            keymap_commands(&keymap, Path::new("/bin/rimz"), &options)
+                .into_iter()
+                .flatten()
+                .filter(|cmd| {
+                    cmd.iter()
+                        .any(|arg| arg.contains("mode-keys") || arg.contains("mode_keys"))
+                })
+                .collect()
+        };
+        assert_eq!(run(&[("mode-keys", "emacs")]), [] as [Vec<String>; 0]);
+        assert_eq!(
+            run(&[("mode-keys", "vi"), ("@rimz_mode_keys", "emacs")]),
+            [
+                words(&["set-option", "-gw", "mode-keys", "emacs"]),
+                words(&["set-option", "-su", "@rimz_mode_keys"]),
+            ]
+        );
     }
 
     #[test]
