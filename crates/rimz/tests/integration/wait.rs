@@ -126,6 +126,20 @@ fn register_owned_calling_agent(env: &Env) {
     );
 }
 
+/// `wait list --json` rows without their clock columns. A refused command between
+/// two reads can cross a second boundary, so `elapsed` and `check_in` may move by
+/// one while every other column stays put.
+fn pending_rows_at_rest(json: &str) -> serde_json::Value {
+    let mut rows: serde_json::Value = serde_json::from_str(json).unwrap();
+    for row in rows.as_array_mut().unwrap() {
+        let row = row.as_object_mut().unwrap();
+        for clock in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
+            row.remove(clock);
+        }
+    }
+    rows
+}
+
 fn assert_unresolved_wait(output: &std::process::Output, unchanged: &str) {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
@@ -180,7 +194,10 @@ fn pid_namespaced_list_refuses_unresolved_caller_and_keeps_wait_pending() {
         .unwrap();
     assert_unresolved_wait(&output, "");
     assert_eq!(wait_instances(&env), before);
-    assert_eq!(wait_ok(&env, &["wait", "list", "--json"]), pending);
+    assert_eq!(
+        pending_rows_at_rest(&wait_ok(&env, &["wait", "list", "--json"])),
+        pending_rows_at_rest(&pending)
+    );
     wait_ok(&env, &["wait", "cancel", "--all"]);
 }
 
@@ -203,7 +220,10 @@ fn pid_namespaced_cancel_refuses_unresolved_caller_and_keeps_wait_pending() {
         .unwrap();
     assert_unresolved_wait(&output, "nothing was canceled: ");
     assert_eq!(wait_instances(&env), before);
-    assert_eq!(wait_ok(&env, &["wait", "list", "--json"]), pending);
+    assert_eq!(
+        pending_rows_at_rest(&wait_ok(&env, &["wait", "list", "--json"])),
+        pending_rows_at_rest(&pending)
+    );
     wait_ok(&env, &["wait", "cancel", name]);
 }
 
