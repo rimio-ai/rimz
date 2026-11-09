@@ -99,7 +99,7 @@ pub(super) struct TeamFrontmatter {
     pub stages: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "blank_as_empty")]
     pub roles: Vec<RoleFrontmatter>,
 }
 
@@ -191,9 +191,15 @@ pub(super) struct SignalBindingFrontmatter {
 fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<T>>, D::Error> {
-    Ok(Some(
-        Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default(),
-    ))
+    blank_as_empty(deserializer).map(Some)
+}
+
+/// serde-saphyr refuses YAML null for a sequence, so a blank `key:` reads as
+/// an empty list here and reaches the definition's own check.
+fn blank_as_empty<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// `off` or a token floor; YAML reads a bare `off` as `false`, so `false`
