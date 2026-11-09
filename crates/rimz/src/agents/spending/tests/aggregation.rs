@@ -2979,3 +2979,98 @@ fn duplicate_timing_breaks_only_usage_ties_in_both_folds() {
     assert!(aggregate::should_replace_duplicate(&richer, &latest));
     assert!(!aggregate::should_replace_duplicate(&latest, &richer));
 }
+
+#[test]
+fn absent_role_history_disables_history_outputs_but_keeps_the_chart_clock() {
+    let path = PathBuf::from("/x/history-off.jsonl");
+    let mut entry = cached_entry(NOW_SECS - 60, 1.5, "history-off");
+    entry.model = Some("model-a".into());
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&path, vec![entry])]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(claude_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let roles = super::super::session_roles::RoleIndex::default();
+    let fold = |roles| {
+        aggregate_counted_rollups(
+            &files,
+            &cache,
+            &counted,
+            &contested_session_locations(&files, &cache),
+            None,
+            HeadlineContext {
+                user_inputs: &[],
+                now_secs: NOW_SECS,
+                spec: &HeadlineSpec {
+                    timezone: Some("Asia/Tokyo".into()),
+                    ..Default::default()
+                },
+            },
+            HistoryContext {
+                roles,
+                ..Default::default()
+            },
+        )
+    };
+    let without = fold(None);
+    let with = fold(Some(&roles));
+
+    assert!(without.days.is_empty());
+    assert!(without.models.is_empty());
+    assert_eq!(without.roles, RoleTallies::default());
+    assert_eq!(with.models["model-a"].tally.year.usd, 1.5);
+    assert_eq!(without.chart.today, with.chart.today);
+    assert_eq!(without.chart.hour, with.chart.hour);
+    assert_eq!(without.timezone, with.timezone);
+    assert_eq!(without.timezone, "Asia/Tokyo");
+}
+
+#[test]
+fn keyed_day_and_month_windows_count_only_the_dedup_winners_session() {
+    let paths = [
+        PathBuf::from("/x/winner.jsonl"),
+        PathBuf::from("/x/copy.jsonl"),
+    ];
+    let entry = |thread| {
+        let mut entry = cached_entry(NOW_SECS - 60, 1.0, thread);
+        entry.message_id = Some("msg-shared".into());
+        entry.request_id = Some("req-shared".into());
+        entry
+    };
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(&paths[0], vec![entry("winner")]),
+            cached_file(&paths[1], vec![entry("copy")]),
+        ]),
+        ..Default::default()
+    };
+    let files = paths
+        .iter()
+        .map(|path| spending_file(claude_adapter(), path.clone()))
+        .collect::<Vec<_>>();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    assert_eq!(counted.len(), 1, "the copied event dedups to one winner");
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        &contested_session_locations(&files, &cache),
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: NOW_SECS,
+            spec: &HeadlineSpec {
+                timezone: Some("UTC".into()),
+                ..Default::default()
+            },
+        },
+        Default::default(),
+    );
+    let login = &files[0].login;
+    assert_eq!(result.spending.total.day.sessions, 2);
+    assert_eq!(result.login_day[login].sessions, 1);
+    assert_eq!(result.provider_day["claude"].sessions, 1);
+    assert_eq!(result.login_month[login].sessions, 1);
+    assert_eq!(result.login_day[login].usd, 1.0);
+}

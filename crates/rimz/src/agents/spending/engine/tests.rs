@@ -225,11 +225,12 @@ fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
     );
 }
 
-#[test]
-fn empty_fleet_and_checkpoint_publications_include_closed_days() {
-    use crate::agents::{ProviderLogin, spending::WalkObserver};
+/// An authoritative walker over a fixture whose one discovered account has no
+/// transcripts and one recorded $2 closed day.
+fn closed_day_fixture() -> (tempfile::TempDir, RuntimePaths, SpendingWalker, u64) {
+    use crate::agents::ProviderLogin;
     use crate::ids::AgentKind;
-    let (_dir, runtime, now_secs) = effort_fixture();
+    let (dir, runtime, now_secs) = effort_fixture();
     let home = runtime
         .shared_spending_cursor_path()
         .parent()
@@ -262,6 +263,13 @@ fn empty_fleet_and_checkpoint_publications_include_closed_days() {
         .to_string(),
     )
     .unwrap();
+    (dir, runtime, walker, now_secs)
+}
+
+#[test]
+fn empty_fleet_and_checkpoint_publications_include_closed_days() {
+    use crate::agents::spending::WalkObserver;
+    let (_dir, runtime, mut walker, now_secs) = closed_day_fixture();
     let request = service_request(&runtime, None, &HeadlineSpec::default());
     let context = super::request_context(&request, true);
     let result = super::walk_fleet_spending_files(
@@ -299,6 +307,81 @@ fn empty_fleet_and_checkpoint_publications_include_closed_days() {
             .usd,
         2.0
     );
+}
+
+#[test]
+fn authoritative_empty_fleet_replaces_a_nonzero_prior_publication() {
+    let (_dir, runtime, mut walker, now_secs) = closed_day_fixture();
+    let provider_path = runtime.shared_provider_spending_path();
+    let mut prior = ProviderSpendingCache {
+        refreshed_at_ms: 1,
+        ..Default::default()
+    };
+    prior.spending.total.year.usd = 981.0;
+    prior.spending.total.month.usd = 981.0;
+    write_provider_spending_cache(&provider_path, &prior);
+    let request = service_request(&runtime, None, &HeadlineSpec::default());
+    let result = super::walk_fleet_spending_files(
+        &mut walker,
+        &runtime,
+        &super::request_context(&request, true),
+        super::FleetWalk::Publish,
+        &mut |_| {},
+        &[],
+        now_secs,
+    );
+    assert_eq!(result.provider.spending.total.month.usd, 2.0);
+    let published = read_provider_spending_cache(&provider_path);
+    assert_eq!(published.spending.total.month.usd, 2.0);
+    assert_eq!(published.refreshed_at_ms, result.provider.refreshed_at_ms);
+}
+
+#[test]
+fn unscoped_walks_return_a_bare_stamped_workspace_cache() {
+    let bare = |caches: &crate::agents::spending::SpendingCaches| {
+        crate::agents::spending::WorkspaceSpendingCache {
+            version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
+            refreshed_at_ms: caches.provider.refreshed_at_ms,
+            ..Default::default()
+        }
+    };
+    let (_dir, runtime, now_secs) = effort_fixture();
+    let request = service_request(&runtime, None, &HeadlineSpec::default());
+    let empty = super::walk_fleet_spending_files(
+        &mut SpendingWalker::new(),
+        &runtime,
+        &super::request_context(&request, true),
+        super::FleetWalk::Publish,
+        &mut |_| {},
+        &[],
+        now_secs,
+    );
+    assert_eq!(empty.workspace, bare(&empty));
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let transcript = dir.path().join("claude.jsonl");
+    let now_secs = unix_secs_now();
+    std::fs::write(
+        &transcript,
+        claude_cost_line_in(now_secs, 2.5, "bare", &dir.path().join("repo")),
+    )
+    .expect("transcript");
+    let _discovered = override_discovered_spending_files_for_test(vec![default_login_file(
+        "claude",
+        &transcript,
+    )]);
+    let walked = walk_fleet_spending(
+        &mut SpendingWalker::new(),
+        &runtime,
+        None,
+        &HeadlineSpec::default(),
+        false,
+    );
+    assert!((walked.provider.spending.total.year.usd - 2.5).abs() < 1e-9);
+    assert_eq!(walked.workspace, bare(&walked));
 }
 
 #[test]
