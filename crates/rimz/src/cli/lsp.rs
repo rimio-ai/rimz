@@ -42,14 +42,17 @@ enum Command {
     /// Search workspace symbols.
     #[command(mut_arg("targets", |arg| arg.help("Symbol-name search strings")))]
     Find(ListQuery),
-    /// Read numbered source for one or more file anchors or positions.
+    /// Read numbered source for one or more file anchors, positions, or symbol names.
     Show {
-        /// Source targets: path::Symbol, path:line[:col], or path:start-end.
+        /// Source targets: path::Symbol, a symbol name, path:line[:col], or path:start-end.
         #[arg(value_name = "ANCHOR", required = true)]
         anchors: Vec<String>,
         /// Print the full body instead of an outline for large items.
         #[arg(long)]
         full: bool,
+        /// Select a configured or registered server by name.
+        #[arg(long)]
+        server: Option<String>,
     },
     /// Check every path::symbol anchor in Markdown files against the outline.
     Check {
@@ -196,8 +199,13 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
         Command::List { all, json } => return list(all, json, globals),
-        Command::Show { anchors, full } => {
+        Command::Show {
+            anchors,
+            full,
+            server,
+        } => {
             let context = query_context(globals)?;
+            context.validate_server(server.as_deref())?;
             let folder = query_folder(
                 &context.root,
                 std::env::current_dir().and_then(std::fs::canonicalize),
@@ -209,6 +217,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 &folder,
                 &context.entries,
                 &context.servers,
+                server.as_deref(),
                 context.usage.as_ref(),
             ) {
                 Ok(blocks) => blocks,

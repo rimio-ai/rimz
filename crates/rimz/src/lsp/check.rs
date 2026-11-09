@@ -29,7 +29,13 @@ pub fn run(
     mode: Mode,
     usage: Option<&super::usage::Log>,
 ) -> Result<Vec<Result<Report, query::QueryErr>>, query::QueryErr> {
-    let mut context = Context::new(root, entries, servers, usage.map(|log| (log, "check")))?;
+    let mut context = Context::new(
+        root,
+        entries,
+        servers,
+        None,
+        usage.map(|log| (log, "check")),
+    )?;
     Ok(notes
         .iter()
         .map(|notes| check_file(notes, &mut context, mode))
@@ -111,6 +117,8 @@ struct Context<'a> {
     checkout: &'a Path,
     entries: &'a [registry::Entry],
     servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
+    /// The `--server` every request in this call goes to, or `None` to select per file.
+    server: Option<&'a str>,
     files: Vec<PathBuf>,
     outlines: BTreeMap<PathBuf, FileOutline>,
     failures: BTreeMap<String, Failure>,
@@ -124,6 +132,41 @@ struct Failure {
     asked: bool,
 }
 
+/// The memoized failure of `entry`'s server, its usage recorded again when the server was
+/// asked.
+fn replay_failure(
+    failures: &BTreeMap<String, Failure>,
+    usage: Option<(&super::usage::Log, &'static str)>,
+    entry: &registry::Entry,
+) -> Option<query::QueryErr> {
+    let failure = failures.get(&entry.server)?;
+    let result: Result<query::Output, _> = Err(failure.error.server_error()?);
+    if failure.asked
+        && let Some((usage, kind)) = usage
+    {
+        usage.record(entry, kind, &result);
+    }
+    result.err()
+}
+
+/// Record a request's usage and memo a server failure for the rest of the call.
+fn record_request(
+    failures: &mut BTreeMap<String, Failure>,
+    usage: Option<(&super::usage::Log, &'static str)>,
+    entry: &registry::Entry,
+    result: &Result<query::Output, query::QueryErr>,
+) {
+    if let Some((usage, kind)) = usage {
+        usage.record(entry, kind, result);
+    }
+    if let Err(error) = result
+        && let Some(error) = error.server_error()
+    {
+        let failure = Failure { error, asked: true };
+        failures.insert(entry.server.clone(), failure);
+    }
+}
+
 struct FileOutline {
     nodes: Vec<Candidate>,
     dirty: bool,
@@ -134,6 +177,7 @@ impl<'a> Context<'a> {
         root: &'a Path,
         entries: &'a [registry::Entry],
         servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
+        server: Option<&'a str>,
         usage: Option<(&'a super::usage::Log, &'static str)>,
     ) -> Result<Self, query::QueryErr> {
         let output = crate::proc::git_command(root)
@@ -168,6 +212,7 @@ impl<'a> Context<'a> {
             checkout: root,
             entries,
             servers,
+            server,
             files,
             outlines: BTreeMap::new(),
             failures: BTreeMap::new(),
@@ -226,10 +271,11 @@ impl<'a> Context<'a> {
     }
 
     fn outline(&mut self, path: &Path) -> Result<Option<&FileOutline>, query::QueryErr> {
-        let (checkout, entries, servers) = (self.checkout, self.entries, self.servers);
+        let (checkout, entries, servers, server) =
+            (self.checkout, self.entries, self.servers, self.server);
         self.outline_with(
             path,
-            || query::select(checkout, entries.to_vec(), servers, None, Some(path)),
+            || query::select(checkout, entries.to_vec(), servers, server, Some(path)),
             |server, path| {
                 query::execute(
                     server,
@@ -238,6 +284,24 @@ impl<'a> Context<'a> {
                 )
             },
         )
+    }
+
+    /// Look `name` up as `def` does, on the server this call selects with no path.
+    fn definitions(&mut self, name: &str) -> Result<query::Output, query::QueryErr> {
+        let entry = query::select(
+            self.checkout,
+            self.entries.to_vec(),
+            self.servers,
+            self.server,
+            None,
+        )?;
+        if let Some(error) = replay_failure(&self.failures, self.usage, &entry) {
+            return Err(error);
+        }
+        let target = query::Target::Symbol(name.to_owned());
+        let result = query::execute(&entry, query::Verb::Def, &target);
+        record_request(&mut self.failures, self.usage, &entry, &result);
+        result
     }
 
     fn outline_with(
@@ -261,35 +325,21 @@ impl<'a> Context<'a> {
                 // Selection probes broker liveness, so check the memo before selecting again.
                 let mut candidates = self.entries.iter().filter(|entry| {
                     entry.root == self.checkout
+                        && self.server.is_none_or(|server| entry.server == server)
                         && self.servers.get(&entry.server).is_some_and(|config| {
                             config.extensions.iter().any(|ext| ext == extension)
                         })
                 });
                 let server = candidates.next().filter(|_| candidates.next().is_none());
                 if let Some(server) = server
-                    && let Some(failure) = self.failures.get(&server.server)
-                    && let Some(error) = failure.error.server_error()
+                    && let Some(error) = replay_failure(&self.failures, self.usage, server)
                 {
-                    let result = Err(error);
-                    if failure.asked
-                        && let Some((usage, kind)) = self.usage
-                    {
-                        usage.record(server, kind, &result);
-                    }
-                    return result.map(|_| None);
+                    return Err(error);
                 }
                 let result = match select() {
                     Ok(selected) => {
                         let result = request(&selected, path);
-                        if let Some((usage, kind)) = self.usage {
-                            usage.record(&selected, kind, &result);
-                        }
-                        if let Err(error) = &result
-                            && let Some(error) = error.server_error()
-                        {
-                            let failure = Failure { error, asked: true };
-                            self.failures.insert(selected.server.clone(), failure);
-                        }
+                        record_request(&mut self.failures, self.usage, &selected, &result);
                         result
                     }
                     Err(error) => {

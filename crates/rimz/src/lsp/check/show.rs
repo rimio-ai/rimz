@@ -1,8 +1,12 @@
-//! Batched source reads using the notes anchor grammar and outline.
+//! Batched source reads using the notes anchor grammar, symbol names, and outline.
 
 use super::super::protocol::{Position, Range};
 use super::*;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the CLI's query context and flags arrive as separate borrows"
+)]
 pub fn show(
     arguments: &[String],
     full: bool,
@@ -10,13 +14,12 @@ pub fn show(
     folder: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
+    server: Option<&str>,
     usage: Option<&super::super::usage::Log>,
 ) -> super::super::Result<Vec<(String, i32)>> {
-    let anchors = arguments
-        .iter()
-        .map(|argument| parse_argument(argument))
-        .collect::<super::super::Result<Vec<_>>>()?;
-    let mut context = match Context::new(root, entries, servers, usage.map(|log| (log, "show"))) {
+    let parsed = parse_arguments(arguments)?;
+    let usage = usage.map(|log| (log, "show"));
+    let mut context = match Context::new(root, entries, servers, server, usage) {
         Ok(context) => context,
         Err(error) => {
             return Ok(arguments
@@ -25,72 +28,158 @@ pub fn show(
                 .collect());
         }
     };
+    Ok(read_arguments(
+        &mut context,
+        arguments,
+        parsed,
+        folder,
+        full,
+        |context, name| context.definitions(name),
+    ))
+}
+
+enum Argument {
+    Read(Anchor, Option<Position>),
+    Name(String),
+}
+
+fn parse_arguments(arguments: &[String]) -> super::super::Result<Vec<Argument>> {
+    arguments
+        .iter()
+        .map(|argument| match parse_argument(argument) {
+            Ok((anchor, position)) => Ok(Argument::Read(anchor, position)),
+            Err(_) if query::is_qualified_name(argument) => Ok(Argument::Name(argument.clone())),
+            Err(error) => Err(error),
+        })
+        .collect()
+}
+
+fn read_arguments(
+    context: &mut Context<'_>,
+    arguments: &[String],
+    parsed: Vec<Argument>,
+    folder: &Path,
+    full: bool,
+    mut define: impl FnMut(&mut Context<'_>, &str) -> Result<query::Output, query::QueryErr>,
+) -> Vec<(String, i32)> {
     let mut sources = BTreeMap::new();
     let mut blocks = Vec::new();
-    for (argument, (anchor, position)) in arguments.iter().zip(anchors) {
-        let line_target = is_line_target(&anchor);
-        let needs_outline = anchor.symbol.is_some() || position.is_some() || line_target;
-        let (anchor, path) = match resolve_argument(&context, anchor, folder) {
-            Ok(resolved) => resolved,
-            Err(verdict) => {
-                let (status, code) = match verdict.status {
-                    Status::External => ("external", 5),
-                    Status::AmbiguousPath => ("ambiguous-path", 6),
-                    _ => ("missing-path", 5),
-                };
-                blocks.push(failure(argument, status, &verdict.detail, code));
-                continue;
+    for (argument, parsed) in arguments.iter().zip(parsed) {
+        match parsed {
+            Argument::Read(anchor, position) => blocks.push(read(
+                context,
+                &mut sources,
+                argument,
+                (anchor, position),
+                folder,
+                full,
+            )),
+            Argument::Name(name) => {
+                let output = define(context, &name);
+                blocks.extend(read_definitions(context, &mut sources, &name, output, full));
             }
-        };
-        let outline = if needs_outline {
-            match context.outline(&path) {
-                Ok(Some(file)) => Some(file),
-                Ok(None) | Err(_) if line_target => None,
-                Ok(None) => {
-                    blocks.push(failure(argument, "unchecked", &unchecked_detail(&path), 3));
-                    continue;
-                }
-                Err(error) => {
-                    blocks.push(failure(
-                        argument,
-                        "error",
-                        &error.to_string(),
-                        error.exit_code(),
-                    ));
-                    continue;
-                }
-            }
-        } else {
-            None
-        };
-        let (nodes, dirty) = if let Some(file) = outline {
-            (file.nodes.as_slice(), file.dirty)
-        } else {
-            match context.is_dirty(&path) {
-                Ok(dirty) => (&[][..], dirty),
-                Err(error) => {
-                    blocks.push(failure(argument, "error", &error.to_string(), 1));
-                    continue;
-                }
-            }
-        };
-        let source = match sources.entry(path.clone()) {
-            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                match std::fs::read_to_string(root.join(&path)) {
-                    Ok(source) => entry.insert(source),
-                    Err(error) => {
-                        blocks.push(failure(argument, "error", &error.to_string(), 1));
-                        continue;
-                    }
-                }
-            }
-        };
-        blocks.push(render_item(
-            &anchor, position, &path, nodes, source, dirty, full,
-        ));
+        }
     }
-    Ok(blocks)
+    blocks
+}
+
+/// One block per definition location, each read as `show <path:line:col>` reads it at the
+/// checkout root.
+fn read_definitions(
+    context: &mut Context<'_>,
+    sources: &mut BTreeMap<PathBuf, String>,
+    name: &str,
+    output: Result<query::Output, query::QueryErr>,
+    full: bool,
+) -> Vec<(String, i32)> {
+    let root = context.checkout;
+    let result = match output {
+        Ok(query::Output::Answer { result, .. }) => result,
+        Ok(output) => {
+            return vec![match query::render_outcome(root, &output, false) {
+                Ok(text) => (text, output.exit_code()),
+                Err(error) => failure(name, "error", &error.to_string(), 1),
+            }];
+        }
+        Err(error) => {
+            return vec![failure(
+                name,
+                "error",
+                &error.to_string(),
+                error.exit_code(),
+            )];
+        }
+    };
+    let targets = match query::definition_targets(root, result) {
+        Ok(targets) if targets.is_empty() => {
+            return vec![failure(name, "missing-symbol", "no definition found", 5)];
+        }
+        Ok(targets) => targets,
+        Err(error) => return vec![failure(name, "error", &error.to_string(), 1)],
+    };
+    targets
+        .iter()
+        .map(|target| match parse_argument(target) {
+            // A printed target is checkout-relative or absolute, never relative to the caller's
+            // folder, so it is read from the checkout root.
+            Ok(parsed) => read(context, sources, target, parsed, Path::new(""), full),
+            Err(error) => failure(target, "error", &error.to_string(), 1),
+        })
+        .collect()
+}
+
+fn read(
+    context: &mut Context<'_>,
+    sources: &mut BTreeMap<PathBuf, String>,
+    argument: &str,
+    (anchor, position): (Anchor, Option<Position>),
+    folder: &Path,
+    full: bool,
+) -> (String, i32) {
+    let checkout = context.checkout;
+    let line_target = is_line_target(&anchor);
+    let needs_outline = anchor.symbol.is_some() || position.is_some() || line_target;
+    let (anchor, path) = match resolve_argument(context, anchor, folder) {
+        Ok(resolved) => resolved,
+        Err(verdict) => {
+            let (status, code) = match verdict.status {
+                Status::External => ("external", 5),
+                Status::AmbiguousPath => ("ambiguous-path", 6),
+                _ => ("missing-path", 5),
+            };
+            return failure(argument, status, &verdict.detail, code);
+        }
+    };
+    let outline = if needs_outline {
+        match context.outline(&path) {
+            Ok(Some(file)) => Some(file),
+            Ok(None) | Err(_) if line_target => None,
+            Ok(None) => return failure(argument, "unchecked", &unchecked_detail(&path), 3),
+            Err(error) => {
+                return failure(argument, "error", &error.to_string(), error.exit_code());
+            }
+        }
+    } else {
+        None
+    };
+    let (nodes, dirty) = if let Some(file) = outline {
+        (file.nodes.as_slice(), file.dirty)
+    } else {
+        match context.is_dirty(&path) {
+            Ok(dirty) => (&[][..], dirty),
+            Err(error) => return failure(argument, "error", &error.to_string(), 1),
+        }
+    };
+    let source = match sources.entry(path.clone()) {
+        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            match std::fs::read_to_string(checkout.join(&path)) {
+                Ok(source) => entry.insert(source),
+                Err(error) => return failure(argument, "error", &error.to_string(), 1),
+            }
+        }
+    };
+    render_item(&anchor, position, &path, nodes, source, dirty, full)
 }
 
 fn resolve_argument(
@@ -144,7 +233,8 @@ fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Positi
         return Ok((anchors.remove(0), None));
     }
     Err(LspErr::Protocol(format!(
-        "invalid anchor {argument}; use path::Symbol, path:line, path:line:col, or path:start-end"
+        "invalid anchor {argument}; use path::Symbol, a symbol name, path:line, path:line:col, \
+         or path:start-end"
     )))
 }
 
@@ -298,424 +388,4 @@ fn render_selected(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn nodes() -> Vec<Candidate> {
-        outline(json!([
-            {"name":"Parent","kind":5,
-             "range":{"start":{"line":0,"character":0},"end":{"line":204,"character":1}},
-             "selectionRange":{"start":{"line":1,"character":3},"end":{"line":1,"character":9}},
-             "children":[
-                {"name":"child","kind":6,
-                 "range":{"start":{"line":2,"character":0},"end":{"line":4,"character":1}},
-                 "selectionRange":{"start":{"line":3,"character":3},"end":{"line":3,"character":8}}}
-             ]},
-            {"name":"child","kind":12,
-             "range":{"start":{"line":207,"character":0},"end":{"line":208,"character":1}},
-             "selectionRange":{"start":{"line":207,"character":3},"end":{"line":207,"character":8}}}
-        ]))
-        .unwrap()
-    }
-
-    fn source() -> String {
-        (1..=210).map(|n| format!("  line {n}\n")).collect()
-    }
-
-    #[test]
-    fn show_folder_reading_wins_and_preserves_the_enclosing_line_target() {
-        let checkout = tempfile::tempdir().unwrap();
-        let root = checkout.path();
-        std::fs::create_dir(root.join("src")).unwrap();
-        for file in ["lib.rs", "src/lib.rs"] {
-            std::fs::write(root.join(file), source()).unwrap();
-        }
-        let context = Context {
-            checkout: root,
-            entries: &[],
-            servers: &BTreeMap::new(),
-            files: vec!["lib.rs".into(), "src/lib.rs".into()],
-            outlines: BTreeMap::new(),
-            failures: BTreeMap::new(),
-            usage: None,
-        };
-        let (anchor, position) = parse_argument("lib.rs:4").unwrap();
-        let (anchor, path) = resolve_argument(&context, anchor, Path::new("src")).unwrap();
-        assert_eq!(
-            render_item(&anchor, position, &path, &nodes(), &source(), false, false),
-            (
-                "src/lib.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n".into(),
-                0
-            )
-        );
-    }
-
-    #[test]
-    fn show_missing_folder_path_names_both_readings_and_the_suffix_fallback() {
-        let context = Context {
-            checkout: Path::new("/checkout"),
-            entries: &[],
-            servers: &BTreeMap::new(),
-            files: Vec::new(),
-            outlines: BTreeMap::new(),
-            failures: BTreeMap::new(),
-            usage: None,
-        };
-        let anchor = parse_argument("gone.rs:1-2").unwrap().0;
-        let error = resolve_argument(&context, anchor, Path::new("src"))
-            .err()
-            .unwrap();
-        assert_eq!(
-            (error.status, error.detail),
-            (Status::MissingPath, "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder when it is inside the checkout, then the checkout root; no checkout file ends with gone.rs".into())
-        );
-        let outside = tempfile::tempdir().unwrap();
-        let path = outside.path().join("lib.rs");
-        std::fs::write(&path, "outside\n").unwrap();
-        let anchor = parse_argument(&format!("{}:1-1", path.display()))
-            .unwrap()
-            .0;
-        let error = resolve_argument(&context, anchor, Path::new("src"))
-            .err()
-            .unwrap();
-        assert_eq!(
-            (error.status, error.detail),
-            (Status::MissingPath, "no matching checkout file".into())
-        );
-    }
-
-    fn read(argument: &str, dirty: bool, full: bool) -> (String, i32) {
-        let (anchor, position) = parse_argument(argument).unwrap();
-        render_item(
-            &anchor,
-            position,
-            Path::new("src/lib.rs"),
-            &nodes(),
-            &source(),
-            dirty,
-            full,
-        )
-    }
-
-    #[test]
-    fn show_symbol_positions_and_pasted_spans_read_the_same_body() {
-        let expected = "src/lib.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n";
-        for argument in [
-            "src/lib.rs::Parent::child",
-            "src/lib.rs::Parent::child ~100",
-            "src/lib.rs:4:4",
-            "src/lib.rs:5:1",
-            "src/lib.rs:4:4 (3-5)",
-            "src/lib.rs:3-5",
-            "src/lib.rs:4",
-            "src/lib.rs:~4",
-        ] {
-            assert_eq!(
-                read(argument, false, false),
-                (expected.into(), 0),
-                "{argument}"
-            );
-        }
-        assert_eq!(
-            read("src/lib.rs::Parent::child", true, false).0,
-            expected.replace(":3-5\n", ":3-5  (unsaved in editor)\n")
-        );
-    }
-
-    #[test]
-    fn show_zoom_uses_child_selection_and_full_never_truncates() {
-        assert_eq!(read("src/lib.rs::Parent", true, false), ("src/lib.rs:1-205  (unsaved in editor)  (outline: 205 lines; --full prints the body)\n     4\tline 4 (3-5)\n".into(), 0));
-        for full in [false, true] {
-            assert_eq!(
-                read("src/lib.rs:2", true, full),
-                read("src/lib.rs::Parent", true, full)
-            );
-        }
-        let body = read("src/lib.rs::Parent", false, true);
-        assert_eq!(body.1, 0);
-        assert_eq!(body.0.lines().count(), 206);
-        assert!(body.0.ends_with("   205\t  line 205\n"));
-        let mut leaf = nodes();
-        leaf.truncate(1);
-        assert_eq!(
-            render_item(
-                &parse_argument("src/lib.rs::Parent").unwrap().0,
-                None,
-                Path::new("src/lib.rs"),
-                &leaf,
-                &source(),
-                false,
-                false
-            ),
-            body
-        );
-    }
-
-    #[test]
-    fn show_lines_cover_indented_starts_but_not_exclusive_ends() {
-        let mut nodes = nodes();
-        nodes[1].extent.start.character = 4;
-        nodes[1].extent.end = Position {
-            line: 4,
-            character: 0,
-        };
-        for (argument, expected) in [
-            ("src/lib.rs:3", "src/lib.rs::Parent::child"),
-            ("src/lib.rs:~3", "src/lib.rs::Parent::child"),
-            ("src/lib.rs:5", "src/lib.rs::Parent"),
-        ] {
-            let (anchor, position) = parse_argument(argument).unwrap();
-            assert_eq!(
-                render_item(
-                    &anchor,
-                    position,
-                    Path::new("src/lib.rs"),
-                    &nodes,
-                    &source(),
-                    false,
-                    false
-                ),
-                read(expected, false, false),
-                "{argument}"
-            );
-        }
-    }
-
-    #[test]
-    fn show_uncovered_lines_and_explicit_ranges_read_only_the_line() {
-        for argument in ["src/lib.rs:206", "src/lib.rs:~206"] {
-            assert_eq!(
-                read(argument, false, false),
-                ("src/lib.rs:206-206\n   206\t  line 206\n".into(), 0)
-            );
-        }
-        for argument in ["src/lib.rs:4-4", "src/lib.rs:~4:1", "src/lib.rs:4:0"] {
-            assert_eq!(
-                read(argument, false, false),
-                ("src/lib.rs:4-4\n     4\t  line 4\n".into(), 0)
-            );
-        }
-    }
-
-    #[test]
-    fn show_unavailable_outline_falls_back_only_for_bare_lines() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(
-            std::process::Command::new("git")
-                .args(["init", "-q"])
-                .current_dir(root.path())
-                .status()
-                .unwrap()
-                .success()
-        );
-        std::fs::write(root.path().join("lib.rs"), "first\nsecond\n").unwrap();
-        let servers = BTreeMap::from([(
-            "rust".into(),
-            serde_json::from_value(json!({
-                "command": ["stub"], "extensions": ["rs"], "root-markers": []
-            }))
-            .unwrap(),
-        )]);
-        let blocks = show(
-            &["lib.rs:2".into(), "lib.rs:~2".into(), "lib.rs:2:1".into()],
-            false,
-            root.path(),
-            Path::new(""),
-            &[],
-            &servers,
-            None,
-        )
-        .unwrap();
-        assert_eq!(blocks[0], ("lib.rs:2-2\n     2\tsecond\n".into(), 0));
-        assert_eq!(blocks[1], blocks[0]);
-        assert_eq!(blocks[2].1, 3);
-    }
-
-    #[test]
-    fn show_clamps_line_range_to_the_last_disk_line() {
-        assert_eq!(
-            read("src/lib.rs:209-211", false, false),
-            (
-                "src/lib.rs:209-210\n   209\t  line 209\n   210\t  line 210\n".into(),
-                0
-            )
-        );
-        for argument in ["src/lib.rs:211-212", "src/lib.rs:0-2", "src/lib.rs:2-1"] {
-            assert_eq!(
-                read(argument, false, false),
-                (format!("{argument}  line-outside  file has 210 lines\n"), 5)
-            );
-        }
-    }
-
-    #[test]
-    fn show_clamps_symbol_and_position_ranges_from_unsaved_outlines() {
-        let mut nodes = nodes();
-        nodes[2].range[1] = 215;
-        nodes[2].extent.end.line = 214;
-        for argument in [
-            "src/lib.rs::child ~208",
-            "src/lib.rs:208:4",
-            "src/lib.rs:208",
-        ] {
-            let (anchor, position) = parse_argument(argument).unwrap();
-            for dirty in [false, true] {
-                let marker = if dirty { "  (unsaved in editor)" } else { "" };
-                assert_eq!(
-                    render_item(
-                        &anchor,
-                        position,
-                        Path::new("src/lib.rs"),
-                        &nodes,
-                        &source(),
-                        dirty,
-                        false
-                    ),
-                    (
-                        format!(
-                            "src/lib.rs:208-210{marker}\n   208\t  line 208\n   209\t  line 209\n   210\t  line 210\n"
-                        ),
-                        0
-                    )
-                );
-            }
-        }
-        let (anchor, position) = parse_argument("src/lib.rs:211").unwrap();
-        assert_eq!(
-            render_item(
-                &anchor,
-                position,
-                Path::new("src/lib.rs"),
-                &nodes,
-                &source(),
-                false,
-                false
-            ),
-            (
-                "src/lib.rs:211  line-outside  file has 210 lines\n".into(),
-                5
-            )
-        );
-    }
-
-    #[test]
-    fn show_zoom_omits_children_past_the_clamped_range() {
-        let mut nodes = nodes();
-        nodes[0].range[1] = 215;
-        let mut outside = nodes[1].clone();
-        outside.range = [211, 215];
-        outside.selection.start.line = 210;
-        nodes.push(outside);
-        assert_eq!(
-            render_item(&parse_argument("src/lib.rs::Parent").unwrap().0, None, Path::new("src/lib.rs"), &nodes, &source(), false, false),
-            ("src/lib.rs:1-210  (outline: 210 lines; --full prints the body)\n     4\tline 4 (3-5)\n".into(), 0)
-        );
-    }
-
-    #[test]
-    fn show_reports_missing_and_outside() {
-        let argument = "src/lib.rs::Parent::chld";
-        let (anchor, _) = parse_argument(argument).unwrap();
-        let checked = check_symbol(anchor, PathBuf::from("src/lib.rs"), &nodes());
-        assert_eq!(checked.detail, "class Parent is at 1-205");
-        assert_eq!(
-            read(argument, false, false),
-            (
-                format!("{argument}  missing-symbol  {}\n", checked.detail),
-                5
-            )
-        );
-        assert_eq!(
-            read("src/lib.rs::child ~4", false, false).0,
-            read("src/lib.rs:208-209", false, false).0,
-            "a hint does not select a nested namesake of a top-level item"
-        );
-        for argument in [
-            "src/lib.rs::absent",
-            "src/lib.rs:210:50",
-            "src/lib.rs:211-212",
-            "src/lib.rs:0-2",
-            "src/lib.rs:0",
-            "src/lib.rs:211",
-        ] {
-            assert_eq!(read(argument, false, false).1, 5, "{argument}");
-        }
-    }
-
-    #[test]
-    fn show_prints_all_hits_unless_a_hint_selects_a_subset() {
-        let mut nodes = nodes();
-        nodes[2].path = vec!["Other".into(), "child".into()];
-        let read = |argument| {
-            let (anchor, position) = parse_argument(argument).unwrap();
-            render_item(
-                &anchor,
-                position,
-                Path::new("src/lib.rs"),
-                &nodes,
-                &source(),
-                false,
-                false,
-            )
-        };
-        let first = read("src/lib.rs::Parent::child").0;
-        let second = read("src/lib.rs::Other::child").0;
-        for argument in [
-            "src/lib.rs::child",
-            "src/lib.rs::child ~100",
-            "src/lib.rs::child ~4-208",
-        ] {
-            assert_eq!(read(argument), (format!("{first}\n{second}"), 0));
-        }
-        assert_eq!(read("src/lib.rs::child ~4"), (first, 0));
-    }
-
-    #[test]
-    fn show_type_prints_struct_and_impl_in_outline_order() {
-        let mut nodes = nodes();
-        nodes.remove(0);
-        nodes[0].name = "Type".into();
-        nodes[0].path = vec!["Type".into()];
-        nodes[0].kind = "struct";
-        nodes[0].parent = None;
-        nodes[1].name = "impl Type".into();
-        nodes[1].path = vec!["impl Type".into()];
-        for (argument, spans) in [
-            ("src/lib.rs::Type", vec!["3-5", "208-209"]),
-            ("src/lib.rs::Type ~4", vec!["3-5"]),
-        ] {
-            let (text, exit) = render_item(
-                &parse_argument(argument).unwrap().0,
-                None,
-                Path::new("src/lib.rs"),
-                &nodes,
-                &source(),
-                false,
-                false,
-            );
-            assert_eq!(exit, 0);
-            let headers: Vec<_> = text
-                .lines()
-                .filter_map(|line| line.strip_prefix("src/lib.rs:"))
-                .collect();
-            assert_eq!(headers, spans);
-        }
-    }
-
-    #[test]
-    fn show_validates_the_whole_batch_before_reading() {
-        assert!(
-            show(
-                &["src/lib.rs::Parent".into(), "not-an-anchor".into()],
-                false,
-                Path::new("/does-not-exist"),
-                Path::new(""),
-                &[],
-                &BTreeMap::new(),
-                None,
-            )
-            .is_err()
-        );
-    }
-}
+mod tests;

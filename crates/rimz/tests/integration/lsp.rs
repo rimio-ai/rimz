@@ -84,6 +84,14 @@ fn lsp_query_argument_mistakes_do_not_disable_the_server() {
             ));
     }
     env.rimz()
+        .args(["lsp", "show", "work", "--server", "nope"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicates::str::contains(
+            "no language server named nope; configured: rust",
+        ));
+    env.rimz()
         .args(["lsp", "def", "README.md::x", "missing"])
         .assert()
         .code(1)
@@ -2294,7 +2302,7 @@ fn lsp_show_batches_source_and_failures() {
         .code(3)
         .stdout(predicates::str::contains("external"));
     env.rimz()
-        .args(["lsp", "show", "show.rs:1-2", "invalid"])
+        .args(["lsp", "show", "show.rs:1-2", "not an anchor"])
         .assert()
         .code(2)
         .stdout("");

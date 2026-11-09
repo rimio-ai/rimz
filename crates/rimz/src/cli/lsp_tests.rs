@@ -174,6 +174,13 @@ fn visible_lsp_arguments_explain_their_input() {
                     command.get_name()
                 );
             }
+            if argument.get_id() == "anchors" {
+                assert_eq!(
+                    help,
+                    "Source targets: path::Symbol, a symbol name, path:line[:col], or \
+                     path:start-end"
+                );
+            }
         }
     }
 }
