@@ -26,14 +26,14 @@ A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags ma
 
 Bare `rimz message` lists the current lane. Any send flag without a target is an invalid command line (exit 2), with the intended send form and a list hint. For inbox flags, use `rimz message list --json`, `rimz message list --all`, or `rimz message list --channel <NAME>`; these flags mean reply formatting, fan-out, and recipient scope on the send form. Bare words and message ids in place of a target also exit 2. `rimz message cancel` requires at least one message id and exits 2 without one.
 
-The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_…` suggests `rimz message show msg_…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
+The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_…` suggests `rimz message show msg_…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents (or `no agents are running`), and exits 1.
 
 The text comes from one of three sources:
 
 | Source | How it is read |
 | --- | --- |
 | Inline argument | Trimmed. `\n` becomes a soft newline in the agent's composer and `\\` a literal backslash; every other backslash is kept, so `\d+` and `C:\tmp` arrive unchanged. |
-| `--file <PATH>` | Sent as written, with no escape processing; only the trailing newline is dropped. Conflicts with inline text and `--stdin`. An empty file is refused. |
+| `--file <PATH>` | Sent as written, with no escape processing; only the trailing line endings are dropped. Conflicts with inline text and `--stdin`. An empty file is refused. |
 | `--stdin` | Read to EOF, with the surrounding whitespace trimmed and no escape processing. With inline text too, the inline text comes first and stdin follows inside `<stdin>` and `</stdin>` lines. Conflicts with `--file`. |
 
 Piped stdin without `--stdin` is ignored, with a warning on stderr.
@@ -60,7 +60,7 @@ A parked message delivers once all of these hold, checked in this order:
 1. Any observed typing hold has expired. The live input check can extend it before writing.
 2. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
 3. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
-4. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A recoverable provider limit or overload reads [`paused`](./agents.md), which opens neither gate. The card shows a provider pause as `failed` once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset, even if auto-continue is about to resume it; that status opens only `any`. A RimZ budget park stays `paused`.
+4. The agent still exists and has not ended, it is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. With `--force`, an agent waiting on input in its pane also opens either gate. A recoverable provider limit or overload reads [`paused`](./agents.md), which opens neither gate. The card shows a provider pause as `failed` once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset, even if auto-continue is about to resume it; that status opens only `any`. A RimZ budget park stays `paused`.
 5. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
 6. A live pane can receive the text.
 
@@ -95,7 +95,7 @@ The send prints one line per target:
 | `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
 | `compacting @coder; queued msg_… (delivers when compaction completes)` | The compact command landed; the prompt follows once compaction ends. Steer prints `queued for @coder (msg_…; waiting for compaction)`. |
 
-A status in a receipt comes from the agent's last recorded state and does not prove its pane is still live. A steer that reaches several agents prints one summary instead: `sent 2 agent(s): @claude (msg_…), @codex (msg_…); queued: …; compacted: …; waiting in pane: …`, with empty parts left out. A single `--steer` to an agent with an open prompt fails with `@coder (msg_…) is waiting on your input in its pane; answer it or pass --force`. Unless the rollout shows that the asking Code Mode cell finished and closes the ask, during Codex's first 60 seconds of automatic permission review steer and interrupt still refuse without `--force`, but explain that the provider's automatic review may occupy the pane and suggest retrying shortly instead of asking for your answer. Once that turn ends on a provider error, the ask is closed and neither refuses on a recorded Auto or Yolo row. In other modes, including unknown mode, an ask still unanswered at the error keeps pane input reserved until the agent's next activity, because a background Code Mode approval may still be live: steer and interrupt still refuse without `--force`, with `@coder (msg_…) ended its turn on a provider error, but a background approval may still be open in its pane; check the pane or pass --force`, and auto-continue does not nudge the pane ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
+A status in a receipt comes from the agent's last recorded state and does not prove its pane is still live. A steer that reaches several agents prints one summary instead: `sent 2 agent(s): @claude (msg_…), @codex (msg_…); queued: …; compacted: …; waiting in pane: …`, with empty parts left out. A typing-held member reads `@codex (msg_…; held: someone is using the receiver's pane; retry at <local time>)` in the queued part. A single `--steer` to an agent with an open prompt fails with `@coder (msg_…) is waiting on your input in its pane; answer it or pass --force`. Unless the rollout shows that the asking Code Mode cell finished and closes the ask, during Codex's first 60 seconds of automatic permission review steer and interrupt still refuse without `--force`, but explain that the provider's automatic review may occupy the pane and suggest retrying shortly instead of asking for your answer. Once that turn ends on a provider error, the ask is closed and neither refuses on a recorded Auto or Yolo row. In other modes, including unknown mode, an ask still unanswered at the error keeps pane input reserved until the agent's next activity, because a background Code Mode approval may still be live: steer and interrupt still refuse without `--force`, with `@coder (msg_…) ended its turn on a provider error, but a background approval may still be open in its pane; check the pane or pass --force`, and auto-continue does not nudge the pane ([Codex asks](../../internals/agents/adapter_codex.md#asks-and-answers)).
 
 ## Conditions
 
@@ -114,7 +114,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 | Rule | Behaviour |
 | --- | --- |
 | Target | Exactly one existing agent with lifecycle state. A broadcast is refused; the recipient itself is allowed, which makes keep-warm messages work. |
-| Status | `running`, `waiting`, `idle`, `success`, or `failed`. These are raw statuses: a completed turn reads `success`, and `paused` is rejected. |
+| Status | `running`, `waiting`, `idle`, `success`, or `failed`. These are raw statuses: a completed turn reads `success`, and the derived `paused` and `sleeping` are rejected. |
 | Duration | `s`, `m`, `h`, or `d`; zero is rejected. |
 | Once met | The condition stays met, even if the watched agent changes status before the recipient takes the message. |
 | Watched agent ends | While the condition is unmet, the message is archived with the reason. |
@@ -224,7 +224,7 @@ The exit code is the first non-completed target's run status, in target order:
 | `125` | A budget cap stopped the turn. |
 | `130` | Canceled. |
 
-At the deadline, stderr starts with `rimz: wait timed out` (naming unfinished targets for a fan-out), then explains each unfinished message. Queued or claimed text stays queued and will deliver; withdraw it with `rimz message cancel <id>`. Text already typed but not acknowledged must not be resent. A delivered message is still being worked on. Read later replies with `rimz agents logs @handle`. These hints also accompany the JSON map.
+At the deadline, stderr starts with `rimz: wait timed out` (naming unfinished targets for a fan-out, and adding `(default 1h for agent callers; use --wait=<duration> to change)` when an agent's bare wait ran out), then explains each unfinished message. Queued or claimed text stays queued and will deliver; withdraw it with `rimz message cancel <id>`. Text already typed but not acknowledged must not be resent. A delivered message is still being worked on. Read later replies with `rimz agents logs @handle`. These hints also accompany the JSON map.
 
 A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error, the automatic-review explanation above while a Codex permission is still under review, or the provider-error explanation above while a pane stays reserved after a turn-ending error.
 
@@ -291,7 +291,7 @@ Trailing lines report what the view left out:
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent pause or stall notice is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
 
 ### Show one message
 
@@ -335,7 +335,7 @@ A follow-up waiting for a resumed child says `waiting for @child to register aft
 | `--enter`, `--no-enter` | Whether the text is submitted. |
 | `--smart-compact <PCT\|TOKENS>`, `--no-smart-compact` | Set or clear the compaction threshold. |
 
-`steer` delivers now, past the schedule, conditions, queue order, and gate, but still honours the typing hold. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, and a final one points to `requeue`.
+`steer` delivers now, past the schedule, conditions, queue order, and gate, but still honours the typing hold. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, a `sent` one is refused because only queued messages can be steered, and a final one points to `requeue`.
 
 `requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A soft-compaction wrap-up is refused: it is steer-only and never requeued. Any other message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
 
