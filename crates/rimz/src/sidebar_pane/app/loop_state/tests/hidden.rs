@@ -2600,3 +2600,135 @@ fn continuously_painted_view_keeps_its_spend_roll_when_moving_tabs() {
         "moving neither settles nor restarts an ongoing roll"
     );
 }
+
+/// The source's pending viewport request: each fact a mirror must not draw.
+#[derive(Clone, Copy, Debug)]
+enum PendingFact {
+    None,
+    Authority,
+    InactiveReveal,
+    RowReveal,
+    Placement,
+    OwnInput,
+    Glide,
+}
+
+fn arm_pending_fact(v: &mut ViewBorrow<'_>, fact: PendingFact) {
+    let rows = &v.context.current.worktree_groups[0].rows;
+    let (selected, below) = (rows[0].id.clone(), rows[18].id.clone());
+    let view = &mut *v.state;
+    match fact {
+        PendingFact::None => {}
+        PendingFact::Authority => view.offset_authoritative = true,
+        PendingFact::InactiveReveal => {
+            view.offset_authoritative = true;
+            view.inactive_reveal = true;
+        }
+        PendingFact::RowReveal => {
+            view.offset_authoritative = true;
+            view.reveal_row = Some(below);
+        }
+        PendingFact::Placement => {
+            view.focus_placement = Some(
+                serde_json::from_value(serde_json::json!({
+                    "row_id": selected, "viewport_row": 5, "held": [],
+                }))
+                .unwrap(),
+            );
+        }
+        PendingFact::OwnInput => view.own_input_reveal = true,
+        PendingFact::Glide => {
+            view.scroll_ease.arm();
+            view.scroll_ease.observe(
+                view.scroll_offset,
+                render::FrameTime::from_millis(u64::MAX / 4),
+            );
+            assert!(view.scroll_ease.in_flight());
+        }
+    }
+}
+
+#[test]
+fn hidden_mirrors_draw_none_of_the_sources_pending_viewport_request() {
+    let facts = [
+        PendingFact::None,
+        PendingFact::Authority,
+        PendingFact::InactiveReveal,
+        PendingFact::RowReveal,
+        PendingFact::Placement,
+        PendingFact::OwnInput,
+        PendingFact::Glide,
+    ];
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut mirrors = Vec::new();
+        for fact in facts {
+            let mut pair = mirror_pair(mux);
+            pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                let mut inactive = v.context.current.worktree_groups[0].clone();
+                inactive.key = "inactive-work".into();
+                inactive.label = inactive.key.clone();
+                inactive.inactive = Some(crate::store::snapshot::SidebarInactive::Unlanded);
+                let rows = Arc::make_mut(&mut inactive.rows);
+                rows.truncate(1);
+                rows[0].id = "old-agent".into();
+                rows[0].pane = None;
+                Arc::make_mut(&mut v.context.current.worktree_groups).push(inactive);
+                v.state.scroll_offset = 9;
+                v.state.offset_authoritative = true;
+                v.state.scroll_ease.cancel();
+                v.context.focus_marker = Some(FocusMarker::Ready);
+            });
+            repaint_source(&mut pair);
+            assert!(
+                pair.view(0).focus_marker_ready,
+                "{mux:?}: the marker is ready"
+            );
+            pair.clock.advance(animation_frame(&pair.snapshot));
+            assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Tick));
+            pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                let child = PaneId::from_parts(mux, "mirror_child");
+                let card = Arc::make_mut(
+                    &mut Arc::make_mut(&mut v.context.current.worktree_groups)[0].rows,
+                )[0]
+                .as_agent_mut()
+                .unwrap();
+                card.prompt = Some("delegate".to_owned());
+                card.sub_agents[0].pane = Some(child.clone());
+                v.state.selected_index = Some(0);
+                v.state.entry_cursor = Some(render::EntryCursor::SubAgent(child));
+                v.state.scroll_offset = 12;
+                arm_pending_fact(v, fact);
+            });
+            let source = format!("{:?}", pair.view(0));
+            let output = FrameOutput::default();
+            pair.panes[1].terminal = Terminal::with_options(
+                PaneBackend::headless(output.clone()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 39, 24)),
+                },
+            )
+            .unwrap();
+            pair.clock.advance(animation_frame(&pair.snapshot));
+            assert!(
+                advance_wakeup(&mut pair.panes[1], Wakeup::Resize),
+                "{mux:?} {fact:?}: a real resize re-mirrors"
+            );
+            assert_eq!(format!("{:?}", pair.view(0)), source, "{mux:?} {fact:?}");
+            let mut screen = vt100::Parser::new(24.try_into().unwrap(), 39.try_into().unwrap(), 0);
+            screen.process(&output.0.lock().unwrap());
+            let hidden = &pair.panes[1].state.pane.ui;
+            mirrors.push((
+                fact,
+                screen.screen().contents(),
+                hidden.painted_rows.clone(),
+                format!("{:?}", hidden.interactions),
+            ));
+        }
+        let (_, control, rows, hits) = &mirrors[0];
+        for (fact, screen, painted, interactions) in &mirrors[1..] {
+            assert_eq!(screen, control, "{mux:?} {fact:?}");
+            assert_eq!(painted, rows, "{mux:?} {fact:?}");
+            assert_eq!(interactions, hits, "{mux:?} {fact:?}");
+        }
+    }
+}

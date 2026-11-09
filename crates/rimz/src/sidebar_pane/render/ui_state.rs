@@ -635,4 +635,102 @@ mod tests {
             assert_eq!(view.head_step, step, "phase {phase} at {refresh_ms} ms");
         }
     }
+
+    #[test]
+    fn note_layout_publishes_each_toggle_and_geometry_change_once() {
+        let ws = crate::sidebar_pane::app::fixtures::workspace();
+        let snapshot = crate::sidebar_pane::app::fixtures::snapshot(&ws);
+        let theme = Theme::fixed(false);
+        let frame = super::super::compose_lines(
+            &snapshot,
+            None,
+            &ViewState::default(),
+            &UiState::default(),
+            &theme,
+            54,
+            24,
+        );
+        let mut view = ViewState::default();
+        view.note_layout(&frame);
+        let mut published = view.layout_sequence;
+        let mut assert_bumps = |view: &mut ViewState,
+                                frame: &super::super::compose::ComposedFrame,
+                                bumps: u64,
+                                what: &str| {
+            for _ in 0..2 {
+                view.note_layout(frame);
+            }
+            published += bumps;
+            assert_eq!(view.layout_sequence, published, "{what}");
+        };
+        type Toggle = fn(&mut ViewState);
+        let toggles: [(&str, Toggle); 9] = [
+            ("expanded_groups", |view| {
+                view.expanded_groups.insert("group".into());
+            }),
+            ("inactive_peek opens", |view| {
+                view.inactive_peek = Some(InactivePeek::default());
+            }),
+            ("inactive_peek pages", |view| {
+                view.inactive_peek = Some(InactivePeek {
+                    pages: NonZeroUsize::new(2).unwrap(),
+                });
+            }),
+            ("delegation_overrides", |view| {
+                view.delegation_overrides.insert("row".into(), true);
+            }),
+            ("delegation_history", |view| {
+                view.delegation_history.insert("row".into(), None);
+            }),
+            ("dashboard_tab", |view| {
+                view.dashboard_tab = Some(DashboardTab {
+                    login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        "claude",
+                    )),
+                    derived_at_start: None,
+                });
+            }),
+            ("make_up_filter", |view| {
+                view.make_up_filter.query = Some("auth".into());
+            }),
+            ("help_visible", |view| view.help_visible = true),
+            ("search_draft", |view| {
+                view.search_draft = Some(String::new())
+            }),
+        ];
+        for (what, toggle) in toggles {
+            toggle(&mut view);
+            assert_bumps(&mut view, &frame, 1, what);
+        }
+        type Reshape = fn(&mut super::super::compose::ComposedFrame);
+        let geometry: [(&str, Reshape); 6] = [
+            ("rows", |frame| frame.anchored_rows.push(("row".into(), 1))),
+            ("groups", |frame| {
+                frame.group_placements.push(("group".into(), 0));
+            }),
+            ("top_height", |frame| frame.top_height += 1),
+            ("bottom_height", |frame| frame.bottom_height += 1),
+            ("content_height", |frame| frame.content_height += 1),
+            ("scroll_max", |frame| frame.scroll_max += 1),
+        ];
+        let mut changed = frame;
+        for (what, change) in geometry {
+            change(&mut changed);
+            assert_bumps(&mut view, &changed, 1, what);
+        }
+        view.animation_phase += 7;
+        view.frame_ms = FrameTime::from_millis(900);
+        view.selected_index = Some(3);
+        view.scroll_offset += 4;
+        view.offset_authoritative = true;
+        view.reveal_row = Some("row".into());
+        view.inactive_reveal = true;
+        view.own_input_reveal = true;
+        assert_bumps(
+            &mut view,
+            &changed,
+            0,
+            "clock, selection and viewport request",
+        );
+    }
 }

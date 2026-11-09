@@ -3,6 +3,10 @@ use crate::ids::FocusNonce;
 use crate::sidebar_pane::app::inbox::WakeupInbox;
 
 fn scroll_rig() -> (Rig, FrameOutput) {
+    scroll_rig_with(|_| {})
+}
+
+fn scroll_rig_with(amend: impl FnOnce(&mut SidebarSnapshot)) -> (Rig, FrameOutput) {
     let mut rig = Rig::with_own_pane(pane("terminal_99", "tab_0", false).pane_id);
     let mut snapshot = agent_snapshot(&rig.ws);
     let first = snapshot.worktree_groups[0].rows[0].clone();
@@ -16,6 +20,7 @@ fn scroll_rig() -> (Rig, FrameOutput) {
             row
         })
         .collect();
+    amend(&mut snapshot);
     rig.view()
         .ui()
         .expanded_groups
@@ -3399,4 +3404,128 @@ fn hidden_redraw_stays_dirty_until_watched() {
     rig.paint(true);
     assert_eq!(paints(&output), 1);
     assert!(!rig.state.pane.dirty);
+}
+
+fn input_pass(rig: &mut Rig, wakeup: Wakeup) {
+    rig.state.with_view_for_test(Route::READ, |state, v| {
+        let now = state.clock.now();
+        state.reduce_input(v, vec![wakeup], now);
+    });
+}
+
+/// Input passes that no paint follows add to one pending request: a row reveal, an entry step
+/// that withdraws its authority and a wheel tick that restores it all reach the one paint.
+#[test]
+fn a_viewport_request_lives_until_the_paint_not_the_input_pass() {
+    let (mut rig, _) = scroll_rig_with(|snapshot| {
+        let now = snapshot.now;
+        let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
+        for (index, row) in rows.iter_mut().enumerate() {
+            let card = row.as_agent_mut().unwrap();
+            card.user_turn_started_at = Some(now);
+            card.prompt = Some("delegate".to_owned());
+            card.sub_agent_count = 1;
+            card.sub_agents = vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": format!("child-{index}"), "kind": "claude", "name": "child",
+                    "status": "running", "last_activity": now,
+                    "pane": format!("zellij:terminal_child_{index}"),
+                }))
+                .unwrap(),
+            ];
+        }
+        rows[15].as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+        rows[15].unread = true;
+    });
+    rig.view()
+        .ui()
+        .delegation_overrides
+        .insert("agent-0".into(), true);
+    rig.state.pane.dirty = true;
+    paint_at(&mut rig, 0);
+    let painted_offset = rig.view().ui().scroll_offset;
+    assert!(rig.state.pane.ui.interactions.line_for_row(15).is_none());
+    let (column, row) = rig
+        .state
+        .pane
+        .ui
+        .interactions
+        .line_for_target(&render::HitTarget::UnreadBanner)
+        .expect("the lead is off screen");
+    input_pass(&mut rig, Wakeup::Key(KeyAction::Top));
+    input_pass(&mut rig, Wakeup::MouseClick { column, row });
+    assert!(rig.view().ui().entry_cursor.is_none());
+    input_pass(&mut rig, Wakeup::Key(KeyAction::Down));
+    assert!(
+        rig.view().ui().entry_cursor.is_some(),
+        "the step entered a child"
+    );
+    input_pass(&mut rig, Wakeup::Scroll { down: true });
+    rig.state.pane.dirty = true;
+    paint_at(&mut rig, 0);
+    assert!(rig.view().ui().scroll_offset > painted_offset + 3);
+    rig.state.pane.dirty = true;
+    paint_at(&mut rig, 5_000);
+    assert!(rig.state.pane.ui.interactions.line_for_row(15).is_some());
+}
+
+/// A non-wheel redraw lands the glide a wheel tick before it armed in the same batch, and a
+/// wheel tick after it still glides.
+#[test]
+fn a_non_wheel_redraw_lands_only_the_glide_queued_before_it() {
+    for (wakeups, glides) in [
+        (
+            [
+                Wakeup::Scroll { down: true },
+                Wakeup::Key(KeyAction::Cancel),
+            ],
+            false,
+        ),
+        (
+            [
+                Wakeup::Key(KeyAction::Cancel),
+                Wakeup::Scroll { down: true },
+            ],
+            true,
+        ),
+    ] {
+        let (mut rig, output) = scroll_rig();
+        rig.state.on_inputs(wakeups, &mut rig.terminal).unwrap();
+        assert_eq!(paints(&output), 1);
+        assert_eq!(rig.view().ui().scroll_offset, 3);
+        assert_eq!(
+            rig.view().ui().scroll_ease.in_flight(),
+            glides,
+            "glides: {glides}"
+        );
+    }
+}
+
+/// Arrival mid-glide makes the glide's target authoritative, so a pending jump placement on
+/// the same view cannot move the receiving pane's first paint.
+#[test]
+fn glide_arrival_lands_the_glide_over_a_pending_placement() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.panes[0].input(KeyAction::Top);
+    pair.input(0);
+    let target = pair.view(0).scroll_offset;
+    assert!(pair.view(0).scroll_ease.in_flight());
+    pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+        let row = v
+            .state
+            .selected_index
+            .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
+            .map(|row| row.id.clone())
+            .expect("a selection");
+        v.state.focus_placement = Some(
+            serde_json::from_value(serde_json::json!({
+                "row_id": row, "viewport_row": -40, "held": [],
+            }))
+            .unwrap(),
+        );
+    });
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    assert!(!pair.view(1).scroll_ease.in_flight());
+    assert_eq!(pair.view(1).scroll_offset, target);
 }

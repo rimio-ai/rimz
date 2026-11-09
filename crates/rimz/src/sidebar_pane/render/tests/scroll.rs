@@ -330,6 +330,108 @@ fn shared_placement_with_no_opening_set_overrides_local_holds() {
     assert!(target.held_expansions.is_empty());
 }
 
+fn placement(
+    row_id: &str,
+    viewport_row: isize,
+    held: &[&str],
+) -> crate::mux::focus_anchor::FocusPlacement {
+    serde_json::from_value(serde_json::json!({
+        "row_id": row_id,
+        "viewport_row": viewport_row,
+        "held": held,
+    }))
+    .unwrap()
+}
+
+/// An authoritative offset suppresses a pending jump's scroll target and this sidebar's own
+/// reveal, whichever was requested first, while the jump's held set still opens its cards,
+/// both in the composed frame and in the entry stops input reads before that paint.
+#[test]
+fn authoritative_offset_keeps_a_pending_jumps_held_set_but_not_its_target() {
+    let mut snapshot = delegation_fleet(&[0]);
+    let codex = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .iter_mut()
+        .find(|row| row.id == "codex-0")
+        .unwrap();
+    codex.as_agent_mut().unwrap().sub_agents[0].pane =
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_child"));
+    let parent = ViewState::default()
+        .visible_roster(&snapshot)
+        .ordinal_of_id("codex-0");
+    let parent = parent.unwrap();
+    let theme = Theme::fixed(false);
+    let pane_ui = UiState::default();
+    let arm = |authority_first: bool| {
+        let mut view = ViewState::default();
+        select_card(&snapshot, &mut view, "codex-11");
+        let jump = placement("codex-11", 0, &["codex-0"]);
+        if authority_first {
+            view.offset_authoritative = true;
+            view.focus_placement = Some(jump);
+        } else {
+            view.focus_placement = Some(jump);
+            view.offset_authoritative = true;
+        }
+        view
+    };
+    let mut unrequested = ViewState::default();
+    select_card(&snapshot, &mut unrequested, "codex-11");
+    unrequested.own_input_reveal = false;
+    assert!(unrequested.entry_stops(&snapshot, parent).is_empty());
+    let mut directed = unrequested.clone();
+    directed.focus_placement = Some(placement("codex-11", 0, &["codex-0"]));
+    let directed = compose_lines(&snapshot, None, &directed, &pane_ui, &theme, 54, 45);
+    assert!(
+        directed.scroll_offset > 0,
+        "without authority the jump lands"
+    );
+    for authority_first in [true, false] {
+        let view = arm(authority_first);
+        assert!(view.own_input_reveal);
+        assert!(!view.entry_stops(&snapshot, parent).is_empty());
+        let composed = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 45);
+        assert_eq!(
+            composed.scroll_offset, 0,
+            "authority first: {authority_first}"
+        );
+        assert_eq!(composed.held_expansions, ["codex-0".into()].into());
+        assert!(
+            composed
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("survey area 0-"))
+        );
+    }
+}
+
+/// A placement for another row still snaps an in-flight glide, but its own target is not used:
+/// the anchor places the window as it would with no placement.
+#[test]
+fn a_mismatched_placement_snaps_without_a_shared_target() {
+    let snapshot = overflowing_fleet();
+    let mut view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    let mut terminal = Terminal::new(TestBackend::new(54, 20)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
+    view.scroll_offset += 3;
+    view.offset_authoritative = true;
+    view.scroll_ease.arm();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
+    assert!(view.scroll_ease.in_flight());
+    let theme = Theme::fixed(false);
+    let control = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 20);
+    assert!(control.scroll_ease.in_flight());
+    let other = snapshot.rows().nth(4).unwrap().id.clone();
+    view.focus_placement = Some(placement(&other, 0, &[]));
+    let composed = compose_lines(&snapshot, None, &view, &pane_ui, &theme, 54, 20);
+    assert!(!composed.scroll_ease.in_flight());
+    assert_eq!(composed.scroll_offset, control.scroll_offset);
+    assert_eq!(composed.correction, control.correction);
+}
+
 fn assert_cache_notice_anchor(
     density: crate::config::CardDensityMode,
     offset: usize,
