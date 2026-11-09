@@ -1,8 +1,11 @@
-//! In-process git ref reads for diff-stats ancestry probes.
+//! In-process git ref reads for diff-stats ancestry probes and the trunk lane.
 //!
 //! This module reads only ref files and `packed-refs`. Any shape that would
 //! need git's full revision parser returns `None` and the caller falls back to
-//! the existing `git` subprocess chain.
+//! the existing `git` subprocess chain. A reftable repository keeps its refs in
+//! binary tables this module does not decode: [`trunk`] names the stack instead,
+//! and [`trunk_from_for_each_ref`] runs the same trunk ladder over the caller's
+//! `git for-each-ref` output.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +32,71 @@ pub(super) fn resolve(worktree: &Path, configured_trunk: Option<&str>) -> Option
         trunk_sha,
         merge_in_progress: merge_in_progress(&git_dir),
     })
+}
+
+/// The trunk as the ref store answers it, read without HEAD.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TrunkRefs {
+    /// Loose refs and `packed-refs` are git's own storage, so a miss is a real
+    /// miss (no trunk ref, or a lock held mid `pack-refs`).
+    Files(Option<(String, String)>),
+    /// The reftable stack's `tables.list` contents, which every ref update
+    /// rewrites and a no-op update leaves byte-identical.
+    Reftable { stack: String },
+}
+
+/// Resolve the trunk ladder of [`resolve`] without reading HEAD, so an unborn
+/// or unparseable HEAD still yields the trunk; `None` when `worktree` has no
+/// git admin directory.
+pub(super) fn trunk(worktree: &Path, configured_trunk: Option<&str>) -> Option<TrunkRefs> {
+    let git_dir = crate::worktree::git_admin_dir_from_checkout_metadata(worktree)
+        .ok()
+        .flatten()?;
+    let common_dir = common_dir(&git_dir)?;
+    if let Ok(stack) = std::fs::read_to_string(common_dir.join("reftable/tables.list")) {
+        return Some(TrunkRefs::Reftable { stack });
+    }
+    Some(TrunkRefs::Files(trunk_ref(
+        &git_dir,
+        &common_dir,
+        configured_trunk,
+    )))
+}
+
+/// Every full refname the trunk ladder may read, for one `git for-each-ref`.
+pub(super) fn trunk_ref_patterns(configured_trunk: Option<&str>) -> Vec<String> {
+    trunk_names(configured_trunk)
+        .flat_map(ref_candidates)
+        .chain([ORIGIN_HEAD.to_owned()])
+        .collect()
+}
+
+/// Run the trunk ladder over `git for-each-ref
+/// --format=%(refname)%00%(objectname)%00%(symref)` output, matching each
+/// refname exactly since a literal pattern also matches the refs below it.
+pub(super) fn trunk_from_for_each_ref(
+    configured_trunk: Option<&str>,
+    stdout: &[u8],
+) -> Option<(String, String)> {
+    let text = String::from_utf8_lossy(stdout);
+    let rows: Vec<[&str; 3]> = text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let row = [fields.next()?, fields.next()?, fields.next()?];
+            fields.next().is_none().then_some(row)
+        })
+        .collect();
+    let row = |reference: &str| rows.iter().find(|row| row[0] == reference);
+    trunk_ladder(
+        configured_trunk,
+        |reference| row(reference).map(|row| row[1].to_owned()),
+        || {
+            let [_, sha, target] = row(ORIGIN_HEAD)?;
+            Some((target.to_string(), sha.to_string()))
+        },
+    )
+    .filter(|(_, sha)| is_hex_oid(sha))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,40 +146,60 @@ fn read_head(git_dir: &Path, common_dir: &Path) -> Option<HeadRef> {
     })
 }
 
+const ORIGIN_HEAD: &str = "refs/remotes/origin/HEAD";
+
 fn trunk_ref(
     git_dir: &Path,
     common_dir: &Path,
     configured: Option<&str>,
 ) -> Option<(String, String)> {
-    let configured = configured.filter(|name| !name.is_empty() && !name.starts_with('-'));
-    for name in configured.into_iter().chain(["main", "master"]) {
-        if let Some((display, sha)) = named_ref(git_dir, common_dir, name) {
-            return Some((display, sha));
-        }
-    }
-    let raw = read_ref_text(common_dir.join("refs/remotes/origin/HEAD"))?;
-    let reference = raw.strip_prefix("ref:").map(str::trim)?;
-    let sha = read_ref(git_dir, common_dir, reference)?;
-    Some((short_ref(reference)?, sha))
+    trunk_ladder(
+        configured,
+        |reference| read_ref(git_dir, common_dir, reference),
+        || {
+            let raw = read_ref_text(common_dir.join(ORIGIN_HEAD))?;
+            let reference = raw.strip_prefix("ref:").map(str::trim)?;
+            let sha = read_ref(git_dir, common_dir, reference)?;
+            Some((reference.to_owned(), sha))
+        },
+    )
 }
 
-fn named_ref(git_dir: &Path, common_dir: &Path, name: &str) -> Option<(String, String)> {
-    let candidates = if name.starts_with("refs/") {
-        vec![(name.to_owned(), name.to_owned())]
+/// The configured trunk, then `main`, `master`, and `origin/HEAD`'s target:
+/// `sha_of` reads one full refname, `origin_head` returns the symref's target
+/// refname and SHA.
+fn trunk_ladder(
+    configured: Option<&str>,
+    sha_of: impl Fn(&str) -> Option<String>,
+    origin_head: impl FnOnce() -> Option<(String, String)>,
+) -> Option<(String, String)> {
+    for name in trunk_names(configured) {
+        if let Some(sha) = ref_candidates(name)
+            .iter()
+            .find_map(|reference| sha_of(reference))
+        {
+            return Some((name.to_owned(), sha));
+        }
+    }
+    let (reference, sha) = origin_head()?;
+    Some((short_ref(&reference)?, sha))
+}
+
+fn trunk_names(configured: Option<&str>) -> impl Iterator<Item = &str> {
+    configured
+        .filter(|name| !name.is_empty() && !name.starts_with('-'))
+        .into_iter()
+        .chain(["main", "master"])
+}
+
+fn ref_candidates(name: &str) -> Vec<String> {
+    if name.starts_with("refs/") {
+        vec![name.to_owned()]
     } else if name.contains('/') {
-        vec![
-            (name.to_owned(), format!("refs/remotes/{name}")),
-            (name.to_owned(), format!("refs/heads/{name}")),
-        ]
+        vec![format!("refs/remotes/{name}"), format!("refs/heads/{name}")]
     } else {
-        vec![
-            (name.to_owned(), format!("refs/heads/{name}")),
-            (name.to_owned(), format!("refs/remotes/{name}")),
-        ]
-    };
-    candidates.into_iter().find_map(|(display, reference)| {
-        read_ref(git_dir, common_dir, &reference).map(|sha| (display, sha))
-    })
+        vec![format!("refs/heads/{name}"), format!("refs/remotes/{name}")]
+    }
 }
 
 fn read_ref(git_dir: &Path, common_dir: &Path, reference: &str) -> Option<String> {
@@ -240,6 +328,44 @@ mod tests {
         assert_eq!(refs.head_branch.as_deref(), Some("feature"));
         assert_eq!(refs.trunk_sha, MAIN);
         assert!(refs.merge_in_progress);
+    }
+
+    #[test]
+    fn for_each_ref_output_runs_the_trunk_ladder_by_exact_refname() {
+        let row = |name: &str, sha: &str, symref: &str| format!("{name}\0{sha}\0{symref}\n");
+        let below = row("refs/heads/main/old", HEAD, "");
+        let origin = row(
+            "refs/remotes/origin/HEAD",
+            PACKED,
+            "refs/remotes/origin/trunk",
+        );
+        let stdout = format!("{below}{origin}");
+        assert_eq!(
+            trunk_from_for_each_ref(None, stdout.as_bytes()),
+            Some(("origin/trunk".into(), PACKED.into()))
+        );
+        let stdout = format!("{stdout}{}", row("refs/heads/main", MAIN, ""));
+        assert_eq!(
+            trunk_from_for_each_ref(None, stdout.as_bytes()),
+            Some(("main".into(), MAIN.into()))
+        );
+        let stdout = format!("{stdout}{}", row("refs/remotes/develop", HEAD, ""));
+        assert_eq!(
+            trunk_from_for_each_ref(Some("develop"), stdout.as_bytes()),
+            Some(("develop".into(), HEAD.into()))
+        );
+        assert_eq!(
+            trunk_ref_patterns(Some("develop")),
+            [
+                "refs/heads/develop",
+                "refs/remotes/develop",
+                "refs/heads/main",
+                "refs/remotes/main",
+                "refs/heads/master",
+                "refs/remotes/master",
+                "refs/remotes/origin/HEAD",
+            ]
+        );
     }
 
     #[test]
