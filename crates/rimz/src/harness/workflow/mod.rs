@@ -30,8 +30,8 @@ pub use inspect::{
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse_run;
 pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, Issue, Limit, OutcomeCap, Route, ScopeKind,
-    SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
+    Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, Limit, OutcomeCap, Route,
+    ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
 };
 pub use validate::{NodeRow, Validation, validate};
 
@@ -114,6 +114,7 @@ pub trait AttemptHost {
         &self,
         scope: &Path,
         target: &str,
+        session: Option<&crate::ids::AgentSessionId>,
         message: &crate::ids::MessageId,
         text: &str,
     ) -> Result<Result<String, String>, WorkflowErr>;
@@ -149,6 +150,7 @@ pub struct StepLaunch {
     pub workflow_note: String,
     pub cwd: PathBuf,
     pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub overrides: LaunchOverrides,
 }
 
 #[derive(Clone, Debug)]

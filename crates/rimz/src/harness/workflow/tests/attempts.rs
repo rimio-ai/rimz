@@ -19,6 +19,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
     max-visits-per-outcome={limit=2,reset-on='queued'}\n";
 
 mod brief;
+mod capabilities;
 mod keep;
 mod reached;
 mod restart;
@@ -32,7 +33,8 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();
     let spec: WorkflowSpec = toml::from_str(text).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":3, "default_lifecycle":"until", "id":WorkflowRunId::new(),
+        "version":3, "default_lifecycle":"until", "spec_version":super::spec::SPEC_VERSION,
+        "id":WorkflowRunId::new(),
         "workflow":"test", "spec_dir":dir.path(),
         "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},

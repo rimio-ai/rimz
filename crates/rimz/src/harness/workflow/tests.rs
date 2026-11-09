@@ -32,6 +32,7 @@ pub(super) struct FakeHost {
     forward_calls: Cell<usize>,
     forward_error: Cell<bool>,
     pub(super) messages: RefCell<Vec<(String, crate::ids::MessageId, String)>>,
+    pub(super) message_sessions: RefCell<Vec<Option<crate::ids::AgentSessionId>>>,
     pub(super) message_answer: RefCell<Result<Result<String, String>, String>>,
     pub(super) on_message: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) retired: RefCell<Vec<crate::ids::MessageId>>,
@@ -73,6 +74,7 @@ impl FakeHost {
             forward_calls: Cell::new(0),
             forward_error: Cell::new(false),
             messages: RefCell::new(Vec::new()),
+            message_sessions: RefCell::new(Vec::new()),
             message_answer: RefCell::new(Ok(Ok("@planner".into()))),
             on_message: RefCell::new(None),
             retired: RefCell::new(Vec::new()),
@@ -202,9 +204,11 @@ impl AttemptHost for FakeHost {
         &self,
         _: &std::path::Path,
         target: &str,
+        session: Option<&crate::ids::AgentSessionId>,
         message: &crate::ids::MessageId,
         text: &str,
     ) -> Result<Result<String, String>, WorkflowErr> {
+        self.message_sessions.borrow_mut().push(session.cloned());
         self.messages
             .borrow_mut()
             .push((target.into(), message.clone(), text.into()));
@@ -881,8 +885,11 @@ fn validation_rejects_each_invalid_spec() {
             "steps.build.then",
         ),
         (
-            "then terminal",
-            VALID.replace("then = \"pick\"", "then = '@done'"),
+            "until then terminal",
+            VALID.replace(
+                "lifecycle = \"turn\"\nthen = \"pick\"",
+                "lifecycle = \"until\"\nthen = '@done'",
+            ),
             "steps.build.then",
         ),
         (

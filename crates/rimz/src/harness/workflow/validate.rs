@@ -288,6 +288,11 @@ pub(super) fn validate_spec(
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
         let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
         let message = matches!(step.kind(), Some(StepKind::Message(_)));
+        if let Some(file) = &step.system_prompt_file
+            && let Err(error) = spec::confined_file(dir, file)
+        {
+            report.error(&format!("{path}.system-prompt-file"), error);
+        }
         if agent && !at_break && step.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
@@ -350,8 +355,12 @@ pub(super) fn validate_spec(
                 "then must name a check or a nonempty list of checks",
             );
         }
+        let ends_run = agent
+            && step.lifecycle() != StepLifecycle::Until
+            && matches!(step.then.as_slice(), [target] if matches!(target.as_str(), "@done" | "@failed"));
         if !at_break
             && !message
+            && !ends_run
             && step
                 .then
                 .iter()
@@ -359,7 +368,20 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("{path}.then"),
-                "then must name a check, never a step or @done",
+                if agent && step.lifecycle() != StepLifecycle::Until {
+                    if step.then.len() > 1
+                        && step
+                            .then
+                            .iter()
+                            .any(|target| target == "@done" || target == "@failed")
+                    {
+                        "then lists only checks; @done or @failed stands alone as then"
+                    } else {
+                        "then must name a check, @done, or @failed, never a step"
+                    }
+                } else {
+                    "then must name a check, never a step or @done"
+                },
             );
         }
         if !message && step.lifecycle() != StepLifecycle::Until && step.then.len() > 1 {
@@ -416,10 +438,11 @@ pub(super) fn validate_spec(
         for (outcome, target) in [
             ("asked", &step.on.asked),
             ("cap", &step.on.cap),
+            ("failed", &step.on.failed),
             ("invalid", &step.on.invalid),
             ("undelivered", &step.on.undelivered),
         ] {
-            if (matches!(outcome, "asked" | "invalid") && !agent)
+            if (matches!(outcome, "asked" | "failed" | "invalid") && !agent)
                 || (outcome == "undelivered" && !message)
             {
                 continue;
@@ -467,6 +490,7 @@ pub(super) fn validate_spec(
                     .filter(|edge| {
                         edge.fires == super::Fireability::Yes
                             && edge.source == EdgeSource::Default
+                            && !spec.declared_default(&row.node, &edge.outcome)
                             && matches!(
                                 edge.outcome.as_str(),
                                 "timeout" | "invalid" | "undelivered" | "cap" | "deadline"

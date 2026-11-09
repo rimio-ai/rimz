@@ -7,8 +7,9 @@ use crate::config::CapacityWait;
 use crate::store::workflow::RouteDefaults;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
-const STEP_TRIGGERS: [&str; 7] = [
+const STEP_TRIGGERS: [&str; 8] = [
     "then",
+    "failed",
     "undelivered",
     "asked",
     "invalid",
@@ -229,12 +230,11 @@ impl WorkflowSpec {
                     .map(|edge| edge.target)
             };
         }
-        let message = self
-            .steps
-            .get(node)
-            .is_some_and(|step| matches!(step.kind(), Some(StepKind::Message(_))));
+        let step = self.steps.get(node);
+        let message = step.is_some_and(|step| matches!(step.kind(), Some(StepKind::Message(_))));
         let outcome = match outcome {
             "died" if message => "undelivered",
+            _ if self.routes_on_failed(node, outcome) => "failed",
             "ended" | "died" | "canceled" | "limited" | "timeout" => "then",
             other => other,
         };
@@ -249,6 +249,16 @@ impl WorkflowSpec {
                     (outcome == "then").then(|| "@failed".into())
                 }
             })
+    }
+
+    /// Whether a step's attempt ending leaves through its `on.failed`, for settlement and
+    /// inspection alike.
+    pub(super) fn routes_on_failed(&self, node: &str, ending: &str) -> bool {
+        matches!(ending, "died" | "timeout" | "limited")
+            && self
+                .steps
+                .get(node)
+                .is_some_and(|step| step.on.failed.is_some())
     }
 
     pub(super) fn engine_target(&self, node: &str, outcome: &str) -> String {
@@ -296,8 +306,10 @@ impl WorkflowSpec {
                             .and_then(|route| route.delay())
                             .map(str::to_owned),
                         target,
-                        source: if explicit {
+                        source: if explicit && !self.declared_default(node, &outcome) {
                             EdgeSource::Explicit
+                        } else if explicit {
+                            EdgeSource::Default
                         } else if !self.is_break(node)
                             && self.route_defaults == RouteDefaults::OnBreak
                             && self.workflow.on_break.is_some()
@@ -314,6 +326,14 @@ impl WorkflowSpec {
                 })
                 .collect(),
         )
+    }
+
+    /// Whether the check's route for `outcome` is written and marked `default = true`.
+    pub(super) fn declared_default(&self, node: &str, outcome: &str) -> bool {
+        self.checks
+            .get(node)
+            .and_then(|check| check.on.get(outcome))
+            .is_some_and(super::spec::Route::is_default)
     }
 
     fn fireability(&self, node: &str, outcome: &str) -> (Fireability, Option<NeverReason>) {
@@ -476,6 +496,7 @@ impl Step {
     fn edges(&self) -> BTreeMap<&'static str, (&str, bool)> {
         [
             ("then", self.then.first().map(String::as_str), None),
+            ("failed", self.on.failed.as_deref(), None),
             ("asked", self.on.asked.as_deref(), None),
             ("cap", self.on.cap.as_deref(), Some("@user")),
             ("capacity", self.on.capacity.as_deref(), Some("@failed")),

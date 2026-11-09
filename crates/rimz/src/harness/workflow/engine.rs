@@ -116,6 +116,7 @@ pub fn create(
         version: workflow::VERSION,
         default_lifecycle: workflow::StepLifecycle::Until,
         route_defaults: workflow::RouteDefaults::OnBreak,
+        spec_version: spec::SPEC_VERSION,
         break_agents: Vec::new(),
         id: WorkflowRunId::new(),
         workflow: name,
@@ -250,7 +251,13 @@ fn window_wait(
     Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
-fn launch_groups(record: &RunRecord, agent: &str) -> Result<Vec<throttle::StartGroup>> {
+/// The start groups an agent launch admits, by kind and account. A step's `account` pins every
+/// cell, so availability routing is skipped, as the launcher does for a pinned login.
+fn launch_groups(
+    record: &RunRecord,
+    agent: &str,
+    account: Option<&crate::ids::LoginName>,
+) -> Result<Vec<throttle::StartGroup>> {
     let workspace = crate::workspace::WorkspaceResolver::resolve(
         &record.scope.path,
         Some(record.project_root.clone()),
@@ -263,12 +270,14 @@ fn launch_groups(record: &RunRecord, agent: &str) -> Result<Vec<throttle::StartG
     let resolved = (|| -> anyhow::Result<_> {
         let machine = crate::config::MachineConfig::load_lenient();
         let mut effective = crate::config::effective::load(&machine, &workspace.project_root)?;
-        let availability = crate::harness::plan::LaunchAvailability::read(
-            &runtime,
-            &state,
-            &machine,
-            Timestamp::now(),
-        );
+        let availability = account.is_none().then(|| {
+            crate::harness::plan::LaunchAvailability::read(
+                &runtime,
+                &state,
+                &machine,
+                Timestamp::now(),
+            )
+        });
         effective.route(
             &machine.tiers,
             crate::config::effective::ProfileScope::Agents,
@@ -276,7 +285,11 @@ fn launch_groups(record: &RunRecord, agent: &str) -> Result<Vec<throttle::StartG
             None,
             None,
             None,
-            |kind, model| availability.unavailable(kind, model),
+            |kind, model| {
+                availability
+                    .as_ref()
+                    .and_then(|usage| usage.unavailable(kind, model))
+            },
         )?;
         Ok(crate::harness::plan::resolve_launch(
             &effective,
@@ -289,7 +302,7 @@ fn launch_groups(record: &RunRecord, agent: &str) -> Result<Vec<throttle::StartG
     .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let mut groups: Vec<throttle::StartGroup> = Vec::new();
     for cell in resolved.layout.agent_cells() {
-        let requested = cell.launch.login.clone().map_or(
+        let requested = account.or(cell.launch.login.as_ref()).cloned().map_or(
             crate::store::writer::LaunchLogin::RoomDefault,
             crate::store::writer::LaunchLogin::Pinned,
         );
@@ -317,7 +330,7 @@ fn window_wait_for_launch(
     raw: &str,
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
-    window_wait_for_groups(record, &launch_groups(record, agent)?, raw, windows)
+    window_wait_for_groups(record, &launch_groups(record, agent, None)?, raw, windows)
 }
 
 fn window_wait_for_groups(
@@ -592,6 +605,7 @@ struct Notice {
     record: RunRecord,
     seq: u64,
     target: String,
+    session: Option<crate::ids::AgentSessionId>,
     message: crate::ids::MessageId,
     text: std::result::Result<String, String>,
 }
@@ -604,13 +618,15 @@ impl Notice {
         text: std::result::Result<String, String>,
     ) -> Option<Self> {
         let attempt = record.attempt.as_ref()?;
-        let Some(spec::StepKind::Message(target)) = spec.steps.get(&attempt.node)?.kind() else {
+        let step = spec.steps.get(&attempt.node)?;
+        let Some(spec::StepKind::Message(target)) = step.kind() else {
             return None;
         };
         Some(Self {
             seq: attempt.seq,
             message: attempt.message.clone()?,
             target: target.into(),
+            session: step.session.clone(),
             record,
             text,
         })
@@ -661,6 +677,7 @@ fn message_step(
         Ok(text) => host.message(
             &notice.record.scope.path,
             &notice.target,
+            notice.session.as_ref(),
             &notice.message,
             &text,
         )?,
@@ -829,7 +846,7 @@ fn prepare(
                 launch_error = Some(reason.to_string());
             }
             let groups = if admits || step.window.is_some() {
-                match launch_groups(&t.record, agent) {
+                match launch_groups(&t.record, agent, step.account.as_ref()) {
                     Ok(groups) => groups,
                     Err(error) => {
                         launch_error = Some(error.to_string());

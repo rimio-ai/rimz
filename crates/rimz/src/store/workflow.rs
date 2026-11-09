@@ -525,6 +525,10 @@ pub struct RunRecord {
     pub default_lifecycle: StepLifecycle,
     #[serde(default)]
     pub route_defaults: RouteDefaults,
+    /// The definition rules the run was sealed under; 0, the default, marks a run sealed before
+    /// `harness::workflow`'s first spec version, whose re-parse ignores every later field.
+    #[serde(default)]
+    pub spec_version: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub break_agents: Vec<String>,
     pub id: WorkflowRunId,
