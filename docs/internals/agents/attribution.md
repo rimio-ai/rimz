@@ -1,6 +1,6 @@
 # Attribution
 
-This page owns how RimZ credits effort to the agents that worked a lane: which records a report admits, how several sessions fold into one contributor, and where each figure comes from. The command surface, `rimz agents attribution`, is [agents.md](../../reference/cli/agents.md#attribution). The fold and the report are [`agents/attribution.rs`](../../../crates/rimz/src/agents/attribution.rs), and lane lifetimes resolve in [`worktree::lane_lifetimes`](../../../crates/rimz/src/worktree.rs).
+This page owns how RimZ credits effort to the agents that worked a lane: which records a report admits, how several sessions fold into one contributor, and where each figure comes from. The command surface, `rimz agents attribution`, is [agents.md](../../reference/cli/agents.md#attribution). The fold, the report, and the `LaneLifetimes` type are [`agents/attribution.rs`](../../../crates/rimz/src/agents/attribution.rs). Lane lifetimes are resolved from the filesystem by [`worktree::lane_lifetimes`](../../../crates/rimz/src/worktree.rs).
 
 Attribution reads the audit rollup (`RuntimeScope::Audit`), so a teammate stays eligible after its pane exits and the runtime projection hides it from live cards. No multiplexer observation participates in correctness.
 
@@ -9,7 +9,7 @@ The seat fold has five consumers. Only the attribution report selects a lane and
 | Consumer | Call site | What it takes from the fold |
 | --- | --- | --- |
 | `rimz agents attribution` | `cli/agents_cmd/attribution.rs` → `attribution::build` | the whole report |
-| `rimz agents show` | `cli/agents_cmd/show.rs` → `slot_groups`, then `spending::slot_effort` | seat effort and active time |
+| `rimz agents show` | `cli/agents_cmd/show.rs` → `slot_groups`, then `spending::slot_effort` | seat effort and active time. For a launched child, the fold runs over launched-child records alone, so the figures cover that child's own continuations. |
 | `rimz agents list --json` | `cli/agents_cmd/list.rs` → `slot_groups` | seat active time |
 | `rimz teams list`, `rimz teams show` | `cli/teams/list.rs::live_instances` → `slot_groups` | member cost |
 | the sidebar's finished-cohort receipt | `sidebar/refresh/cohort_spend.rs::compute_cohort_effort` → `slot_groups` | cohort and seat totals |
@@ -43,7 +43,7 @@ Exclusion rewrites and deletes nothing. The audit records, the event log, and pr
 
 Attribution alone filters by `AttributionScope.branch`, after lifetime admission and on roots only. A root qualifies when its `worktree_branches` set holds the branch, and launched children follow their admitted parent without a branch check. How the rollup accepts a branch into that set is [model.md](./model.md#the-rollup).
 
-Figures stay whole-identity, so an identity observed on several branches reports its full effort under each. The rollup rebuilds `worktree_branches` from the active event log plus carryover, never from rotated archives. A carried record whose branches were never observed there has an empty set and fails every branch filter.
+Figures stay whole-identity, so an identity observed on several branches reports its full effort under each. The rollup accumulates `worktree_branches` from the active event log, and rotation carries the set forward in the carryover row ([store.md](../store.md#rotation-and-carryover)). Rotated archives are never reread. A record that no event observed on a branch has an empty set and fails every branch filter.
 
 ## The seat fold
 
@@ -55,7 +55,7 @@ One contributor can span several session records. Compaction continuations and `
 4. The pane id (`Slot::Pane`).
 5. The session id (`Slot::Session`).
 
-Records with equal kind and slot in different channels stay separate seats. Within a seat, records sort by `registered_at`, then `last_activity`, and the newest record supplies the member's handle, role, model, and team.
+Records with equal kind and slot in different channels stay separate seats. Within a seat, records sort by `registered_at`, then `last_activity`. The newest record (latest `last_activity`, ties broken by `registered_at`) supplies the member's handle, role, name, kind, model, effort, launch ordinal, and team. The member's `registered_at` is the earliest across the seat's own sessions, and its `last_activity` is the latest.
 
 A pane-backed child joins the seat of the parent that launched it (`attribution::fold_seats`), and the child's own continuations fold into one child slot inside that seat. The parent must be among the admitted roots that passed the branch filter. A child whose parent is not there, because the parent left the audit rollup or a filter excluded it, keeps its own slot under `Slot::Orphan`. Attribution drops an orphan slot, since it holds no parent identity, while `slot_groups` returns it to the other consumers as a group of its own.
 
@@ -75,19 +75,20 @@ Each figure keeps its source boundary.
 
 | Figure | Source |
 | --- | --- |
-| identity, `registered_at`, `last_activity`, presence, `sessions`, tool calls, compactions | the audit rollup records of the seat |
-| prompts from you, messages from teammates, asks and answered asks | RimZ's append-only conversation transcript (`transcript::read_all`), per session. An ask is answered when an `Answer` entry carries its id. |
-| messages to teammates | the `from` handle on teammates' received `Message` entries, matched against each member's `petname::sender_handle` (role, name, kind) and channel, never the displayed list handle. Best-effort. |
+| identity, `registered_at`, `last_activity`, presence, `sessions`, tool calls, compactions | the audit rollup records of the seat's own sessions. Presence is `live` when any of them has no `ended_at`, and `sessions` counts them. |
+| prompts from you, messages from teammates, asks and answered asks | RimZ's append-only conversation transcript (`transcript::read_all`), per session. Every `Message` entry recorded on a session counts as from a teammate. An ask is answered when an `Answer` entry carries its id. |
+| messages to teammates | the `from` handle on teammates' received `Message` entries, matched against each member's `petname::sender_handle` (role, name, kind) and channel, never the displayed list handle. A `#channel` suffix on `from` overrides the entry's own channel, and the first matching member takes the credit. Best-effort. |
 | tokens, cost, model rows | each session's spend transcripts, parsed once by its adapter and priced through the shared price book (`spending::slot_effort_breakdown`) |
-| member active seconds | per-session active-time sidecars, projected by `store::active_time::display_secs_for_keys` under the configured silence grace and summed across the seat and its launched children by `attribution::seat_active_secs` ([model.md](./model.md#activity-clocks)). A native child pulses its parent's record. |
+| member active seconds | per-session active-time sidecars, projected by `store::active_time::display_secs_for_keys` under the silence grace `agents.attention.active_grace_secs` and summed across the seat and its launched children by `attribution::seat_active_secs` ([model.md](./model.md#activity-clocks)). A native child pulses its parent's record. |
 | kind active seconds | the same sidecars, summed over every continuation of each launched child slot in the kind. Native children contribute no separate time, including in a kind that mixes both origins. |
 | model `tokens_per_sec` | transcript `CachedEntry.timing` through `SlotEffort`: summed timed output over summed milliseconds per model, rounded. Report rows fold the raw counters over retained members, never member rates. |
 | member `fast` | transcript `CachedEntry.fast` (wire key `f`) through `SlotEffortBreakdown.own_fast`: set when any counted turn of the seat's own sessions ran fast. Native and launched children never set it, and neither does the launch record. |
 | kind `fast` | set when any counted turn of a child grouped into the kind ran fast |
+| totals | `EffortTotals` per team group and for the whole report, summed over retained members. `wall_clock_secs` runs from the earliest member `registered_at` to the latest member `last_activity`, and is zero when no member has a `registered_at`. |
 
 A prompt counts as from you when `TranscriptEntry::origin` reads it as human. System nudges carry a sender stamp and read as RimZ. A nudge recorded without the stamp, which older logs hold, reads as human and counts. The transcript reader drops legacy paste-fragment prompts ([transcript.md](../harness/transcript.md#the-log)), so they never count.
 
-Model rows split the member's all-in tokens and cost by transcript model id, from the same deduplicated entries. A blank or missing id joins the unnamed row (`unknown` in the panel, `null` in JSON), and a row with no tokens and no cost is omitted. Rows sort by cost descending (unpriced last), then tokens, then model id. The pricing read itself is [spending.md](./spending.md#token-pricing).
+Model rows split the member's all-in tokens and cost by transcript model id, from the same deduplicated entries. A blank or missing id joins the unnamed row (`unknown` in the panel, `null` in JSON), and a row with no tokens and no cost is omitted. Rows sort by cost descending (unpriced last), then tokens descending, then model id, with the unnamed row last at ties. The pricing read itself is [spending.md](./spending.md#token-pricing).
 
 A missing time, cost, or throughput reads `null`, never zero:
 
