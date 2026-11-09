@@ -568,12 +568,13 @@ fn discover_target(
     reached.insert(common_dir.clone());
     let branch = match super::git_refs::head_branch(&git_dir, &common_dir) {
         Some(branch) => branch,
-        None => {
-            let output = super::git_output(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
-                .filter(|output| output.status.success())
-                .ok_or(RetryableDiscovery)?;
-            first_line(&output.stdout).filter(|branch| branch != "HEAD")
-        }
+        // Git symbolic-ref names a born or unborn branch with exit 0 and exits 1
+        // on a detached HEAD.
+        None => match super::git_output(worktree, &["symbolic-ref", "--short", "-q", "HEAD"]) {
+            Some(output) if output.status.success() => first_line(&output.stdout),
+            Some(output) if output.status.code() == Some(1) => None,
+            _ => return Err(RetryableDiscovery),
+        },
     };
     let Some(branch) = branch else {
         return Ok(None);
