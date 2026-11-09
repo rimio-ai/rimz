@@ -49,7 +49,38 @@ const FORWARDER_STOP_POLL: Duration = Duration::from_millis(250);
 
 pub(super) fn send_input(stream: &mut UnixStream, word: &str) -> io::Result<()> {
     stream.set_write_timeout(Some(FORWARDER_STOP_POLL))?;
-    stream.write_all(format!("{word}\n").as_bytes())
+    write_word(stream, word)
+}
+
+/// Write one word whole or not at all. A timeout before its first byte drops
+/// the word; a timeout after it would leave a fragment the host joins to the
+/// next word, so it fails as a stream error instead.
+fn write_word(out: &mut impl Write, word: &str) -> io::Result<()> {
+    let line = format!("{word}\n");
+    let mut written = 0;
+    while written < line.len() {
+        match out.write(&line.as_bytes()[written..]) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(count) => written += count,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if written > 0 && dropped(&err) => {
+                return Err(io::Error::other(format!(
+                    "input word torn after {written} of {} bytes: {err}",
+                    line.len()
+                )));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+/// A write that timed out and so dropped its word; forwarding goes on.
+fn dropped(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
 }
 
 /// Why a forwarder stopped forwarding before it was asked to stop.
@@ -71,13 +102,17 @@ pub(in crate::sidebar_pane) struct EventForwarder {
 impl EventForwarder {
     pub(in crate::sidebar_pane) fn start(mut stream: UnixStream) -> Self {
         // Settle any resize that raced the fd handover before forwarding input.
-        let _ = send_input(&mut stream, "resize");
+        let settled = send_input(&mut stream, "resize");
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let ended = Arc::new(OnceLock::new());
         let end = ended.clone();
         let thread = std::thread::spawn(move || {
-            if let Some(reason) = forward_events(stream, FORWARDER_STOP_POLL, &stopped) {
+            let reason = match settled {
+                Err(err) if !dropped(&err) => Some(ForwarderEnd::Stream),
+                _ => forward_events(&mut stream, terminal_word, FORWARDER_STOP_POLL, &stopped),
+            };
+            if let Some(reason) = reason {
                 let _ = end.set(reason);
             }
         });
@@ -101,40 +136,39 @@ impl EventForwarder {
 }
 
 /// Forward until stopped (`None`) or until the terminal or the stream fails.
-fn forward_events(
-    mut stream: UnixStream,
+pub(super) fn forward_events(
+    out: &mut impl Write,
+    mut next_word: impl FnMut(Duration) -> io::Result<Option<String>>,
     poll: Duration,
     stop: &AtomicBool,
 ) -> Option<ForwarderEnd> {
     while !stop.load(Ordering::SeqCst) {
-        let encoded = match event::poll(poll) {
-            Ok(true) => match event::read() {
-                Ok(Event::Resize(_, _)) => Some("resize".to_owned()),
-                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    encode_key(key.code, key.modifiers)
-                }
-                Ok(Event::Mouse(mouse)) => encode_mouse(mouse.kind, mouse.column, mouse.row),
-                Ok(_) => None,
-                Err(err) => {
-                    warn!(error = %err, "event waker stopping: event read failed");
-                    return Some(ForwarderEnd::Input);
-                }
-            },
-            Ok(false) => None,
+        let word = match next_word(poll) {
+            Ok(word) => word,
             Err(err) => {
-                warn!(error = %err, "event waker stopping: event poll failed");
+                warn!(error = %err, "event waker stopping: terminal events failed");
                 return Some(ForwarderEnd::Input);
             }
         };
-        if let Some(encoded) = encoded
-            && let Err(err) = send_input(&mut stream, &encoded)
-            && !matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            )
+        if let Some(word) = word
+            && let Err(err) = write_word(out, &word)
+            && !dropped(&err)
         {
             return Some(ForwarderEnd::Stream);
         }
     }
     None
+}
+
+/// The next input word from the terminal, waiting at most `poll` for an event.
+fn terminal_word(poll: Duration) -> io::Result<Option<String>> {
+    if !event::poll(poll)? {
+        return Ok(None);
+    }
+    Ok(match event::read()? {
+        Event::Resize(_, _) => Some("resize".to_owned()),
+        Event::Key(key) if key.kind == KeyEventKind::Press => encode_key(key.code, key.modifiers),
+        Event::Mouse(mouse) => encode_mouse(mouse.kind, mouse.column, mouse.row),
+        _ => None,
+    })
 }

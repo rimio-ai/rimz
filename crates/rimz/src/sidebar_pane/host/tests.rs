@@ -1234,6 +1234,27 @@ fn stream_input_ignores_unknown_lines_and_delivers_keys() {
 }
 
 #[test]
+fn stream_input_discards_a_torn_word_left_at_eof() {
+    use std::io::Write;
+    let room = Room::new();
+    let (attachment, live) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let (mut supervisor, host) = UnixStream::pair().unwrap();
+    read_input(&host, live.close);
+    supervisor
+        .write_all(b"press:-:char:j\nmouse:left:12:3")
+        .unwrap();
+    drop(supervisor);
+    assert_eq!(
+        attachment.input.recv_timeout(SETTLE),
+        Ok(decode_wakeup(b"press:-:char:j"))
+    );
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
+    // The close wake comes after the reader's last send, so nothing more can arrive.
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
+    assert_eq!(attachment.input.try_recv(), Err(Empty));
+}
+
+#[test]
 fn room_events_are_scoped_once_before_reaching_each_attachment() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();

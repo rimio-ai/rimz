@@ -1576,3 +1576,67 @@ fn a_stopped_forwarder_gives_up_on_a_full_inbox() {
         "a full stream drops the word within the forwarder's stop bound"
     );
 }
+
+/// A stream end that accepts `budgets` bytes per write in turn, `None` timing out, then everything.
+struct ScriptedStream {
+    delivered: Vec<u8>,
+    budgets: std::collections::VecDeque<Option<usize>>,
+}
+
+impl std::io::Write for ScriptedStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let accepted = match self.budgets.pop_front() {
+            Some(None) => return Err(std::io::ErrorKind::TimedOut.into()),
+            Some(Some(budget)) => budget.min(bytes.len()),
+            None => bytes.len(),
+        };
+        self.delivered.extend_from_slice(&bytes[..accepted]);
+        Ok(accepted)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Forward `words` into a stream scripted by `budgets`, the terminal failing after the last word.
+fn forward_scripted(
+    words: &[&str],
+    budgets: &[Option<usize>],
+) -> (Option<super::socket::ForwarderEnd>, String) {
+    let mut stream = ScriptedStream {
+        delivered: Vec::new(),
+        budgets: budgets.iter().copied().collect(),
+    };
+    let mut words: std::collections::VecDeque<String> =
+        words.iter().map(|word| (*word).to_owned()).collect();
+    let end = super::socket::forward_events(
+        &mut stream,
+        |_| {
+            words
+                .pop_front()
+                .map(Some)
+                .ok_or_else(|| std::io::Error::other("terminal gone"))
+        },
+        Duration::from_millis(1),
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    (end, String::from_utf8(stream.delivered).unwrap())
+}
+
+#[test]
+fn a_word_torn_by_a_write_timeout_ends_the_forwarder_before_the_next_word() {
+    let (end, delivered) =
+        forward_scripted(&["press:-:char:j", "press:-:char:k"], &[Some(3), None]);
+    // Only the unterminated fragment stays on the wire, which the host reader
+    // discards at EOF (`host::tests::stream_input_discards_a_torn_word_left_at_eof`).
+    assert_eq!(delivered, "pre");
+    assert_eq!(end, Some(super::socket::ForwarderEnd::Stream));
+}
+
+#[test]
+fn a_write_timeout_before_any_byte_drops_only_that_word() {
+    let (end, delivered) = forward_scripted(&["press:-:char:j", "press:-:char:k"], &[None]);
+    assert_eq!(delivered, "press:-:char:k\n");
+    assert_eq!(end, Some(super::socket::ForwarderEnd::Input));
+}
