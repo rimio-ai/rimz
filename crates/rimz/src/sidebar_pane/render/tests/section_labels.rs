@@ -111,6 +111,47 @@ fn wrapped_alert_continuations_keep_chrome_label_on_painted_rows() {
 }
 
 #[test]
+fn a_long_alert_paints_as_gutter_rows_within_the_chrome_keeping_every_word() {
+    let snapshot = snapshot_with(Vec::new());
+    let reason = "alpha beta supercalifragilisticexpialidocious gamma delta epsilon zeta omega";
+    let alert = Alert {
+        reason: reason.to_owned(),
+        since: fixed_now(),
+        recovered_at: None,
+    };
+    let (ui, buffer) = painted(&snapshot, Some(&alert), 26, 30);
+    let rows = ui
+        .frame_rows(&buffer)
+        .map(|row| (row.label.as_str().to_owned(), row.plain_text()))
+        .collect::<Vec<_>>();
+    let first = rows
+        .iter()
+        .position(|(_, text)| text.contains("Sidebar degraded"))
+        .expect("alert start");
+    let last = rows
+        .iter()
+        .position(|(_, text)| text.contains("omega"))
+        .expect("alert end");
+    let alert_rows = &rows[first..=last];
+    for (label, text) in alert_rows {
+        assert_eq!(label, "chrome", "{rows:#?}");
+        assert!(
+            text.starts_with(' ') && !text.starts_with("  "),
+            "{rows:#?}"
+        );
+        assert!(text.ends_with(' '), "the right rail stays clear: {rows:#?}");
+    }
+    let painted = alert_rows
+        .iter()
+        .flat_map(|(_, text)| text.split_whitespace())
+        .collect::<String>();
+    assert!(
+        painted.ends_with(&reason.split_whitespace().collect::<String>()),
+        "{rows:#?}"
+    );
+}
+
+#[test]
 fn painted_row_text_strips_osc_links_and_ansi_keeps_them() {
     let ui = UiState::default();
     let mut buffer = Buffer::empty(Rect::new(4, 2, 6, 1));

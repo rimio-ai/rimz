@@ -91,7 +91,9 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// banner screen row ride beside it in absolute screen coordinates. The maps
 /// are the single authority on hit geometry — built from the same final line
 /// vector that is rendered, so they stay 1:1 with what the user sees through
-/// every clip and every scroll position.
+/// every clip and every scroll position: the frame is painted without wrapping,
+/// so line `i` is screen row `i`. A line meant to take several rows is split into
+/// rows where it is built, and a line wider than the pane is cut at its edge.
 #[expect(
     clippy::too_many_arguments,
     reason = "lend pane-local caches independently of immutable UI state"
@@ -129,12 +131,7 @@ pub(super) fn compose_lines_with_meter(
     let bottom = build_bottom_chrome(snapshot, alert, theme, cells, view, ui, &roster);
 
     let height = usize::from(height);
-    let bottom_height = bottom
-        .lines
-        .iter()
-        .map(|line| super::frame_rows::wrapped_line_height(line, width))
-        .sum::<usize>()
-        .min(height);
+    let bottom_height = bottom.lines.len().min(height);
 
     let held_expansions = view.effective_held_expansions(&roster);
     let ScrollContent {
@@ -573,35 +570,36 @@ pub(super) fn build_bottom_chrome(
     if plan.truth_notice
         && let Some(notice) = snapshot.truth_degraded.as_ref()
     {
-        bottom.extend_inert(
-            truth_notice_lines(theme, notice, snapshot.now)
-                .into_iter()
-                .map(pad_chrome),
-        );
+        bottom.extend_inert(notice_rows(
+            truth_notice_lines(theme, notice, snapshot.now),
+            inner,
+        ));
     }
     if plan.gate_notice
         && let Some(notice) = ui.gate_notice.as_ref()
     {
-        bottom.extend_inert(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
+        bottom.extend_inert(notice_rows(gate_notice_lines(theme, notice), inner));
     }
     if !alert.is_some_and(Alert::is_active) && snapshot.skipped_settings > 0 {
         let count = snapshot.skipped_settings;
         let suffix = if count == 1 { "" } else { "s" };
-        bottom.push_inert(pad_chrome(Line::styled(
+        let notice = Line::styled(
             format!(
                 "{} {count} setting{suffix} skipped at start {} rimz doctor",
                 theme.glyph(GlyphRole::ChromeAlert),
                 theme.glyph(GlyphRole::Seam)
             ),
             theme.muted().add_modifier(Modifier::DIM),
-        )));
+        );
+        bottom.extend_inert(notice_rows(vec![notice], inner));
     }
     if !alert.is_some_and(Alert::is_active) {
-        for notice in &snapshot.throttle_notices {
-            bottom.push_inert(pad_chrome(super::chrome::throttle_notice_line(
-                theme, notice, inner,
-            )));
-        }
+        let notices = snapshot
+            .throttle_notices
+            .iter()
+            .map(|notice| super::chrome::throttle_notice_line(theme, notice, inner))
+            .collect();
+        bottom.extend_inert(notice_rows(notices, inner));
     }
     if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
@@ -615,24 +613,28 @@ pub(super) fn build_bottom_chrome(
         }
     }
     if !alert.is_some_and(Alert::is_active) {
-        bottom.extend_inert(
-            hook_drainer_alert_lines(theme, snapshot, view.hook_drainer_alert.as_ref())
-                .into_iter()
-                .map(pad_chrome),
-        );
+        bottom.extend_inert(notice_rows(
+            hook_drainer_alert_lines(theme, snapshot, view.hook_drainer_alert.as_ref()),
+            inner,
+        ));
     }
     if plan.alert
         && let Some(alert) = alert
     {
-        bottom.extend_inert(
-            alert_lines(theme, alert, snapshot.now)
-                .into_iter()
-                .map(pad_chrome),
-        );
+        bottom.extend_inert(notice_rows(alert_lines(theme, alert, snapshot.now), inner));
     }
     header.append(bottom);
     header.tag("chrome");
     header
+}
+
+/// Notice or alert lines as chrome rows: split to the chrome's inner width, each row opened
+/// with the gutter, since the frame never wraps a line onto the next row.
+fn notice_rows(lines: Vec<Line<'static>>, inner: usize) -> impl Iterator<Item = Line<'static>> {
+    lines
+        .into_iter()
+        .flat_map(move |line| super::layout::wrap_line(line, inner))
+        .map(pad_chrome)
 }
 
 fn dashboard_chrome(

@@ -49,9 +49,57 @@ proptest! {
             let mut out = Vec::new();
             render_fixed(&mut out, &snapshot, width, height)
                 .expect("fixed render succeeds");
+            assert_painted_rows_are_composed_lines(&snapshot, ui, width, height)?;
         }
 
     }
+}
+
+/// Paint one frame and hold it to the frame contract: composed line `i` is buffer row `i`
+/// (the line alone, cut at the pane edge) under label `i`.
+fn assert_painted_rows_are_composed_lines(
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    mut view: ViewState,
+    width: u16,
+    height: u16,
+) -> Result<(), TestCaseError> {
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = compose_lines(snapshot, None, &view, &ui, theme.as_ref(), width, height);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, None, &mut view, &mut ui).unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows = ui.frame_rows(buffer).collect::<Vec<_>>();
+    for (index, (line, label)) in composed.lines.iter().zip(&composed.sections).enumerate() {
+        let Some(row) = rows.get(index) else {
+            break;
+        };
+        prop_assert_eq!(row.plain_text(), line_cut_at(line, width), "row {}", index);
+        prop_assert_eq!(row.label, label, "row {}", index);
+    }
+    // A pane too short for the pinned zones composes lines past its edge; they stay unpainted,
+    // and none of them may be a row the screen-edge keys could select.
+    let height = usize::from(height);
+    for line in height..ui.interactions.line_count() {
+        prop_assert_eq!(ui.interactions.row_at_line(line), None, "line {}", line);
+    }
+    Ok(())
+}
+
+/// One line painted alone into a one-row buffer `width` cells wide.
+fn line_cut_at(line: &Line<'static>, width: u16) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, width, 1);
+    let mut buffer = Buffer::empty(area);
+    ratatui::widgets::Widget::render(
+        ratatui::widgets::Paragraph::new(line.clone()),
+        area,
+        &mut buffer,
+    );
+    UiState::default()
+        .frame_rows(&buffer)
+        .next()
+        .unwrap()
+        .plain_text()
 }
 
 fn build_adversarial_snapshot(

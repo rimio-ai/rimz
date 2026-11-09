@@ -314,8 +314,14 @@ fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
     let (lines, hits) = bottom_chrome_texts(&snapshot, Some(&alert));
     let text = lines.join("\n");
 
-    assert_eq!(lines.len(), 1, "only the active alert remains:\n{text}");
-    assert!(text.contains("Sidebar degraded"), "{text}");
+    // The alert is one notice, split into rows at the chrome's 40-cell inner width.
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(
+        words[1..].join(" "),
+        "Sidebar degraded for 0s: snapshot failed",
+        "only the active alert remains:\n{text}"
+    );
+    assert_eq!(words.len(), 7, "only the active alert remains:\n{text}");
     assert!(!text.contains("Claude"), "{text}");
     assert!(!text.contains("W:"), "{text}");
     assert!(!text.contains("? for help"), "{text}");

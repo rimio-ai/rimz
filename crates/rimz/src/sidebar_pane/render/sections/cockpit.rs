@@ -18,10 +18,11 @@ use super::{metric_spans, pin_right, spans_width};
 /// `◎ {sessions}` — the threads that have run in the configured headline
 /// window, the glyph in the teal it shares with the W/M store rows — on the
 /// left, with the headline token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the
-/// live coarse form) pinned to the right edge. The breakdown reads the
-/// workspace-scoped JSONL tally's headline window and paints zeroes before any
-/// spend arrives. The live-agent count and the spend ride the second line
-/// ([`cockpit_spend_line`]).
+/// live coarse form) pinned to the right edge, narrowed to the `◇` total and
+/// `◌` cache read when the full breakdown does not fit beside the sessions
+/// count. The breakdown reads the workspace-scoped JSONL tally's headline
+/// window and paints zeroes before any spend arrives. The live-agent count
+/// and the spend ride the second line ([`cockpit_spend_line`]).
 pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     theme: &Theme,
     sessions: u32,
@@ -36,16 +37,24 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     );
     let zero = SpendWindow::default();
     let window = headline.unwrap_or(&zero);
-    let right = token_breakdown_spans(
-        theme,
-        window.tokens,
-        window.input,
-        window.output,
-        window.cache_read,
-        compact_count,
-        TokenDetail::Full,
-        &TokenColumns::default(),
-    );
+    let breakdown = |detail| {
+        token_breakdown_spans(
+            theme,
+            window.tokens,
+            window.input,
+            window.output,
+            window.cache_read,
+            compact_count,
+            detail,
+            &TokenColumns::default(),
+        )
+    };
+    let full = breakdown(TokenDetail::Full);
+    let right = if spans_width(&left) + 1 + spans_width(&full) <= width {
+        full
+    } else {
+        breakdown(TokenDetail::Summary)
+    };
     pin_right(left, right, width)
 }
 

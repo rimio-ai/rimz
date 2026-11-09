@@ -1824,6 +1824,54 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
 }
 
 #[test]
+fn pr_badge_link_lands_on_its_painted_cells_below_an_overflowing_cockpit_line() {
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.pr_number = Some(91);
+    group.pr_url = Some("https://github.com/org/repo/pull/91".to_owned());
+    // A tripped cap's label is wider than the pane, so the spend line overflows it.
+    snapshot.fleet_day_spend_usd = Some(123_456_789_012.34);
+    snapshot.fleet_day_spend_epoch_secs = Some(20);
+    snapshot.fleet_budget = Some(crate::store::snapshot::DailyBudgetView {
+        cap_usd: 999_999_999_999.99,
+        spend_usd: 123_456_789_012.34,
+        parked: true,
+    });
+    let mut view = selected_ui();
+    let mut ui = fixed_theme_ui(&snapshot, &UiState::default());
+    let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut ui).unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows = ui
+        .frame_rows(buffer)
+        .map(|row| row.plain_text())
+        .collect::<Vec<_>>();
+    assert!(rows.iter().any(|row| row.contains("of $")), "{rows:#?}");
+    let (lines, columns, url) = ui.interactions.hyperlinks().next().expect("a PR link");
+    let row = u16::try_from(lines.start).unwrap();
+    let cells = columns
+        .clone()
+        .map(|column| buffer[(column, row)].symbol().to_owned())
+        .collect::<Vec<_>>();
+    let text = cells
+        .iter()
+        .map(|cell| anstream::adapter::strip_str(cell).to_string())
+        .collect::<String>();
+    assert_eq!(
+        text,
+        "#91",
+        "row {row} {:?}\n{rows:#?}",
+        rows[usize::from(row)]
+    );
+    let open = format!("\x1b]8;;{url}\x1b\\");
+    assert!(
+        cells.iter().all(|cell| cell.starts_with(&open)),
+        "{cells:?}"
+    );
+}
+
+#[test]
 fn inactive_worktree_age_is_always_plain_and_muted_even_under_five_minutes() {
     let mut card = agent(
         "worker",

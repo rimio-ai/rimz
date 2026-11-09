@@ -1,5 +1,6 @@
 //! Cell-width text layout for sidebar lines.
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -129,6 +130,69 @@ pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// Split `line` into rows at most `width` cells wide, breaking between words and keeping each
+/// span's style and the line's own. A word wider than a row is cut across rows, so no text is
+/// lost. A line that fits comes back whole.
+pub(super) fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.width() <= width || width == 0 {
+        return vec![line];
+    }
+    let cells = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(|ch| (ch, span.style)))
+        .collect::<Vec<_>>();
+    let cell_width = |&(ch, _): &(char, Style)| UnicodeWidthChar::width(ch).unwrap_or(0);
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut row_width = 0;
+    let mut rest = cells.as_slice();
+    while !rest.is_empty() {
+        let gap_len = rest.iter().take_while(|(ch, _)| ch.is_whitespace()).count();
+        let (gap, after) = rest.split_at(gap_len);
+        let word_len = after
+            .iter()
+            .take_while(|(ch, _)| !ch.is_whitespace())
+            .count();
+        let (word, next) = after.split_at(word_len);
+        rest = next;
+        let gap_width = gap.iter().map(cell_width).sum::<usize>();
+        let word_width = word.iter().map(cell_width).sum::<usize>();
+        if !row.is_empty() && row_width + gap_width + word_width > width {
+            rows.push(std::mem::take(&mut row));
+            row_width = 0;
+        } else {
+            row.extend_from_slice(gap);
+            row_width += gap_width;
+        }
+        for cell in word {
+            if !row.is_empty() && row_width + cell_width(cell) > width {
+                rows.push(std::mem::take(&mut row));
+                row_width = 0;
+            }
+            row.push(*cell);
+            row_width += cell_width(cell);
+        }
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    rows.into_iter()
+        .map(|row| styled_row(row).style(line.style))
+        .collect()
+}
+
+fn styled_row(cells: Vec<(char, Style)>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (ch, style) in cells {
+        match spans.last_mut() {
+            Some(span) if span.style == style => span.content.to_mut().push(ch),
+            _ => spans.push(Span::styled(ch.to_string(), style)),
+        }
+    }
+    Line::from(spans)
 }
 
 pub(super) fn clip(content: &str, width: usize) -> String {
