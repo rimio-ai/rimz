@@ -151,7 +151,8 @@ locks/*.lock                                  room, workspace, publish, subagent
                                               message-sweep, sidebar-launch, snapshot,
                                               topology-writer, authoritative-pane-probe, focus-anchor, typing,
                                               pr-state, diff-stats, budget.fleet, hook-drainer,
-                                              hook-drainer-spawn, hook-ingress, lsp-usage, and sidecar locks
+                                              hook-drainer-spawn, hook-ingress, lsp-usage, read-marks, unread,
+                                              and sidecar locks
 locks/reply-waits/<token>.lock                reply-wait leg leases, held by the waiting `rimz message --wait`
 workspace.json                                room record, layout: 2
 rimz                                          stable room executable

@@ -179,6 +179,7 @@ impl RuntimePaths {
             self.sidebar_width_path(),
             self.sidebar_filter_path(),
             self.unread_path(),
+            self.unread_lock_path(),
             self.pane_frame_path(),
             self.agent_projection_path(),
             self.topology_writer_lock(),

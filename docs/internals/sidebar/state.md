@@ -561,7 +561,7 @@ Unless marked, these live in the workspace runtime directory.
 | `sock/host.<digest>.wake.sock` | The host's room datagram socket, named by a digest of mux and session to fit the AF_UNIX path limit. Every attachment's heartbeat names this same address. |
 | `lanes/focus-anchor.json` | The durable jump intent, optional card placement, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `lanes/typing.json` | Linux pane tty paths, applied atimes, viewers, non-typing exclusions and counted input, shared under a room lock by the host, delivery and pane writes ([messaging](../harness/messaging.md#four-modes-on-one-timing-axis)). |
-| `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes and the room's locked, max-updated read marks. |
+| `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes, replaced under `unread.lock`, and the room's max-updated read marks, under `read-marks.lock`. |
 | `lanes/attention.json` | Launch-keyed attention-zone stamps and pane-keyed order/activity slots, reconciled by the host on final framed folds ([attention stamps](#attention-stamps)). |
 | `lanes/loop-fire.json` | The host's loop-task arm and fire stamps for this room. |
 | `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |

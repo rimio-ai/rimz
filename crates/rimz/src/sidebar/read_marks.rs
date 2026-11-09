@@ -86,7 +86,11 @@ fn load_legacy(runtime: &RuntimePaths) -> ReadMarks {
 }
 
 fn read_marks_lock(runtime: &RuntimePaths) -> atomic::Result<WorkspaceLock> {
-    let path = runtime.read_marks_lock_path();
+    lane_lock(runtime.read_marks_lock_path())
+}
+
+/// Takes a sidebar lane's write lock within the 250 ms budget its writers share.
+pub(super) fn lane_lock(path: std::path::PathBuf) -> atomic::Result<WorkspaceLock> {
     WorkspaceLock::acquire_with_timeout(&path, Duration::from_millis(250)).map_err(|err| {
         atomic::AtomicErr::Io {
             path,

@@ -413,3 +413,71 @@ fn manual_mark_lands_after_an_existing_receipt_and_survives_reconcile() {
         assert!(!read.worktree_groups[0].rows[0].unread, "receipt={receipt}");
     }
 }
+
+fn hold_unread_lock(runtime: &RuntimePaths) -> crate::disk::lock::WorkspaceLock {
+    crate::disk::lock::WorkspaceLock::acquire_with_timeout(
+        &runtime.unread_lock_path(),
+        std::time::Duration::from_millis(250),
+    )
+    .expect("unread lock")
+}
+
+#[test]
+fn a_manual_mark_is_never_lost_to_a_writer_mid_transaction() {
+    let (_dir, runtime) = runtime();
+    let manual = row("manual", AgentStatus::Running, 1_000);
+
+    let lock = hold_unread_lock(&runtime);
+    let mut held = UnreadEpisodes::load(&runtime);
+    held.open_for_row(&row("host", AgentStatus::Waiting, 1_000), 1_000);
+    let during = mark_rows_unread(&runtime, std::slice::from_ref(&manual), 5_000);
+    held.persist(&runtime).expect("replace");
+    drop(lock);
+    if during.is_ok() {
+        assert!(
+            UnreadEpisodes::load(&runtime)
+                .episodes
+                .contains_key("manual"),
+            "a mark that returned Ok was dropped by the other writer's replace"
+        );
+    }
+
+    mark_rows_unread(&runtime, std::slice::from_ref(&manual), 5_000).expect("after release");
+    let loaded = UnreadEpisodes::load(&runtime);
+    assert!(loaded.episodes.contains_key("host"));
+    assert!(loaded.episodes.contains_key("manual"));
+}
+
+#[test]
+fn host_reconcile_under_a_held_lock_only_derives_and_opens_next_pass() {
+    let (_dir, runtime) = runtime();
+    mark_rows_unread(&runtime, &[row("seen", AgentStatus::Running, 1_000)], 5_000).expect("seed");
+    let before = fs::read_to_string(runtime.unread_path()).expect("episodes");
+    let rows = || {
+        snapshot(vec![
+            row("seen", AgentStatus::Running, 1_000),
+            row("ask", AgentStatus::Waiting, 2_000),
+        ])
+    };
+
+    let lock = hold_unread_lock(&runtime);
+    let mut held = rows();
+    let out = reconcile_snapshot(&runtime, &mut held);
+    assert_eq!(
+        fs::read_to_string(runtime.unread_path()).expect("episodes"),
+        before
+    );
+    assert_eq!(out, ReconcileOutcome::default());
+    let unread = held.rows().map(|row| row.unread).collect::<Vec<_>>();
+    assert_eq!(unread, [true, false]);
+    drop(lock);
+
+    let mut next = rows();
+    let out = reconcile_snapshot(&runtime, &mut next);
+    let opened = out
+        .opened
+        .iter()
+        .map(|open| open.row_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(opened, ["ask"]);
+}

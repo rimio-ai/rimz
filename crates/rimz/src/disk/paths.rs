@@ -1171,6 +1171,12 @@ impl RuntimePaths {
         self.lock_path("read-marks.lock")
     }
 
+    /// Serializes `unread.json` transactions by the fetch worker, renderers, and
+    /// the CLI.
+    pub(crate) fn unread_lock_path(&self) -> PathBuf {
+        self.lock_path("unread.lock")
+    }
+
     /// Room-runtime sidebar width selected by the renderer.
     pub(crate) fn sidebar_width_path(&self) -> PathBuf {
         self.lane_path("sidebar-width.json")
@@ -1191,11 +1197,11 @@ impl RuntimePaths {
         self.lane_path("closed-cards.json")
     }
 
-    /// The workspace-wide set of open unread episodes. The room host's fetch
-    /// worker owns writes for status-derived opens and row-gone pruning, on every
-    /// final fold that carries a pane frame, cached or produced; renderers and CLI
-    /// commands write read receipts that derive this set back to read on the next
-    /// fold.
+    /// The workspace-wide set of open unread episodes. Three writers replace it,
+    /// each under `unread.lock`: the room host's fetch worker
+    /// (status-derived opens and pruning, on every final fold), manual unread
+    /// marks from renderers and `rimz agents mark TARGET unread`, and `rimz
+    /// agents mark TARGET read`, which removes the episodes its receipt reaches.
     pub fn unread_path(&self) -> PathBuf {
         self.lane_path("unread.json")
     }
