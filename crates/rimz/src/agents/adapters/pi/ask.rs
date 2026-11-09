@@ -36,7 +36,7 @@ pub(super) fn question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec
 }
 
 pub(super) fn answer_detail(payload: &Value) -> Option<Vec<AskAnswer>> {
-    let details: ToolDetails = serde_json::from_value(payload.get("tool_details")?.clone()).ok()?;
+    let details: ToolDetails = Deserialize::deserialize(payload.get("tool_details")?).ok()?;
     if details.cancelled {
         return None;
     }

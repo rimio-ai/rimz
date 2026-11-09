@@ -24,6 +24,7 @@ use super::{
     optional_payload_string, resolve_root_identity, resolve_subagent_identity,
 };
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 use payloads::{QoderHook, QoderStopError};
 
 static QODER_DESCRIPTOR: AgentSpec = AgentSpec {
@@ -332,7 +333,7 @@ impl LaunchCapability for QoderAdapter {
 
 impl HookCapability for QoderAdapter {
     fn decode_hook(&self, event: &str, payload: &Value) -> Result<HookOutput> {
-        let hook = QoderHook::parse(payload);
+        let hook: QoderHook = decode_or_default(payload);
         let ask = (event == "PermissionRequest").then(|| {
             self.spec()
                 .blocking_tool_kind(hook.tool_name.as_deref())

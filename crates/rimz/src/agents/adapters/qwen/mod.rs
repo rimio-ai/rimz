@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use serde::Deserialize;
 use serde_json::Value;
 
 use self::install::MANAGED_SOURCE;
@@ -622,8 +623,7 @@ impl crate::agents::capabilities::ContextCapability for QwenAdapter {
         if !payload.is_object() {
             return None;
         }
-        let parsed =
-            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let parsed = statusline::StatuslinePayload::deserialize(payload).ok()?;
         let agent_id = parsed.session_id.clone()?;
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
@@ -636,7 +636,7 @@ impl crate::agents::capabilities::ContextCapability for QwenAdapter {
         if !payload.is_object() {
             return None;
         }
-        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+        statusline::StatuslinePayload::deserialize(payload)
             .ok()?
             .cost(prices)
     }

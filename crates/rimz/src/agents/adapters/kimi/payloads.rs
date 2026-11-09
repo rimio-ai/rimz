@@ -32,10 +32,6 @@ impl KimiHookPayload {
     }
 }
 
-pub(super) fn parse(payload: &Value) -> KimiHookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
-}
-
 fn deserialize_prompt<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -63,17 +59,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::agents::payload::decode_or_default;
 
     #[test]
     fn prompt_accepts_string_or_text_parts_and_ignores_unknown_fields() {
         assert_eq!(
-            parse(&json!({"prompt": "hello", "future": true}))
+            decode_or_default::<KimiHookPayload>(&json!({"prompt": "hello", "future": true}))
                 .prompt
                 .as_deref(),
             Some("hello")
         );
         assert_eq!(
-            parse(&json!({"prompt": [
+            decode_or_default::<KimiHookPayload>(&json!({"prompt": [
                 {"type": "text", "text": "one"},
                 {"type": "image", "text": "skip"},
                 {"type": "text", "text": "two"}
@@ -82,12 +79,21 @@ mod tests {
             .as_deref(),
             Some("one\ntwo")
         );
-        assert!(parse(&json!(null)).prompt.is_none());
+        assert!(
+            decode_or_default::<KimiHookPayload>(&json!(null))
+                .prompt
+                .is_none()
+        );
     }
 
     #[test]
     fn question_background_comes_from_tool_input() {
-        assert!(parse(&json!({"tool_input": {"background": true}})).question_background());
-        assert!(!parse(&json!({"tool_input": {}})).question_background());
+        assert!(
+            decode_or_default::<KimiHookPayload>(&json!({"tool_input": {"background": true}}))
+                .question_background()
+        );
+        assert!(
+            !decode_or_default::<KimiHookPayload>(&json!({"tool_input": {}})).question_background()
+        );
     }
 }

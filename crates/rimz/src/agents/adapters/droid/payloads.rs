@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::agents::hook_types::SessionSource;
 use crate::agents::lifecycle::AskKind;
+use crate::agents::payload::decode_or_default;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -74,7 +75,7 @@ pub struct DroidUserPromptSubmit {
 macro_rules! parse_fn {
     ($name:ident, $ty:ty) => {
         pub fn $name(payload: &Value) -> $ty {
-            serde_json::from_value(payload.clone()).unwrap_or_default()
+            decode_or_default(payload)
         }
     };
 }

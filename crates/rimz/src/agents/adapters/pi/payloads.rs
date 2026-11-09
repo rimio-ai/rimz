@@ -205,7 +205,7 @@ pub(super) fn parse_payload(payload: &Value) -> PiHookPayload {
         .or_else(|| payload.get("rateLimits"))
         .map(rate_limits_from_value)
         .unwrap_or_default();
-    serde_json::from_value(payload.clone()).unwrap_or_else(|_| PiHookPayload {
+    Deserialize::deserialize(payload).unwrap_or_else(|_| PiHookPayload {
         session_id,
         rate_limits,
         ..PiHookPayload::default()

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::hook_types::{BackgroundTask, CompactTrigger, HookEventCommon, SessionSource};
+use crate::agents::payload::decode_or_default;
 use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
     deserialize_optional_u64_lossy,
@@ -373,7 +374,7 @@ struct TranscriptPart {
 macro_rules! parse_fn {
     ($name:ident, $ty:ty) => {
         pub(super) fn $name(payload: &Value) -> $ty {
-            serde_json::from_value(payload.clone()).unwrap_or_default()
+            decode_or_default(payload)
         }
     };
 }

@@ -1,7 +1,6 @@
 //! Consumed fields on Qoder's Claude-shaped native hook envelopes.
 
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::agents::hook_types::{CompactTrigger, HookEventCommon, SessionSource};
 
@@ -21,12 +20,6 @@ pub(super) struct QoderHook {
     pub(super) agent_type: Option<String>,
     pub(super) last_assistant_message: Option<String>,
     pub(super) error: QoderStopError,
-}
-
-impl QoderHook {
-    pub(super) fn parse(payload: &Value) -> Self {
-        serde_json::from_value(payload.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]

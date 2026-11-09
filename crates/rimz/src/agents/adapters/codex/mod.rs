@@ -92,6 +92,7 @@ use super::{
     non_empty_trimmed, optional_payload_string, read_transcript_tail_with_status,
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
+use crate::agents::payload::decode_or_default;
 use crate::transcript::{AskOption, AskQuestion};
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks append
@@ -1892,16 +1893,16 @@ impl CodexChild<'_> {
 impl CodexHook {
     fn parse(event_name: &str, payload: &Value) -> Self {
         match event_name {
-            "SessionStart" => Self::SessionStart(payloads::parse(payload)),
-            "UserPromptSubmit" => Self::UserPromptSubmit(payloads::parse(payload)),
-            "SubagentStart" => Self::SubagentStart(payloads::parse(payload)),
-            "SubagentStop" => Self::SubagentStop(payloads::parse(payload)),
-            "PreToolUse" => Self::PreToolUse(payloads::parse(payload)),
-            "PermissionRequest" => Self::PermissionRequest(payloads::parse(payload)),
-            "PostToolUse" => Self::PostToolUse(payloads::parse(payload)),
-            "PreCompact" => Self::PreCompact(payloads::parse(payload)),
-            "PostCompact" => Self::PostCompact(payloads::parse(payload)),
-            "Stop" => Self::Stop(payloads::parse(payload)),
+            "SessionStart" => Self::SessionStart(decode_or_default(payload)),
+            "UserPromptSubmit" => Self::UserPromptSubmit(decode_or_default(payload)),
+            "SubagentStart" => Self::SubagentStart(decode_or_default(payload)),
+            "SubagentStop" => Self::SubagentStop(decode_or_default(payload)),
+            "PreToolUse" => Self::PreToolUse(decode_or_default(payload)),
+            "PermissionRequest" => Self::PermissionRequest(decode_or_default(payload)),
+            "PostToolUse" => Self::PostToolUse(decode_or_default(payload)),
+            "PreCompact" => Self::PreCompact(decode_or_default(payload)),
+            "PostCompact" => Self::PostCompact(decode_or_default(payload)),
+            "Stop" => Self::Stop(decode_or_default(payload)),
             "Interrupt" => Self::Interrupt,
             _ => Self::Other,
         }

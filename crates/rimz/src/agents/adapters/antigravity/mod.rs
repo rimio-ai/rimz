@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use serde::Deserialize;
 use serde_json::Value;
 
 #[cfg(test)]
@@ -541,8 +542,7 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         if !payload.is_object() {
             return None;
         }
-        let parsed =
-            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let parsed = statusline::StatuslinePayload::deserialize(payload).ok()?;
         let agent_id = parsed.conversation_id.clone()?;
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
     }
@@ -555,7 +555,7 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         if !payload.is_object() {
             return None;
         }
-        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+        statusline::StatuslinePayload::deserialize(payload)
             .ok()?
             .cost(prices)
     }

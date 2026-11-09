@@ -108,17 +108,17 @@ fn value_is_error(value: Option<&Value>) -> bool {
 }
 
 pub(super) fn parse_invocation(payload: &Value) -> Option<InvocationPayload> {
-    serde_json::from_value(payload.clone()).ok()
+    Deserialize::deserialize(payload).ok()
 }
 
 pub(super) fn parse_common(payload: &Value) -> Option<CommonPayload> {
-    serde_json::from_value(payload.clone()).ok()
+    Deserialize::deserialize(payload).ok()
 }
 
 pub(super) fn parse_post_tool(payload: &Value) -> Option<PostToolPayload> {
-    serde_json::from_value(payload.clone()).ok()
+    Deserialize::deserialize(payload).ok()
 }
 
 pub(super) fn parse_stop(payload: &Value) -> Option<StopPayload> {
-    serde_json::from_value(payload.clone()).ok()
+    Deserialize::deserialize(payload).ok()
 }

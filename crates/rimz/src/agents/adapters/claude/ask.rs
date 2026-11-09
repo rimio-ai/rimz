@@ -172,7 +172,7 @@ fn single_answer(text: String) -> Vec<AskAnswer> {
 }
 
 fn answers_map_detail(tool_response: &Value) -> Option<Vec<AskAnswer>> {
-    let parsed: AskUserQuestionResponse = serde_json::from_value(tool_response.clone()).ok()?;
+    let parsed: AskUserQuestionResponse = Deserialize::deserialize(tool_response).ok()?;
     if parsed.answers.is_empty() {
         return None;
     }

@@ -43,13 +43,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use serde::Deserialize;
 use serde_json::Value;
 
 use self::install::MANAGED_SOURCE;
 use self::payloads::{
     ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
     ClaudeSessionStart, ClaudeStop, ClaudeStopFailure, ClaudeSubagentStart, ClaudeSubagentStop,
-    ClaudeUserPromptSubmit, parse,
+    ClaudeUserPromptSubmit,
 };
 use super::AskKind;
 use super::RemoteControlStatus;
@@ -70,7 +71,7 @@ use super::{
     read_transcript_tail_with_budget, read_transcript_tail_with_status, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
-use crate::agents::payload::finished_task_notification_ids;
+use crate::agents::payload::{decode_or_default, finished_task_notification_ids};
 use crate::agents::version::{CliVersion, probe_cli_version};
 use crate::agents::{PresetArgMatcher, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
@@ -1432,7 +1433,7 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         // Claude's transport is the statusline JSON blob. Tolerant parse: any
         // non-object payload yields `None` rather than an error.
-        let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
+        let parsed: statusline::StatuslinePayload = Deserialize::deserialize(payload).ok()?;
         let agent_id = parsed.session_id.clone()?;
         let mut context = parsed.into_context(source, Timestamp::now());
         if let Some(tail) = transcript_tail_from_payload(payload) {
@@ -1446,9 +1447,8 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {
         // Claude's transport is the `subagentStatusLine` tasks array. Tolerant
         // parse: a non-object payload yields no observations rather than an error.
-        let Ok(parsed) = serde_json::from_value::<subagent_statusline::SubagentStatuslinePayload>(
-            payload.clone(),
-        ) else {
+        let Ok(parsed) = subagent_statusline::SubagentStatuslinePayload::deserialize(payload)
+        else {
             return Vec::new();
         };
         parsed.into_observations(Timestamp::now())
@@ -1677,17 +1677,17 @@ enum ClaudeHook {
 impl ClaudeHook {
     fn parse(event_name: &str, payload: &Value) -> Self {
         match event_name {
-            "SessionStart" => Self::SessionStart(parse(payload)),
-            "UserPromptSubmit" => Self::UserPromptSubmit(parse(payload)),
-            "SubagentStart" => Self::SubagentStart(parse(payload)),
-            "SubagentStop" => Self::SubagentStop(parse(payload)),
-            "Stop" => Self::Stop(parse(payload)),
-            "StopFailure" => Self::StopFailure(parse(payload)),
-            "PreToolUse" => Self::PreToolUse(parse(payload)),
-            "PostToolUse" => Self::PostToolUse(parse(payload)),
-            "PermissionRequest" => Self::PermissionRequest(parse(payload)),
+            "SessionStart" => Self::SessionStart(decode_or_default(payload)),
+            "UserPromptSubmit" => Self::UserPromptSubmit(decode_or_default(payload)),
+            "SubagentStart" => Self::SubagentStart(decode_or_default(payload)),
+            "SubagentStop" => Self::SubagentStop(decode_or_default(payload)),
+            "Stop" => Self::Stop(decode_or_default(payload)),
+            "StopFailure" => Self::StopFailure(decode_or_default(payload)),
+            "PreToolUse" => Self::PreToolUse(decode_or_default(payload)),
+            "PostToolUse" => Self::PostToolUse(decode_or_default(payload)),
+            "PermissionRequest" => Self::PermissionRequest(decode_or_default(payload)),
             "PreCompact" => Self::PreCompact,
-            "PostCompact" => Self::PostCompact(parse(payload)),
+            "PostCompact" => Self::PostCompact(decode_or_default(payload)),
             "SessionEnd" => Self::SessionEnd,
             _ => Self::Other,
         }

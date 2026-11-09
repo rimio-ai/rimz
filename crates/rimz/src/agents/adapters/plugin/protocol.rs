@@ -119,7 +119,7 @@ impl Envelope {
         event_name: &str,
         payload: &serde_json::Value,
     ) -> Result<Self, EnvelopeParseError> {
-        let envelope: Self = serde_json::from_value(payload.clone())
+        let envelope: Self = Self::deserialize(payload)
             .map_err(|error| EnvelopeParseError::InvalidJson(error.to_string()))?;
         if envelope.protocol != PROTOCOL_VERSION {
             return Err(EnvelopeParseError::UnsupportedProtocol {

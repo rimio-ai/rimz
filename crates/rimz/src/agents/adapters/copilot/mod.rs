@@ -20,6 +20,7 @@ mod subagent;
 mod transcript;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -389,7 +390,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::CopilotHookPayload = decode_or_default(payload);
         let tools = parsed.normalized_tool_calls();
         let tool = tools.selected();
         let ask_kind = if event_name == "permissionRequest" {

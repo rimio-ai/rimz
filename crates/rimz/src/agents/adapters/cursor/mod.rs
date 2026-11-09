@@ -14,12 +14,14 @@ mod statusline;
 mod transcript;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use serde::Deserialize;
 #[cfg(test)]
 use serde_json::json as test_json;
 use serde_json::{Value, json};
@@ -380,7 +382,7 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let mut decoded = decode_catalog_hook(CURSOR_HOOKS, event_name, None);
         decoded.set_reply(self.payload_hook_reply(event_name, payload));
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::CursorHookPayload = decode_or_default(payload);
         let agent_id = parsed
             .conversation_id
             .as_deref()
@@ -592,8 +594,7 @@ impl crate::agents::capabilities::SessionCapability for CursorAdapter {
 
 impl crate::agents::capabilities::ContextCapability for CursorAdapter {
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
-        let payload =
-            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let payload = statusline::StatuslinePayload::deserialize(payload).ok()?;
         let agent_id = payload.session_id.clone()?;
         let markers = payload
             .session_id
@@ -616,7 +617,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
         if !matches!(event_name, "afterAgentResponse" | "stop") {
             return None;
         }
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::CursorHookPayload = decode_or_default(payload);
         if event_name == "stop"
             && !matches!(
                 parsed.status.as_deref(),

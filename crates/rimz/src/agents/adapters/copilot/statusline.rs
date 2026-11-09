@@ -109,7 +109,7 @@ impl StatuslinePayload {
     pub(super) fn parse(payload: &Value) -> Option<Self> {
         payload
             .is_object()
-            .then(|| serde_json::from_value(payload.clone()).ok())
+            .then(|| Deserialize::deserialize(payload).ok())
             .flatten()
     }
 

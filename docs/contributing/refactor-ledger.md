@@ -38,12 +38,12 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/cursor` | holds; landed pass-25 | `4a82d6b28` | 30 | registry adapter only; its statusline lossy reader swallows inner errors, unlike `transcript_fs`, so they stay apart. |
 | `agents/adapters/antigravity` | holds; landed pass-20c | `e55c49fd4` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/pi` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
-| `agents/adapters/opencode` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant `parse_payload` and `sqlite_io` adapter hold. |
+| `agents/adapters/opencode` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant payload decode (now the shared `decode_or_default`) and `sqlite_io` adapter hold. |
 | `agents/adapters/plugin` | holds; landed pass-21c | `dde310cbf` | 30 | `agents::plugins` re-exports stay `pub` for the binary; `PluginAdapter` private. |
 | `agents/adapters/grok` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/droid` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/kiro` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
-| `agents/adapters/amp` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant `parse_payload` holds. |
+| `agents/adapters/amp` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant payload decode (now the shared `decode_or_default`) holds. |
 | `agents/attribution` | holds | `2f84d791a` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |

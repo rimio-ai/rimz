@@ -7760,7 +7760,7 @@ reason = "Registry registration is the only outside-provider interface; the hook
 [[verdict]]
 kind = "item"
 key = "agents::adapters::copilot::payloads::CopilotHookPayload"
-reason = "Stays pub(super), with NormalizedToolCall(s) and CopilotHookError: parse_payload, normalized_tool_calls and selected return them to mod.rs, so private_interfaces refutes the private narrowing. Raw tool_name/tool_args/tool_calls are private so the normalized view is the one way in (pass 20c)."
+reason = "Stays pub(super), with NormalizedToolCall(s) and CopilotHookError: mod.rs names CopilotHookPayload to decode it, and normalized_tool_calls and selected return them to mod.rs, so private_interfaces refutes the private narrowing. Raw tool_name/tool_args/tool_calls are private so the normalized view is the one way in (pass 20c)."
 
 [[verdict]]
 kind = "pass-through"
@@ -7836,16 +7836,6 @@ reason = "Registry registration is the only outside-provider interface; the plug
 kind = "item"
 key = "agents::adapters::plugin::loaded"
 reason = "The plugin directory keeps a second public surface: discovery, conformance and diagnostics re-exported through the agents::plugins facade for the binary crate's register, check, doctor and hooks commands, which see only pub items. PluginAdapter itself is private; the registry reaches plugin definitions through loaded() (pass 21c)."
-
-[[verdict]]
-kind = "item"
-key = "agents::adapters::amp::payloads::parse_payload"
-reason = "Stays pub(super) with AmpHookPayload: it returns the payload to mod.rs, so private_interfaces refutes the private narrowing. Inlining the one-line tolerant parse is line-neutral and loses the named contract payload_parse_is_tolerant pins (pass 21c)."
-
-[[verdict]]
-kind = "item"
-key = "agents::adapters::opencode::payloads::parse_payload"
-reason = "Stays pub(super) with OpencodeHookPayload: parse_payload and errored take or return it in mod.rs, so private_interfaces refutes the private narrowing. Inlining the one-line tolerant parse is line-neutral and loses the named contract tolerant_parse_degrades_to_empty_default pins (pass 21c)."
 
 [[verdict]]
 kind = "pass-through"

@@ -28,6 +28,7 @@ mod spend;
 mod transcript;
 
 use crate::agents::capabilities::*;
+use crate::agents::payload::decode_or_default;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -555,7 +556,7 @@ fn parse_inline_config(
 
 impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::OpencodeHookPayload = decode_or_default(payload);
         let state_snapshot = matches!(event_name, "client_idle" | "client_running");
         let ask_kind = match event_name {
             "permission_ask" => Some(AskKind::Permission),
@@ -1120,7 +1121,7 @@ impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
-        let parsed = payloads::parse_payload(payload);
+        let parsed: payloads::OpencodeHookPayload = decode_or_default(payload);
         if parsed.session_name.is_none()
             && parsed.model_display_name.is_none()
             && parsed.agent_version.is_none()

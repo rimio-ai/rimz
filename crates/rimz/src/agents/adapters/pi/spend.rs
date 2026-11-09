@@ -125,7 +125,7 @@ where
     };
     Ok(blocks
         .iter()
-        .filter_map(|block| serde_json::from_value(block.clone()).ok())
+        .filter_map(|block| Deserialize::deserialize(block).ok())
         .collect())
 }
 

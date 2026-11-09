@@ -32,7 +32,7 @@ pub(super) struct Payload {
 }
 
 pub(super) fn parse(payload: &Value) -> Payload {
-    serde_json::from_value(payload.clone()).unwrap_or_else(|_| Payload {
+    Deserialize::deserialize(payload).unwrap_or_else(|_| Payload {
         session_id: payload
             .get("session_id")
             .and_then(Value::as_str)
@@ -56,7 +56,7 @@ struct Question {
 }
 
 pub(super) fn questions(input: &Value) -> Vec<AskQuestion> {
-    let Ok(input) = serde_json::from_value::<QuestionInput>(input.clone()) else {
+    let Ok(input) = QuestionInput::deserialize(input) else {
         return Vec::new();
     };
     input

@@ -48,7 +48,7 @@ pub(super) fn queued_questions(
         return None;
     }
     let call_id = tool.tool_use_id.as_deref()?;
-    let input: AsyncQuestions = serde_json::from_value(tool.tool_input.clone()?).ok()?;
+    let input: AsyncQuestions = Deserialize::deserialize(tool.tool_input.as_ref()?).ok()?;
     if input.questions.is_empty() {
         return None;
     }
@@ -157,7 +157,7 @@ pub(super) fn answer_detail(
         tool_input,
         super::super::question::PreviewPolicy::None,
     )?;
-    let mut response: CodexQuestionResponse = serde_json::from_value(tool_response.clone()).ok()?;
+    let mut response: CodexQuestionResponse = Deserialize::deserialize(tool_response).ok()?;
     let mut answers = Vec::new();
     for question in input {
         let Some(id) = question.native_id else {

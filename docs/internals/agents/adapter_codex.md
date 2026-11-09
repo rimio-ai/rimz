@@ -7,7 +7,7 @@ This page maps Codex onto RimZ's internal types: which hook carries which signal
 | Module | Owns |
 | --- | --- |
 | `mod.rs` | the hook catalog `CODEX_HOOKS`, the one-of `CodexHook` payload, `decode_hook`, lifecycle mapping, `CODEX_DESCRIPTOR`, the capability impls, and `config_home` (the one Codex home rule) |
-| `payloads.rs` | typed hook payloads and their one generic `parse` |
+| `payloads.rs` | typed hook payloads, decoded through the shared `decode_or_default` |
 | `ask.rs` | ask questions, answers, and `rimz answer` key plans |
 | `install.rs` | the `config.toml` hook merge, uninstall, installed-hook trust, the routine rules file, and `codex_config_path` |
 | `project_trust.rs` | read-only `[projects]` directory trust for the launch preflight |
