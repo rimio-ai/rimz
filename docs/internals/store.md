@@ -60,7 +60,7 @@ The file primitives sit one level down, in `disk/`, which imports nothing from t
 | [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs) | `StatePaths`, `RuntimePaths`, and `SpendingHistoryPaths`: the store-owned filenames on this page, account-shared history paths, the XDG resolution, the layout check, and the private runtime-directory check. |
 | [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, exact-mode directory creation, appends and replacements, non-replacing durable copies and staged file/directory publication, cache-local temp cleanup, and the cache-class read (missing or corrupt reads as default). Every fsync call is in this file ([write classes](#write-classes)). |
 | [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | `WorkspaceLock`, the advisory flock, bounded by `LOCK_TIMEOUT` (30 seconds), with immediate acquisition and exact-mode creation for shared locks. The timeout error names `fuser` to find the holder. `SharedAppendLock` is the shared, blocking guard for ingress appends. |
-| [`disk/lease.rs`](../../crates/rimz/src/disk/lease.rs) | Single-flight leases (the loop watch and run locks, and wrapper hook-drainer outage records). Claim, probe, and GC removal each run under the directory's `lease-gate.lock`, held for one attempt and its body write, read, or unlink, so a probe or a sweep never defeats a claim. The gate wait is bounded at five seconds, and a timeout is an error. |
+| [`disk/lease.rs`](../../crates/rimz/src/disk/lease.rs) | Single-flight leases (the loop watch and run locks, reply-wait leg leases, and wrapper hook-drainer outage records). Claim, probe, and GC removal each run under the directory's `lease-gate.lock`, held for one attempt and its body write, read, or unlink, so a probe or a sweep never defeats a claim. The gate wait is bounded at five seconds, and a timeout is an error. |
 | [`disk/retention.rs`](../../crates/rimz/src/disk/retention.rs) | The retention figures that state writers and the class sweeps share: archive retention, the rotation threshold, the owned and temp-unit graces, the audit age and size caps, and the transcript bucket width. |
 | [`disk/buckets.rs`](../../crates/rimz/src/disk/buckets.rs) | Date-bucket file names and listing for the append-only `audit/transcript/` and `audit/messages/` logs. |
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
@@ -152,6 +152,7 @@ locks/*.lock                                  room, workspace, publish, subagent
                                               topology-writer, authoritative-pane-probe, focus-anchor, typing,
                                               pr-state, diff-stats, budget.fleet, hook-drainer,
                                               hook-drainer-spawn, hook-ingress, lsp-usage, and sidecar locks
+locks/reply-waits/<token>.lock                reply-wait leg leases, held by the waiting `rimz message --wait`
 workspace.json                                room record, layout: 2
 rimz                                          stable room executable
 ```

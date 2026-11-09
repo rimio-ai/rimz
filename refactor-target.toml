@@ -1580,7 +1580,8 @@ allowed-dependencies = [
 # RuntimePaths::typing_path and typing_lock_path class the pane-input record and lock (+2).
 # RuntimePaths::sidebar_closed_cards_path owns the CLI's runtime undo stack (+1).
 # RuntimePaths::zellij_client_mode_paths owns stamped per-client mode lanes (+1).
-surface-budget = 329
+# RuntimePaths::reply_wait_lease_path classes each reply wait leg's liveness lease (+1).
+surface-budget = 330
 
 [[verdict]]
 kind = "item"
@@ -4292,7 +4293,8 @@ path = "crates/rimz/src/store"
 # raised::observe and raised::audit share lifecycle settlement and operator audit writes (+2).
 # raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
 # raised::prepare_raise owns the CLI's basis, rest and captured-reply decisions (+1).
-surface-budget = 584
+# MessageRecord::with_reply_wait_lease stamps a reply wait leg's lease token for cycle detection (+1).
+surface-budget = 585
 
 [[verdict]]
 kind = "item"

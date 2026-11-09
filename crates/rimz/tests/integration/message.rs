@@ -6145,10 +6145,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
 #[test]
 fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
     let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_role_agent(&env, "claude", "sess-coder", "coder", true, None);
-    register_role_agent(&env, "claude", "sess-reviewer", "reviewer", true, None);
+    register_wait_pair(&env);
     let snapshot = env.store().snapshot().expect("snapshot");
     let coder = snapshot
         .agents
@@ -6201,6 +6198,112 @@ fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
     let messages = env.store().list_messages().expect("messages");
     assert_eq!(messages.len(), 1, "the counter-wait was not enqueued");
     assert_eq!(messages[0].message_id, existing_id);
+}
+
+/// Registers a running coder and reviewer, as the cycle-guard tests' two sides.
+fn register_wait_pair(env: &Env) {
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_role_agent(env, "claude", "sess-coder", "coder", true, None);
+    register_role_agent(env, "claude", "sess-reviewer", "reviewer", true, None);
+}
+
+/// The coder's `--wait` back toward the reviewer, which must not be refused as a deadlock.
+fn assert_counter_wait_accepted(env: &Env, live_before: usize) {
+    let out = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_NAME", "coder-agent")
+        .args([
+            "message",
+            "@reviewer",
+            "--no-from",
+            "--wait=1s",
+            "counter-question",
+        ])
+        .output()
+        .expect("counter-wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("--wait would deadlock"),
+        "a settled wait no longer blocks the counter-wait: {stderr}"
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(
+        messages.len(),
+        live_before + 1,
+        "the counter-wait was enqueued: {messages:?}"
+    );
+}
+
+#[test]
+fn agent_wait_accepts_a_counter_wait_once_the_other_leg_settled() {
+    let env = Env::new();
+    register_wait_pair(&env);
+    let snapshot = env.store().snapshot().expect("snapshot");
+    let coder = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.role.as_deref() == Some("coder"))
+        .expect("coder card");
+    // A settled leg removes its lease file, so the token names no lease.
+    let settled = MessageRecord::new(
+        snapshot.workspace_id.clone(),
+        coder,
+        "answer the review".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_address(Some("@coder".to_owned()))
+    .with_sender(MessageSender::Agent {
+        agent_id: None,
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("reviewer-agent".to_owned()),
+        profile: None,
+        role: Some("reviewer".to_owned()),
+        channel: None,
+    })
+    .with_reply_wait(true)
+    .with_reply_wait_lease(Some("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f".to_owned()));
+    env.store()
+        .queue_message(&settled, "rimz-test")
+        .expect("seed reviewer's settled wait");
+
+    assert_counter_wait_accepted(&env, 1);
+}
+
+#[test]
+fn agent_wait_accepts_a_counter_wait_after_the_other_wait_is_killed() {
+    let env = Env::new();
+    register_wait_pair(&env);
+    let mut reviewer = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_NAME", "reviewer-agent")
+        .args(["message", "@coder", "--wait", "review question"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("reviewer wait");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let wait = loop {
+        let messages = env.store().list_messages().expect("messages");
+        if let Some(record) = messages.into_iter().find(|record| record.reply_wait) {
+            break record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reviewer's wait never enqueued"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(
+        matches!(&wait.sender, MessageSender::Agent { name: Some(name), .. } if name == "reviewer-agent"),
+        "the reviewer authored its wait: {wait:?}"
+    );
+    reviewer.kill().expect("SIGKILL the reviewer's wait");
+    reviewer.wait().expect("reap the reviewer's wait");
+
+    assert_counter_wait_accepted(&env, 1);
 }
 
 #[test]

@@ -14,6 +14,8 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, TurnCompletion};
+use crate::disk::lease::{self, Lease, LeaseAttempt, LeaseState};
+use crate::disk::paths::RuntimePaths;
 use crate::harness::auto_continue::CardStatus;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
@@ -115,6 +117,12 @@ pub enum ReplyPrepareErr {
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Login(#[from] crate::agents::RoomLoginErr),
+    #[error("cannot claim reply wait lease {path}: {source}")]
+    Lease {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -184,7 +192,14 @@ impl ReplyPreparation {
             }
             if let (Some(caller), Some((live, history))) =
                 (caller_identity.as_ref(), guard_records.as_ref())
-                && let Some(cycle) = wait_cycle(live, history, &snapshot.agents, caller, agent)
+                && let Some(cycle) = wait_cycle(
+                    store.runtime_paths(),
+                    live,
+                    history,
+                    &snapshot.agents,
+                    caller,
+                    agent,
+                )
             {
                 let first = cycle.first();
                 return Err(ReplyPrepareErr::DependencyCycle {
@@ -194,13 +209,26 @@ impl ReplyPreparation {
                     chain: render_chain(&cycle),
                 });
             }
-            prepared.push(ReplyTarget::new(agent, target.label, adapter));
+            let mut prepared_target = ReplyTarget::new(agent, target.label, adapter);
+            prepared_target.lease = Some(WaitLease::claim(store.runtime_paths())?);
+            prepared.push(prepared_target);
         }
         Ok(Self {
             targets: prepared,
             wait_base: store.wait_fold_base()?,
             caller_identity,
         })
+    }
+
+    /// The lease token dispatch stamps on the record of the leg at `index`, in dispatch's target
+    /// order, the order `attach` zips outcomes in. By position, not by card: two same-kind,
+    /// same-name legs can be distinct cards, and each record must carry its own leg's token.
+    pub(super) fn lease_token(&self, index: usize) -> Option<&str> {
+        self.targets
+            .get(index)?
+            .lease
+            .as_ref()
+            .map(|lease| lease.token.as_str())
     }
 
     pub(super) fn attach(
@@ -283,9 +311,14 @@ impl ReplyWait {
                 .snapshot
                 .with_agent_context(crate::store::agent_context::read_all(store.runtime_paths()));
             let history = store.list_message_history()?;
-            for (index, cycle) in
-                deadlocked_legs(&self.legs, &view.messages, &history, &view.snapshot, caller)
-            {
+            for (index, cycle) in deadlocked_legs(
+                store.runtime_paths(),
+                &self.legs,
+                &view.messages,
+                &history,
+                &view.snapshot,
+                caller,
+            ) {
                 let leg = &mut self.legs[index];
                 let first = cycle.first();
                 leg.done = Some(RunStatus::Failed);
@@ -309,6 +342,7 @@ impl ReplyWait {
         for index in &newly_settled {
             self.legs[*index].reported = true;
         }
+        self.release_settled_leases();
         Ok(self.update(newly_settled))
     }
 
@@ -326,6 +360,7 @@ impl ReplyWait {
             leg.reported = true;
             newly_settled.push(index);
         }
+        self.release_settled_leases();
         let settled = newly_settled
             .into_iter()
             .map(|index| self.legs[index].result())
@@ -337,6 +372,13 @@ impl ReplyWait {
                 winner: None,
             }),
         })
+    }
+
+    /// A settled leg stops counting toward cycle detection, while the rest of the wait goes on.
+    fn release_settled_leases(&mut self) {
+        for leg in self.legs.iter_mut().filter(|leg| leg.done.is_some()) {
+            leg.target.lease = None;
+        }
     }
 
     fn take_unreported(&mut self) -> Vec<usize> {
@@ -394,6 +436,44 @@ struct ReplyTarget {
     label: String,
     cursor: Option<TranscriptCursor>,
     transcript_path: Option<String>,
+    lease: Option<WaitLease>,
+}
+
+/// A leg's liveness lease, held from preparation until the leg settles or its process exits.
+struct WaitLease {
+    token: String,
+    path: PathBuf,
+    held: Option<Lease>,
+}
+
+impl WaitLease {
+    fn claim(runtime: &RuntimePaths) -> Result<Self, ReplyPrepareErr> {
+        let token = uuid::Uuid::now_v7().simple().to_string();
+        let path = runtime.reply_wait_lease_path(&token);
+        let held = match lease::claim(&path, |_| Ok(())) {
+            Ok(LeaseAttempt::Acquired(held)) => held,
+            Ok(LeaseAttempt::Held(_)) => {
+                return Err(ReplyPrepareErr::Lease {
+                    path,
+                    source: std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+                });
+            }
+            Err(source) => return Err(ReplyPrepareErr::Lease { path, source }),
+        };
+        Ok(Self {
+            token,
+            path,
+            held: Some(held),
+        })
+    }
+}
+
+impl Drop for WaitLease {
+    fn drop(&mut self) {
+        drop(self.held.take());
+        // Best-effort: GC's lock sweep removes a file left behind.
+        let _ = lease::remove_if_free(&self.path);
+    }
 }
 
 impl ReplyTarget {
@@ -410,6 +490,7 @@ impl ReplyTarget {
                 adapter,
             )),
             transcript_path,
+            lease: None,
         }
     }
 
@@ -463,6 +544,9 @@ impl Leg {
                 )
         });
         let transcript_path = target.transcript_path.clone();
+        if done.is_some() {
+            target.lease = None;
+        }
         Self {
             target,
             message_id,
@@ -882,6 +966,7 @@ struct WaitEdge {
 }
 
 fn wait_cycle(
+    runtime: &RuntimePaths,
     live: &[MessageRecord],
     history: &[MessageRecord],
     agents: &[AgentState],
@@ -900,6 +985,7 @@ fn wait_cycle(
                 record.status,
                 MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
             )
+            && wait_still_held(runtime, record)
     }) {
         let Some(sender) = running_sender_index(record, agents) else {
             continue;
@@ -928,6 +1014,7 @@ fn wait_cycle(
                 record.message_id == *message_id
                     && record.reply_wait
                     && record.status == MessageStatus::Delivered
+                    && wait_still_held(runtime, record)
             }) else {
                 continue;
             };
@@ -1002,6 +1089,31 @@ fn walk_edges(
     false
 }
 
+/// Whether the wait behind `record` is still live: its lease is held, or it has none (a record
+/// from an older binary). A probe that fails counts the wait, since a missed deadlock costs
+/// more than a refusal the caller can retry.
+fn wait_still_held(runtime: &RuntimePaths, record: &MessageRecord) -> bool {
+    let Some(token) = record.reply_wait_lease.as_deref() else {
+        return true;
+    };
+    // The token comes from the queue file; anything but our own token shape counts as legacy.
+    if token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return true;
+    }
+    match lease::probe(&runtime.reply_wait_lease_path(token)) {
+        Ok(LeaseState::Held(_)) => true,
+        Ok(LeaseState::Free) => false,
+        Err(error) => {
+            tracing::warn!(
+                message_id = %record.message_id,
+                %error,
+                "counting a reply wait whose lease cannot be probed"
+            );
+            true
+        }
+    }
+}
+
 fn running_sender_index(record: &MessageRecord, agents: &[AgentState]) -> Option<usize> {
     let sender = sender_notice::resolve_sender(&record.sender, agents)
         .filter(|agent| agent.status == AgentStatus::Running)?;
@@ -1013,6 +1125,7 @@ fn same_card(left: &AgentState, right: &AgentState) -> bool {
 }
 
 fn deadlocked_legs(
+    runtime: &RuntimePaths,
     legs: &[Leg],
     live: &[MessageRecord],
     history: &[MessageRecord],
@@ -1027,7 +1140,7 @@ fn deadlocked_legs(
                 .agents
                 .iter()
                 .find(|agent| leg.target.matches(agent))?;
-            let cycle = wait_cycle(live, history, &snapshot.agents, caller, target)?;
+            let cycle = wait_cycle(runtime, live, history, &snapshot.agents, caller, target)?;
             (youngest_wait_message(&cycle, &leg.message_id) == leg.message_id)
                 .then_some((index, cycle))
         })

@@ -697,6 +697,7 @@ fn construction_settled_leg_is_reported_before_store_poll() {
         label: "@coder".to_owned(),
         cursor: None,
         transcript_path: None,
+        lease: None,
     };
     let outcome = DispatchOutcome::SkippedWaiting {
         label: "@coder".to_owned(),
@@ -1008,7 +1009,7 @@ fn detects_mutual_queued_cycle() {
         wait_message(&agents[1], &agents[0], 2, MessageStatus::Queued),
     ];
 
-    let cycle = wait_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
+    let cycle = scratch_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
         .expect("mutual wait closes a cycle");
 
     assert_eq!(cycle, [hop("@b", 2)]);
@@ -1018,7 +1019,7 @@ fn detects_mutual_queued_cycle() {
 fn detects_an_immediate_self_wait_cycle_without_edges() {
     let agents = [agent("a", AgentStatus::Running)];
 
-    let cycle = wait_cycle(&[], &[], &agents, &sender_of(&agents[0]), &agents[0])
+    let cycle = scratch_cycle(&[], &[], &agents, &sender_of(&agents[0]), &agents[0])
         .expect("waiting on the caller itself is an immediate cycle");
 
     assert!(cycle.is_empty());
@@ -1036,7 +1037,7 @@ fn detects_three_agent_chain_and_renders_it() {
         wait_message(&agents[2], &agents[0], 3, MessageStatus::Claimed),
     ];
 
-    let cycle = wait_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
+    let cycle = scratch_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
         .expect("chain reaches caller");
 
     assert_eq!(cycle, [hop("@b", 2), hop("@c", 3)]);
@@ -1053,7 +1054,7 @@ fn detects_delivered_wait_that_opened_reply_turn() {
     agents[0].context = Some(crate::agents::AgentContext::new("codex", Timestamp::now()));
     agents[0].context.as_mut().unwrap().turn_opened_by = vec![delivered.message_id.clone()];
 
-    let cycle = wait_cycle(
+    let cycle = scratch_cycle(
         &[],
         &[delivered],
         &agents,
@@ -1073,7 +1074,7 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
     ];
     let mut message = wait_message(&agents[1], &agents[0], 2, MessageStatus::Queued);
     assert!(
-        wait_cycle(
+        scratch_cycle(
             &[message.clone()],
             &[],
             &agents,
@@ -1088,7 +1089,7 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
         *name = None;
     }
     assert!(
-        wait_cycle(
+        scratch_cycle(
             &[message.clone()],
             &[],
             &agents,
@@ -1102,7 +1103,7 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
         kind: agents[1].kind.clone(),
         name: "child".to_owned(),
     };
-    assert!(wait_cycle(&[message], &[], &agents, &sender_of(&agents[0]), &agents[1]).is_none());
+    assert!(scratch_cycle(&[message], &[], &agents, &sender_of(&agents[0]), &agents[1]).is_none());
 }
 
 #[test]
@@ -1127,15 +1128,152 @@ fn a_same_name_row_in_another_lane_does_not_stand_in_for_the_caller() {
     let caller = sender_with_id(&agents[1], "sess-a-auth");
 
     assert_eq!(
-        wait_cycle(&live, &[], &agents, &caller, &agents[2]),
+        scratch_cycle(&live, &[], &agents, &caller, &agents[2]),
         None,
         "@b waits on the docs lane's @a, not on the caller"
     );
     let docs = sender_with_id(&agents[0], "sess-a-docs");
     assert_eq!(
-        wait_cycle(&live, &[], &agents, &docs, &agents[2]),
+        scratch_cycle(&live, &[], &agents, &docs, &agents[2]),
         Some(vec![hop("@b", 2)])
     );
+}
+
+#[test]
+fn a_reply_wait_edge_counts_only_while_its_lease_is_held() {
+    use crate::disk::lease::{self, LeaseAttempt};
+
+    let (_dir, runtime) = wait_runtime();
+    let claim = |token: &str| match lease::claim(&runtime.reply_wait_lease_path(token), |_| Ok(()))
+        .unwrap()
+    {
+        LeaseAttempt::Acquired(held) => held,
+        LeaseAttempt::Held(_) => panic!("fresh lease `{token}` is already held"),
+    };
+    let held = claim("held");
+    drop(claim("freed"));
+    let mut agents = [
+        agent("a", AgentStatus::Running),
+        agent("b", AgentStatus::Running),
+    ];
+    let caller = sender_of(&agents[0]);
+    for (token, counts) in [
+        (None, true),
+        (Some("held"), true),
+        (Some("freed"), false),
+        (Some("missing"), false),
+    ] {
+        let live = wait_message(&agents[1], &agents[0], 2, MessageStatus::Queued)
+            .with_reply_wait_lease(token.map(str::to_owned));
+        assert_eq!(
+            wait_cycle(&runtime, &[live], &[], &agents, &caller, &agents[1]).is_some(),
+            counts,
+            "live record with lease {token:?}"
+        );
+        let delivered = wait_message(&agents[1], &agents[0], 7, MessageStatus::Delivered)
+            .with_reply_wait_lease(token.map(str::to_owned));
+        agents[0].context = Some(crate::agents::AgentContext::new("codex", Timestamp::now()));
+        agents[0].context.as_mut().unwrap().turn_opened_by = vec![delivered.message_id.clone()];
+        assert_eq!(
+            wait_cycle(&runtime, &[], &[delivered], &agents, &caller, &agents[1]).is_some(),
+            counts,
+            "delivered record with lease {token:?}"
+        );
+    }
+    assert_eq!(
+        lease::probe(&runtime.reply_wait_lease_path("held")).unwrap(),
+        lease::LeaseState::Held(Vec::new()),
+        "the holding process reads its own lease as held"
+    );
+    drop(held);
+}
+
+#[test]
+fn a_settled_leg_frees_its_lease_while_the_wait_goes_on() {
+    use crate::disk::lease::{self, LeaseState};
+
+    let (_dir, store) = wait_store();
+    let observation = crate::agents::AgentLifecycleObservation::new(
+        Some("kept".into()),
+        crate::agents::LifecycleSignal::Registered,
+    );
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            store.paths().workspace_id.clone(),
+            "test",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let leased = |session: &str| {
+        let mut leg = leg(&format!("@{session}"), MessageStatus::Queued, None);
+        leg.target.kind = AgentKind::new_unchecked("claude");
+        leg.target.agent_id = AgentSessionId::from(session);
+        leg.target.lease = Some(WaitLease::claim(store.runtime_paths()).unwrap());
+        leg
+    };
+    let mut wait = wait_with_legs(vec![leased("gone"), leased("kept")], ReplyJoin::All);
+    let path = |wait: &ReplyWait, index: usize| {
+        wait.legs[index].target.lease.as_ref().unwrap().path.clone()
+    };
+    let (gone, kept) = (path(&wait, 0), path(&wait, 1));
+    let state = |path: &std::path::Path| lease::probe(path).unwrap();
+
+    let update = wait.poll(&store).unwrap();
+    assert_eq!(
+        update.settled.len(),
+        1,
+        "only the vanished card's leg settles"
+    );
+    assert_eq!(wait.legs[0].done, Some(RunStatus::Failed));
+    assert_eq!(wait.legs[1].done, None);
+    assert_eq!(
+        state(&gone),
+        LeaseState::Free,
+        "the settled leg stops counting"
+    );
+    assert!(
+        matches!(state(&kept), LeaseState::Held(_)),
+        "the open leg still counts"
+    );
+
+    wait.timeout(&store, "test").unwrap();
+    assert_eq!(wait.legs[1].done, Some(RunStatus::TimedOut));
+    assert_eq!(
+        state(&kept),
+        LeaseState::Free,
+        "timeout frees what it settles"
+    );
+}
+
+#[test]
+fn same_name_targets_each_carry_their_own_leg_lease() {
+    let (_dir, store) = wait_store();
+    let adapter = crate::agents::find_definition("codex").unwrap();
+    let targets = ["sess-child-one", "sess-child-two"].map(|session| {
+        let mut card = agent("child", AgentStatus::Running);
+        card.agent_id = session.into();
+        let mut target = ReplyTarget::new(&card, "@child".to_owned(), adapter);
+        target.lease = Some(WaitLease::claim(store.runtime_paths()).unwrap());
+        target
+    });
+    let own = |index: usize| targets[index].lease.as_ref().unwrap().token.clone();
+    let (first, second) = (own(0), own(1));
+    let preparation = ReplyPreparation {
+        targets: targets.into(),
+        wait_base: 0,
+        caller_identity: None,
+    };
+
+    assert_ne!(first, second, "each leg claims its own lease");
+    assert_eq!(preparation.lease_token(0), Some(first.as_str()));
+    assert_eq!(
+        preparation.lease_token(1),
+        Some(second.as_str()),
+        "a same-name card in the fan-out gets its own leg's token, not the first leg's"
+    );
+    assert_eq!(preparation.lease_token(2), None);
 }
 
 #[test]
@@ -1167,6 +1305,7 @@ fn leg(label: &str, status: MessageStatus, done: Option<RunStatus>) -> Leg {
             label: label.to_owned(),
             cursor: None,
             transcript_path: None,
+            lease: None,
         },
         message_id: MessageId::new(),
         phase: WaitPhase::Delivery,
@@ -1232,6 +1371,25 @@ fn sender_with_id(agent: &AgentState, id: &str) -> MessageSender {
         *agent_id = Some(id.into());
     }
     sender
+}
+
+/// `wait_cycle` over a fresh runtime, where no lease file exists.
+fn scratch_cycle(
+    live: &[MessageRecord],
+    history: &[MessageRecord],
+    agents: &[AgentState],
+    caller: &MessageSender,
+    target: &AgentState,
+) -> Option<Vec<WaitCycleHop>> {
+    let (_dir, runtime) = wait_runtime();
+    wait_cycle(&runtime, live, history, agents, caller, target)
+}
+
+fn wait_runtime() -> (tempfile::TempDir, RuntimePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    (dir, runtime)
 }
 
 fn hop(handle: &str, id: u64) -> WaitCycleHop {
