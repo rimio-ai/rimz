@@ -23,7 +23,7 @@ Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hiber
 ## Rules a change keeps
 
 - Every function that opens a `PaneWriter` wakes the pane earlier in the same function. `cargo xtask invariants` enforces it ([Synchronous wake](#synchronous-wake)).
-- One per-workspace lock, `hibernate.lock`, serializes the final freeze decision, the freeze, each reclaim, publication of the record, and wake. Wake bypasses it only after a timeout ([Lock-timeout recovery](#lock-timeout-recovery)).
+- One per-workspace lock, `hibernate.lock`, serializes the final freeze decision, the freeze, each reclaim, publication of the record, wake, and start reconciliation. Wake bypasses it only after a timeout ([Lock-timeout recovery](#lock-timeout-recovery)).
 - The record is published only after a confirmed freeze and a successful first reclaim. A failure between the freeze and publication thaws the scope. A deepen step never recreates an entry that a wake withdrew.
 - Hibernation never changes an agent's lifecycle or displayed status ([What a frozen row shows](#what-a-frozen-row-shows)).
 - A scope holds only the provider, its descendants, and its in-scope ancestor chain. Any other process vetoes the freeze.
@@ -36,7 +36,7 @@ Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hiber
 
 Off Linux, the config keeps the configured `enabled` value. After validating the schedule, `crates/rimz/src/harness/hibernate.rs::inspect_with` reports `Linux cgroup freezing is unavailable` without probing capabilities, so admission is unavailable and nothing hibernates. Platform support produces no command warning or room warning record; only doctor's HIBERNATE section shows the configured value and the skip reason, as uncounted information.
 
-`crates/rimz/src/harness/hibernate.rs::inspect` probes the host's capabilities for `rimz doctor`. Each failed check is a warning row, and the first failure becomes the reason hibernation is skipped:
+`crates/rimz/src/harness/hibernate.rs::inspect` probes the host's capabilities for `rimz doctor`. On Linux with `enabled = false` it probes nothing and reports the skip reason `disabled`. Otherwise each failed check is a warning row, and the first failure becomes the reason hibernation is skipped:
 
 | Doctor check | Passes when |
 | --- | --- |
@@ -46,7 +46,7 @@ Off Linux, the config keeps the configured `enabled` value. After validating the
 | `cgroup.freeze` | `app.slice/cgroup.freeze` is writable. |
 | `memory.reclaim` | `app.slice/memory.reclaim` is writable (Linux 5.19 or newer). |
 | `swap` | `/proc/meminfo` reports a positive `SwapTotal`. |
-| `swap limit` | No visible ancestor of `app.slice` has a `memory.swap.max` that reads `0`, is malformed, or cannot be read. A value of `max`, a positive limit, or a missing file passes. |
+| `swap limit` | Neither `app.slice` nor any of its ancestors up to `/sys/fs/cgroup` has a `memory.swap.max` that reads `0`, is malformed, or cannot be read. A value of `max`, a positive limit, or a missing file passes. |
 | `free swap` | Advisory only: a warning when `SwapFree` is 0. It does not skip hibernation. |
 
 The `app.slice` path is `user.slice/user-<uid>.slice/user@<uid>.service/app.slice`, built from the uid. The caller's own cgroup does not matter, so a login shell in `session-N.scope` can use it. A passing `swap limit` does not prove swap is available: a container's cgroup namespace can hide a tighter ancestor limit, and inside a container the virtualized `/proc/meminfo` is the authority on swap.
@@ -160,7 +160,7 @@ Each transaction holds `hibernate.lock` for one reclaim. Input that arrives duri
 
 `crates/rimz/src/harness/hibernate.rs::project_hibernation` attaches a `Hibernation` (`frozen_at`, `step`, `reclaimed_bytes`, `wake_error`) to each open row that has an entry of the same kind and session id. Read-only folds reuse the atomic record's cached parse; locked record updates remain uncached. The projection drives the [hibernated sidebar cadence](../sidebar/state.md#cadences), not lifecycle: a frozen row keeps its displayed status and glyph, ranking, unread episodes, notifications, and turn-completion behaviour. A pending wait keeps its working or sleeping classification, and idle-stop reads the real state, so an armed wait still holds a frozen agent as sleeping. Cache keepalive skips rows with an entry; idle compaction wakes eligible frozen rows.
 
-`rimz agents list --json` and `show --json` carry `hibernation` whenever the row carries the projection. An entry with no matching live row shows nowhere. `rimz agents show` renders `hibernating since <frozen_at>, step <n> of <final>, <bytes> reclaimed`, and appends `, wake failed: <error>` when `wake_error` is set. [stats.md](../stats.md) counts freezes and keeps reclaimed memory apart from GC disk recovery.
+`rimz agents list --json` and `show --json` carry `hibernation` whenever the row carries the projection. An entry with no matching live row shows nowhere. `rimz agents show` renders `hibernating since <frozen_at>, step <n> of <final>, <bytes> reclaimed`, and appends `, wake failed: <error>` when `wake_error` is set. `<final>` comes from the current machine config's schedule and prints `?` when that schedule is invalid. [stats.md](../stats.md) counts freezes and keeps reclaimed memory apart from GC disk recovery.
 
 ## Wake
 
@@ -170,7 +170,7 @@ Each transaction holds `hibernate.lock` for one reclaim. Input that arrives duri
 
 1. Writes the pane's synchronous wake stamp before it reads the record, so a freeze helper that publishes later still sees the grace. A failed stamp write stops the wake before any thaw.
 2. Reads the pane's entries. With none it returns `NotHibernating`.
-3. For each entry, thaws its scope unless the scope is already gone, and appends a `wake` diagnostic.
+3. For each entry, thaws its scope unless the scope is already gone, and appends a `wake` diagnostic. A recorded scope path that fails validation (`recorded_scope`) returns `InvalidScope` before any thaw or diagnostic, and the entry stays.
 4. On a thaw failure, saves the error as the entry's `wake_error`, keeps the entry, and returns the error, so the caller stops before transport.
 5. On success, starts the refault sampler when `memory.stat` is readable, withdraws the entry, and returns `Thawed`.
 
@@ -200,11 +200,11 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 
 ### Lock-timeout recovery
 
-Only a timeout on `hibernate.lock` lets a wake go on without the lock. Every other lock error and every thaw failure still stops the wake. A focus helper first repeats its dwell check, and returns `NotHibernating` if the user left. Then `wake_workspace_unlocked`:
+Only a timeout on `hibernate.lock` lets a wake go on without the lock. Every other lock error and every thaw failure still stops the wake. A focus helper first completes its dwell if it has not run one yet, then samples focus again, and returns `NotHibernating` if the user left. Then `wake_workspace_unlocked`:
 
 1. Writes the workspace-wide wake stamp, without the lock. A failed write stops the wake.
 2. Thaws every scope with this workspace's prefix, including scopes the helper froze but has not yet recorded.
-3. For each entry in the workspace, appends a `wake` diagnostic with trigger `lock_timeout` and withdraws the entry through the store's normal record-update lock.
+3. For each entry in the workspace, appends a `wake` diagnostic with trigger `lock_timeout` and withdraws the entry through the store's record update, which takes the workspace lock.
 4. Appends one `wake_lock_timeout` diagnostic.
 
 It returns `Thawed` when the requested pane had an entry and `NotHibernating` otherwise, and starts no refault samplers. The room-wide reset is reserved for this case. The workspace stamp holds every pane for the full `after`, so agents that stay idle freeze again only after that grace. If a delayed helper later publishes an entry over a thawed scope, the next wake of that pane, deepen step, or start reconciliation withdraws it.
@@ -217,7 +217,7 @@ The sidebar import graph cannot write the store, so it never wakes synchronously
 - A producer pass that sees a focused pane with an entry. This repairs a lost event, or focus that arrived before the entry was published.
 - A sidebar card click (`crates/rimz/src/sidebar_pane/app/focus.rs::spawn_pane_focus`), before the focus request.
 
-The first two paths share a per-pane pacing of two seconds in `live/hibernate/wake.json` and spawn only for a pane with an entry. Sidebar toggle and pane zoom are browsing actions: they wake nothing directly, and the focus change reaches the helper through the room host or the producer repair. A command that names its target wakes synchronously instead ([Synchronous wake](#synchronous-wake)).
+The first two paths share a per-pane pacing of two seconds in `live/hibernate/wake.json` and spawn only for a pane with an entry. A card click spawns on every click, unpaced, and the helper returns at once for a pane without an entry. Sidebar toggle and pane zoom are browsing actions: they wake nothing directly, and the focus change reaches the helper through the room host or the producer repair. A command that names its target wakes synchronously instead ([Synchronous wake](#synchronous-wake)).
 
 The helper waits for a dwell so that a passing glance does not thaw an agent. A pane without an entry needs no dwell and writes no stamp. For a pane with an entry, `focus_dwell` measures time from the request's `requested_at_ms`, or from helper start when it is absent:
 
@@ -277,6 +277,6 @@ Scopes of other workspaces are untouched. A missing, corrupt, or unknown-version
 | `wake_refault` | Once by the refault sampler, after a successful locked thaw | `thawed_at`, and `samples`, each with `after_ms`, `refault_anon`, and `refault_file` |
 | `wake_lock_timeout` | Once after a lock-timeout recovery | `lock_path`, `withdrawn` (the number of entries withdrawn) |
 
-For a locked wake, `thaw_ms` runs from wake entry to the thaw write, lock acquisition included. For lock-timeout recovery it runs to the end of the workspace-wide thaw and is the same for every entry. `focus_to_thaw_ms` is present on helper wakes whose request carries `requested_at_ms`, and includes the dwell. `dwell` is `input` or `elapsed` on helper wakes and is omitted from the other triggers. `error` is null on success and carries the thaw failure otherwise, with the latency measured through the failed attempt.
+For a locked wake, `thaw_ms` runs from wake entry to the thaw write, lock acquisition included. For lock-timeout recovery it runs to the end of the workspace-wide thaw and is the same for every entry. `focus_to_thaw_ms` is set on helper wakes whose request carries `requested_at_ms`, includes the dwell, and is null otherwise. `dwell` is `input` or `elapsed` on helper wakes and is omitted from the other triggers. `error` is null on success and carries the thaw failure otherwise, with the latency measured through the failed attempt.
 
 The refault sampler is the hidden `rimz agents wake-refault --request` helper. A locked thaw that reads `memory.stat` passes it the `workingset_refault_anon` and `workingset_refault_file` counters as a baseline. It samples at about 1, 10, and 60 seconds after the thaw and records the cumulative deltas from that baseline. `after_ms` is the measured time since the thaw, and a counter that decreases gives a delta of zero. A missing or unreadable scope ends sampling and writes the samples already taken. A failed wake and lock-timeout recovery start no sampler.
