@@ -1460,7 +1460,7 @@ fn is_named_account_kind(segment: &str) -> bool {
 
 fn is_disallowed_set_container(path: &[String]) -> bool {
     matches!(path, [root] if root == "loop")
-        || matches!(path, [root, child, ..] if root == "keys" && child == "bind")
+        || matches!(path, [root, child, ..] if root == "keys" && matches!(child.as_str(), "bind" | "sidebar"))
         || matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child] if root == "accounts" && child == "budget")

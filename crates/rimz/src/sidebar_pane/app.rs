@@ -28,7 +28,6 @@ mod health;
 mod hidden_views;
 mod inbox;
 mod input;
-mod keymap;
 mod layout_freeze;
 mod lifecycle;
 mod loop_state;
@@ -61,7 +60,6 @@ pub(super) use self::socket::EventForwarder;
 pub use fetch::{ConcurrentFanout, FanoutThread, IdleCycleFixture};
 #[cfg(feature = "testkit")]
 pub use hidden_views::testkit::{HiddenViewSweep, start_hidden_view_sweep};
-pub use keymap::NavKeymap;
 #[cfg(feature = "testkit")]
 pub use play::{PlayError, PlayOptions, play};
 

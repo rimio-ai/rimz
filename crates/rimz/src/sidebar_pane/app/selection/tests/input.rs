@@ -1135,7 +1135,7 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
     paint(&mut view, &mut ui, &snapshot, 24);
     let offset = view.scroll_offset;
     let selected = view.selected_pane.clone();
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     let action = resolve_key(
         &keymap,
         InputMode::Normal,
@@ -1165,10 +1165,7 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
         );
         assert_eq!(view.selected_pane, selected);
     }
-    let keymap = super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
-        down: "i".to_owned(),
-        ..Default::default()
-    });
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("i", "move.down")]);
     assert_eq!(
         resolve_key(
             &keymap,

@@ -140,8 +140,13 @@ fn row_handle_prefers_role_then_explicit_name_then_profile() {
 }
 
 #[test]
-fn apply_machine_config_stamps_sidebar_theme_and_attention() {
-    let mut config = crate::config::MachineConfig::default();
+fn apply_machine_config_stamps_sidebar_theme_keys_and_attention() {
+    let mut config = crate::config::MachineConfig::parse_text(
+        std::path::Path::new("config.toml"),
+        "[keys.sidebar]\n'v' = 'move.down'\n",
+        std::path::Path::new("missing-definitions"),
+    )
+    .unwrap();
     config.sidebar.trunk = Some("develop".into());
     config.theme.display.provider_list = vec!["codex".into()];
     config.agents.attention.stalled_after_secs = std::num::NonZeroU32::new(2700).unwrap();
@@ -151,6 +156,8 @@ fn apply_machine_config_stamps_sidebar_theme_and_attention() {
 
     assert_eq!(snapshot.sidebar, config.sidebar);
     assert_eq!(snapshot.theme, config.theme);
+    assert_eq!(snapshot.keys, config.sidebar_keymap());
+    assert_ne!(snapshot.keys, Default::default());
     assert_eq!(snapshot.attention, config.agents.attention);
 }
 

@@ -166,7 +166,7 @@ fn draw_into(
             theme.as_ref(),
             crate::config::SidebarConfig::key_label(&snapshot.sidebar.focus_key),
             crate::config::SidebarConfig::key_label(&snapshot.sidebar.zoom_key),
-            &snapshot.sidebar.keys,
+            &snapshot.keys,
             area,
             (top_height, bottom_height),
         )
@@ -216,7 +216,7 @@ fn draw_help_overlay(
     theme: &Theme,
     focus_key: Option<&str>,
     zoom_key: Option<&str>,
-    keys: &crate::config::SidebarKeys,
+    keys: &crate::config::keys::sidebar::SidebarKeymap,
     area: Rect,
     chrome_heights: (usize, usize),
 ) -> Option<Rect> {

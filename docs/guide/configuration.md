@@ -373,7 +373,7 @@ Team boards and notes have their own archive under `~/.rimz/ws/<workspace-dir>/t
 
 ### Sidebar rendering
 
-Three tables shape the sidebar: the room-level keys, its movement chords, and the timings behind card ranking. What the sidebar shows is the [sidebar guide](./sidebar.md) and the [interface reference](../interface/sidebar.md); these are the settings behind it. Its colors, glyphs, width, render cadence, card density, and stale-card threshold live in `theme.toml` instead, under [theme → display](./theme.md#display).
+Two tables here shape the sidebar: the room-level keys and the timings behind card ranking. Its in-pane keys are [`[keys.sidebar]`](#sidebar-keys). What the sidebar shows is the [sidebar guide](./sidebar.md) and the [interface reference](../interface/sidebar.md); these are the settings behind it. Its colors, glyphs, width, render cadence, card density, and stale-card threshold live in `theme.toml` instead, under [theme → display](./theme.md#display).
 
 ```toml
 timezone = "America/New_York"
@@ -393,26 +393,6 @@ With `[room] style = "native"`, `focus_key` is the multiplexer chord that focuse
 `afk_after_secs` defaults to 900 seconds. On both backends it bounds how long a departed client's sidebar view is retained for reattach and sets the input-idle window before the footer shows `zᶻ idle`, adding `· Nm` after the first minute. Zellij uses the presence plugin's human-input timestamps, so an attached Zellij room can become idle too. CLI actions and buttonless mouse motion do not reset input idle; with no known input timestamp, an attached room stays active until input supplies one. Both backends show `zᶻ away` on a full detach. The [sidebar guide](./sidebar.md#how-the-column-is-ordered) explains how views follow clients. `trunk` names the branch the worktree header compares against, falling back to `main`, then `master`, then the remote's default when it does not resolve.
 
 `spend_window` decides how far back the token and dollar figures in the sidebar count. `"session"`, the default, counts the current stretch of work: it opens when you prompt any agent after five idle hours and stays open while the work continues. `"24h"` counts a trailing twenty-four hours, and `"today"` counts from calendar midnight in `timezone`. [Per room: the cockpit](./insight.md#per-room-the-cockpit) works each choice through.
-
-```toml
-[sidebar.keys]
-narrower = "a"
-wider = "d"
-up = "k up"
-down = "j down"
-top = "g"
-bottom = "G"
-worktree_up = "K"
-worktree_down = "J"
-page_up = "ctrl+b pageup"
-page_down = "ctrl+f pagedown"
-screen_top = "H"
-screen_bottom = "L"
-```
-
-`[sidebar.keys]` rebinds the twelve movement and width keys, shown above with their defaults. Changes apply to each sidebar with its next refreshed snapshot, without a restart, and the `?` help overlay shows the same bindings. Each value is a space-separated list of alternate chords, and the first one is what the overlay shows. A chord takes optional `ctrl`/`control`/`c` and `alt`/`meta`/`m` modifiers joined by `+` or `-`, then either a case-sensitive single character (`H` differs from `h`) or a named key: `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, `esc`, or `space`.
-
-Two things to know before you rebind. Outside search typing, configured chords resolve before the sidebar's fixed action keys, so a rebind can shadow a filter (`A` for all, `s` for success and done) on purpose or by accident. While typing a search, plain characters enter the query instead, and every `Ctrl` or `Alt` chord other than `Ctrl+n` and `Ctrl+p` does nothing, bound or not. And tmux's default prefix swallows `Ctrl+b` before the sidebar ever sees it, which is why `pageup` rides alongside it in the default.
 
 ```toml
 [agents.attention]
@@ -441,7 +421,7 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 
 ### Room keymap
 
-`[keys]` applies only with `[room] style = "rimz"`. The bundled `rimz` keymap has normal, prefix, sticky resize, and sticky move bindings. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal.
+`[keys]` applies only with `[room] style = "rimz"`, except [`[keys.sidebar]`](#sidebar-keys), which applies under both styles. The bundled `rimz` keymap has normal, prefix, sticky resize, and sticky move bindings. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal.
 
 ```toml
 [room]
@@ -472,7 +452,49 @@ On tmux, reload removes the previous keymap's bindings before installing the new
 
 On Zellij, native style adds its two chords in normal and locked modes without clearing anything. RimZ style replaces the locked, prefix, resize, move, scroll, enter-search, and search bindings, including your own bindings in those modes, for each attached client. Reload replaces the map without editing `config.kdl`; switching back to native restores Zellij's full stock and user bindings only after you detach and attach again. User commands receive the room's project root and backend, not a verb-specific `--session-name` flag.
 
-Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind` and its mode tables in `~/.rimz/config.toml`, not with `rimz config set`.
+Bindings and commands are per-machine only. A project `[keys]` table is ignored, with a notice at room entry and in `rimz doctor`; it cannot install commands even in a trusted project. `rimz config set|get` supports `keys.keymap` and `keys.prefix`. Edit `keys.bind`, its mode tables, and `keys.sidebar` in `~/.rimz/config.toml`, not with `rimz config set`.
+
+### Sidebar keys
+
+`[keys.sidebar]` rebinds the keys you press inside the sidebar pane. It applies under both room styles, and like the rest of `[keys]` it is per-machine: a project table is ignored. Each entry maps a key sequence to an in-pane action, or to `"none"` to unbind a default, and overrides the defaults key by key. Changes apply to each sidebar with its next refreshed snapshot, without a restart.
+
+```toml
+[keys.sidebar]
+"g x" = "move.bottom"            # a sequence: chords separated by spaces
+"Ctrl+d" = "move.half_page_down"
+"x" = "card.close"               # a second key for an action
+"d d" = "none"                   # unbind a default
+```
+
+A chord is `[Ctrl+][Alt+]key`, with the room keymap's aliases: `meta`/`m` for `Alt`, `control`/`c` for `Ctrl`, and `-` in place of `+`. No modifier is required. The key is one ASCII graphic character, case-sensitive (`H` differs from `h`) except under `Ctrl`, where `Ctrl+L` means `Ctrl+l` since a terminal sends both as one byte, or one of `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Enter`, `Esc`, `Tab`, `Space`, or `Backspace`. Ctrl chords that alias Enter, Esc, Tab, or Backspace (`Ctrl+m`, `Ctrl+[`, `Ctrl+i`, `Ctrl+h`) are refused, as in the room keymap.
+
+No bound sequence may be a prefix of another, so `"g" = "move.top"` is refused while `g g` is bound; unbind the other one with `"none"` first. An invalid chord, an unknown action, or a prefix conflict warns with its dotted path (`keys.sidebar."g x"`) at room entry, in the sidebar, and in `rimz doctor`, and is ignored while the rest stays bound. `rimz config set` refuses `keys.sidebar`; edit it in `~/.rimz/config.toml`. Search typing keeps a fixed table that this one cannot rebind.
+
+| action | default |
+| --- | --- |
+| `move.down` / `move.up` | `j` `Down` / `k` `Up` |
+| `move.worktree_down` / `move.worktree_up` | `J` `}` / `K` `{` |
+| `move.top` / `move.bottom` | `g g` / `G` |
+| `move.screen_top` / `move.screen_middle` / `move.screen_bottom` | `H` / `M` / `L` |
+| `move.half_page_down` / `move.half_page_up` | `Ctrl+d` / `Ctrl+u` |
+| `move.page_down` / `move.page_up` | `Ctrl+f` `PageDown` / `Ctrl+b` `PageUp` |
+| `card.focus` | `Enter` `l` |
+| `card.slot.1` .. `card.slot.9` | `1` .. `9` |
+| `card.last` | `Tab` |
+| `card.close` | `d d` |
+| `read.toggle` / `read.all` | `m` / `U` |
+| `palette.commands` | `:` |
+| `pane.return` | `q` |
+| `search.start` / `search.next` / `search.prev` | `/` / `n` / `N` |
+| `filter.asks`, `filter.failures`, `filter.unread`, `filter.working`, `filter.paused`, `filter.done`, `filter.sleeping`, `filter.idle` | `f ?`, `f !`, `f u`, `f w`, `f p`, `f d`, `f z`, `f i` |
+| `filter.needs_you` / `filter.clear` | `f n` / `F` |
+| `fold.toggle` / `fold.open_all` / `fold.close_all` / `fold.inactive` | `z a` / `z R` / `z M` / `z i` |
+| `width.narrower` / `width.wider` / `width.reset` | `<` / `>` / `=` |
+| `view.redraw` / `view.reload` / `view.cancel` | `Ctrl+l` / `R` / `Esc` |
+| `help` | `?` |
+| `dashboard.prev` / `dashboard.next` | `Left` / `Right` |
+
+tmux's default prefix swallows `Ctrl+b` before the sidebar sees it, which is why `PageUp` rides alongside it in the default.
 
 ### Multiplexer room options
 

@@ -333,6 +333,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         root_class,
         sidebar,
         theme,
+        keys,
         attention,
         providers,
         value_tally,
@@ -383,6 +384,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && root_class == &right.root_class
         && sidebar == &right.sidebar
         && theme == &right.theme
+        && keys == &right.keys
         && attention == &right.attention
         && providers == &right.providers
         && match (value_tally, &right.value_tally) {

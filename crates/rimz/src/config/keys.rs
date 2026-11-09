@@ -9,12 +9,15 @@ use serde_json::Value;
 
 use super::{MachineConfig, SidebarConfig, mux::RoomStyle};
 
+pub mod sidebar;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct KeysConfig {
     keymap: Value,
     prefix: Value,
     bind: Value,
+    pub(super) sidebar: Value,
 }
 
 impl Default for KeysConfig {
@@ -23,6 +26,7 @@ impl Default for KeysConfig {
             keymap: Value::String("rimz".into()),
             prefix: Value::String("Alt+p".into()),
             bind: Value::Object(Default::default()),
+            sidebar: Value::Object(Default::default()),
         }
     }
 }
@@ -49,10 +53,9 @@ impl KeyChord {
         }
         let (modifier, key) = raw.split_once(['+', '-'])?;
         let key = graphic(key.trim())?;
-        match modifier.trim().to_ascii_lowercase().as_str() {
-            "alt" | "meta" | "m" => Some(Self::Alt(key)),
-            "ctrl" | "control" | "c" => Some(Self::Ctrl(key)),
-            _ => None,
+        match Modifier::parse(modifier)? {
+            Modifier::Alt => Some(Self::Alt(key)),
+            Modifier::Ctrl => Some(Self::Ctrl(key)),
         }
     }
 
@@ -65,10 +68,38 @@ impl KeyChord {
     }
 
     fn is_terminal_control(self) -> bool {
-        matches!(self, Self::Ctrl(key) if matches!(key.to_ascii_lowercase(),
-            'h' | 'i' | 'j' | 'm' | '[' | '{' | '?' | '3' | '8'))
+        matches!(self, Self::Ctrl(key) if is_terminal_control(key))
     }
 }
+
+/// The modifier names both key grammars accept, in any case.
+#[derive(Clone, Copy)]
+enum Modifier {
+    Alt,
+    Ctrl,
+}
+
+impl Modifier {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "alt" | "meta" | "m" => Some(Self::Alt),
+            "ctrl" | "control" | "c" => Some(Self::Ctrl),
+            _ => None,
+        }
+    }
+}
+
+/// Whether `Ctrl` with this key reaches a program as the terminal's Enter, Esc,
+/// Tab, or Backspace byte, so the chord cannot be told apart from that key.
+fn is_terminal_control(key: char) -> bool {
+    matches!(
+        key.to_ascii_lowercase(),
+        'h' | 'i' | 'j' | 'm' | '[' | '{' | '?' | '3' | '8'
+    )
+}
+
+const TERMINAL_CONTROL_REFUSAL: &str =
+    "Ctrl aliases for terminal Enter, Esc, Tab, and Backspace cannot be bound here";
 
 fn graphic(raw: &str) -> Option<char> {
     let mut chars = raw.chars();
@@ -330,6 +361,12 @@ impl MachineConfig {
         self.resolve_room_keymap(&mut BTreeMap::new())
     }
 
+    /// Resolve the sidebar's in-pane keymap: the defaults with `[keys.sidebar]`
+    /// applied, under either room style.
+    pub fn sidebar_keymap(&self) -> sidebar::SidebarKeymap {
+        sidebar::SidebarKeymap::resolve(&self.keys.sidebar, &mut BTreeMap::new())
+    }
+
     pub(super) fn resolve_room_keymap(&self, notices: &mut BTreeMap<String, String>) -> RoomKeymap {
         if self.room.style == RoomStyle::Native {
             let mut normal = BTreeMap::new();
@@ -462,9 +499,7 @@ fn binding(
         return Err("normal-mode keys need an Alt or Ctrl modifier, such as Alt+x");
     }
     if matches!(mode, KeyMode::Normal | KeyMode::Prefix) && key.is_terminal_control() {
-        return Err(
-            "Ctrl aliases for terminal Enter, Esc, Tab, and Backspace cannot be bound here",
-        );
+        return Err(TERMINAL_CONTROL_REFUSAL);
     }
     if let Some(name) = value.as_str() {
         return if name == "none" {

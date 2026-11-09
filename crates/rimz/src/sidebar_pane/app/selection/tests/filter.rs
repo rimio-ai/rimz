@@ -216,10 +216,7 @@ fn search_press(
         ui,
         pane_ui,
         snapshot,
-        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
-            wider: "ctrl+b".to_owned(),
-            ..Default::default()
-        }),
+        &crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]),
         false,
     )
 }
@@ -246,7 +243,7 @@ fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     let snapshot = clickable_block_snapshot(&workspace());
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     for (ch, expected) in [
         ('/', InputOutcome::default()),
         (
@@ -598,7 +595,7 @@ fn normal_escape_clears_only_query_even_during_an_alert() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     let snapshot = clickable_block_snapshot(&workspace());
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
     for alert_active in [false, true] {
         let mut ui = render::ViewState {
@@ -640,7 +637,7 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
     use super::super::super::loop_state::handle_wakeup;
 
     let snapshot = clickable_block_snapshot(&workspace());
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     let pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
     for target in [
         HitTarget::Row(0),
@@ -727,7 +724,7 @@ fn departed_painted_row_click_does_not_commit_a_search() {
         interactions: render::FrameInteractions::from_parts(vec![Some(0)], Vec::new()),
         ..Default::default()
     };
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     let outcome = handle_wakeup(
         Wakeup::MouseClick { column: 1, row: 0 },
         &mut ui,
@@ -748,7 +745,7 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
     use ratatui::crossterm::event::KeyCode;
 
     let snapshot = clickable_block_snapshot(&workspace());
-    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
     for target in [
         HitTarget::BodyFilter(filter),
@@ -860,10 +857,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
         &mut ui,
         &mut pane_ui,
         &snapshot,
-        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
-            wider: "ctrl+b".to_owned(),
-            ..Default::default()
-        }),
+        &crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]),
         false,
     );
     assert_eq!(ui.search_draft.as_deref(), Some("c"));
@@ -874,10 +868,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
         &mut ui,
         &mut pane_ui,
         &snapshot,
-        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
-            wider: "ctrl+b".to_owned(),
-            ..Default::default()
-        }),
+        &crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]),
         false,
     );
     assert_eq!(ui.search_draft, None);

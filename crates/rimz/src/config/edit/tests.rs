@@ -129,6 +129,8 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
         "keys.bind.resize",
         "keys.bind.move",
         "keys.bind.normal.Alt+x",
+        "keys.sidebar",
+        "keys.sidebar.j",
     ] {
         assert!(
             matches!(

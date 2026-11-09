@@ -33,9 +33,6 @@ pub struct SidebarConfig {
     /// first so chrome is never fullscreened. Default `Alt+g`; set empty or
     /// `off` to disable it.
     pub zoom_key: String,
-    /// Sidebar motion key bindings. Each string is a space-separated list of
-    /// chords; the first chord is the one the help overlay displays.
-    pub keys: SidebarKeys,
     /// Seconds of input idle before the footer shows `zᶻ idle` on either backend,
     /// adding `· Nm` after the first minute. Both report per-client input clocks;
     /// without a known clock an attached room stays active. 15 minutes by default.
@@ -51,7 +48,6 @@ impl Default for SidebarConfig {
             trunk: None,
             focus_key: default_focus_key(),
             zoom_key: default_zoom_key(),
-            keys: SidebarKeys::default(),
             afk_after_secs: NonZeroU32::new(DEFAULT_AFK_AFTER_SECS)
                 .expect("non-zero default afk window"),
         }
@@ -83,44 +79,4 @@ fn default_focus_key() -> String {
 
 fn default_zoom_key() -> String {
     "Alt+g".to_owned()
-}
-
-/// Sidebar movement and width key bindings. Action keys stay fixed; these
-/// strings rebind the navigation and width families only.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct SidebarKeys {
-    /// Steps the sidebar pane narrower; the settled width persists for the room.
-    pub narrower: String,
-    /// Steps the sidebar pane wider; the settled width persists for the room.
-    pub wider: String,
-    pub up: String,
-    pub down: String,
-    pub top: String,
-    pub bottom: String,
-    pub worktree_up: String,
-    pub worktree_down: String,
-    pub page_up: String,
-    pub page_down: String,
-    pub screen_top: String,
-    pub screen_bottom: String,
-}
-
-impl Default for SidebarKeys {
-    fn default() -> Self {
-        Self {
-            narrower: "a".to_owned(),
-            wider: "d".to_owned(),
-            up: "k up".to_owned(),
-            down: "j down".to_owned(),
-            top: "g".to_owned(),
-            bottom: "G".to_owned(),
-            worktree_up: "K".to_owned(),
-            worktree_down: "J".to_owned(),
-            page_up: "ctrl+b pageup".to_owned(),
-            page_down: "ctrl+f pagedown".to_owned(),
-            screen_top: "H".to_owned(),
-            screen_bottom: "L".to_owned(),
-        }
-    }
 }

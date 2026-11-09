@@ -138,7 +138,6 @@ pub(crate) use scheme::{
 pub use scheme::{SchemeSwatch, scheme_swatches};
 pub(crate) use sentry::SentryConfig;
 pub use sidebar::SidebarConfig;
-pub(crate) use sidebar::SidebarKeys;
 pub(crate) use skills::{SkillListErr, deserialize_optional_skill_list, validate_skill_list};
 pub use skills::{SkillName, skill_is_callable};
 pub(crate) use theme::InlinePalette;
@@ -563,6 +562,7 @@ impl ConfigNotices {
                 .retain(|notice| notice.key != "keys" && !notice.key.starts_with("keys."));
         }
         config.resolve_room_keymap(&mut self.key_bindings);
+        keys::sidebar::SidebarKeymap::resolve(&config.keys.sidebar, &mut self.key_bindings);
     }
 }
 
