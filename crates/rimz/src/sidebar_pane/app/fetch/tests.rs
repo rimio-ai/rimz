@@ -1509,6 +1509,9 @@ fn unchanged_pane_overlays_keep_group_vector_shared() {
     let missing = PaneId::from_parts(MuxName::Zellij, "sidebar_absent");
     local.remove_pane_rows(&missing);
     local.overlay_pane_command(&missing, "zsh");
+    let present = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    local.overlay_pane_command(&present, "zsh");
+    local.overlay_pane_command(&present, "rimz");
     local.sort_groups_for_presentation();
     crate::sidebar_pane::app::state::set_rows_unread(&mut local, &["absent".into()], false);
     assert_shared_fields(&local, &shared);

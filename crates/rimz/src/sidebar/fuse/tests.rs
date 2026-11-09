@@ -200,11 +200,86 @@ fn carried_pane_close_older_than_pull_deletes_the_card() {
 }
 
 #[test]
-fn command_events_preserve_due_messages_on_rebuilt_agent_cards() {
+fn command_events_repeating_the_pane_command_leave_the_row_as_pulled() {
+    use crate::store::snapshot::{AgentCard, RowCard};
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    for (command, wired) in [("claude", true), ("zsh", false)] {
+        let mut live = pane("terminal_1", command);
+        live.pane_process_start = Some(jiff::Timestamp::UNIX_EPOCH);
+        let mut snapshot = pulled(vec![live], 10);
+        if wired {
+            snapshot.wired_kinds = vec!["claude".to_owned()];
+            snapshot.rows_mut().next().unwrap().card =
+                RowCard::Agent(std::sync::Arc::new(AgentCard {
+                    due_messages: 3,
+                    ..Default::default()
+                }));
+        }
+        let before = snapshot.rows().next().unwrap().clone();
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id: pane_id.clone(),
+                command: command.to_owned(),
+            },
+        );
+        let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+        assert_eq!(fused.rows().next().unwrap(), &before, "{command}");
+    }
+}
+
+#[test]
+fn command_events_keep_an_idle_agent_row_whole_within_its_kind() {
+    use crate::store::snapshot::RowCard;
+    let mut live = pane("terminal_1", "claude");
+    live.pane_process_start = Some(jiff::Timestamp::UNIX_EPOCH);
+    let mut snapshot = pulled(vec![live], 10);
+    snapshot.wired_kinds = vec!["claude".to_owned()];
+    let row = snapshot.rows_mut().next().unwrap();
+    assert_eq!(row.name, "claude");
+    row.inactive = true;
+    row.archived = true;
+    row.attention_score = 1_234;
+    row.last_activity = jiff::Timestamp::UNIX_EPOCH;
+    row.card = RowCard::Agent(std::sync::Arc::new(crate::store::snapshot::AgentCard {
+        context_severity: Some(crate::agents::ContextSeverity::Amber),
+        ..Default::default()
+    }));
+    let before = row.clone();
+    let command = "claude --resume abc";
+    let mut events = EventStore::default();
+    append(
+        &mut events,
+        11,
+        SidebarEvent::CommandChanged {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            command: command.to_owned(),
+        },
+    );
+    let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    let row = fused.rows().next().unwrap();
+    let mut expected = before.clone();
+    let pane = expected.pane.as_mut().unwrap();
+    pane.command = Some(command.to_owned());
+    pane.pane_process_start = None;
+    assert_eq!(row, &expected);
+    let (RowCard::Agent(card), RowCard::Agent(prior)) = (&row.card, &before.card) else {
+        panic!("both rows are agent rows");
+    };
+    assert!(std::sync::Arc::ptr_eq(card, prior));
+}
+
+#[test]
+fn command_events_start_another_kinds_agent_without_the_due_count() {
     use crate::store::snapshot::{AgentCard, RowCard};
     let mut snapshot = pulled(vec![pane("terminal_1", "claude")], 10);
-    snapshot.wired_kinds = vec!["claude".to_owned()];
-    snapshot.rows_mut().next().unwrap().card = RowCard::Agent(std::sync::Arc::new(AgentCard {
+    snapshot.wired_kinds = vec!["claude".to_owned(), "codex".to_owned()];
+    let row = snapshot.rows_mut().next().unwrap();
+    row.id = "session-plain".to_owned();
+    row.card = RowCard::Agent(std::sync::Arc::new(AgentCard {
+        handle: Some("plain".to_owned()),
         due_messages: 3,
         ..Default::default()
     }));
@@ -214,19 +289,17 @@ fn command_events_preserve_due_messages_on_rebuilt_agent_cards() {
         11,
         SidebarEvent::CommandChanged {
             pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            command: "claude".to_owned(),
+            command: "codex --quiet".to_owned(),
         },
     );
     let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    let row = fused.rows().next().unwrap();
     assert_eq!(
-        fused
-            .rows()
-            .next()
-            .unwrap()
-            .as_agent()
-            .unwrap()
-            .due_messages,
-        3
+        (
+            row.name.as_str(),
+            row.as_agent().map(|card| card.due_messages)
+        ),
+        ("codex", Some(0))
     );
 }
 
@@ -589,6 +662,9 @@ fn command_events_projecting_nothing_keep_the_row_and_set_the_pane_command() {
         let mut snapshot = pulled(vec![live], 10);
         snapshot.wired_kinds = vec!["claude".to_owned()];
         let row = snapshot.rows_mut().next().unwrap();
+        if prior == "claude" {
+            row.card = crate::store::snapshot::RowCard::Agent(Default::default());
+        }
         row.unread = true;
         row.attention_score = 7;
         let before = row.clone();
