@@ -93,7 +93,7 @@ impl Drop for CheckFiles {
     }
 }
 
-pub(super) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
+pub(in crate::harness::schedule) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
     if !matches!(task.source(), catalog::TaskSource::Project { .. }) {
         return resolve_config_path(path);
     }

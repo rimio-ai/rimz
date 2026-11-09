@@ -2323,7 +2323,8 @@ path = "crates/rimz/src/harness"
 # run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
-surface-budget = 1114
+# `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
+surface-budget = 1123
 
 [[verdict]]
 kind = "item"
@@ -5415,7 +5416,8 @@ allowed-dependencies = [
 # CheckSignalGuard and TaskFire::record_signal_guard hold SIGTERM through terminal recording (+2).
 # CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
 # CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
-surface-budget = 65
+# `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
+surface-budget = 69
 
 [[verdict]]
 kind = "item"

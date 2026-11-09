@@ -4,7 +4,7 @@
 //! launch preparation, and terminal record mapping. CLI executes the prepared
 //! supervised-run or message effect and returns its typed result.
 
-mod agent_check;
+pub(super) mod agent_check;
 mod prompt;
 pub(in crate::harness) use prompt::signal_details;
 pub use prompt::signal_subject;
@@ -2943,7 +2943,7 @@ pub fn parse_mode(raw: &str) -> Result<String> {
     Ok(mode_name(parse_mode_value(raw)?).to_owned())
 }
 
-fn task_permission_mode(entry: &TaskEntry) -> Result<Option<PermissionMode>> {
+pub(super) fn task_permission_mode(entry: &TaskEntry) -> Result<Option<PermissionMode>> {
     entry
         .mode
         .as_deref()
@@ -2975,7 +2975,7 @@ pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
 }
 
-fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
+pub(super) fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     if let Some(prompt) = entry
         .prompt
         .as_deref()
@@ -2998,7 +2998,7 @@ fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     Ok(prompt)
 }
 
-fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+pub(super) fn resolve_config_path(path: &Path) -> Result<PathBuf> {
     let expanded = expand_tilde(path);
     if expanded.is_absolute() {
         return Ok(expanded);

@@ -13,6 +13,7 @@ mod memory;
 mod scope;
 mod shells;
 mod sleep;
+mod tasks;
 mod ticks;
 mod tolerance;
 mod wakes;

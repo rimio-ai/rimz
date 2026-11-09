@@ -4,7 +4,8 @@ use unicode_width::UnicodeWidthStr;
 use rimz::config::GlyphRole;
 use rimz::harness::schedule::when::WhenExpr;
 use rimz::harness::workflow::{
-    CheckKind, Edge, EdgeSource, Fireability, Hop, StepKind, WalkNode, WorkflowSpec, reached,
+    Check, CheckKind, Edge, EdgeSource, Fireability, Hop, Route, StepKind, WalkNode, WorkflowSpec,
+    reached,
 };
 use rimz::store::workflow::{JournalEntry, RunRecord, RunState, StepLifecycle};
 
@@ -417,8 +418,9 @@ impl Row {
                 && let Some(edge) = live.iter().find(|edge| edge.outcome == "timeout")
             {
                 row.heading.push_str(&format!(
-                    " · waits ≤{timeout}, then {}",
-                    edge_target(name, edge, order)
+                    " · waits ≤{timeout}, then {}{}",
+                    edge_target(name, edge, order),
+                    declared_mark(check, "timeout")
                 ));
             }
             if let Some(window) = &check.window {
@@ -485,7 +487,9 @@ impl Row {
                 }
                 if edge.outcome == "timeout"
                     || edge.outcome == "deadline"
-                    || (edge.outcome == "invalid" && edge.source == EdgeSource::Default)
+                    || (edge.outcome == "invalid"
+                        && edge.source == EdgeSource::Default
+                        && !declared_default(check, "invalid"))
                     || (!check.cases.is_empty()
                         && (edge.outcome == "unknown"
                             || check.cases.iter().any(|case| case.outcome == edge.outcome)
@@ -493,7 +497,11 @@ impl Row {
                 {
                     continue;
                 }
-                routes.push(edge_text(name, edge, order));
+                routes.push(format!(
+                    "{}{}",
+                    edge_text(name, edge, order),
+                    declared_mark(check, &edge.outcome)
+                ));
             }
             if !routes.is_empty() {
                 row.details.push(routes.join(" · "));
@@ -700,13 +708,35 @@ fn write_wrapped(
     Ok(())
 }
 
+/// Whether the check's route for `outcome` is written and marked `default = true`.
+fn declared_default(check: &Check, outcome: &str) -> bool {
+    matches!(
+        check.on.get(outcome),
+        Some(Route::Delayed { default: true, .. })
+    )
+}
+
+fn declared_mark(check: &Check, outcome: &str) -> &'static str {
+    if declared_default(check, outcome) {
+        " (default)"
+    } else {
+        ""
+    }
+}
+
 pub(super) fn defaults(spec: &WorkflowSpec) -> Vec<&'static str> {
     let mut sentences = Vec::new();
     let edges = spec
         .checks
         .keys()
         .chain(spec.steps.keys())
-        .flat_map(|name| spec.edges(name))
+        .flat_map(|name| {
+            spec.edges(name).into_iter().filter(move |edge| {
+                spec.checks
+                    .get(name)
+                    .is_none_or(|check| !declared_default(check, &edge.outcome))
+            })
+        })
         .collect::<Vec<_>>();
     if spec
         .steps

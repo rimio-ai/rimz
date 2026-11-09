@@ -184,7 +184,7 @@ pub struct LoadedTask {
 }
 
 impl LoadedTask {
-    pub(super) fn new(name: &str, entry: TaskEntry, source: TaskSource) -> Self {
+    pub(crate) fn new(name: &str, entry: TaskEntry, source: TaskSource) -> Self {
         let shape = TaskShape::compile(name, &entry);
         Self {
             entry,
@@ -233,6 +233,11 @@ impl LoadedTask {
 
     pub fn action(&self) -> Result<&TaskAction, &TaskActionErr> {
         self.shape.action()
+    }
+
+    /// The compiled action a fire runs: a delivery or the workflow it starts.
+    pub fn compiled(&self) -> Result<&super::compile::CompiledAction, &TaskActionErr> {
+        self.shape.compiled()
     }
 
     pub fn trigger(&self) -> &std::result::Result<ParsedTrigger, ScheduleErr> {
