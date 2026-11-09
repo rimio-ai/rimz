@@ -251,6 +251,8 @@ pub struct WorkflowPaths {
     pub record: PathBuf,
     pub journal: PathBuf,
     pub spec: PathBuf,
+    /// An inline run's definition root: its source text and the assets it names.
+    pub definition: PathBuf,
     pub work: PathBuf,
     pub context: PathBuf,
 }
@@ -396,6 +398,7 @@ impl StatePaths {
             record: home.join("record.json"),
             journal: home.join("journal.jsonl"),
             spec: workflow_spec_file(&home),
+            definition: home.join("definition"),
             context: work.join("context.json"),
             home,
             work,
