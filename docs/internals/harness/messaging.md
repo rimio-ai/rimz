@@ -52,7 +52,8 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `channel` | Receiver lane at enqueue |
 | `sender` | `Human`, `Agent { kind, agent_id, name, profile, role, channel }`, `Harness { notice }` (rendered as `@rimz`), or `System` (rendered as `rimz`). `Subagent { kind, name }` decodes but nothing writes it |
 | `automated` | Background orchestration traffic. Never earns a dollar-budget waiver, and makes a queued command perishable |
-| `reply_wait` | A CLI is blocked on this record's reply ([Reply waits](#reply-waits)) |
+| `reply_wait` | Sent by a CLI waiting for the reply; suppresses [sender notices](#sender-notices) ([Reply waits](#reply-waits)) |
+| `reply_wait_lease` | Optional token of the waiting leg's lease under `locks/reply-waits/`. The wait counts toward [cycle detection](#cycle-detection) only while that lease is held; omitted on records from older binaries |
 | `in_reply_to` | The messages that opened the sender's authoring turn. Empty starts a new conversation ([transcript.md § Causality](./transcript.md#causality)) |
 | `about_run` | Optional run id. Delivery withdraws the record when that run is terminal or gone; omitted when absent and preserved by requeue |
 | `body` | `Prompt` (pasted) or `Command` (typed, such as `/compact`) |
@@ -794,6 +795,8 @@ Two agents that each wait on the other would hang forever, so [`wait_cycle`](../
 - A live `reply_wait` record that is `Queued`, `Claimed`, or `Sent`, from a `Running` sender.
 - A `Delivered` `reply_wait` record from history, when the receiver is `Running`, its `turn_opened_by` context lists the record, and the sender is `Running`.
 
+Either record counts only while its wait is live. `ReplyPreparation::new` claims one lease per leg at `locks/reply-waits/<token>.lock` through `disk::lease::claim` before dispatch writes the leg's record, and dispatch stamps the token on that record as `reply_wait_lease`. The waiting process holds the lease until the leg settles, and the kernel frees it when the process exits, so a completed, failed, yielded, timed-out, killed, or interrupted leg stops counting while the rest of an all-join wait goes on. `wait_cycle` probes the lease: a held lease counts, a free or missing one does not. A record without a token (from an older binary) counts, and so does a lease whose probe fails, with a warning, since a missed deadlock costs more than a refusal the caller can retry. `reply_wait` itself, and the notice suppression it carries, ignore the lease.
+
 The sender card of each edge, and the caller's own card, resolve through `resolve_sender` as sender notices do ([Sender notices](#sender-notices)): a session id before a name, so a same-name card in another lane never stands in for either.
 
 Dispatch checks the graph before enqueue, and the periodic poll catches simultaneous dispatches and cycles that form later. The youngest `msg_` id in a detected cycle yields: only that reply leg fails, and its record is left untouched so the turn boundary still delivers the text. Older waits continue. Diagnostics name the blocking handle and message id and render the multi-hop chain.
@@ -801,6 +804,8 @@ Dispatch checks the graph before enqueue, and the periodic poll catches simultan
 ### Settlement
 
 The join succeeds only when every leg completes. Otherwise it takes the first non-completed status in target order. `--any` returns the first terminal leg without canceling the rest.
+
+A leg releases its lease (and removes the file, best-effort) when it settles, and the process's exit releases the rest, `--any`'s unfinished legs included. GC's `locks/` sweep removes any file a release left behind. The records themselves are untouched: a released leg's record still delivers at its turn boundary.
 
 One deadline spans fan-out dispatch and every reply turn. A human's bare `--wait` is indefinite, an agent's defaults to one hour, and an explicit duration wins. On expiry every unfinished `Sent` record is marked timed out, every unfinished leg is classified `TimedOut`, and the command exits 124.
 

@@ -503,9 +503,15 @@ pub struct MessageRecord {
     /// Background orchestration traffic never earns a dollar-budget waiver.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automated: bool,
-    /// The CLI that created this record is waiting for the receiver's reply.
+    /// The CLI that created this record waited for the receiver's reply;
+    /// `reply_wait_lease` says whether it still does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reply_wait: bool,
+    /// The token of the waiting leg's lease under `locks/reply-waits/`: the wait still counts
+    /// toward cycle detection only while that lease is held. Absent on records from older
+    /// binaries, which count as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_wait_lease: Option<String>,
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
@@ -689,6 +695,7 @@ impl MessageRecord {
             sender: MessageSender::Human,
             automated: false,
             reply_wait: false,
+            reply_wait_lease: None,
             body: MessageBody::Prompt,
             text,
             enter,
@@ -782,6 +789,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_reply_wait(mut self, reply_wait: bool) -> Self {
         self.reply_wait = reply_wait;
+        self
+    }
+
+    #[must_use]
+    pub fn with_reply_wait_lease(mut self, token: Option<String>) -> Self {
+        self.reply_wait_lease = token;
         self
     }
 

@@ -1003,6 +1003,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
     .with_reply_wait(true)
+    .with_reply_wait_lease(Some("0123abcd".to_owned()))
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -1036,6 +1037,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         "sender",
         "automated",
         "reply_wait",
+        "reply_wait_lease",
         "body",
         "force",
         "pane_id",
@@ -1063,6 +1065,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     assert_eq!(legacy.sender, MessageSender::Human);
     assert!(!legacy.automated);
     assert!(!legacy.reply_wait);
+    assert_eq!(legacy.reply_wait_lease, None);
     assert_eq!(legacy.body, MessageBody::Prompt);
     assert!(!legacy.force);
     assert_eq!(legacy.pane_id, None);
@@ -1101,6 +1104,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
     .with_reply_wait(true)
+    .with_reply_wait_lease(Some("0123abcd".to_owned()))
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -1149,6 +1153,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.in_reply_to, original.in_reply_to);
     assert!(requeued.automated);
     assert!(!requeued.reply_wait);
+    assert_eq!(requeued.reply_wait_lease, None);
     let mut expected_after = original.after.clone();
     for condition in &mut expected_after {
         condition.met_at = None;
