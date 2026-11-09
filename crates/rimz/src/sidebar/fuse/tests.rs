@@ -685,6 +685,7 @@ fn command_events_projecting_nothing_keep_the_row_and_set_the_pane_command() {
         assert_eq!(fused.rows().next().unwrap(), &expected, "{prior}");
     }
 }
+
 #[test]
 fn command_events_keep_the_plumbing_worktree_when_the_new_tenant_has_none() {
     let mut live = pane(
