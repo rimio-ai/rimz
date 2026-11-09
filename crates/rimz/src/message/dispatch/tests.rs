@@ -547,6 +547,62 @@ fn agent_sender_inherits_exact_named_sessions_turn_openers() {
 }
 
 #[test]
+fn agent_sender_turn_openers_follow_the_senders_session_before_its_name() {
+    let opener = |n: u64| MessageId::parse(&format!("msg_{n:016x}")).unwrap();
+    let row = |id: &str, channel: &str, n: u64| {
+        let mut agent = named_agent(id, "coder", channel);
+        let mut context = crate::agents::AgentContext::new("claude", now());
+        context.turn_opened_by = vec![opener(n)];
+        agent.context = Some(context);
+        agent
+    };
+    let docs = row("sess-docs", "docs", 1);
+    let auth = row("sess-auth", "auth", 2);
+    let sender = |agent_id: Option<&str>, channel: Option<String>| MessageSender::Agent {
+        agent_id: agent_id.map(Into::into),
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("coder".to_owned()),
+        profile: None,
+        role: None,
+        channel,
+    };
+    for rows in [
+        vec![docs.clone(), auth.clone()],
+        vec![auth.clone(), docs.clone()],
+    ] {
+        let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), rows, now());
+        assert_eq!(
+            turn_openers_for_sender(&snapshot, &sender(Some("sess-auth"), None)),
+            vec![opener(2)],
+            "the sender's session wins over row order"
+        );
+        assert!(
+            turn_openers_for_sender(&snapshot, &sender(Some("sess-stale"), None)).is_empty(),
+            "a stale id names no row"
+        );
+        assert_eq!(
+            turn_openers_for_sender(&snapshot, &sender(None, auth.channel())),
+            vec![opener(2)],
+            "duplicate names resolve by the recorded channel"
+        );
+        assert!(
+            turn_openers_for_sender(&snapshot, &sender(None, None)).is_empty(),
+            "duplicate names without a channel name no row"
+        );
+        assert!(
+            turn_openers_for_sender(&snapshot, &sender(None, Some("gone".to_owned()))).is_empty(),
+            "duplicate names with an unmatched channel name no row"
+        );
+    }
+    let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![docs], now());
+    assert_eq!(
+        turn_openers_for_sender(&snapshot, &sender(None, None)),
+        vec![opener(1)],
+        "a name only one row holds needs no channel"
+    );
+}
+
+#[test]
 fn co_resident_session_resolves_to_one_pane_backed_recipient() {
     let older = resident("sess-older", "terminal_1");
     let owner = resident("sess-owner", "terminal_1");

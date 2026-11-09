@@ -119,7 +119,7 @@ pub(super) fn send_message(
         Err(DispatchErr::Recipient(err)) => {
             match recipient_miss(&ctx, miss(), err, globals, Some(request()))? {
                 RecipientMissOutcome::Complete => return Ok(()),
-                RecipientMissOutcome::Dispatched(result) => result,
+                RecipientMissOutcome::Dispatched(result) => *result,
                 RecipientMissOutcome::Retry => {
                     match rimz::message::dispatch::dispatch(workspace, store, request()) {
                         Ok(result) => result,
@@ -220,7 +220,7 @@ struct RecipientMiss<'a> {
 enum RecipientMissOutcome {
     Complete,
     Retry,
-    Dispatched(DispatchResult),
+    Dispatched(Box<DispatchResult>),
 }
 
 /// Recover from an address that matched no recipient: create the agent on
@@ -262,7 +262,7 @@ fn recipient_miss(
             ) {
                 Ok(ResumeChildOutcome::AlreadyBound) => return Ok(RecipientMissOutcome::Retry),
                 Ok(ResumeChildOutcome::Dispatched(result)) => {
-                    return Ok(RecipientMissOutcome::Dispatched(result));
+                    return Ok(RecipientMissOutcome::Dispatched(Box::new(result)));
                 }
                 Ok(ResumeChildOutcome::DispatchFailed(error)) => {
                     return Err(map_dispatch_err(error, ctx));

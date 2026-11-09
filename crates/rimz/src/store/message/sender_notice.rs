@@ -22,6 +22,7 @@ pub(crate) fn resolve_sender<'a>(
     };
     let mut cards = agents.iter().filter(|agent| {
         agent.ended_at.is_none()
+            && !agent.is_provider_subagent()
             && &agent.kind == kind
             && match agent_id {
                 Some(id) => agent.answers_to(id),

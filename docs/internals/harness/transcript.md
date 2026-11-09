@@ -148,7 +148,7 @@ Three optional field groups link entries. Each defaults empty, so older JSONL li
 `reply_to` carries parent message ids. The loop that fills it runs through the agent context:
 
 1. A turn start replaces `AgentContext.turn_opened_by` with every matched message id. An empty list clears the previous turn's value.
-2. An agent-authored enqueue copies `turn_opened_by` into the new record's `in_reply_to`. A human sender, `--no-from`, an unnamed sender, or missing context starts a new root.
+2. An agent-authored enqueue copies its sender row's `turn_opened_by` into the new record's `in_reply_to`, the row resolved as for sender notices ([messaging.md § Sender notices](./messaging.md#sender-notices)). A human sender, `--no-from`, a sender that resolves to no row, or missing context starts a new root.
 3. The turn's final `Assistant` entry and any blocking `Ask` copy `turn_opened_by` into `reply_to`. A Codex async `Ask` carries none.
 
 A requeued message keeps `in_reply_to`, so retried text keeps its causal position.
