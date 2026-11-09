@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use super::super::{
-    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, StepKind, Wake, WorkflowSpec, duration,
-    parse_deadline, parse_window,
+    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, Step, StepKind, Wake, WorkflowSpec,
+    duration, parse_deadline, parse_window,
 };
 use super::ignored_issue;
 use crate::harness::schedule::when::WhenExpr;
 
 pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usize>>) {
+    let legacy = spec.spec_version == 0;
     let ignored = &mut spec.ignored;
     summary(&mut spec.workflow.summary, "workflow.summary", ignored);
     sanitize(
@@ -127,6 +128,18 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             );
         }
         subscriptions(&mut check.wake, &format!("{path}.wake"), indices, ignored);
+        for (outcome, route) in &mut check.on {
+            if let Route::Delayed { default, .. } = route
+                && *default
+                && legacy
+            {
+                *default = false;
+                ignored.push(ignored_issue(
+                    &format!("{path}.on.{outcome}.default"),
+                    SEALED_BEFORE,
+                ));
+            }
+        }
         let outcomes = check
             .cases
             .iter()
@@ -378,13 +391,21 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             indices,
             ignored,
         );
-        if matches!(step.kind(), Some(StepKind::Agent(_))) && !step.lifecycle().is_turn() {
+        launch_fields(step, &path, legacy, ignored);
+        let staying = match step.lifecycle() {
+            crate::store::workflow::StepLifecycle::Turn => false,
+            crate::store::workflow::StepLifecycle::Until => legacy,
+            crate::store::workflow::StepLifecycle::Stay => true,
+        };
+        if matches!(step.kind(), Some(StepKind::Agent(_))) && staying {
             ignore(
                 &mut step.timeout,
                 &format!("{path}.timeout"),
                 ignored,
                 "a staying step has no step timeout; remove timeout or use lifecycle = \"turn\"",
             );
+        }
+        if matches!(step.kind(), Some(StepKind::Agent(_))) && !step.lifecycle().is_turn() {
             ignore(
                 &mut step.on.asked,
                 &format!("{path}.on.asked"),
@@ -403,7 +424,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             })
             .collect::<Vec<_>>();
         for (outcome, route) in &mut check.on {
-            let Route::Delayed { to, delay } = route else {
+            let Route::Delayed { to, delay, .. } = route else {
                 continue;
             };
             let path = format!("checks.{node}.on.{outcome}.delay");
@@ -427,6 +448,111 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             }
         }
     }
+}
+
+const SEALED_BEFORE: &str = "this run was sealed before the field existed";
+
+/// Drop the launch overrides, `on.failed`, and a session pin where the step cannot use them.
+fn launch_fields(step: &mut Step, path: &str, legacy: bool, ignored: &mut Vec<Issue>) {
+    let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
+    let message = matches!(step.kind(), Some(StepKind::Message(_)));
+    let launch = if legacy {
+        Some(SEALED_BEFORE)
+    } else {
+        (!agent).then_some("launch settings are for agent steps")
+    };
+    if let Some(reason) = launch {
+        ignore(
+            &mut step.account,
+            &format!("{path}.account"),
+            ignored,
+            reason,
+        );
+        ignore(&mut step.mode, &format!("{path}.mode"), ignored, reason);
+        ignore(&mut step.effort, &format!("{path}.effort"), ignored, reason);
+        ignore(&mut step.fast, &format!("{path}.fast"), ignored, reason);
+        ignore(&mut step.budget, &format!("{path}.budget"), ignored, reason);
+        ignore(
+            &mut step.system_prompt_file,
+            &format!("{path}.system-prompt-file"),
+            ignored,
+            reason,
+        );
+        ignore(
+            &mut step.worktree,
+            &format!("{path}.worktree"),
+            ignored,
+            reason,
+        );
+    }
+    let failed = if legacy {
+        Some(SEALED_BEFORE)
+    } else if message {
+        Some("a message step that reaches no agent follows on.undelivered")
+    } else {
+        (!agent).then_some("a command's ending goes to then, with its exit in prev_attempt")
+    };
+    if let Some(reason) = failed {
+        ignore(
+            &mut step.on.failed,
+            &format!("{path}.on.failed"),
+            ignored,
+            reason,
+        );
+    }
+    let session = if legacy {
+        Some(SEALED_BEFORE)
+    } else {
+        (!message).then_some("only a message step delivers to a pinned session")
+    };
+    if let Some(reason) = session {
+        ignore(
+            &mut step.session,
+            &format!("{path}.session"),
+            ignored,
+            reason,
+        );
+    }
+    if step.mode == Some(crate::agents::PermissionMode::Plan) {
+        ignore(
+            &mut step.mode,
+            &format!("{path}.mode"),
+            ignored,
+            "plan mode cannot do a step's work; use auto, ask, or yolo",
+        );
+    }
+    sanitize(
+        &mut step.budget,
+        &format!("{path}.budget"),
+        ignored,
+        |raw| {
+            raw.parse::<crate::harness::budget::BudgetSpec>()
+                .map(|_| ())
+        },
+    );
+    sanitize(
+        &mut step.worktree,
+        &format!("{path}.worktree"),
+        ignored,
+        |name| {
+            if name.is_empty() {
+                return Ok(());
+            }
+            crate::worktree::parse_requested_name(name).map(|_| ())
+        },
+    );
+    sanitize(
+        &mut step.session,
+        &format!("{path}.session"),
+        ignored,
+        |session| {
+            if session.as_str().trim().is_empty() {
+                Err("set a nonempty agent session id")
+            } else {
+                Ok(())
+            }
+        },
+    );
 }
 
 fn limit(value: &mut Option<Limit>, path: &str, ignored: &mut Vec<Issue>) {

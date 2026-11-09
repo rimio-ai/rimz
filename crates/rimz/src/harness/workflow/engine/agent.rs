@@ -357,8 +357,15 @@ pub(super) fn launch(
 ) -> Result<bool> {
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
-    let launched = match prompt {
-        Ok(prompt) => host
+    let step = &spec.steps[&record.node];
+    let prepared = prompt.and_then(|prompt| {
+        let overrides = step
+            .launch_overrides(&record.spec_dir)
+            .map_err(|error| error.to_string())?;
+        Ok((prompt, overrides))
+    });
+    let launched = match prepared {
+        Ok((prompt, overrides)) => host
             .launch(StepLaunch {
                 automation: crate::agents::Automation::Workflow {
                     workflow: record.workflow.clone(),
@@ -370,12 +377,9 @@ pub(super) fn launch(
                     role: WorkflowAttemptRole::Step,
                 },
                 // Preparation dispatches only validated agent steps here.
-                agent: spec.steps[&record.node]
-                    .agent
-                    .clone()
-                    .expect("agent step layout"),
+                agent: step.agent.clone().expect("agent step layout"),
                 lifecycle: attempt.lifecycle,
-                keep: spec.is_break(&record.node) || spec.steps[&record.node].keep.unwrap_or(false),
+                keep: spec.is_break(&record.node) || step.keep.unwrap_or(false),
                 resume: record
                     .restart
                     .as_ref()
@@ -384,6 +388,7 @@ pub(super) fn launch(
                 workflow_note: super::super::brief::step(paths, spec, record),
                 cwd: record.scope.path.clone(),
                 throttle_turn,
+                overrides,
             })
             .unwrap_or_else(|error| {
                 Err(LaunchFailure {

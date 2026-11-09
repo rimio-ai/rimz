@@ -308,6 +308,10 @@ expression: value
         {
           "additionalProperties": false,
           "properties": {
+            "default": {
+              "description": "Labels the route as a default the definition's author left in place.",
+              "type": "boolean"
+            },
             "delay": {
               "type": [
                 "string",
@@ -335,7 +339,21 @@ expression: value
     "Step": {
       "additionalProperties": false,
       "properties": {
+        "account": {
+          "description": "The account an agent step's launch runs on; unset follows the profile and the room.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "budget": {
+          "description": "A per-launch dollar budget, in the `--budget` grammar.",
           "type": [
             "string",
             "null"
@@ -344,6 +362,18 @@ expression: value
         "capacity-wait": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fast": {
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -397,6 +427,12 @@ expression: value
             "null"
           ]
         },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "notes": {
           "type": [
             "boolean",
@@ -413,6 +449,13 @@ expression: value
           ]
         },
         "run": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "description": "The agent session a message step delivers to; another session under the address is\nundelivered.",
           "type": [
             "string",
             "null"
@@ -440,6 +483,12 @@ expression: value
           ]
         },
         "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system-prompt-file": {
           "type": [
             "string",
             "null"
@@ -482,6 +531,13 @@ expression: value
             "string",
             "null"
           ]
+        },
+        "worktree": {
+          "description": "Launch the agent in a new worktree of the run's checkout under this name.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -505,6 +561,13 @@ expression: value
           ]
         },
         "capacity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "description": "An agent step's ending that died, timed out, or was limited; without it, `then` takes it.",
           "type": [
             "string",
             "null"

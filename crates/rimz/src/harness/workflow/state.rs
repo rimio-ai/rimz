@@ -799,6 +799,17 @@ impl Transition<'_> {
                 ParkReason::Asked,
             );
         }
+        if self
+            .spec
+            .routes_on_failed(&attempt.node, ending.outcome.as_str())
+        {
+            return self.engine_route(
+                "failed",
+                json!({"outcome":"failed", "ending":ending.outcome, "reason":reason}),
+                &self.spec.engine_target(&attempt.node, "failed"),
+                ParkReason::User,
+            );
+        }
         let target = self.spec.engine_target(&self.record.node, "then");
         self.route(
             &target,

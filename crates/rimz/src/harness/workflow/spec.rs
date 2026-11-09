@@ -28,6 +28,11 @@ pub(super) fn issue(path: &str, message: impl Display) -> Issue {
     }
 }
 
+/// The definition rules a new run is sealed under. A record without the key was sealed before
+/// version 1, which added step launch overrides, `on.failed`, a turn step's terminal `then`,
+/// message session pins, default routes, and honoured `timeout` on until steps.
+pub(super) const SPEC_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct WorkflowSpec {
@@ -37,6 +42,10 @@ pub struct WorkflowSpec {
     #[serde(skip)]
     #[schemars(skip)]
     pub ignored: Vec<Issue>,
+    /// The definition rules this spec was read under (`SPEC_VERSION`, or a sealed run's own).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub spec_version: u32,
     pub workflow: Header,
     #[serde(default)]
     pub checks: BTreeMap<String, Check>,
@@ -197,6 +206,8 @@ pub struct StepEdges {
     pub capacity: Option<String>,
     pub invalid: Option<String>,
     pub undelivered: Option<String>,
+    /// An agent step's ending that died, timed out, or was limited; without it, `then` takes it.
+    pub failed: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -234,7 +245,13 @@ pub struct Check {
 #[schemars(deny_unknown_fields)]
 pub enum Route {
     Target(String),
-    Delayed { to: String, delay: Option<String> },
+    Delayed {
+        to: String,
+        delay: Option<String>,
+        /// Labels the route as a default the definition's author left in place.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        default: bool,
+    },
 }
 
 impl<'de> Deserialize<'de> for Route {
@@ -244,7 +261,7 @@ impl<'de> Deserialize<'de> for Route {
             type Value = Route;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a route target or a table with to and optional delay")
+                f.write_str("a route target or a table with to, optional delay, and default")
             }
 
             fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Route, E> {
@@ -256,12 +273,15 @@ impl<'de> Deserialize<'de> for Route {
                 struct Delayed {
                     to: String,
                     delay: Option<String>,
+                    #[serde(default)]
+                    default: bool,
                 }
                 let route =
                     Delayed::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(Route::Delayed {
                     to: route.to,
                     delay: route.delay,
+                    default: route.default,
                 })
             }
         }
@@ -287,6 +307,10 @@ impl Route {
             Self::Target(_) => None,
             Self::Delayed { delay, .. } => delay.as_deref(),
         }
+    }
+
+    pub(super) fn is_default(&self) -> bool {
+        matches!(self, Self::Delayed { default: true, .. })
     }
 }
 
@@ -473,6 +497,35 @@ pub struct Step {
     pub max_visits: Option<u64>,
     pub max_visits_per_outcome: Option<OutcomeCap>,
     pub timeout: Option<String>,
+    /// The account an agent step's launch runs on; unset follows the profile and the room.
+    #[schemars(with = "Option<String>")]
+    pub account: Option<crate::ids::LoginName>,
+    #[schemars(with = "Option<String>")]
+    pub mode: Option<crate::agents::PermissionMode>,
+    pub effort: Option<String>,
+    pub fast: Option<bool>,
+    /// A per-launch dollar budget, in the `--budget` grammar.
+    pub budget: Option<String>,
+    pub system_prompt_file: Option<String>,
+    /// Launch the agent in a new worktree of the run's checkout under this name.
+    pub worktree: Option<String>,
+    /// The agent session a message step delivers to; another session under the address is
+    /// undelivered.
+    #[schemars(with = "Option<String>")]
+    pub session: Option<crate::ids::AgentSessionId>,
+}
+
+/// An agent step's launch settings beside its profile, as a fresh launch applies them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LaunchOverrides {
+    pub account: Option<crate::ids::LoginName>,
+    pub mode: Option<crate::agents::PermissionMode>,
+    pub effort: Option<String>,
+    pub fast: Option<bool>,
+    pub budget: Option<crate::harness::budget::BudgetSpec>,
+    /// Resolved inside the workflow directory.
+    pub system_prompt_file: Option<PathBuf>,
+    pub worktree: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSchema)]
@@ -658,6 +711,24 @@ impl Step {
         .find(|(_, used, max)| used >= max)
     }
 
+    /// The step's launch overrides, its system-prompt file resolved inside `dir`.
+    pub fn launch_overrides(&self, dir: &Path) -> Result<LaunchOverrides, SpecErr> {
+        Ok(LaunchOverrides {
+            account: self.account.clone(),
+            mode: self.mode,
+            effort: self.effort.clone(),
+            fast: self.fast,
+            // Cleanup drops a budget that does not parse.
+            budget: self.budget.as_deref().and_then(|raw| raw.parse().ok()),
+            system_prompt_file: self
+                .system_prompt_file
+                .as_deref()
+                .map(|path| confined_file(dir, path))
+                .transpose()?,
+            worktree: self.worktree.clone(),
+        })
+    }
+
     pub fn kind(&self) -> Option<StepKind<'_>> {
         match (&self.agent, &self.run, &self.shell, &self.message) {
             (Some(agent), None, None, None) => Some(StepKind::Agent(agent)),
@@ -721,17 +792,28 @@ pub fn load_run(dir: &Path, record: &RunRecord) -> Result<WorkflowSpec, SpecErr>
 }
 
 pub(crate) fn parse_run(text: &str, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_defaults(text, record.default_lifecycle, record.route_defaults)
+    parse_with_defaults(
+        text,
+        record.default_lifecycle,
+        record.route_defaults,
+        record.spec_version,
+    )
 }
 
 pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_defaults(text, StepLifecycle::Until, RouteDefaults::OnBreak)
+    parse_with_defaults(
+        text,
+        StepLifecycle::Until,
+        RouteDefaults::OnBreak,
+        SPEC_VERSION,
+    )
 }
 
 fn parse_with_defaults(
     text: &str,
     default: StepLifecycle,
     routes: RouteDefaults,
+    version: u32,
 ) -> Result<WorkflowSpec, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
@@ -740,7 +822,7 @@ fn parse_with_defaults(
     if routes == RouteDefaults::OnBreak {
         reject_reserved_targets(&value)?;
     }
-    let mut spec = tolerant::parse(value, default, routes)?;
+    let mut spec = tolerant::parse(value, default, routes, version)?;
     if routes == RouteDefaults::Park {
         return Ok(spec);
     }
@@ -782,6 +864,14 @@ fn parse_with_defaults(
                 max_visits: None,
                 max_visits_per_outcome: None,
                 timeout: None,
+                account: None,
+                mode: None,
+                effort: None,
+                fast: None,
+                budget: None,
+                system_prompt_file: None,
+                worktree: None,
+                session: None,
             },
         );
     }
@@ -825,7 +915,7 @@ fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
                 if kind == "steps"
                     && !matches!(
                         outcome.as_str(),
-                        "asked" | "cap" | "capacity" | "invalid" | "undelivered"
+                        "asked" | "cap" | "capacity" | "failed" | "invalid" | "undelivered"
                     )
                 {
                     continue;

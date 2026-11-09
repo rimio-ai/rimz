@@ -399,11 +399,11 @@ fn omitted_lifecycle_keeps_delays_bans_sleep_and_explains_turn_only_fields() {
         (
             delay_kept,
             sleep_refused_with_fix,
-            spec.steps["build"].timeout.is_none(),
+            spec.steps["build"].timeout.is_some(),
             spec.steps["build"].on.asked.is_none(),
             cleanup,
         ),
-        (true, true, true, true, [true, true]),
+        (true, true, true, true, [false, true]),
         "default lifecycle must use until rules: {report:?}; {:?}",
         spec.ignored
     );
@@ -1179,18 +1179,17 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             },
         ));
     }
-    for lifecycle in ["stay", "until"] {
-        for (field, value, path) in [
-            ("timeout", "'1h'", "steps.build.timeout"),
-            ("on.asked", "'@done'", "steps.build.on.asked"),
-        ] {
-            cases.push((
-                acyclic
-                    .replace("lifecycle = \"turn\"", &format!("lifecycle='{lifecycle}'"))
-                    .replace("then='after'", &format!("{field}={value}\nthen='after'")),
-                path,
-            ));
-        }
+    for (lifecycle, field, value, path) in [
+        ("stay", "timeout", "'1h'", "steps.build.timeout"),
+        ("stay", "on.asked", "'@done'", "steps.build.on.asked"),
+        ("until", "on.asked", "'@done'", "steps.build.on.asked"),
+    ] {
+        cases.push((
+            acyclic
+                .replace("lifecycle = \"turn\"", &format!("lifecycle='{lifecycle}'"))
+                .replace("then='after'", &format!("{field}={value}\nthen='after'")),
+            path,
+        ));
     }
     for wake in [
         "'bad selector'",
@@ -1242,6 +1241,44 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             path,
         ));
     }
+    let launch = [
+        ("account", "'work'", "steps.build.account"),
+        ("mode", "'yolo'", "steps.build.mode"),
+        ("effort", "'high'", "steps.build.effort"),
+        ("fast", "true", "steps.build.fast"),
+        ("budget", "'$5'", "steps.build.budget"),
+        (
+            "system-prompt-file",
+            "'prompts/build.md'",
+            "steps.build.system-prompt-file",
+        ),
+        ("worktree", "'feat-x'", "steps.build.worktree"),
+        ("on.failed", "'@failed'", "steps.build.on.failed"),
+    ];
+    for definition in [&command, &message] {
+        for (field, value, path) in launch {
+            cases.push((
+                definition.replace("then='after'", &format!("{field}={value}\nthen='after'")),
+                path,
+            ));
+        }
+    }
+    for (definition, field, value, path) in [
+        (&acyclic, "session", "'ses-1'", "steps.build.session"),
+        (&command, "session", "'ses-1'", "steps.build.session"),
+        (&message, "session", "' '", "steps.build.session"),
+        (&acyclic, "mode", "'plan'", "steps.build.mode"),
+        (&acyclic, "mode", "'sideways'", "steps.build.mode"),
+        (&acyclic, "budget", "'lots'", "steps.build.budget"),
+        (&acyclic, "worktree", "'../out'", "steps.build.worktree"),
+        (&acyclic, "account", "'bad name!'", "steps.build.account"),
+        (&acyclic, "fast", "'yes'", "steps.build.fast"),
+    ] {
+        cases.push((
+            definition.replace("then='after'", &format!("{field}={value}\nthen='after'")),
+            path,
+        ));
+    }
     let actual = cases
         .iter()
         .map(|(text, path)| {
@@ -1276,6 +1313,15 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "on.asked" => step.on.asked.is_none(),
                             "lifecycle" => step.lifecycle.is_none(),
                             "prompt-file" => step.prompt_file.is_none(),
+                            "account" => step.account.is_none(),
+                            "mode" => step.mode.is_none(),
+                            "effort" => step.effort.is_none(),
+                            "fast" => step.fast.is_none(),
+                            "budget" => step.budget.is_none(),
+                            "system-prompt-file" => step.system_prompt_file.is_none(),
+                            "worktree" => step.worktree.is_none(),
+                            "session" => step.session.is_none(),
+                            "on.failed" => step.on.failed.is_none(),
                             _ => false,
                         }
                     }

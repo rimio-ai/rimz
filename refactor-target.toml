@@ -2321,7 +2321,8 @@ path = "crates/rimz/src/harness"
 # headless::judge::FailureKind::from_label reads workflow's journaled failure labels back; it had sat in slack that trunk's schedule::resolve_once_at has since taken (+1).
 # Workflow steps carry `share`, `message`, and `undelivered`, with `Step::subscriptions` and `Step::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack (+3).
 # run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
-surface-budget = 1111
+# Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
+surface-budget = 1112
 
 [[verdict]]
 kind = "item"
@@ -11838,6 +11839,11 @@ reason = "Workflow detach and ordinary resume persist compare-and-clear ownershi
 kind = "item"
 key = "harness::workflow::StepLaunch"
 reason = "The host receives the complete admitted supervised-attempt request."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::LaunchOverrides"
+reason = "The host maps an agent step's sealed launch settings onto the launcher's overrides and cohort."
 
 [[verdict]]
 kind = "item"

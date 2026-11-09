@@ -10,6 +10,7 @@ pub(super) fn parse(
     mut value: toml::Value,
     default: crate::store::workflow::StepLifecycle,
     routes: crate::store::workflow::RouteDefaults,
+    version: u32,
 ) -> Result<WorkflowSpec, SpecErr> {
     let mut ignored = Vec::new();
     let mut indices = BTreeMap::new();
@@ -22,6 +23,7 @@ pub(super) fn parse(
             match serde_path_to_error::deserialize::<_, WorkflowSpec>(deserializer) {
                 Ok(mut spec) => {
                     spec.route_defaults = routes;
+                    spec.spec_version = version;
                     if default.is_turn() {
                         for step in spec.steps.values_mut().filter(|step| step.agent.is_some()) {
                             step.lifecycle.get_or_insert(default);

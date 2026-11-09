@@ -63,6 +63,7 @@ expression: value
   },
   "spec_digest": "abc",
   "spec_dir": "/definitions/review",
+  "spec_version": 0,
   "state": "active",
   "task": null,
   "terminal_at": null,

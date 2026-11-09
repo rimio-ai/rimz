@@ -3,12 +3,16 @@ use super::*;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 
 fn tell(room: &Room, target: &str) -> String {
+    tell_with(room, target, "")
+}
+
+fn tell_with(room: &Room, target: &str, extra: &str) -> String {
     let dir = room.env.rimz_home().join("workflows/tell");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workflow.toml"),
         format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='{target}'\nprompt-file='prompt.md'\nthen='@done'\n"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='{target}'\nprompt-file='prompt.md'\nthen='@done'\n{extra}"
         ),
     )
     .unwrap();
@@ -122,6 +126,28 @@ fn a_message_step_to_no_agent_follows_undelivered() {
         "{value:#}"
     );
     assert!(room.env.store().list_messages().unwrap().is_empty());
+}
+
+#[test]
+fn a_pinned_message_step_delivers_only_to_its_session() {
+    let room = Room::new("lifecycle='stay'\n");
+    let (agent, ..) = leader(&room, true);
+    let id = tell_with(&room, "@codex", &format!("session='{agent}'\n"));
+    let (value, record) = notice(&room, &id);
+    assert_eq!(value["record"]["state"], "done", "{value:#}");
+    assert_eq!(record.agent_id, agent);
+
+    let id = tell_with(&room, "@codex", "session='ses-elsewhere'\n");
+    let value = until(&room.env, &id, |value| value["record"]["state"] == "failed");
+    let routes = events(&value, "route");
+    assert!(
+        routes.iter().any(|route| route["outcome"] == "undelivered"
+            && route["input"]["reason"]
+                == json!(format!(
+                    "@codex is session {agent}, not the pinned session ses-elsewhere"
+                ))),
+        "{value:#}"
+    );
 }
 
 #[test]

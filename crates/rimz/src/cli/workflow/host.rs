@@ -241,6 +241,22 @@ impl workflow::AttemptHost for Host<'_> {
     ) -> Result<Result<AttemptRun, workflow::LaunchFailure>, WorkflowErr> {
         let resume = step.resume.clone();
         let workflow_id = step.workflow.run.clone();
+        // A resumed session keeps the account, system prompt, and checkout it was launched with.
+        let fresh = step.resume.is_none();
+        let set = step.overrides;
+        let worktree = set.worktree.filter(|_| fresh);
+        let cwd = worktree.is_none().then_some(step.cwd);
+        let overrides = launcher::LaunchOverrides {
+            login: set.account.filter(|_| fresh),
+            mode: set.mode,
+            preset: rimz::agents::LaunchPreset {
+                effort: set.effort,
+                fast: set.fast,
+                system_prompt_file: set.system_prompt_file.filter(|_| fresh),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let result = (|| -> Result<_> {
             let ctx = self.ctx()?;
             let mux = crate::cli::render::room::present_mux_pick(
@@ -261,16 +277,19 @@ impl workflow::AttemptHost for Host<'_> {
                 launch: launcher::LayoutLaunch {
                     spec: Some(step.agent),
                     prompt: Some(step.prompt),
-                    cwd: Some(step.cwd.clone()),
+                    cwd: cwd.clone(),
                     cohort: launcher::CohortRequest {
+                        worktree,
+                        budget: set.budget,
                         bg: true,
                         new_tab: true,
                         ..Default::default()
                     },
+                    overrides,
                     report_to: ReportTo::Nobody,
                     ..Default::default()
                 },
-                cwd: Some(step.cwd),
+                cwd,
                 allow_in_place: false,
                 entry: launcher::RoomEntry::Birth,
                 starter: launcher::Starter::Workflow,
@@ -583,6 +602,7 @@ impl workflow::AttemptHost for Host<'_> {
         &self,
         scope: &Path,
         target: &str,
+        session: Option<&rimz::ids::AgentSessionId>,
         message: &rimz::ids::MessageId,
         text: &str,
     ) -> Result<std::result::Result<String, String>, WorkflowErr> {
@@ -619,6 +639,15 @@ impl workflow::AttemptHost for Host<'_> {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error.to_string())),
             };
+            // A handle outlives its session: a reused one names another agent.
+            if let Some(session) = session
+                && agent.agent_id != *session
+            {
+                return Ok(Err(format!(
+                    "{target} is session {}, not the pinned session {session}",
+                    agent.agent_id
+                )));
+            }
             queue_notice(
                 &ctx,
                 agent,

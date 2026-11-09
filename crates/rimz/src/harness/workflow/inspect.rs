@@ -359,8 +359,12 @@ fn attempt_superseded(
     match (&next.event, outcome) {
         (JournalEvent::Resume { .. }, AttemptOutcome::Canceled) => true,
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Died) => {
-            outcome == "invalid" || outcome == "undelivered"
+            outcome == "invalid" || outcome == "undelivered" || outcome == "failed"
         }
+        (
+            JournalEvent::Route { outcome, .. },
+            AttemptOutcome::Timeout | AttemptOutcome::Limited,
+        ) => outcome == "failed",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Canceled) => outcome == "deadline",
         (
@@ -455,7 +459,7 @@ pub(super) fn first_bound(
         .min_by_key(|(at, _)| *at))
 }
 
-/// The check's entry-based timeout or a turn step's timeout, excluding held time.
+/// The check's entry-based timeout or a turn or until step's timeout, excluding held time.
 pub fn timeout_at(
     spec: &WorkflowSpec,
     record: &RunRecord,
@@ -466,8 +470,9 @@ pub fn timeout_at(
         let Some(attempt) = record.attempt.as_ref() else {
             return Ok(None);
         };
-        if !attempt.lifecycle.is_turn() || attempt.held_since.is_some() || attempt.asking.is_some()
-        {
+        // Cleanup drops a stay step's timeout, and an until step's in a run sealed before
+        // until steps honoured it; an until step's bound runs from its launch.
+        if attempt.held_since.is_some() || attempt.asking.is_some() {
             return Ok(None);
         }
         let Ok(start) = attempt

@@ -527,8 +527,14 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
             "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
         );
     }
-    // Validation requires a nonempty `then` list of checks.
-    let check = span(step.then.first().expect("validated step then"));
+    // Validation requires a nonempty `then`: checks, or one terminal on a turn or stay step.
+    let first = step.then.first().expect("validated step then");
+    let check = span(first);
+    let next = if matches!(first.as_str(), "@done" | "@failed") {
+        format!("ends the run at {check}")
+    } else {
+        format!("runs the check {check}")
+    };
     match step.lifecycle() {
         StepLifecycle::Turn => {
             let cleanup = if step.keep.unwrap_or(false) {
@@ -540,7 +546,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                 format!(", within the step's {} timeout", verbatim(timeout))
             });
             let after = format!(
-                "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and runs the check {check}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
+                "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and {next}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
             );
             let questions = if step.on.asked.is_some() {
                 // An explicit asked edge always has a resolved target.
@@ -569,7 +575,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
         lifecycle @ (StepLifecycle::Stay | StepLifecycle::Until) => {
             let mut after = if lifecycle == StepLifecycle::Stay {
                 format!(
-                    "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check {check}."
+                    "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and {next}."
                 )
             } else {
                 let close = if step.keep.unwrap_or(false) {
@@ -582,8 +588,14 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                 } else {
                     ""
                 };
+                let timeout = step.timeout.as_ref().map_or_else(String::new, |timeout| {
+                    format!(
+                        " The step's {} timeout counts from your launch and ends this session when it passes.",
+                        verbatim(timeout)
+                    )
+                });
                 format!(
-                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn."
+                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn.{timeout}"
                 )
             };
             if let Some(subscriptions) = subscriptions(step) {
