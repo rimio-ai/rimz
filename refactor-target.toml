@@ -1193,6 +1193,31 @@ reason = "MachineConfig resolves one typed keymap without consulting a live mult
 
 [[verdict]]
 kind = "item"
+key = "config::keys::sidebar::SidebarKeymap"
+reason = "The snapshot carries one resolved in-pane table that the renderer's resolver, hint, and legend read."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::sidebar::SidebarChord"
+reason = "Pressed keys and configured sequences meet as one case-preserving in-pane chord."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::sidebar::SidebarKey"
+reason = "The renderer maps terminal key codes onto the keys the in-pane grammar can name."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::sidebar::SidebarAction"
+reason = "Named in-pane actions cross from `[keys.sidebar]` to the renderer's dispatch and labels."
+
+[[verdict]]
+kind = "item"
+key = "config::keys::sidebar::SequenceMatch"
+reason = "A lookup tells a bound sequence from a pending prefix and an unbound key."
+
+[[verdict]]
+kind = "item"
 key = "config::mux::RoomConfig"
 reason = "Machine configuration and room-key resolution share the room style."
 

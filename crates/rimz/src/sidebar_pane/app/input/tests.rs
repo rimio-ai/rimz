@@ -1,16 +1,13 @@
 use super::*;
 use crate::wakeup::events::RELOAD_CONTROL_WORD;
 
-fn default_keymap() -> NavKeymap {
-    NavKeymap::from_config(&crate::config::SidebarKeys::default())
+fn default_keymap() -> SidebarKeymap {
+    SidebarKeymap::default()
 }
 
 #[test]
 fn typing_resolves_before_keymap_and_command_table() {
-    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
-        wider: "ctrl+b".to_owned(),
-        ..Default::default()
-    });
+    let keymap = SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]);
     for ch in "njqr?A1".chars() {
         assert_eq!(
             resolve_key(
@@ -249,14 +246,14 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::Enter),
         ),
         (
-            "a → narrower",
-            KeyCode::Char('a'),
+            "< → narrower",
+            KeyCode::Char('<'),
             KeyModifiers::NONE,
             Wakeup::Key(KeyAction::WidthNarrower),
         ),
         (
-            "d → wider",
-            KeyCode::Char('d'),
+            "> → wider",
+            KeyCode::Char('>'),
             KeyModifiers::NONE,
             Wakeup::Key(KeyAction::WidthWider),
         ),
@@ -275,10 +272,10 @@ fn keys_round_trip_through_the_wire() {
         ),
         // top/bottom jumps
         (
-            "g → top",
+            "g alone only starts g g",
             KeyCode::Char('g'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Top),
+            Wakeup::Key(KeyAction::Other),
         ),
         (
             "G → bottom",
@@ -555,10 +552,7 @@ fn escape_clears_search_unless_rebound() {
         resolve_wakeup(encoded.as_bytes()),
         Wakeup::Key(KeyAction::CancelSearch)
     );
-    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
-        wider: "esc".to_owned(),
-        ..Default::default()
-    });
+    let keymap = SidebarKeymap::rebound(&[("Esc", "width.wider")]);
     assert_eq!(
         resolve_key(&keymap, InputMode::Normal, KeyCode::Esc, KeyModifiers::NONE),
         KeyAction::WidthWider

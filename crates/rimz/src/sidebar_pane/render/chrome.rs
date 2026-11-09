@@ -1,5 +1,6 @@
 use crate::agents::AgentStatus;
-use crate::config::{GlyphRole, SidebarKeys};
+use crate::config::GlyphRole;
+use crate::config::keys::sidebar::{SidebarAction, SidebarChord, SidebarKey, SidebarKeymap};
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
@@ -588,7 +589,7 @@ pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
     zoom_key: Option<&str>,
-    keys: &SidebarKeys,
+    keys: &SidebarKeymap,
     width: usize,
 ) -> Vec<Line<'static>> {
     const TITLE: &str = "help";
@@ -618,7 +619,7 @@ fn help_body_rows(
     theme: &Theme,
     focus_key: Option<&str>,
     zoom_key: Option<&str>,
-    keys: &SidebarKeys,
+    keys: &SidebarKeymap,
 ) -> Vec<Line<'static>> {
     let movement = |key: String, label| {
         key_entry(
@@ -635,28 +636,36 @@ fn help_body_rows(
         ),
         (
             movement(
-                format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
+                format!(
+                    "{}/{}",
+                    chord_label(keys, SidebarAction::MoveDown),
+                    chord_label(keys, SidebarAction::MoveUp)
+                ),
                 "cards/entries",
             ),
             Some(movement(
                 format!(
                     "{}/{}",
-                    chord_label(&keys.worktree_down),
-                    chord_label(&keys.worktree_up)
+                    chord_label(keys, SidebarAction::MoveWorktreeDown),
+                    chord_label(keys, SidebarAction::MoveWorktreeUp)
                 ),
                 "worktrees",
             )),
         ),
         (
             movement(
-                format!("{}/{}", chord_label(&keys.top), chord_label(&keys.bottom)),
+                format!(
+                    "{}/{}",
+                    chord_label(keys, SidebarAction::MoveTop),
+                    chord_label(keys, SidebarAction::MoveBottom)
+                ),
                 "ends",
             ),
             Some(movement(
                 format!(
                     "{}/{}",
-                    chord_label(&keys.page_down),
-                    chord_label(&keys.page_up)
+                    chord_label(keys, SidebarAction::MovePageDown),
+                    chord_label(keys, SidebarAction::MovePageUp)
                 ),
                 "page",
             )),
@@ -665,8 +674,8 @@ fn help_body_rows(
             movement(
                 format!(
                     "{}/{}",
-                    chord_label(&keys.screen_top),
-                    chord_label(&keys.screen_bottom)
+                    chord_label(keys, SidebarAction::MoveScreenTop),
+                    chord_label(keys, SidebarAction::MoveScreenBottom)
                 ),
                 "screen",
             ),
@@ -729,8 +738,8 @@ fn help_body_rows(
             Some(movement(
                 format!(
                     "{}/{}",
-                    chord_label(&keys.narrower),
-                    chord_label(&keys.wider)
+                    chord_label(keys, SidebarAction::WidthNarrower),
+                    chord_label(keys, SidebarAction::WidthWider)
                 ),
                 "width",
             )),
@@ -794,40 +803,43 @@ fn help_body_rows(
     lines
 }
 
-fn chord_label(spec: &str) -> String {
-    let Some(token) = spec.split_whitespace().next() else {
+/// The legend's spelling of the first sequence bound to `action`, `?` when
+/// the table leaves it unbound.
+fn chord_label(keys: &SidebarKeymap, action: SidebarAction) -> String {
+    let Some(sequence) = keys.sequences(action).next() else {
         return "?".to_owned();
     };
-    let parts = token.split(['+', '-']).collect::<Vec<_>>();
-    let Some((base, modifiers)) = parts.split_last() else {
-        return "?".to_owned();
-    };
-    let base = key_label(base.trim());
-    let mut label = String::new();
-    for modifier in modifiers {
-        match modifier.trim().to_ascii_lowercase().as_str() {
-            "ctrl" | "control" | "c" => label.push('^'),
-            "alt" | "meta" | "m" => label.push_str("M-"),
-            _ => {}
-        }
-    }
-    label.push_str(&base);
-    label
+    sequence
+        .iter()
+        .map(|chord| {
+            let mut label = String::new();
+            if chord.ctrl {
+                label.push('^');
+            }
+            if chord.alt {
+                label.push_str("M-");
+            }
+            label.push_str(&key_label(*chord));
+            label
+        })
+        .collect()
 }
 
-fn key_label(base: &str) -> String {
-    match base.to_ascii_lowercase().as_str() {
-        "up" => "↑".to_owned(),
-        "down" => "↓".to_owned(),
-        "left" => "←".to_owned(),
-        "right" => "→".to_owned(),
-        "pageup" => "PgUp".to_owned(),
-        "pagedown" => "PgDn".to_owned(),
-        "home" => "Home".to_owned(),
-        "end" => "End".to_owned(),
-        "enter" => "Enter".to_owned(),
-        "space" => "Space".to_owned(),
-        _ => base.to_owned(),
+fn key_label(chord: SidebarChord) -> String {
+    match chord.key {
+        SidebarKey::Up => "↑".to_owned(),
+        SidebarKey::Down => "↓".to_owned(),
+        SidebarKey::Left => "←".to_owned(),
+        SidebarKey::Right => "→".to_owned(),
+        SidebarKey::PageUp => "PgUp".to_owned(),
+        SidebarKey::PageDown => "PgDn".to_owned(),
+        SidebarKey::Char(key) if key != ' ' => key.to_string(),
+        _ => SidebarChord {
+            ctrl: false,
+            alt: false,
+            ..chord
+        }
+        .to_string(),
     }
 }
 
@@ -1072,13 +1084,13 @@ mod tests {
     #[test]
     fn help_shows_width_chords_and_remapped_filters() {
         let theme = Theme::fixed(false);
-        let text = help_body_rows(&theme, None, None, &SidebarKeys::default())
+        let text = help_body_rows(&theme, None, None, &SidebarKeymap::default())
             .iter()
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect::<String>();
 
-        assert!(text.contains("a/d"));
+        assert!(text.contains("</>"));
         assert!(text.contains("width"));
         assert!(text.contains("s"));
         assert!(text.contains("done"));
@@ -1095,7 +1107,7 @@ mod tests {
             &theme,
             Some("Alt+p"),
             Some("Alt+g"),
-            &SidebarKeys::default(),
+            &SidebarKeymap::default(),
         );
         let text = |line: &Line<'_>| {
             line.spans

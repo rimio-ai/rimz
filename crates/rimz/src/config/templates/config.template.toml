@@ -102,26 +102,12 @@
 ## when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 
 [sidebar]
-# Sidebar behavior: room keybinds, motion keybinds, spend headline window, and worktree comparison target.
+# Sidebar behavior: room keybinds, spend headline window, and worktree comparison target.
 # focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
 # zoom_key = "Alt+g"                  # global smart-zoom chord; zooms a work pane, never the sidebar
 # afk_after_secs = 900                # departed-view hold and input-idle badge (both backends); default 15 min
 # spend_window = "session"            # cockpit & provider headline window: "session", "24h", or "today"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
-
-[sidebar.keys]
-# narrower = "a"
-# wider = "d"
-# up = "k up"
-# down = "j down"
-# top = "g"
-# bottom = "G"
-# worktree_up = "K"
-# worktree_down = "J"
-# page_up = "ctrl+b pageup"
-# page_down = "ctrl+f pagedown"
-# screen_top = "H"
-# screen_bottom = "L"
 
 [web]
 # Browser access through a writable daemon with named sign-in tokens and an always-on gate.
@@ -143,11 +129,15 @@
 # style = "native"                   # native keeps your mux navigation; rimz selects sidebar-first navigation
 
 [keys]
-# Read only with room.style = "rimz"; bindings belong in this per-machine file.
+# keymap, prefix, and keys.bind are read only with room.style = "rimz"; bindings belong in this per-machine file.
 # keymap = "rimz"                     # bundled sidebar-first keymap
 # prefix = "Alt+p"                    # moves both the mode entry and the prefix-mode palette chord
 ## [keys.bind.normal]
 ## "Alt+x" = "card.close"              # named action, or { run = "rimz ..." }; "none" removes a binding
+## [keys.sidebar]                     # in-pane sidebar keys, read under both room styles
+## "g x" = "move.bottom"              # a sequence: chords separated by spaces
+## "Ctrl+d" = "move.half_page_down"   # [Ctrl+][Alt+]key; case matters
+## "d d" = "none"                     # unbind a default; a prefix of another bound sequence is refused
 
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux

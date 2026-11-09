@@ -265,6 +265,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         root_class: crate::workspace::RootClass::Repo,
         sidebar: crate::config::SidebarConfig::default(),
         theme: crate::config::ThemeConfig::default(),
+        keys: Default::default(),
         attention: crate::config::AttentionConfig::default(),
         providers: (0..providers).map(provider_panel).collect(),
         value_tally: None,

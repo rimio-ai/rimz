@@ -55,6 +55,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         root_class: crate::workspace::RootClass::Repo,
         sidebar: crate::config::SidebarConfig::default(),
         theme: crate::config::ThemeConfig::default(),
+        keys: Default::default(),
         attention: crate::config::AttentionConfig::default(),
         providers: Vec::new(),
         value_tally: None,

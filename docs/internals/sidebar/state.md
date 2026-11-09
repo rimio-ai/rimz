@@ -101,7 +101,7 @@ Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz
 
 ### The room host and its attachments
 
-The supervisor keeps the pane's tty and hands the host only the pane's output. It holds raw mode and mouse capture for its whole lifetime, including first-start failures and the gaps between attach rounds. While attached it reads keys, clicks, and resizes and forwards them as raw input words. The host ([`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs)) is detached from every terminal and runs one attachment per pane ([`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs)), each on its own thread with its own `LoopState`, geometry, width control, and pixel lease. The host resolves each key against the routed [client view](#client-views)'s UI mode and the current snapshot's `sidebar.keys` navigation map ([motion keys](./sidebar.md#selection-and-jump)).
+The supervisor keeps the pane's tty and hands the host only the pane's output. It holds raw mode and mouse capture for its whole lifetime, including first-start failures and the gaps between attach rounds. While attached it reads keys, clicks, and resizes and forwards them as raw input words. The host ([`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs)) is detached from every terminal and runs one attachment per pane ([`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs)), each on its own thread with its own `LoopState`, geometry, width control, and pixel lease. The host resolves each key against the routed [client view](#client-views)'s UI mode and the current snapshot's in-pane keymap (`keys`, resolved from `[keys.sidebar]`) ([motion keys](./sidebar.md#selection-and-jump)).
 
 | Owned by | What |
 | --- | --- |

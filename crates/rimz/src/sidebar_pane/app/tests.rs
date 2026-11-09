@@ -497,12 +497,12 @@ fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
 fn configurable_width_bindings_shadow_fixed_actions() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-    let keys = crate::config::SidebarKeys {
-        narrower: "q ctrl+b".to_owned(),
-        wider: "x /".to_owned(),
-        ..Default::default()
-    };
-    let keymap = NavKeymap::from_config(&keys);
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[
+        ("q", "width.narrower"),
+        ("Ctrl+b", "width.narrower"),
+        ("x", "width.wider"),
+        ("/", "width.wider"),
+    ]);
     for (code, mods, action) in [
         (
             KeyCode::Char('q'),
@@ -558,10 +558,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
-        wider: "/".to_owned(),
-        ..Default::default()
-    });
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("/", "width.wider")]);
 
     for wakeup in [
         Wakeup::Press {

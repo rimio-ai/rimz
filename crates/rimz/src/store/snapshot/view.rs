@@ -265,6 +265,10 @@ pub struct SidebarSnapshot {
     /// animations. Filled beside [`Self::sidebar`] by [`Self::apply_machine_config`].
     #[serde(default)]
     pub theme: crate::config::ThemeConfig,
+    /// The resolved in-pane keymap: shipped defaults with `[keys.sidebar]`
+    /// applied. Filled beside [`Self::sidebar`] by [`Self::apply_machine_config`].
+    #[serde(default)]
+    pub keys: crate::config::keys::sidebar::SidebarKeymap,
     /// Per-machine attention timing preferences, filled beside
     /// [`Self::sidebar`] by [`Self::apply_machine_config`].
     #[serde(default)]
@@ -441,6 +445,7 @@ impl SidebarSnapshot {
             root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
             theme: crate::config::ThemeConfig::default(),
+            keys: Default::default(),
             attention: crate::config::AttentionConfig::default(),
             providers: Vec::new(),
             value_tally: None,
@@ -541,12 +546,13 @@ impl SidebarSnapshot {
         self
     }
 
-    /// Stamp the per-machine `sidebar`, `theme`, and `attention` settings from
-    /// `config`: the one place machine config reaches a snapshot, so every
-    /// path that builds one carries all three or none.
+    /// Stamp the per-machine `sidebar`, `theme`, in-pane `keys`, and
+    /// `attention` settings from `config`: the one place machine config reaches
+    /// a snapshot, so every path that builds one carries all four or none.
     pub fn apply_machine_config(&mut self, config: &crate::config::MachineConfig) {
         self.sidebar = config.sidebar.clone();
         self.theme = config.theme.clone();
+        self.keys = config.sidebar_keymap();
         self.attention = config.agents.attention;
     }
 

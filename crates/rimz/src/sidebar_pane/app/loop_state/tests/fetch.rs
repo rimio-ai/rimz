@@ -974,7 +974,8 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
     assert_eq!(rig.view().ui().selected_index, None);
 
     let mut rebound = snapshot;
-    rebound.sidebar.keys.down = "v".to_owned();
+    rebound.keys =
+        crate::config::keys::sidebar::SidebarKeymap::rebound(&[("v", "move.down"), ("j", "none")]);
     rig.fold(rebound, SnapshotSource::Produced);
     rig.state.on_input(press, &mut rig.terminal).unwrap();
     assert_eq!(rig.view().ui().selected_index, Some(0));

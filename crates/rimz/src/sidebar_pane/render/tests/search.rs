@@ -416,7 +416,7 @@ fn search_line_keeps_plain_and_folded_footer_badge_admission() {
         &theme,
         None,
         None,
-        &crate::config::SidebarKeys::default(),
+        &crate::config::keys::sidebar::SidebarKeymap::default(),
         54,
     );
     assert!(help.iter().any(|line| {

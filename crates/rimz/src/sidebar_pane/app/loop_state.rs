@@ -251,8 +251,6 @@ pub(super) struct PaneState {
     fold_preparations: u64,
     fold_effects: FoldEffects,
     baseline_seed: Option<PaneId>,
-    /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
-    nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
     config: ServeConfig,
     clock: LoopClock,
     runtime: RuntimePaths,
@@ -309,7 +307,7 @@ pub(super) fn handle_wakeup(
     view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    keymap: &super::NavKeymap,
+    keymap: &crate::config::keys::sidebar::SidebarKeymap,
     alert_active: bool,
 ) -> InputOutcome {
     let wakeup = match wakeup {
@@ -583,10 +581,6 @@ impl LoopState {
             width,
         );
         let make_up_filter = crate::sidebar::body_filter::load(&runtime);
-        let nav_keys = (
-            current.sidebar.keys.clone(),
-            super::NavKeymap::from_config(&current.sidebar.keys),
-        );
         Self {
             views: ViewAccess::new(
                 ViewState {
@@ -605,7 +599,6 @@ impl LoopState {
                 projections: 0,
                 #[cfg(test)]
                 fold_preparations: 0,
-                nav_keys,
                 config,
                 clock,
                 runtime,
@@ -2680,8 +2673,6 @@ impl PaneState {
                 projections: _,
             #[cfg(test)]
                 fold_preparations: _,
-            // Derived from `current`, which equal content leaves unchanged.
-            nav_keys: _,
             // Loop wiring and identity, fixed for the attachment.
             config: _,
             clock: _,
@@ -2971,10 +2962,6 @@ impl PaneState {
         wakeups: Vec<Wakeup>,
         now: Instant,
     ) -> InputOutcome {
-        let keys = &v.context.current.sidebar.keys;
-        if self.nav_keys.0 != *keys {
-            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
-        }
         let mut outcome = InputOutcome::default();
         let mut user_input = false;
         for wakeup in wakeups {
@@ -3047,7 +3034,7 @@ impl PaneState {
                     v.state,
                     &mut self.ui,
                     &v.context.current,
-                    &self.nav_keys.1,
+                    &v.context.current.keys,
                     alert_active,
                 ),
             };

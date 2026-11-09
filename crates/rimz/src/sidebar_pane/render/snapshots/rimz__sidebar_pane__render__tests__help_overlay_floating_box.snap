@@ -19,28 +19,28 @@ expression: screen
 ▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
 ▎⣾ codex 3                                                                     🮇
 ▎  task-2                                                                      🮇
-▎  ▢ ────────────────────────────────╭ help ───────────────────────────────────╮
-                                     │ keys                                    │
- ⑂ beta                              │   /   search           esc   clear      │
- ⣾ codex 4                           │ ↕ j/k cards/entries  ↕ J/K   worktrees  │
-   task-3                            │ ↕ g/G ends           ↕ ^f/^b page       │
-   ▢ ────────────────────────────────│ ↕ H/L screen         ⏎ l     focus/open │
- ⣾ codex 5                           │ ⏎ 1-9 direct         ␣ n/N   needs-you  │
-   task-4                            │ ✉ m   read/unread    ✉ M     read all   │
-   ▢ ────────────────────────────────│ ↔ ←/→ account tabs   ⟳ r     reload     │
- ⣾ codex 6                           │ ✕ x   dismiss        ↕ a/d   width      │
-   task-5                            │   i   inactive fold                     │
-   ▢ ────────────────────────────────│                                         │
-                                     │ filter                                  │
-                                     │ ? q   waiting        ! e     attention  │
-                                     │ ⏸︎ p   paused         ✓ s     done       │
-                                     │ ⢿ w   working        ○ o     idle       │
-                                     │ ☾ z   sleeping                          │
-                                     │ ● u   unread         ≡ A     all        │
-                                     │                                         │
-                                     │ ▐ alt p sidebar                         │
-                                     │   alt g zoom                            │
-                                     ╰─────────── any key to close ────────────╯
+▎  ▢ ───────────────────────────────╭ help ────────────────────────────────────╮
+                                    │ keys                                     │
+ ⑂ beta                             │   /    search           esc   clear      │
+ ⣾ codex 4                          │ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
+   task-3                           │ ↕ gg/G ends           ↕ ^f/^b page       │
+   ▢ ───────────────────────────────│ ↕ H/L  screen         ⏎ l     focus/open │
+ ⣾ codex 5                          │ ⏎ 1-9  direct         ␣ n/N   needs-you  │
+   task-4                           │ ✉ m    read/unread    ✉ M     read all   │
+   ▢ ───────────────────────────────│ ↔ ←/→  account tabs   ⟳ r     reload     │
+ ⣾ codex 6                          │ ✕ x    dismiss        ↕ </>   width      │
+   task-5                           │   i    inactive fold                     │
+   ▢ ───────────────────────────────│                                          │
+                                    │ filter                                   │
+                                    │ ? q    waiting        ! e     attention  │
+                                    │ ⏸︎ p    paused         ✓ s     done       │
+                                    │ ⢿ w    working        ○ o     idle       │
+                                    │ ☾ z    sleeping                          │
+                                    │ ● u    unread         ≡ A     all        │
+                                    │                                          │
+                                    │ ▐ alt p sidebar                          │
+                                    │   alt g zoom                             │
+                                    ╰──────────── any key to close ────────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

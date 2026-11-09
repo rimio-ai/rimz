@@ -5,7 +5,9 @@ use crate::sidebar_pane::view::BodyFilter;
 use crate::wakeup::events::SidebarEventEnvelope;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
-use super::NavKeymap;
+use crate::config::keys::sidebar::{
+    SequenceMatch, SidebarAction, SidebarChord, SidebarKey, SidebarKeymap,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum Wakeup {
@@ -100,7 +102,7 @@ pub(super) enum InputMode {
 }
 
 pub(super) fn resolve_key(
-    keymap: &NavKeymap,
+    keymap: &SidebarKeymap,
     mode: InputMode,
     code: KeyCode,
     mods: KeyModifiers,
@@ -122,7 +124,10 @@ pub(super) fn resolve_key(
             _ => KeyAction::Other,
         };
     }
-    if let Some(action) = keymap.action_for(code, mods) {
+    if let Some(chord) = chord(code, mods)
+        && let SequenceMatch::Action(action) = keymap.lookup(&[chord])
+        && let Some(action) = motion(action)
+    {
         return action;
     }
     if mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
@@ -158,6 +163,51 @@ pub(super) fn resolve_key(
         KeyCode::Char('r') => KeyAction::Reload,
         _ => KeyAction::Other,
     }
+}
+
+/// The table chord a press spells. Case lives in the character, so Shift is
+/// dropped; keys the table cannot name have no chord.
+fn chord(code: KeyCode, mods: KeyModifiers) -> Option<SidebarChord> {
+    let key = match code {
+        KeyCode::Char(c) => SidebarKey::Char(c),
+        KeyCode::Up => SidebarKey::Up,
+        KeyCode::Down => SidebarKey::Down,
+        KeyCode::Left => SidebarKey::Left,
+        KeyCode::Right => SidebarKey::Right,
+        KeyCode::Home => SidebarKey::Home,
+        KeyCode::End => SidebarKey::End,
+        KeyCode::PageUp => SidebarKey::PageUp,
+        KeyCode::PageDown => SidebarKey::PageDown,
+        KeyCode::Enter => SidebarKey::Enter,
+        KeyCode::Esc => SidebarKey::Esc,
+        KeyCode::Tab => SidebarKey::Tab,
+        KeyCode::Backspace => SidebarKey::Backspace,
+        _ => return None,
+    };
+    Some(SidebarChord {
+        key,
+        ctrl: mods.contains(KeyModifiers::CONTROL),
+        alt: mods.contains(KeyModifiers::ALT),
+    })
+}
+
+/// The motion and width keys the table rebinds, as the resolver's actions.
+fn motion(action: SidebarAction) -> Option<KeyAction> {
+    Some(match action {
+        SidebarAction::MoveDown => KeyAction::Down,
+        SidebarAction::MoveUp => KeyAction::Up,
+        SidebarAction::MoveWorktreeDown => KeyAction::WorktreeDown,
+        SidebarAction::MoveWorktreeUp => KeyAction::WorktreeUp,
+        SidebarAction::MoveTop => KeyAction::Top,
+        SidebarAction::MoveBottom => KeyAction::Bottom,
+        SidebarAction::MoveScreenTop => KeyAction::ScreenTop,
+        SidebarAction::MoveScreenBottom => KeyAction::ScreenBottom,
+        SidebarAction::MovePageDown => KeyAction::PageDown,
+        SidebarAction::MovePageUp => KeyAction::PageUp,
+        SidebarAction::WidthNarrower => KeyAction::WidthNarrower,
+        SidebarAction::WidthWider => KeyAction::WidthWider,
+        _ => return None,
+    })
 }
 
 pub(super) fn encode_key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
