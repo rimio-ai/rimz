@@ -62,11 +62,11 @@ An `Auto` target is resolved again at each launch, reconnect, and probe start. I
 
 `SshDestination::parse` handles the colon-less `[user@]host` form that `rimz remote setup` accepts.
 
-Aliases persist per machine at `~/.rimz/remote.toml`, one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename. Unknown fields fail the load.
+Aliases persist per machine at `$RIMZ_HOME/remote.toml` (`~/.rimz/remote.toml` by default), one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename. Unknown fields fail the load.
 
 | Field | Default | Effect |
 | --- | --- | --- |
-| `name` | required | 1 to 64 ASCII alphanumerics, `-`, or `_`, never a leading `-`. Checked on every add, update, and load. |
+| `name` | required | 1 to 64 ASCII alphanumerics, `-`, or `_`, never a leading `-`. Checked on every add, update, rename, load, and save. |
 | `target` | required | Parsed through `RemoteTarget::parse` on add and update. Load checks names only, so a hand-edited bad target fails when `rimz remote connect` resolves it. |
 | `reconnect` | `true` | `false` hands the link to a single `ssh` run with no supervisor. |
 | `resume` | `true` | `false` passes `--no-resume` to the remote room. |
@@ -133,9 +133,9 @@ Both exits reach the local side as fatal verdicts, and `known_remote_exit_messag
 
 Zellij 0.44 can reuse a client id before the queued removal of the old client has drained, which leaves a reconnect painting into a dead client slot. Before an executable Zellij attach, the remote `rimz` reaps the clients of its own lineage (`reap_remote_zellij_predecessors`).
 
-`remote_lineage` hashes a domain tag plus the length-prefixed local hostname, local user, remote host as typed, spec kind, and spec value with SHA-256, and hex-encodes the first eight bytes. The same inputs always give the same value. A second attach from one machine to one target therefore moves the room, while attachments from two machines with different hostnames or users coexist. The hash sees the target text, never the resolved room: `host:repo` and `host:~/repo` can open one directory under two lineages, and two machines that share a hostname and user share a lineage.
+`remote_lineage` hashes a domain tag plus the length-prefixed local hostname, local user, remote host (`host_display`, without the remote user or IPv6 brackets), spec kind, and spec value with SHA-256, and hex-encodes the first eight bytes. The same inputs always give the same value. A second attach from one machine to one target therefore moves the room, while attachments from two machines with different hostnames or users coexist. The hash sees the target text, never the resolved room: `host:repo` and `host:~/repo` can open one directory under two lineages, and two machines that share a hostname and user share a lineage. The remote user is not hashed, but the reaper only selects processes of its own uid, so two remote accounts never retire each other's clients.
 
-`reap_lineage_clients` selects `zellij attach <session> options ...` processes that carry that lineage, excluding its own process ancestry. It sends `SIGTERM` and escalates to `SIGKILL` after a 500ms grace. A bare user attach is never selected. A predecessor started by an older binary that attached with the creation flag is not selected across an upgrade, and it dies with its SSH link. The reaper then polls `zellij --session <name> action list-clients` until the human-client count falls. That successful reply is the ordering fence: Zellij's screen worker has processed the predecessor's removal before the replacement attach registers. The whole sequence is bounded at two seconds.
+`reap_lineage_clients` selects processes of its own uid whose `comm` is `zellij`, whose argv is `zellij attach <session> options ...`, and whose environment carries that lineage, excluding its own process ancestry. It sends `SIGTERM` and escalates to `SIGKILL` after a 500ms grace. A bare user attach is never selected. A predecessor started by an older binary that attached with the creation flag is not selected across an upgrade, and it dies with its SSH link. The reaper then polls `zellij --session <name> action list-clients` until the human-client count falls. That successful reply is the ordering fence: Zellij's screen worker has processed the predecessor's removal before the replacement attach registers. The whole sequence is bounded at two seconds.
 
 The reap is best-effort. It is skipped in four cases: tmux, an attach invoked from inside the target multiplexer (so an explicit nested `--attach` cannot retire the outer client that displays that pane), an empty or missing `RIMZ_REMOTE_LINEAGE`, and platforms without a readable process environment. When the room has a workspace id, each reap records a `client_reaped` diagnostic with the killed pids, the client counts before and after, and settlement or timeout. A reap that does not settle prints `rimz: Zellij predecessor cleanup did not settle; attaching anyway` and attaches.
 
@@ -178,7 +178,7 @@ supervise_remote
 
 ### Proving the transport
 
-The background master proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. RimZ launches `SshAttachPlan::master` (`ssh -M -N -o BatchMode=yes`, stderr piped) on the control socket `<runtime home>/rimz/link/link-<pid>.sock` (`link::validated_control_path`, which refuses a path over the socket length limit). It then runs `ssh -S <socket> -O check` every 200ms with a 500ms timeout. On the initial connection, a `Path` target next runs `test -d` over the same socket. Exit `1` is the one conclusive missing-path result, and any other exit defers to the normal attach. The visible `ssh -t` reuses the socket.
+The background master proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. RimZ launches `SshAttachPlan::master` (`ssh -M -N -o BatchMode=yes`, stderr piped) on the control socket `<runtime home>/rimz/link/link-<pid>.sock` (`link::validated_control_path`, which refuses a path over the socket length limit). It then runs `ssh -S <socket> -O check` every 200ms with a 500ms timeout. On the initial connection, a `Path` target next runs `test -d` over the same socket (`SshAttachPlan::path_preflight`). Exit `1` is the one conclusive missing-path result: the connect fails with exit `67` and the path fix before the panel hands off. Any other exit, or a preflight that cannot start, defers to the normal attach, whose snippet guard checks again. The visible `ssh -t` reuses the socket.
 
 `MasterState` in `cli/remote/supervisor.rs` has three variants, and each tick yields one outcome:
 
@@ -197,7 +197,7 @@ The pinned SSH options keep the attach alive only while the master is. The hidde
 
 A batch-mode master cannot answer a password, two-factor, or host-key prompt. On the initial connection, a master child that exits with stderr that `transport_failure` does not recognize releases the panel for exactly one foreground interactive attach. A master that times out never does. The fallback inherits stderr, so authentication prompts, banners, and host-key warnings stay usable.
 
-A failure in that attach is fatal, so RimZ never loops a password prompt. The exception is an established `255`, which enters recovery. With no confirmed master, `settle` gets no evidence, and the attach is itself the master (`ControlMaster=auto`), so `~.` there ends the whole connection and reads exactly as a drop. Recovery stays batch-only and retries until Ctrl-C.
+A failure in that attach is fatal, so RimZ never loops a password prompt. The exception is an established `255`, which enters recovery. With no confirmed master, `settle` gets no evidence, and the attach is itself the master (`ControlMaster=auto`), so `~.` there ends the whole connection and reads exactly as a drop. Its stderr is inherited, so `attach_interrupted` never sees `Killed by signal 2.` either: a Ctrl-C that kills the remote command after establishment also reads as a drop and enters recovery. Recovery stays batch-only and retries until Ctrl-C.
 
 ### The handoff
 
@@ -223,7 +223,7 @@ A one-shot `--no-reconnect` attach runs no relay. It owns the alternate-scroll (
 
 ### Classifying the end
 
-`ReconnectState::settle` turns a finished `ssh` into a `Verdict`, checking rows in this order. `attach_interrupted` checks the Ctrl-C row before `settle` runs. The evidence is `(control alive, lived past gatetime)`, supplied only when a master exists.
+`ReconnectState::settle` turns a finished `ssh` into a `Verdict`, checking rows in this order. `attach_interrupted` checks the Ctrl-C row before `settle` runs, and only when the relay captured stderr (an attach over a confirmed master). The evidence is `(control alive, lived past gatetime)`, supplied only when a master exists.
 
 | Exit | Evidence | Verdict |
 | --- | --- | --- |
@@ -234,7 +234,7 @@ A one-shot `--no-reconnect` attach runs no relay. It owns the alternate-scroll (
 | `255` | established, master alive (process running and `-O check` passes) | `CleanExit`: the session closed without an exit status over a live connection, as `~.` does, whatever the gatetime. |
 | `255` | established, and the master ended, the check failed, or there is no evidence | `Retry`: enter background recovery. |
 | other nonzero | established, and the master ended or the check failed | `Retry`: SSH liveness outranks the attach status. |
-| other nonzero | master alive, and the attach lived past gatetime | `Reattach`: replace only the multiplexer client over the existing SSH connection. |
+| other nonzero | master alive, and the attach lived past gatetime | `Reattach`: print `rimz: remote session on <host> disconnected — reattaching` and replace only the multiplexer client over the existing SSH connection. |
 | any other status | anything else | `Fatal`: an immediate remote room or authentication failure. |
 | signal death | any | `Fatal`: something killed `ssh` deliberately. |
 
@@ -252,7 +252,7 @@ A session counts as established once its link probe receives the first ack, once
 
 ### The reply fence
 
-Before every replacement attach, `settle_terminal_replies` fences off replies addressed to the dead SSH generation. It puts the tty in raw mode, writes a DSR status query (`ESC[5n`) to stderr, and discards input one byte at a time through the terminal's status answer (`ESC[0n`). Terminals answer queries in order, so every DA1, DA2, or XTVERSION reply for the dead generation comes before the fence reply, and type-ahead after it reaches the replacement byte-exact. Without the fence, tmux passes a duplicate reply to the focused pane as keystrokes. The fence uses DSR because the dead client's outstanding DA1 reply would be indistinguishable from a DA1 fence reply.
+Before every replacement attach, `settle_terminal_replies` fences off replies addressed to the dead SSH generation. It puts the tty in raw mode, writes a DSR status query (`ESC[5n`) to stderr, and discards input one byte at a time through the terminal's status answer (`ESC[0n`, or `ESC[3n` from a terminal that reports a malfunction, as `StatusReplyScanner` matches both). Terminals answer queries in order, so every DA1, DA2, or XTVERSION reply for the dead generation comes before the fence reply, and type-ahead after it reaches the replacement byte-exact. Without the fence, tmux passes a duplicate reply to the focused pane as keystrokes. The fence uses DSR because the dead client's outstanding DA1 reply would be indistinguishable from a DA1 fence reply.
 
 The fence has three bounds:
 
@@ -270,7 +270,7 @@ Every session end runs one fixed sequence, in `run_ssh_session` and `RelayOutput
 2. Restore the termios snapshot.
 3. Resolve the panel guard's terminal modes without flushing its captured logs. If the host never entered the alternate screen, the guard restores its modes. Otherwise it is disarmed without writing terminal modes.
 4. Leave the alternate screen when the relay's tracked screen is alternate or unknown.
-5. Write `EMULATOR_RESET`. It disables mouse, focus, and paste reporting and resets the scroll region while it keeps the cursor, with no unconditional alternate-screen leave or cursor move.
+5. Write `EMULATOR_RESET` (in `remote/tty.rs`). It pops kitty keyboard enhancement, disables bracketed paste, focus, and mouse reporting, enables autowrap, shows the cursor, resets the scroll region inside a cursor save and restore, resets SGR, and selects the normal keypad. It carries no alternate-screen leave and no cursor move.
 6. Replay captured logs to stderr on the main screen from column 0, then any unpainted mux tail behind a separator, then the local end line. A CRLF is supplied wherever those writes leave an unfinished line.
 
 While a panel guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame. When the connect showed a panel, the relay keeps that log capture for the whole session, even after host speech steps off the panel, so step 6 replays it. A connection that lands inside the grace shows no panel and captures nothing, so its warnings write live through the multiplexer's frame. Fatal failures return immediately with their error in scrollback, without waiting for input.
@@ -286,9 +286,9 @@ While a panel guard owns the terminal, the tracing writer buffers warnings inste
 
 `wait_for_master` in `cli/remote/supervisor.rs` builds a fresh pacer for each wait, the initial connect and every recovery. Both ladders and the flat window therefore count from the start of the current wait and start over after every lost attach, however long the link has been flapping. Within a wait, two edges reset both ladders and schedule an immediate attempt: a down-to-up checkpoint transition, and a change in the local route fingerprint. The fingerprint is the source address the kernel selects for a UDP route lookup toward `1.1.1.1:443`, and the lookup sends no packet.
 
-Endpoint discovery (`resolve_dial_plan`) runs once at supervisor startup. `ssh -G -- <destination>` reports the effective `hostname` and `port` after user config applies, and `parse_dial_plan` turns them into a `DialPlan`. A configured `ProxyJump` or `ProxyCommand` yields no plan, because a direct dial would not test the path SSH uses. A failed query or unparseable output also yields none. Without a plan there is no Server checkpoint and no zombie guard, and the internet checkpoint and route fingerprint pace attempts alone. DNS resolution stays per-dial, so a network change can supply a fresh address.
+Endpoint discovery (`resolve_dial_plan`) runs once per connect, in `LinkSupervisor::connect`, for terminal and web connects alike. `ssh -G -- <destination>`, bounded at five seconds (`SSH_CONFIG_QUERY_TIMEOUT`), reports the effective `hostname` and `port` after user config applies, and `parse_dial_plan` turns them into a `DialPlan`. A configured `ProxyJump` or `ProxyCommand` yields no plan, because a direct dial would not test the path SSH uses. A failed query or unparseable output also yields none. Without a plan there is no Server checkpoint and no zombie guard, and the internet checkpoint and route fingerprint pace attempts alone. DNS resolution stays per-dial, so a network change can supply a fresh address.
 
-During initial connect and during an outage, the reachability workers run every second (`RIMZ_REMOTE_DIAL_MS`). Each round samples the route fingerprint, dials the endpoint with a two-second TCP timeout (`DIAL_TIMEOUT`), and, while the panel is shown, fetches the internet checkpoint with a one-second HTTP timeout. Before each dial, a packet-free route lookup finds the owning local interface. `is_tun_interface` treats a name starting with `tun`, `utun`, `wg`, or `tailscale`, and any point-to-point interface, as reachable without a dial, because a direct probe can blackhole over such a route while SSH succeeds through it.
+During initial connect and during an outage, the reachability workers run every second (`RIMZ_REMOTE_DIAL_MS`). Each round samples the route fingerprint, dials the endpoint with a two-second TCP timeout (`DIAL_TIMEOUT`), and, while the panel is shown, fetches the internet checkpoint with a one-second HTTP timeout. A plain-line connect has no internet checkpoint, so the Server dial and the route fingerprint pace it alone. Before each dial, a packet-free route lookup finds the owning local interface. `is_tun_interface` treats a name starting with `tun`, `utun`, `wg`, or `tailscale`, and any point-to-point interface, as reachable without a dial, because a direct probe can blackhole over such a route while SSH succeeds through it.
 
 These workers drive presentation and pacing and never decide truth. The background master stays the end-to-end proof.
 
@@ -305,22 +305,22 @@ These workers drive presentation and pacing and never decide truth. The backgrou
 
 An interactive terminal gets a full-screen panel for the initial connection and for each outage, shown after a 500ms grace (`RECOVERY_GRACE`). `panel_allowed` falls back to plain stderr lines when stdout is not a terminal, `RIMZ_NO_PROGRESS` is `1` or `true`, `TERM` is `dumb`, or an agent owns the terminal.
 
-The panel has four rows, one per pipeline stage. Network rows hold their last settled result across attempts, including a regression to unreachable. The last row stays present throughout, so the centered layout is stable at handoff.
+The panel has up to four rows, one per pipeline stage. Network rows hold their last settled result across attempts, including a regression to unreachable. The last row stays present throughout, so the centered layout is stable at handoff.
 
 | Row | Checkpoint |
 | --- | --- |
-| Internet | `GET http://cp.cloudflare.com/generate_204` returning status `204`. |
+| Internet | `GET http://cp.cloudflare.com/generate_204` returning status `204`, with no redirects followed. Omitted when `RIMZ_REMOTE_INTERNET_PROBE` is empty, `0`, or not an HTTP or HTTPS URL. |
 | Server | The effective SSH endpoint from `ssh -G`. Omitted when there is no dial plan. |
 | SSH session | The next master attempt. |
 | Multiplexer (`Web tunnel` under `--web`) | Waiting until the master confirms, then `attaching…` (`opening…` for the web tunnel). |
 
 `StageStatus::Suspect` is the one non-obvious status. Once an SSH attempt has failed, a Server row that still answers TCP reads yellow with `answers TCP · SSH failing`, instead of green beside a failing connection. A TUN route reads `via TUN <interface> · TCP check skipped`, and becomes `via TUN <interface> · SSH failing` under the same condition.
 
-Exactly one row animates: the Internet row while waiting for the network, the SSH session row while a master connects, and the last row after confirmation. The active phase, countdown, and final OpenSSH stderr line fold into that row. A dim header carries the attempt number, elapsed time, and `Ctrl-C stops`. The initial wording says `Connecting`, and recovery says `Connection lost`. The block is centered, with left-aligned rows and fixed label columns.
+Exactly one row animates: the Internet row while waiting for the network, the SSH session row while a master connects, and the last row after confirmation. The active phase, countdown, and final OpenSSH stderr line fold into that row. The headline reads `⚡ Connecting to <host>` on the initial connection and `⚡ Connection to <host> lost` in recovery, above a dim line with the attempt number, elapsed time, and `Ctrl-C stops`. Once the master confirms, it turns green as `⚡ Connected to <host>`. The outage state (elapsed time and attempt count) lives on `LinkSupervisor` and spans every failed session until one is established, while the pacer restarts with each wait. The block is centered, with left-aligned rows and fixed label columns.
 
 Once shown, the panel stays at least 1.5s (`RECOVERY_MIN_DISPLAY`), so a fast reconnect spends the remaining hold on the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, a local ✓, or a handoff frame. Fatal failures release the panel and return their error and fix directly to scrollback, after the host startup text the relay surfaced.
 
-Ctrl-C is polled as a terminal event in raw mode while the panel owns the terminal. It kills a pending master, restores the terminal, prints `rimz: connect to <host> stopped` (or `reconnect`) with the last error, and stops the supervisor. Once SSH owns the terminal, OpenSSH reports a remote command interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`, which `attach_interrupted` recognizes before transport classification.
+Ctrl-C is polled as a terminal event in raw mode while the panel owns the terminal. It kills a pending master, restores the terminal, prints `rimz: connect to <host> stopped` (or `reconnect`) with the last error, and stops the supervisor. Once SSH owns the terminal, OpenSSH reports a remote command interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`, which `attach_interrupted` recognizes before transport classification when the stderr was captured ([the interactive fallback](#the-interactive-fallback) is the exception).
 
 ## Link health
 
@@ -330,7 +330,7 @@ When reconnect is enabled, the supervisor runs a long-lived probe stream over th
 ssh -S <control-sock> -o BatchMode=yes -- <host> '<PATH repair>; exec rimz remote link-stats ingest --session <name>|--dir <path>'
 ```
 
-The local side writes one JSON line every two seconds (`LINK_PROBE_INTERVAL`), plus a stats-refresh line whenever the displayed RTT changes. The remote `ingest` replies with one JSON ack per line and republishes a sidecar file. A stream that does not start on a confirmed master first waits for `control_check_spec` to succeed: `ssh -S <path>` without `-O check` would open a fresh TCP connection when the socket is absent and measure a link nobody uses.
+The local side writes one JSON line every two seconds (`LINK_PROBE_INTERVAL`), plus a stats-refresh line whenever the displayed RTT changes. The remote `ingest` replies with one JSON ack per line and republishes a sidecar file. A session's first stream skips this wait only when it starts on a confirmed master. Every other stream, the interactive fallback's first and every respawn, first waits for `control_check_spec` to succeed: `ssh -S <path>` without `-O check` would open a fresh TCP connection when the socket is absent and measure a link nobody uses.
 
 ### Protocol
 
@@ -362,7 +362,7 @@ Each attach session starts its own probe thread (`probe_loop`) with a fresh `Lin
 | Elapsed reaches gatetime | Marks established. | `Restore`, when the session began during an open outage |
 | `FirstAck` | Marks established and confirmed, clears the zombie watch. | `Restore`, when an outage was open |
 | `Blackout(d)` | Arms the zombie watch, opens the outage. | `NotifyBlackout(d)`, once per outage |
-| `Recovered` | Clears the zombie watch. | `Restore` |
+| `Recovered` | Clears the zombie watch. | `Restore`, when an outage was open |
 | `transport_lost` | Opens the outage. | `NotifyTransportLoss`, once per outage |
 | Zombie watch armed and established | Schedules the next check. | `VerifyZombie` |
 | `finish` | Settles an exited child. | none |
@@ -373,7 +373,7 @@ Each attach session starts its own probe thread (`probe_loop`) with a fresh `Lin
 
 A suspended laptop or a NAT rebind can leave an SSH child holding the tty on a transport that will never carry another byte. OpenSSH keepalives (`ServerAliveInterval=5`, `ServerAliveCountMax=3`) reach exit `255` in roughly fifteen seconds for a hard loss, but a zombie transport can outlive them.
 
-`verify_zombie` replaces the session only when three conditions hold: the session is established, its probe stayed silent past the blackout threshold, and a fresh endpoint dial succeeds (a TUN route satisfies the dial without one). If any one fails, RimZ waits, because a slow link and a dead link look identical from the blackout alone. When all three hold, RimZ kills the child with `SIGKILL` so the replacement can claim the terminal, and prints `rimz: link to <host> confirmed dead`. The guard needs a dial plan and a nonzero dial cadence, so proxied configurations, `--no-reconnect`, disabled probes, probe version skew, and a stream that never acked rely on OpenSSH keepalive death alone.
+`verify_zombie` replaces the session only when three conditions hold: the session is established, its probe stayed silent past the blackout threshold, and a fresh endpoint dial succeeds (a TUN route satisfies the dial without one). If any one fails, RimZ waits, because a slow link and a dead link look identical from the blackout alone. When all three hold, RimZ kills the child with `SIGKILL` so the replacement can claim the terminal, prints `rimz: link to <host> confirmed dead — host reachable, session silent; reconnecting now`, and enters recovery. While the watch stays armed, the check repeats at the dial cadence (one second by default). The guard needs a dial plan and a nonzero dial cadence, so proxied configurations, `--no-reconnect`, disabled probes, probe version skew, and a stream that never acked rely on OpenSSH keepalive death alone.
 
 ### Publication and freshness
 
@@ -406,7 +406,7 @@ Alerts split across two delivery paths, by who can still reach the user. The del
 
 The local supervisor owns outage alerts, because a dead link cannot rely on the remote-rendered sidebar. Confirmed link-lost and link-restored edges emit terminal-local OSC and BEL plus notification handlers. A probe blackout emits the terminal-local signals only, because it is a local stall and not a confirmed drop.
 
-The remote sidebar owns degraded-but-alive links. They surface through the footer badge alone and raise no bell or handler. `LinkNotificationState` in `sidebar/notify.rs` still bounds a health episode for the record: ten seconds of fresh degraded or bad stats opens one, thirty seconds of fresh good stats closes it, and stale stats pause both clocks. Each edge writes a `link_alert` diagnostic carrying the tier, RTT, miss percentage, episode start, and recovery duration.
+The remote sidebar owns degraded-but-alive links. They surface through the footer badge alone and raise no bell or handler. `LinkNotificationState` in `sidebar/notify.rs` still bounds a health episode for the record: ten seconds of fresh degraded or bad stats opens one, thirty seconds of fresh good stats closes it, and stale stats pause both clocks. An expired or missing sidecar closes an open episode at once. Each edge writes a `link_alert` diagnostic carrying the tier, RTT, miss percentage, episode start, and recovery duration.
 
 ## Port auto-forwarding
 
@@ -443,7 +443,7 @@ The laptop appends a `port_forward` assist for each report-driven SSH open attem
 
 `run_supervised_web` creates a `LinkSupervisor`, which establishes the initial master through `wait_for_master` with a Web tunnel row in place of Multiplexer. `WebRounds` keeps the relay port and target together and runs each round with either a master control forward or an owned tunnel child. Each round runs three steps over the confirmed master:
 
-1. Run remote `rimz web open --print --json` as a non-PTY one-shot with stderr inherited. A prep exit of `255` is a transport failure and enters recovery. `127`, `65`, `66`, and `67` get the same fatal messages as terminal attach. Any other failure aborts.
+1. Run remote `rimz web open --print --json` as a non-PTY one-shot with stderr inherited. A prep exit of `255` is a transport failure: it enters recovery when the round has a confirmed master, and is fatal in the masterless round below. `127`, `65`, `66`, and `67` get the same fatal messages as terminal attach. Any other failure aborts.
 2. Reserve a fresh ephemeral local port and install `-L 127.0.0.1:<ephemeral>:127.0.0.1:<tunnel_port>` through `ssh -O forward` on the master. The first round binds the user-facing relay port, and later rounds retarget the relay at the new forward.
 3. On the first round, print the URL to stdout, open the browser best-effort, and print `rimz: tunnel up` to stderr. Later rounds print `rimz: tunnel to <host> restored`. Then wait on the master until Ctrl-C or transport exit.
 
@@ -469,7 +469,7 @@ The table lists the module's test overrides. Every other duration is fixed, so a
 
 | Variable | Controls |
 | --- | --- |
-| `RIMZ_SSH_BIN`, `RIMZ_INFOCMP_BIN` | Binary overrides. `tests/fixtures/ssh-trace` is the standard shim. |
+| `RIMZ_SSH_BIN`, `RIMZ_INFOCMP_BIN` | Binary overrides. `crates/rimz/tests/fixtures/ssh-trace` is the standard shim. |
 | `RIMZ_REMOTE_GATETIME_MS` | Establishment threshold. |
 | `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS` | Background master connect and total deadlines. |
 | `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS` | Retry pacing. |
