@@ -22,7 +22,8 @@ The target names a channel or one agent, using the [agent-address grammar](./age
 | --- | --- |
 | none | The current channel. Outside a channel, every channel in the workspace. |
 | `'#<channel>'` | That channel. |
-| `@all` | Every channel in the workspace, with each handle suffixed by its channel. |
+| `'#main'` | The root lane, labelled `#main`. The project's own channel name and its root path select it too. |
+| `@all` | Every channel in the workspace, with each handle suffixed by its channel. With `-w <channel>`, that channel. |
 | `@all#<channel>` | That channel. |
 | `@<handle>` | One agent, looked up in the current channel. |
 | `@<handle>#<channel>` | One agent, looked up in that channel. |
@@ -31,13 +32,13 @@ The target names a channel or one agent, using the [agent-address grammar](./age
 | a session id | That agent session, in whatever channel it ran. |
 | `run_<id>` | The agent session bound to that supervised run. Fails with `run <id> has not bound an agent session yet` until the run's agent registers. |
 
-`-w <channel>` sets the channel for a target that names none. A target whose `#channel` disagrees with `-w` is an error.
+`-w <channel>` sets the channel for a target that names none. A target whose `#channel` disagrees with `-w` fails with ``target `@codex#api` names channel `#api` but --worktree names `web` ``.
 
 Quote a target that starts with `#`. An unquoted `#` starts a comment in bash, and in zsh with `interactivecomments`, so `rimz transcript #cli-docs` runs as `rimz transcript` and shows the current channel.
 
 ### Channel views
 
-A channel view merges the transcript of every root agent in the channel into one chat log, headed by a `#<channel>` line. Children launched through `rimz subagents` are not root agents: their conversations stay out of channel and `@all` views, in human and `--json` output alike. Read a child by targeting it.
+A channel view merges the transcript of every root agent in the channel into one chat log. Children launched through `rimz subagents` are not root agents: their conversations stay out of channel and `@all` views, in human and `--json` output alike. Read a child by targeting it.
 
 ### One agent
 
@@ -46,10 +47,10 @@ An agent view shows the messages the agent sent or received, including its messa
 The target resolves to exactly one agent session, in this order:
 
 1. A `run_<id>` resolves to the run's bound session.
-2. The live agent resolver runs, just as for `pane` and `agents show`. An exact session id wins across channels; other selectors use the [current channel](agents.md#addressing-agents). Several live matches refuse with addresses to retype. A resolved live agent owns the view even when it has no transcript lines.
+2. The live agent resolver runs, just as for `pane` and `agents show`. An exact session id wins across channels; other selectors use the [current channel](agents.md#addressing-agents). Several live matches refuse with addresses to retype. A resolved live agent owns the view even when it has no transcript lines. `@me` never falls through to step 3: from outside an agent pane, or for an ended or still-starting caller, it fails.
 3. Only a live miss searches historical transcript identities. An exact session id wins across channels. Otherwise handle, provider kind, name, profile, role, or session-id prefix matches within the channel. Matches sharing one handle and channel select the latest transcript activity; distinct handles or channels refuse. Historical suggestions use `@handle#channel`, or the full session id when a live agent shadows that address, so retyping selects the historical session.
 
-No match fails with the live resolver's error, naming `rimz agents list` or the channel where the agent runs. This also applies when the log is empty.
+No match fails with the live resolver's error, naming `rimz agents list` or the channel where the agent runs. This also applies when the log is empty. When the live miss found no agent of that name in any channel and the name is a configured launch profile, command, or team, the error says so: ``` `coder` is a launch profile, not a running agent; run `rimz agents list` to see live agents ```.
 
 Targeting a launched child shows the child's own conversation, with its launch brief attributed to the parent as `@parent → @child`. The parent's view leaves its children's conversations out.
 
@@ -61,7 +62,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 #cli-docs has conversations in several workspaces: /home/me/api, /home/me/web; run from one of them or pass --root <path>
 ```
 
-`--root <path>` pins the workspace and skips the search.
+`--root <path>` pins the workspace and skips the search. The root lane (`#main` and its aliases) is never searched for elsewhere.
 
 ## Flags
 
@@ -79,7 +80,13 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 
 ## Prior sessions
 
-Default views read only the last 30 days. When older weekly files were skipped, a faint stderr hint names a shell-quoted `--all` command that repeats your target, `-w`, and `--root`. The hint also appears for an empty scope; it says older workspace history exists, not that the selected scope has older entries. When the prior-session note below prints, it already names the `--all` command, so `rimz transcript` leaves the older-history hint out. `--all` reads every retained file. Channel discovery across workspaces still uses the last 30 days; pass `--root <path> --all` to read an older channel in a known workspace. Follow stays windowed and conflicts with `--all`.
+The log is stored in weekly files. A default view reads every weekly file that overlaps the last 30 days, whole, so it can show entries up to a week older than that. When older weekly files were skipped, a faint line on stderr names a shell-quoted `--all` command that repeats your target, `-w`, and `--root`:
+
+```text
+⋯ older history exists — rimz transcript '#cli-docs' --all
+```
+
+The hint also appears for an empty scope: it says older workspace history exists, not that the selected scope has older entries. While following, the command always carries `--root <project root>`. When the prior-session note below prints, it already names the `--all` command, so the older-history hint is left out. `--all` reads every retained file. Channel discovery across workspaces uses the same 30-day window; pass `--root <path> --all` to read an older channel in a known workspace. Follow stays windowed and conflicts with `--all`.
 
 By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. A message written before that registration but delivered after it arrived in the living conversation, so it stays in the default view. Earlier entries stay in the log, and a note on stderr counts them:
 
@@ -87,9 +94,9 @@ By default a view starts at the current live cohort: the earliest registration a
 ⋯ 12 earlier entries from a prior session (Fri, Sep 11 2026) — rimz transcript --all
 ```
 
-`--all` prints the earlier entries first, then a `Live · <when>` rule before the current cohort's entries. When nothing in scope is live, or every entry predates the cohort, the scope within the chosen history window prints without a rule.
+`--all` prints the earlier entries first, then a faint rule before the current cohort's entries: `Live · earlier today · 14:02` when its first entry is from today, otherwise `Live · Fri, Sep 11 2026`. The note's date in parentheses takes the same two forms, for the newest earlier entry. When nothing in scope is live, or every entry predates the cohort, the scope within the chosen history window prints without a rule.
 
-The suggested command repeats the target, `-w`, and `--root` you supplied, shell-quoted for pasting. The note is withheld when `-n` drops any current-session entry, and while following.
+The suggested command repeats the target, `-w`, and `--root` you supplied, shell-quoted for pasting. The note is withheld when the tail (`-n` or the default bound of `20`) drops any current-session entry, and while following.
 
 ## Read the human view
 
@@ -113,7 +120,9 @@ Review docs/reference/cli/transcript.md against the transcript CLI code.
 
 ### Headers and grouping
 
-Each header names the sender, then `→` and the receiver when there is one, then the local time as `HH:MM`. Human senders show as the `user` chip, and RimZ itself as `rimz`. A channel view drops the `#channel` suffix from handles. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
+A view of one channel, and an agent view whose agent has a channel, opens with a `#<channel>` line and drops the `#channel` suffix from handles. A view across channels (`@all`, or no target outside a channel) has no such line, and each handle keeps its suffix.
+
+Each header names the sender, then `→` and the receiver when there is one, then the time as `HH:MM` in the configured [`timezone`](../../guide/configuration.md#sidebar-rendering), else the system zone. Human senders show as the `user` chip, and RimZ itself as the `rimz` chip. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
 
 A message's time is its creation time when known, otherwise its recorded time. When delivery trails creation by at least 60 seconds, the header reads `12:41 · delivered 12:45`. Delivery on a different local date includes that date, as in `23:58 · delivered Mon, Jun 29 2026 · 00:02`. Such a line gets its own header, and the next line cannot share it. Older entries without a recorded creation time keep their original timestamp.
 
@@ -131,7 +140,7 @@ On a styled terminal, bodies render markdown (headings, emphasis, links, lists, 
 
 ### Asks
 
-A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — user`. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
+A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — <answerer>`, followed by ` · “<note>”` when the answer carries a note. A choice outside the options prints as `● other: <text>`, and a question without options shows the answer text after `●`. An ask without structured questions prints its text, then the answer. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
 
 An answer stays with its ask, even when another channel's conversation intervenes. If the question is no longer in the log, the answer prints as its own card under a `user → @agent  HH:MM` header, with the recorded question and `● <chosen> — user`. An answer without recorded question text prints as a plain body instead. Following reprints the ask card when its answer arrives.
 
@@ -173,9 +182,9 @@ The count can exceed `20` when a thread keeps its opener. No bound note prints w
 
 ## Empty results
 
-All views, including `--json` and `--follow`, require an existing room. Outside a room the command exits nonzero with `no room at <root>: run \`rimz start\` there, or pass --root <room>` before reading or following anything.
+All views, including `--json` and `--follow`, require an existing room. Outside a room the command exits `1` with ``no room at <root>: run `rimz start` there, or pass --root <room>`` before reading or following anything.
 
-A resolved live agent with nothing to show exits 0 and prints `@handle#channel has no messages yet (launched 37s ago, no turn opened)` on stderr (without the suffix when it has no channel). The age uses its recorded launch time; once a turn has opened, the `no turn opened` clause disappears. Without a recorded launch time, it prints `@handle#channel has no messages yet`. A historical focus still reads `No conversation for @handle#channel yet.`. When entries exist but the human view hides them all as RimZ automation traffic, it prints `<scope> shows only RimZ traffic: N entries hidden (--json shows them)` instead. A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`. An unknown agent is an error, not an empty conversation.
+A resolved live agent with nothing to show exits 0 and prints `@handle#channel has no messages yet (launched 37s ago, no turn opened)` on stderr (without the suffix when it has no channel). The age uses its recorded launch time; once a turn has opened, the `no turn opened` clause disappears. Without a recorded launch time, it prints `@handle#channel has no messages yet`. An agent found only in history reads `No conversation for @handle#channel yet.`. When entries exist but the human view hides them all as RimZ automation traffic, it prints `<scope> shows only RimZ traffic: N entries hidden (--json shows them)` instead. A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`, plus `"older_omitted": true` when older weekly files were skipped. An unknown agent is an error, not an empty conversation.
 
 With `--follow`, an empty first view prints nothing and waits. Following honours `-n` for the first view and keeps the selected channel and `--flat` rendering for subsequent entries, until interrupted or the output pipe closes.
 
@@ -190,7 +199,7 @@ With `--follow`, every entry is one JSON object per line, including the first vi
 | `channel` | When the view has a channel | The channel name, without `#`. |
 | `focus` | Agent targets only | The focal agent's handle. |
 | `entries` | Always | The entries, described below. |
-| `archived_count` | When prior-session entries are left out | How many entries within the 30-day window were archived, including ones the human view hides. |
+| `archived_count` | When prior-session entries are left out | How many entries read were from before the current live cohort and left out, including ones the human view hides. |
 | `older_omitted` | When older weekly files were skipped | `true`; `--all` reads that older retained history too. Present even for an empty result, absent with `--all`. |
 
 Each entry carries these fields. A field shown as optional is absent when empty or false.
@@ -207,10 +216,24 @@ Each entry carries these fields. A field shown as optional is absent when empty 
 | `reply_to` | Optional. Ids of the messages that opened the turn this entry belongs to. |
 | `error` | Optional. `true` for a provider error. |
 | `questions` | Optional. An ask's questions: `question`, `options` (a label string or `{label, description, caution}`), `multi_select`, `has_option_previews`. |
-| `answers` | Optional. An answer's picks: `question`, `chosen`, `note`. |
+| `answers` | Optional. An answer's picks: `question`, `chosen` (a list of strings), `note`. |
 | `stage` | Optional. A flip: `team`, `from`, `to`, `owner`, `by`. |
 
-Entries carry no kind field. `origin` is additive; `from` keeps its string shape and sender vocabulary, but system prompts and commands no longer fall back to `user`. A system `/compact` carries `origin: "harness"`; a command requested by a human or agent keeps that caller's origin. Agent replies remain `origin: "agent"` even when the human view hides them with a harness opener. `reply_to` records causality as delivered. The human view builds threads from it, but only from turn output and replies back to the sender, so two entries linked in JSON can print in separate exchanges.
+Entries carry no kind field. A system prompt or command reads `from: "rimz"`, never `user`. A flip reads `user` when a human flipped it. A system `/compact` carries `origin: "harness"`; a command requested by a human or agent keeps that caller's origin. Agent replies remain `origin: "agent"` even when the human view hides them with a harness opener. `reply_to` records causality as delivered. The human view builds threads from it, but only from turn output and replies back to the sender, so two entries linked in JSON can print in separate exchanges.
+
+## Exit codes
+
+The command exits `0` when it prints a view, including an empty one, and while following it runs until interrupted. It exits `2` for an invalid command line, such as `--follow` with `--all` or a non-numeric `-n`. Every refusal below exits `1`, with the message on stderr.
+
+| Message | Cause |
+| --- | --- |
+| ``no room at <root>: run `rimz start` there, or pass --root <room>`` | No room exists for the resolved workspace. |
+| `#<channel> has conversations in several workspaces: ...` | An explicit channel matches more than one other workspace; see [Channels in other workspaces](#channels-in-other-workspaces). |
+| ``channel target must be `#<name>` `` | The target is a bare `#`. |
+| ``channel suffix in target `<target>` must name a channel`` | The target ends in `#`, such as `@codex#`. |
+| ``target `<target>` names channel `#<channel>` but --worktree names `<flag>` `` | The target's channel and `-w` disagree. |
+| `run <id> has not bound an agent session yet` | A `run_<id>` target whose agent has not registered. |
+| The live resolver's no-match or ambiguity error | An agent target matched nothing, or matched several; see [One agent](#one-agent). |
 
 ## See also
 
