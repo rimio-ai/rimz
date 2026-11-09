@@ -241,7 +241,7 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
     rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
     assert_eq!(
         rig.view().ui().frame_ms,
-        1_000,
+        render::FrameTime::from_millis(1_000),
         "paint uses scenario elapsed time"
     );
     let row = rig.state.pane.ui.interactions.line_for_row(0).unwrap() as u16;
@@ -274,4 +274,96 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
     let wall = LoopClock::wall();
     wall.focus(|| {});
     assert_eq!(wall.focus_calls.load(Ordering::Relaxed), 1);
+}
+
+fn effect_rig() -> (Rig, FrameOutput, LoopClock) {
+    let (mut rig, output, clock) = compacting_rig();
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.context
+            .current
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap()
+            .compacting = false;
+    });
+    (rig, output, clock)
+}
+
+fn spend_at(rig: &mut Rig, usd: f64) {
+    rig.state.with_view_for_test(Route::READ, |pane, v| {
+        v.context.current.today_spend_live_usd = Some(usd);
+        v.context
+            .current
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap()
+            .delegated_cost_usd = Some(usd);
+        v.context.fold_spend_rolls(v.state, &pane.clock);
+    });
+}
+
+fn paint_effects(rig: &mut Rig, clock: &LoopClock) {
+    rig.state.pane.dirty = true;
+    rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
+}
+
+#[test]
+fn settled_money_survives_a_long_uptime_grid_raise() {
+    let (mut rig, output, clock) = effect_rig();
+    clock.advance(Duration::from_secs(3_590));
+    spend_at(&mut rig, 1.0);
+    spend_at(&mut rig, 5.0);
+    clock.advance(Duration::from_secs(10));
+    paint_effects(&mut rig, &clock);
+    rig.view().ctx().current.theme.display.refresh_ms = 200;
+    paint_effects(&mut rig, &clock);
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
+    parser.process(&output.0.lock().unwrap());
+    let screen = parser.screen().contents();
+    assert_eq!(
+        screen.matches("$5.00").count(),
+        2,
+        "headline and card stay settled: {screen}"
+    );
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        let now = v.state.frame_ms;
+        let refresh_ms = v.context.current.theme.display.resolved_refresh_ms();
+        assert!(!v.state.tally.any_rolling(now, refresh_ms));
+        assert!(!v.state.cost_rolls.any_rolling(now, refresh_ms));
+        assert!(!v.state.tally.today_usd.flashing(now, refresh_ms));
+        assert!(!v.state.cost_rolls.flashing("agent-1", now, refresh_ms));
+    });
+    assert!(
+        !rig.state.frame_timing().0,
+        "settled money releases its grid"
+    );
+}
+
+#[test]
+fn settled_scrollbar_survives_a_long_uptime_grid_raise() {
+    let (mut rig, _, clock) = effect_rig();
+    clock.advance(Duration::from_secs(3_600));
+    paint_effects(&mut rig, &clock);
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.state.scrollbar.observe(1, v.state.frame_ms);
+        v.state.scrollbar.observe(0, v.state.frame_ms);
+    });
+    clock.advance(Duration::from_secs(3));
+    rig.view().ctx().current.theme.display.refresh_ms = 200;
+    paint_effects(&mut rig, &clock);
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        frame_clock(clock.now(), v.context.anim_start, 200).stamp(v.state);
+        assert!(
+            !v.state.scrollbar.visible(v.state.frame_ms, 200),
+            "the bar stays hidden"
+        );
+    });
+    assert!(
+        !rig.state.frame_timing().0,
+        "settled fade releases the base grid"
+    );
 }

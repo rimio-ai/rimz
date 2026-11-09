@@ -457,7 +457,8 @@ fn visible_scroll_block(
         ScrollbarMode::Always => true,
         ScrollbarMode::Never => false,
         ScrollbarMode::Auto => {
-            scrollbar.moved_from(layout.offset) || scrollbar.visible(view.animation_phase)
+            scrollbar.moved_from(layout.offset)
+                || scrollbar.visible(view.frame_ms, snapshot.theme.display.resolved_refresh_ms())
         }
     };
     if overflow && show_bar {
@@ -1056,7 +1057,7 @@ pub(super) fn top_lines(
         },
         (today_usd, tripped),
         &view.tally,
-        view.animation_phase,
+        (view.frame_ms, snapshot.theme.display.resolved_refresh_ms()),
         inner,
     );
     header.push(spend);
@@ -1204,7 +1205,8 @@ fn scroll_lines_windowed(
         entry_cursor: view.entry_cursor.as_ref(),
         animation_phase: view.cosmetic_phase.unwrap_or(view.animation_phase),
         head_step: view.cosmetic_phase.unwrap_or(view.head_step),
-        money_phase: view.animation_phase,
+        money_ms: view.frame_ms,
+        refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
         cost_rolls: &view.cost_rolls,
         lead_unread: lead_unread_id,
         recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,

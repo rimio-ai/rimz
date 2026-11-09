@@ -45,7 +45,9 @@ use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
-pub(in crate::sidebar_pane) use self::ui_state::{Alert, EntryCursor, UiState, ViewState};
+pub(in crate::sidebar_pane) use self::ui_state::{
+    Alert, EntryCursor, FrameTime, UiState, ViewState,
+};
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
 };
@@ -143,7 +145,7 @@ fn draw_into(
     ui.interactions = composed.interactions;
     view.scrollbar.shift(composed.correction);
     view.scrollbar
-        .observe(composed.visible_scroll_offset, view.animation_phase);
+        .observe(composed.visible_scroll_offset, view.frame_ms);
     view.scroll_ease = composed.scroll_ease;
     view.scroll_ease
         .observe(composed.scroll_offset, view.frame_ms);
@@ -538,13 +540,13 @@ pub(in crate::sidebar_pane) fn pet_motion_enabled(
 }
 
 /// The repaint grid while something on screen moves, `None` when nothing does.
-/// `phase` is the observed animation phase, which the serve loop may take from
-/// the wall clock ahead of `view.animation_phase`.
+/// `frame_ms` is the observed driver-clock time, which the serve loop may sample
+/// ahead of `view.frame_ms`.
 pub(in crate::sidebar_pane) fn animation_interval(
     snapshot: &SidebarSnapshot,
     view: &ViewState,
     ui: &UiState,
-    phase: u64,
+    frame_ms: FrameTime,
     alert_active: bool,
 ) -> Option<Duration> {
     if view.scroll_ease.in_flight() {
@@ -558,21 +560,22 @@ pub(in crate::sidebar_pane) fn animation_interval(
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.
-    if view.help_visible || view.scrollbar.fading(phase) {
+    if view.help_visible || view.scrollbar.fading(frame_ms, refresh_ms) {
         return Some(base);
     }
     let cadence = animation_cadence(snapshot, &theme.animations);
     if visible_delegation_motion(snapshot, view) || cadence == AnimationCadence::Fast {
         return Some(base);
     }
-    // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
+    // The money rolls click once per `CLICK_PHASES` base frames, so a rolling room
     // samples on the matching money grid — one paint per distinct click, and
     // the one-click settle flash can never fall between samples. A fast room
     // (a working spinner) keeps the fast grid; the roll's painted value simply
     // holds across the extra frames. A slow-cadence room drops to the money
     // grid while a climb is in flight — the cosmetic breath repaints
     // idempotently, and the climb window bounds the extra paints.
-    let money_rolling = view.tally.any_rolling(phase) || view.cost_rolls.any_rolling(phase);
+    let money_rolling = view.tally.any_rolling(frame_ms, refresh_ms)
+        || view.cost_rolls.any_rolling(frame_ms, refresh_ms);
     let money_grid = || crate::sidebar::timing::money_animation_frame(refresh_ms, CLICK_PHASES);
     // The dashboard pet paints on its track cadence, but a money climb in the
     // still-visible cockpit must keep sampling on the money grid, so a rolling

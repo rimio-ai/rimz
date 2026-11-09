@@ -749,7 +749,10 @@ fn hidden_mirror_preserves_view_and_arrival_obligations() {
                 .state
                 .inspect_view(|_, v| v.tab_read_dwell_until.is_some())
         );
-        assert!(!arrived.cost_rolls.any_rolling(arrived.animation_phase));
+        assert!(!arrived.cost_rolls.any_rolling(
+            arrived.frame_ms,
+            pair.snapshot.theme.display.resolved_refresh_ms()
+        ));
     }
 }
 
@@ -2547,13 +2550,14 @@ fn arrival_settles_spend_accrued_while_hidden() {
     pair.paint(1);
     let arrived = pair.view(1);
     assert_eq!(arrived.viewing_own_tab, Some(true));
-    let phase = arrived.animation_phase;
+    let now = arrived.frame_ms;
+    let refresh_ms = pair.snapshot.theme.display.resolved_refresh_ms();
     assert!(
-        !arrived.cost_rolls.any_rolling(phase),
+        !arrived.cost_rolls.any_rolling(now, refresh_ms),
         "arrival snaps card cost"
     );
     assert!(
-        !arrived.tally.any_rolling(phase),
+        !arrived.tally.any_rolling(now, refresh_ms),
         "arrival snaps the headline"
     );
     set_cost(&mut pair.snapshot, 9.0);
@@ -2561,7 +2565,7 @@ fn arrival_settles_spend_accrued_while_hidden() {
     pair.paint(1);
     let watched = pair.view(1);
     assert!(
-        watched.cost_rolls.any_rolling(watched.animation_phase),
+        watched.cost_rolls.any_rolling(watched.frame_ms, refresh_ms),
         "a climb seen while watched still rolls"
     );
 }
@@ -2581,16 +2585,17 @@ fn continuously_painted_view_keeps_its_spend_roll_when_moving_tabs() {
     pair.sample(&[(1, 0)]);
     pair.paint(0);
     let before = pair.view(0);
-    let phase = before.animation_phase + 1;
+    let refresh_ms = pair.snapshot.theme.display.resolved_refresh_ms();
+    let now = render::FrameTime::from_millis((before.animation_phase + 1) * u64::from(refresh_ms));
     let row = pair.snapshot.worktree_groups[0].rows[0].id.clone();
-    let display = before.cost_rolls.display(&row, 5.0, phase);
-    assert!(before.cost_rolls.any_rolling(phase));
+    let display = before.cost_rolls.display(&row, 5.0, now, refresh_ms);
+    assert!(before.cost_rolls.any_rolling(now, refresh_ms));
     pair.sample(&[(1, 1)]);
     pair.paint(1);
     let after = pair.view(1);
-    assert!(after.cost_rolls.any_rolling(phase));
+    assert!(after.cost_rolls.any_rolling(now, refresh_ms));
     assert_eq!(
-        after.cost_rolls.display(&row, 5.0, phase),
+        after.cost_rolls.display(&row, 5.0, now, refresh_ms),
         display,
         "moving neither settles nor restarts an ongoing roll"
     );

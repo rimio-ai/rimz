@@ -4,14 +4,14 @@
 //! The animated figure is a [`Roll`]: it remembers where it is painted on
 //! screen and where the latest snapshot says it should be, then sweeps between
 //! the two along an ease-out cubic inside a fixed window — every jump, three
-//! cents or five dollars, lands within [`CLIMB_CLICKS`] clicks on a 200ms
-//! beat. The curve front-loads the motion and flattens into the landing, so
+//! cents or five dollars, lands within [`CLIMB_CLICKS`] clicks on the default
+//! 200ms beat. The curve front-loads the motion and flattens into the landing, so
 //! big first steps decay into penny-sized last clicks onto the exact
 //! two-decimal value, and a small jump simply lands early once rounding
-//! reaches the target. Motion is driven purely by the wall-clock animation
-//! phase ([`super::ViewState::animation_phase`]) — never by the age of the
-//! fetched data — so a roll plays smoothly even when the data behind it is
-//! stale, per the render-thread performance contract.
+//! reaches the target. Motion stamps the driver-clock milliseconds
+//! ([`super::ViewState::frame_ms`]) and counts base frames on the current grid,
+//! never the age of fetched data, so a roll plays smoothly even when the data
+//! behind it is stale, per the render-thread performance contract.
 //!
 //! A roll fires only on an *increase*: a decrease (today's UTC-midnight reset)
 //! and the first observed value both snap, so a figure never plays a sad
@@ -23,10 +23,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Animation phases per roll click. The wall-clock phase advances on the
-/// configured base render grid; the roll clicks on every second phase, so the
-/// default 100ms grid yields a 200ms click — and a room where only money moves
-/// rides the serve loop's matching money grid rather than the fast one.
+use super::FrameTime;
+
+/// Base frames per roll click on the current refresh grid. The roll clicks on
+/// every second base frame, so the default 100ms grid yields a 200ms click —
+/// and a room where only money moves rides the serve loop's matching money
+/// grid rather than the fast one.
 pub(super) const CLICK_PHASES: u64 = 2;
 
 /// The fixed climb window: every jump completes within this many clicks
@@ -67,8 +69,8 @@ pub(in crate::sidebar_pane) struct Roll {
     from_cents: u64,
     /// The value in cents the data says we should reach.
     target_cents: u64,
-    /// Animation phase the current roll began at; `None` until the first value.
-    start_phase: Option<u64>,
+    /// Frame time the current roll began at; `None` until the first value.
+    started_ms: Option<FrameTime>,
 }
 
 impl Roll {
@@ -77,37 +79,42 @@ impl Roll {
     /// an *unchanged* target is a no-op — refolds land on every store wakeup,
     /// and re-anchoring would snap a climb in flight and erase the settle flash
     /// mid-window; a decrease or the first-ever value snaps.
-    fn observe(&mut self, target: f64, phase: u64) {
+    fn observe(&mut self, target: f64, now: FrameTime, refresh_ms: u16) {
         let target_cents = to_cents(target);
-        if self.start_phase.is_some() && target_cents == self.target_cents {
+        if self.started_ms.is_some() && target_cents == self.target_cents {
             return;
         }
-        let snap = match self.start_phase {
+        let snap = match self.started_ms {
             None => true,
             Some(_) => target_cents < self.target_cents,
         };
         self.from_cents = if snap {
             target_cents
         } else {
-            self.value_at_cents(phase)
+            self.value_at_cents(now, refresh_ms)
         };
         self.target_cents = target_cents;
-        self.start_phase = Some(phase);
+        self.started_ms = Some(now);
     }
 
-    /// The value to paint at `phase`, sweeping toward the authoritative
+    /// The value to paint at `now`, sweeping toward the authoritative
     /// `target` from the snapshot. Mid-climb it reads the ease-out curve from
     /// where the figure was painted when the climb began; unseeded (no
     /// `observe` has run — a one-off `draw`, or a test), snapped, or settled,
     /// it is `target` itself. Reading the live target here keeps the corner
     /// correct even on a render path that never folded a roll, with the roll
     /// supplying only the transition. Pure: render reads it without mutating,
-    /// so a frame recomputes at any phase.
-    pub(in crate::sidebar_pane) fn display(&self, target: f64, phase: u64) -> f64 {
+    /// so a frame recomputes at any sample.
+    pub(in crate::sidebar_pane) fn display(
+        &self,
+        target: f64,
+        now: FrameTime,
+        refresh_ms: u16,
+    ) -> f64 {
         let target_cents = to_cents(target);
-        match self.start_phase {
+        match self.started_ms {
             Some(start) if self.from_cents < target_cents => {
-                let clicks = phase.saturating_sub(start) / CLICK_PHASES;
+                let clicks = now.elapsed_frames_since(start, refresh_ms) / CLICK_PHASES;
                 eased_cents(self.from_cents, target_cents, clicks) as f64 / 100.0
             }
             // Unseeded, a snap, or a roll long settled: paint the true figure.
@@ -115,15 +122,15 @@ impl Roll {
         }
     }
 
-    /// The painted cents at `phase` against the roll's own stored target — the
+    /// The painted cents at `now` against the roll's own stored target — the
     /// start point `observe` captures when a fresh climb interrupts one already
     /// in flight.
-    fn value_at_cents(&self, phase: u64) -> u64 {
-        match self.start_phase {
+    fn value_at_cents(&self, now: FrameTime, refresh_ms: u16) -> u64 {
+        match self.started_ms {
             Some(start) => eased_cents(
                 self.from_cents,
                 self.target_cents,
-                phase.saturating_sub(start) / CLICK_PHASES,
+                now.elapsed_frames_since(start, refresh_ms) / CLICK_PHASES,
             ),
             None => self.target_cents,
         }
@@ -144,30 +151,30 @@ impl Roll {
     /// the brief flash, and one trailing clean frame, so the last frame painted
     /// is the settled value rather than a stuck brighten. A snap (`from ==
     /// target`) has no motion, so it never holds the tick.
-    fn rolling(&self, phase: u64) -> bool {
+    fn rolling(&self, now: FrameTime, refresh_ms: u16) -> bool {
         self.from_cents < self.target_cents
             && self
-                .elapsed(phase)
+                .elapsed(now, refresh_ms)
                 .is_some_and(|e| e <= self.clicks_to_settle() + FLASH_CLICKS)
     }
 
     /// Within the brief brighten window just after the figure lands. A snap never
     /// flashes — only a genuine climb earns the "ka-chunk".
-    pub(in crate::sidebar_pane) fn flashing(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn flashing(&self, now: FrameTime, refresh_ms: u16) -> bool {
         if self.from_cents >= self.target_cents {
             return false;
         }
         let settle = self.clicks_to_settle();
-        self.elapsed(phase)
+        self.elapsed(now, refresh_ms)
             .is_some_and(|e| (settle..settle + FLASH_CLICKS).contains(&e))
     }
 
-    /// Clicks elapsed since the climb began — the phase delta on the
+    /// Clicks elapsed since the climb began — base frames on the current
     /// [`CLICK_PHASES`] grid, so `rolling`/`flashing` reason in the same units
     /// as `clicks_to_settle`.
-    fn elapsed(&self, phase: u64) -> Option<u64> {
-        self.start_phase
-            .map(|start| phase.saturating_sub(start) / CLICK_PHASES)
+    fn elapsed(&self, now: FrameTime, refresh_ms: u16) -> Option<u64> {
+        self.started_ms
+            .map(|start| now.elapsed_frames_since(start, refresh_ms) / CLICK_PHASES)
     }
 }
 
@@ -185,15 +192,20 @@ impl TallyAnim {
     /// each data refresh that carries a figure; a refresh without one leaves
     /// the roll untouched, so a transient missing snapshot never snaps the
     /// figure to zero.
-    pub(in crate::sidebar_pane) fn observe(&mut self, today_usd: f64, phase: u64) {
-        self.today_usd.observe(today_usd, phase);
+    pub(in crate::sidebar_pane) fn observe(
+        &mut self,
+        today_usd: f64,
+        now: FrameTime,
+        refresh_ms: u16,
+    ) {
+        self.today_usd.observe(today_usd, now, refresh_ms);
     }
 
     /// Whether the figure is still mid-roll — the serve loop ORs this into its
     /// animation gate so a finished-turn climb plays even when no agent is
     /// running, then lets the loop fall back to the slow data tick once settled.
-    pub(in crate::sidebar_pane) fn any_rolling(&self, phase: u64) -> bool {
-        self.today_usd.rolling(phase)
+    pub(in crate::sidebar_pane) fn any_rolling(&self, now: FrameTime, refresh_ms: u16) -> bool {
+        self.today_usd.rolling(now, refresh_ms)
     }
 }
 
@@ -214,36 +226,52 @@ impl CostRolls {
     pub(in crate::sidebar_pane) fn observe(
         &mut self,
         costs: impl Iterator<Item = (String, f64)>,
-        phase: u64,
+        now: FrameTime,
+        refresh_ms: u16,
     ) {
         let mut seen = HashSet::new();
         for (id, usd) in costs {
             self.rolls
                 .entry(id.clone())
                 .or_default()
-                .observe(usd, phase);
+                .observe(usd, now, refresh_ms);
             seen.insert(id);
         }
         self.rolls.retain(|id, _| seen.contains(id));
     }
 
-    /// The value to paint for `id` at `phase` — the eased sweep toward the
+    /// The value to paint for `id` at `now` — the eased sweep toward the
     /// authoritative `target`, or `target` itself for an unobserved id.
-    pub(in crate::sidebar_pane) fn display(&self, id: &str, target: f64, phase: u64) -> f64 {
+    pub(in crate::sidebar_pane) fn display(
+        &self,
+        id: &str,
+        target: f64,
+        now: FrameTime,
+        refresh_ms: u16,
+    ) -> f64 {
         self.rolls
             .get(id)
-            .map_or(target, |roll| roll.display(target, phase))
+            .map_or(target, |roll| roll.display(target, now, refresh_ms))
     }
 
     /// Whether `id`'s figure is inside its brief settle brighten.
-    pub(in crate::sidebar_pane) fn flashing(&self, id: &str, phase: u64) -> bool {
-        self.rolls.get(id).is_some_and(|roll| roll.flashing(phase))
+    pub(in crate::sidebar_pane) fn flashing(
+        &self,
+        id: &str,
+        now: FrameTime,
+        refresh_ms: u16,
+    ) -> bool {
+        self.rolls
+            .get(id)
+            .is_some_and(|roll| roll.flashing(now, refresh_ms))
     }
 
     /// Whether any card figure is still mid-roll — ORed into the serve loop's
     /// animation gate beside the cockpit tally's.
-    pub(in crate::sidebar_pane) fn any_rolling(&self, phase: u64) -> bool {
-        self.rolls.values().any(|roll| roll.rolling(phase))
+    pub(in crate::sidebar_pane) fn any_rolling(&self, now: FrameTime, refresh_ms: u16) -> bool {
+        self.rolls
+            .values()
+            .any(|roll| roll.rolling(now, refresh_ms))
     }
 }
 
@@ -251,44 +279,56 @@ impl CostRolls {
 mod tests {
     use super::*;
 
+    fn ms(elapsed_ms: u64) -> FrameTime {
+        FrameTime::from_millis(elapsed_ms)
+    }
+
     #[test]
     fn roll_snaps_first_and_decrease_but_sweeps_increases() {
         let mut r = Roll::default();
-        r.observe(100.0, 0);
-        assert_eq!(r.value_at_cents(0), 10_000);
-        assert!(!r.rolling(0));
+        r.observe(100.0, ms(0), 100);
+        assert_eq!(r.value_at_cents(ms(0), 100), 10_000);
+        assert!(!r.rolling(ms(0), 100));
 
-        r.observe(200.0, 10);
-        assert_eq!(r.value_at_cents(10), 10_000, "starts at the prior value");
+        r.observe(200.0, ms(1000), 100);
+        assert_eq!(
+            r.value_at_cents(ms(1000), 100),
+            10_000,
+            "starts at the prior value"
+        );
         let settle = r.clicks_to_settle();
-        let mid = r.value_at_cents(10 + CLICK_PHASES);
+        let mid = r.value_at_cents(ms((10 + CLICK_PHASES) * 100), 100);
         assert!(mid > 10_000 && mid < 20_000, "mid-climb");
         for click in 0..=settle + 1 {
             assert!(
-                r.value_at_cents(10 + click * CLICK_PHASES) <= 20_000,
+                r.value_at_cents(ms((10 + click * CLICK_PHASES) * 100), 100) <= 20_000,
                 "never overshoots"
             );
         }
         assert_eq!(
-            r.value_at_cents(10 + settle * CLICK_PHASES),
+            r.value_at_cents(ms((10 + settle * CLICK_PHASES) * 100), 100),
             20_000,
             "lands exactly"
         );
 
-        r.observe(40.0, 0);
-        r.observe(0.5, 5); // UTC-midnight today reset
-        assert_eq!(r.value_at_cents(5), 50, "snaps down, never rolls backward");
-        assert!(!r.rolling(5));
+        r.observe(40.0, ms(0), 100);
+        r.observe(0.5, ms(500), 100); // UTC-midnight today reset
+        assert_eq!(
+            r.value_at_cents(ms(500), 100),
+            50,
+            "snaps down, never rolls backward"
+        );
+        assert!(!r.rolling(ms(500), 100));
     }
 
     #[test]
     fn roll_curve_is_front_loaded_bounded_and_click_quantized() {
         let mut r = Roll::default();
-        r.observe(0.0, 0);
-        r.observe(10.0, 0);
+        r.observe(0.0, ms(0), 100);
+        r.observe(10.0, ms(0), 100);
         let settle = r.clicks_to_settle();
         let values: Vec<u64> = (0..=settle)
-            .map(|click| r.value_at_cents(click * CLICK_PHASES))
+            .map(|click| r.value_at_cents(ms((click * CLICK_PHASES) * 100), 100))
             .collect();
         let steps: Vec<u64> = values.windows(2).map(|w| w[1] - w[0]).collect();
         assert_eq!(steps[0], 421, "the first click covers the ease-out's bulk");
@@ -304,33 +344,37 @@ mod tests {
 
         for target in [0.01, 0.05, 0.20, 1.0, 5.0, 123.45] {
             let mut r = Roll::default();
-            r.observe(0.0, 0);
-            r.observe(target, 0);
+            r.observe(0.0, ms(0), 100);
+            r.observe(target, ms(0), 100);
             let settle = r.clicks_to_settle();
             assert!(
                 settle <= CLIMB_CLICKS,
                 "${target} settles within the window"
             );
             assert_eq!(
-                r.value_at_cents(settle * CLICK_PHASES),
+                r.value_at_cents(ms((settle * CLICK_PHASES) * 100), 100),
                 to_cents(target),
                 "${target} lands exactly"
             );
         }
 
         let mut r = Roll::default();
-        r.observe(0.0, 0);
-        r.observe(0.01, 0);
+        r.observe(0.0, ms(0), 100);
+        r.observe(0.01, ms(0), 100);
         assert!(r.clicks_to_settle() < CLIMB_CLICKS, "a penny lands early");
 
         let mut r = Roll::default();
-        r.observe(0.0, 0);
-        r.observe(1.0, 0);
+        r.observe(0.0, ms(0), 100);
+        r.observe(1.0, ms(0), 100);
         for phase in 0..CLICK_PHASES {
-            assert_eq!(r.value_at_cents(phase), 0, "value holds within a click");
+            assert_eq!(
+                r.value_at_cents(ms(phase * 100), 100),
+                0,
+                "value holds within a click"
+            );
         }
         assert_eq!(
-            r.value_at_cents(CLICK_PHASES),
+            r.value_at_cents(ms(CLICK_PHASES * 100), 100),
             42,
             "sweeps on the click boundary"
         );
@@ -339,50 +383,64 @@ mod tests {
     #[test]
     fn flash_reobserve_and_retarget_keep_the_roll_continuous() {
         let mut r = Roll::default();
-        r.observe(1.0, 0);
-        r.observe(2.0, 0); // increase at phase 0
+        r.observe(1.0, ms(0), 100);
+        r.observe(2.0, ms(0), 100); // increase at phase 0
         let settle = r.clicks_to_settle();
-        assert!(!r.flashing(0), "no flash mid-climb");
-        assert!(r.flashing(settle * CLICK_PHASES), "brightens once it lands");
+        assert!(!r.flashing(ms(0), 100), "no flash mid-climb");
         assert!(
-            r.rolling((settle + FLASH_CLICKS) * CLICK_PHASES),
+            r.flashing(ms((settle * CLICK_PHASES) * 100), 100),
+            "brightens once it lands"
+        );
+        assert!(
+            r.rolling(ms(((settle + FLASH_CLICKS) * CLICK_PHASES) * 100), 100),
             "one clean trailing frame"
         );
         assert!(
-            !r.rolling((settle + FLASH_CLICKS + 1) * CLICK_PHASES),
+            !r.rolling(ms(((settle + FLASH_CLICKS + 1) * CLICK_PHASES) * 100), 100),
             "then releases the tick"
         );
 
-        let painted = r.value_at_cents(CLICK_PHASES);
+        let painted = r.value_at_cents(ms(CLICK_PHASES * 100), 100);
         assert!(painted > 100 && painted < 200, "mid-climb");
 
-        r.observe(2.0, CLICK_PHASES);
-        assert_eq!(r.value_at_cents(CLICK_PHASES), painted, "climb unbroken");
-        assert!(r.rolling(CLICK_PHASES), "still holds the tick");
+        r.observe(2.0, ms(CLICK_PHASES * 100), 100);
+        assert_eq!(
+            r.value_at_cents(ms(CLICK_PHASES * 100), 100),
+            painted,
+            "climb unbroken"
+        );
+        assert!(
+            r.rolling(ms(CLICK_PHASES * 100), 100),
+            "still holds the tick"
+        );
 
         let flash_phase = settle * CLICK_PHASES;
-        r.observe(2.0, flash_phase);
+        r.observe(2.0, ms(flash_phase * 100), 100);
         assert!(
-            r.flashing(flash_phase),
+            r.flashing(ms(flash_phase * 100), 100),
             "flash survives an equal-target refold"
         );
-        assert_eq!(r.value_at_cents(flash_phase), 200, "settled on target");
+        assert_eq!(
+            r.value_at_cents(ms(flash_phase * 100), 100),
+            200,
+            "settled on target"
+        );
 
         let mut r = Roll::default();
-        r.observe(1.0, 0);
-        r.observe(5.0, 0);
+        r.observe(1.0, ms(0), 100);
+        r.observe(5.0, ms(0), 100);
         let mid_phase = 3 * CLICK_PHASES;
-        let painted = r.value_at_cents(mid_phase);
+        let painted = r.value_at_cents(ms(mid_phase * 100), 100);
         assert!(painted > 100 && painted < 500, "mid-climb when retargeted");
-        r.observe(9.0, mid_phase);
+        r.observe(9.0, ms(mid_phase * 100), 100);
         assert_eq!(
-            r.value_at_cents(mid_phase),
+            r.value_at_cents(ms(mid_phase * 100), 100),
             painted,
             "continues from the painted value, never jumps"
         );
         let settle = r.clicks_to_settle();
         assert_eq!(
-            r.value_at_cents(mid_phase + settle * CLICK_PHASES),
+            r.value_at_cents(ms((mid_phase + settle * CLICK_PHASES) * 100), 100),
             900,
             "lands on the new target"
         );
@@ -392,18 +450,18 @@ mod tests {
     fn cost_rolls_observe_prune_and_fall_back() {
         let mut rolls = CostRolls::default();
         let seed = vec![("a".to_owned(), 1.0), ("b".to_owned(), 2.0)];
-        rolls.observe(seed.into_iter(), 0);
+        rolls.observe(seed.into_iter(), ms(0), 100);
         // First observation snaps each id; nothing holds the fast tick.
-        assert_eq!(rolls.display("a", 1.0, 0), 1.0);
-        assert!(!rolls.any_rolling(0));
+        assert_eq!(rolls.display("a", 1.0, ms(0), 100), 1.0);
+        assert!(!rolls.any_rolling(ms(0), 100));
 
         // An increase rolls: the painted value sits strictly mid-climb.
-        rolls.observe(vec![("a".to_owned(), 3.0)].into_iter(), 10);
-        assert!(rolls.any_rolling(10));
-        let mid = rolls.display("a", 3.0, 10 + CLICK_PHASES);
+        rolls.observe(vec![("a".to_owned(), 3.0)].into_iter(), ms(1000), 100);
+        assert!(rolls.any_rolling(ms(1000), 100));
+        let mid = rolls.display("a", 3.0, ms((10 + CLICK_PHASES) * 100), 100);
         assert!(mid > 1.0 && mid < 3.0, "mid-climb between start and target");
 
         // The fold pruned the departed "b": display falls back to the target.
-        assert_eq!(rolls.display("b", 9.99, 12), 9.99);
+        assert_eq!(rolls.display("b", 9.99, ms(1200), 100), 9.99);
     }
 }

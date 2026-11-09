@@ -172,6 +172,11 @@ impl FramePainter {
             PetViewFrame {
                 action,
                 phase: view.cosmetic_phase.unwrap_or(view.animation_phase),
+                frame_ms: if view.cosmetic_phase.is_some() {
+                    Default::default()
+                } else {
+                    view.frame_ms
+                },
                 refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
                 body,
                 pixel_id_base: self.painter.id_base(),

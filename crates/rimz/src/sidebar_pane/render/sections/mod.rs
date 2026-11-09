@@ -24,9 +24,9 @@ use crate::ids::PaneId;
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use crate::store::snapshot::SidebarRow;
 
-use super::CostRolls;
 use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
+use super::{CostRolls, FrameTime};
 
 mod agent_card;
 mod cockpit;
@@ -144,7 +144,8 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) entry_cursor: Option<&'a super::EntryCursor>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) head_step: u64,
-    pub(in crate::sidebar_pane::render) money_phase: u64,
+    pub(in crate::sidebar_pane::render) money_ms: FrameTime,
+    pub(in crate::sidebar_pane::render) refresh_ms: u16,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
     pub(in crate::sidebar_pane::render) recent_subagent_secs: u64,

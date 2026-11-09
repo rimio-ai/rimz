@@ -76,7 +76,8 @@ impl CardHeights {
             // Content-only; test builds re-measure every hit to guard this premise.
             animation_phase: _,
             head_step: _,
-            money_phase: _,
+            money_ms: _,
+            refresh_ms: _,
             cost_rolls: _,
         } = *ctx;
         let inputs = HeightInputs {

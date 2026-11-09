@@ -28,7 +28,7 @@ The kitty graphics transport the pixel tier uses lives beside it in [`sidebar_pa
 
 ## One frame
 
-A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../crates/rimz/src/sidebar_pane/app/paint.rs). `refresh_view` builds the `PetView` from clones of the snapshot and of the pane's `ViewState` (selection and animation phase), taken under the view lock and used outside it. `compose_frame` then composes the frame under the lock, and the caller writes the returned `BufferedFrame` after it releases the lock.
+A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../crates/rimz/src/sidebar_pane/app/paint.rs). `refresh_view` builds the `PetView` from clones of the snapshot and of the pane's `ViewState` (selection, cyclic phase, and frame time), taken under the view lock and used outside it. `compose_frame` then composes the frame under the lock, and the caller writes the returned `BufferedFrame` after it releases the lock.
 
 `refresh_view` runs these steps:
 
@@ -73,7 +73,7 @@ Tracks index into the sheet's rows. The `ANIMATIONS` table in `model.rs` holds t
 
 A track's frame duration is `1000 / fps` milliseconds, rounded, and never shorter than the display refresh interval. `thinking` and `ask` are composed from more than one row, because no single sheet row paces back and forth or waves before waiting.
 
-The jump is the attention cue. An action change plays `jumping` once before the new steady track, and so does a newly unread row while the action holds. The first action a fresh `PetAssets` sees is not a change, and nothing jumps until the asset has loaded. `selected_track` bounds the one-shot by the jump track's own loop duration, measured in animation phases, so it lasts the same wall time at any wake cadence.
+The jump is the attention cue. An action change plays `jumping` once before the new steady track, and so does a newly unread row while the action holds. The first action a fresh `PetAssets` sees is not a change, and nothing jumps until the asset has loaded. `selected_track` bounds the one-shot by the jump track's own loop duration, measured from a driver-clock millisecond stamp in base frames on the current refresh grid, so wake cadence does not stretch it. Stamp and sample rescale together when `refresh_ms` changes; playback pins pet frame time to zero while its cosmetic phase is pinned.
 
 Motion follows the [animation roles](../../guide/theme.md#animations) in `[theme.animations]`. `pet_motion_enabled` in `render/mod.rs` maps each action to the role in the track table. A role quiets the pet when it sets `effect = "static"` explicitly without a multi-frame `frames` override (`motion_quieted` in `render/animation.rs`). A quieted pet skips the jump and freezes on its track's first frame.
 
@@ -148,7 +148,7 @@ Prepared sheets are shared across all the host's panes through a process-wide ta
 
 The two tiers keep different things in a prepared sheet. The cell tier converts all 72 frames on the loader thread and keeps only the `PetCellGrid`s (character, foreground, and background per cell). The pixel tier encodes all 72 frames to PNG on that thread and keeps the byte arrays, which every pane's painter transmits without a copy of its own. Both slice frames lazily, keeping the decoded sheet plus one RGBA slice live instead of the sheet plus all 72 slices: an estimated slicing footprint of about 11 MiB instead of 22 MiB per load, computed from the geometry, excluding compressed input and decoder scratch, not measured. Both drop the decoded RGBA before the result crosses the channel.
 
-A failed load retries after `RETRY_COOLDOWN_MS` (20 seconds), measured in animation phases. A first fetch can fail transiently (a cold network the moment pets are switched on, a CDN blip), and latching forever would leave `pet unavailable` up for the session. The retry thread runs while the state stays `Failed`, so the caption stays `pet unavailable` while the frame interval switches to the loading grid. A retry that fails restarts the cooldown.
+A failed load retries after `RETRY_COOLDOWN_MS` (20 seconds), counted in base frames on the current refresh grid from the failure's driver-clock millisecond stamp. Stamp and sample use the same grid even after a refresh change. A first fetch can fail transiently (a cold network the moment pets are switched on, a CDN blip), and latching forever would leave `pet unavailable` up for the session. The retry thread runs while the state stays `Failed`, so the caption stays `pet unavailable` while the frame interval switches to the loading grid. A retry that fails restarts the cooldown.
 
 ## Render tiers
 

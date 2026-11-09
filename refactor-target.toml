@@ -4105,6 +4105,11 @@ reason = "Portable presentation excludes pane-bound caches and hit geometry."
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::render::ui_state::FrameTime"
+reason = "The renderer, scheduler and pets share one driver-clock axis for effect lifetimes, distinct from cyclic animation phases."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::render::render_section_line_ansi"
 reason = "The sidebar frame CLI prints matching physical rows from the library's painted buffer."
 

@@ -45,6 +45,10 @@ mod worktree;
 use super::*;
 use crate::sidebar_pane::view::BodyLens;
 
+fn ms(elapsed_ms: u64) -> FrameTime {
+    FrameTime::from_millis(elapsed_ms)
+}
+
 fn selected_ui() -> ViewState {
     ViewState {
         selected_index: Some(0),
@@ -544,6 +548,7 @@ fn ui_at_phase(phase: u64) -> ViewState {
         selected_index: Some(0),
         help_visible: false,
         animation_phase: phase,
+        frame_ms: ms(phase * 100),
         head_step: phase,
         ..Default::default()
     }
@@ -574,7 +579,8 @@ fn test_row_ctx<'a>(
         entry_cursor: None,
         animation_phase,
         head_step: animation_phase,
-        money_phase: animation_phase,
+        money_ms: ms(animation_phase * u64::from(snapshot.theme.display.resolved_refresh_ms())),
+        refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
@@ -1070,12 +1076,12 @@ fn overflowing_fleet_with_unread_lead() -> SidebarSnapshot {
 }
 
 /// A fade in the mid-scroll state — its last draw resolved `offset` with the
-/// move stamped at `phase` — built through the real observe path, since the
+/// move stamped at `elapsed_ms` — built through the real observe path, since the
 /// fade's fields are the scrollbar module's own.
-fn scrolled_fade(offset: usize, phase: u64) -> ScrollbarFade {
+fn scrolled_fade(offset: usize, elapsed_ms: u64) -> ScrollbarFade {
     let mut fade = ScrollbarFade::default();
-    fade.observe(offset + 1, phase);
-    fade.observe(offset, phase);
+    fade.observe(offset + 1, ms(elapsed_ms));
+    fade.observe(offset, ms(elapsed_ms));
     fade
 }
 

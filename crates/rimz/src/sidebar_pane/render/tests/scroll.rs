@@ -749,7 +749,10 @@ fn growth_above_an_unchanged_selection_keeps_its_row() {
         after, before,
         "live height changes above do not move the selection"
     );
-    assert!(!ui.scrollbar.visible(ui.animation_phase));
+    assert!(
+        !ui.scrollbar
+            .visible(ui.frame_ms, snapshot.theme.display.resolved_refresh_ms())
+    );
 }
 
 #[test]
@@ -902,14 +905,14 @@ fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
     let mut ui = ViewState {
         selected_index: Some(2),
         scroll_offset: 6,
-        frame_ms: 40,
+        frame_ms: ms(40),
         offset_authoritative: true,
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
-    ui.scroll_ease.observe(2, 0);
+    ui.scroll_ease.observe(2, ms(0));
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(6, 0);
+    ui.scroll_ease.observe(6, ms(0));
     let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 28);
     let remaining = ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms);
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
@@ -930,14 +933,14 @@ fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let theme = Theme::fixed(false);
     let mut ui = ViewState {
         scroll_offset: 9,
-        frame_ms: 40,
+        frame_ms: ms(40),
         offset_authoritative: true,
         ..Default::default()
     };
     let pane_ui = UiState::default();
-    ui.scrollbar.observe(0, 0);
+    ui.scrollbar.observe(0, ms(0));
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(9, 0);
+    ui.scroll_ease.observe(9, ms(0));
     let visible = ui.scroll_ease.visible(9, ui.frame_ms);
     assert!((1..9).contains(&visible));
     let expected = compose_lines(
@@ -972,11 +975,11 @@ fn wheel_banner_height_uses_the_target_throughout_the_glide() {
     let target_frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     ui.scroll_offset = target_frame.scroll_offset;
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(ui.scroll_offset, 0);
+    ui.scroll_ease.observe(ui.scroll_offset, ms(0));
     let first = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert_eq!(first.interactions.visible_row_span().unwrap().0, 0);
     for elapsed in [0, 16, 48, 100] {
-        ui.frame_ms = elapsed;
+        ui.frame_ms = ms(elapsed);
         let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
         assert_eq!(frame.top_height, target_frame.top_height);
         assert!(
@@ -997,7 +1000,7 @@ fn selection_follow_cancels_a_flight_even_with_the_same_target() {
     };
     let mut pane_ui = UiState::default();
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(3, 0);
+    ui.scroll_ease.observe(3, ms(0));
     let mut terminal = Terminal::new(TestBackend::new(38, 20)).unwrap();
     draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert_eq!(ui.scroll_offset, 3);
@@ -1320,6 +1323,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         selected_index: Some(0),
         scrollbar: scrolled_fade(0, 0),
         animation_phase: 11,
+        frame_ms: ms(1100),
         ..Default::default()
     };
     let pane_settled_ui = UiState::default();
