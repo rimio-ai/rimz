@@ -268,6 +268,29 @@ pub(super) struct HistoryContext<'a> {
     pub(super) spend: Option<&'a super::closed_days::SpendIndex>,
 }
 
+// These collections only establish session uniqueness. Hashing avoids
+// repeatedly ordering transcript paths while the final public maps retain
+// their deterministic `BTreeMap` representation.
+struct KeyedWindows<'a, K>(BTreeMap<K, (SpendWindow, FastHashSet<SessionKey<'a>>)>);
+
+impl<'a, K: Ord> KeyedWindows<'a, K> {
+    fn add(&mut self, key: K, entry: &CachedEntry, session: SessionKey<'a>) {
+        let (window, sessions) = self.0.entry(key).or_default();
+        window.add(entry.cost_usd, entry);
+        sessions.insert(session);
+    }
+
+    fn finish(self) -> BTreeMap<K, SpendWindow> {
+        self.0
+            .into_iter()
+            .map(|(key, (mut window, sessions))| {
+                window.sessions = sessions.len().try_into().unwrap_or(u32::MAX);
+                (key, window)
+            })
+            .collect()
+    }
+}
+
 pub(crate) fn aggregate_counted_rollups(
     files: &[SpendingFile],
     cache: &SpendingDiskCache,
@@ -296,16 +319,10 @@ pub(crate) fn aggregate_counted_rollups(
     let mut spending = Spending::default();
     let day_cutoff_secs = local_day_start_secs(now_secs, spec.timezone.as_deref())
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
-    let mut provider_day = BTreeMap::<String, SpendWindow>::new();
-    let mut login_day = BTreeMap::<LoginKey, SpendWindow>::new();
-    let mut login_day_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
+    let mut provider_day = KeyedWindows::<String>(BTreeMap::new());
+    let mut login_day = KeyedWindows::<LoginKey>(BTreeMap::new());
     let month_cutoff_secs = utc_month_start_secs(now_secs).unwrap_or_default();
-    let mut login_month = BTreeMap::<LoginKey, SpendWindow>::new();
-    let mut login_month_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
-    // These collections only establish session uniqueness. Hashing avoids
-    // repeatedly ordering transcript paths while the final public maps retain
-    // their deterministic `BTreeMap` representation.
-    let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
+    let mut login_month = KeyedWindows::<LoginKey>(BTreeMap::new());
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut chart = ChartSpend::default();
     let mut models = BTreeMap::<&str, (SpendTally, BTreeMap<&str, SpendWindow>)>::new();
@@ -379,32 +396,11 @@ pub(crate) fn aggregate_counted_rollups(
             window_starts,
         );
         if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
-            login_day
-                .entry(counted.login().clone())
-                .or_default()
-                .add(entry.cost_usd, entry);
-            login_day_sessions
-                .entry(counted.login().clone())
-                .or_default()
-                .insert(counted.session_key);
-            provider_day
-                .entry(provider.to_owned())
-                .or_default()
-                .add(entry.cost_usd, entry);
-            provider_day_sessions
-                .entry(provider.to_owned())
-                .or_default()
-                .insert(counted.session_key);
+            login_day.add(counted.login().clone(), entry, counted.session_key);
+            provider_day.add(provider.to_owned(), entry, counted.session_key);
         }
         if entry.ts_secs >= month_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
-            login_month
-                .entry(counted.login().clone())
-                .or_default()
-                .add(entry.cost_usd, entry);
-            login_month_sessions
-                .entry(counted.login().clone())
-                .or_default()
-                .insert(counted.session_key);
+            login_month.add(counted.login().clone(), entry, counted.session_key);
         }
         if history_roles.is_some() {
             let index =
@@ -469,6 +465,10 @@ pub(crate) fn aggregate_counted_rollups(
                     continue;
                 };
                 let placement = role.placement(provider);
+                role_sessions
+                    .entry((placement, session))
+                    .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))
+                    .or_insert(entry.ts_secs);
                 accum(
                     &mut roles.entry(placement).tally,
                     entry,
@@ -490,10 +490,6 @@ pub(crate) fn aggregate_counted_rollups(
                 if let Some(tally) = owner_tally {
                     accum(tally, entry, now_secs, cutoffs.total, window_starts);
                 }
-                role_sessions
-                    .entry((placement, session))
-                    .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))
-                    .or_insert(entry.ts_secs);
             }
         }
     }
@@ -515,18 +511,6 @@ pub(crate) fn aggregate_counted_rollups(
             cutoffs.total,
             window_starts,
         );
-    }
-    for (provider, sessions) in provider_day_sessions {
-        provider_day.entry(provider).or_default().sessions =
-            sessions.len().try_into().unwrap_or(u32::MAX);
-    }
-    for (login, sessions) in login_day_sessions {
-        login_day.entry(login).or_default().sessions =
-            sessions.len().try_into().unwrap_or(u32::MAX);
-    }
-    for (login, sessions) in login_month_sessions {
-        login_month.entry(login).or_default().sessions =
-            sessions.len().try_into().unwrap_or(u32::MAX);
     }
     if let Some(index) = history_roles {
         super::session_effort::fold(index, &mut roles, now_secs, window_starts);
@@ -564,40 +548,36 @@ pub(crate) fn aggregate_counted_rollups(
         session_start_secs: cutoffs.session_start_secs,
         spending,
         workspace,
-        provider_day,
-        login_day,
+        provider_day: provider_day.finish(),
+        login_day: login_day.finish(),
         day_cutoff_secs,
-        login_month,
+        login_month: login_month.finish(),
         month_cutoff_secs,
         days,
         chart,
         timezone,
-        models: if history_roles.is_some() {
-            models
-                .into_iter()
-                .map(|(model, (tally, producers))| {
-                    // Every model entry records at least one producer above.
-                    let (kind, _) = producers
-                        .into_iter()
-                        .max_by(|(a_kind, a), (b_kind, b)| {
-                            a.usd
-                                .total_cmp(&b.usd)
-                                .then_with(|| a.tokens.cmp(&b.tokens))
-                                .then_with(|| b_kind.cmp(a_kind))
-                        })
-                        .expect("each model has a producing kind");
-                    (
-                        model.to_owned(),
-                        ModelTally {
-                            tally,
-                            kind: kind.to_owned(),
-                        },
-                    )
-                })
-                .collect()
-        } else {
-            BTreeMap::new()
-        },
+        models: models
+            .into_iter()
+            .map(|(model, (tally, producers))| {
+                // Every model entry records at least one producer above.
+                let (kind, _) = producers
+                    .into_iter()
+                    .max_by(|(a_kind, a), (b_kind, b)| {
+                        a.usd
+                            .total_cmp(&b.usd)
+                            .then_with(|| a.tokens.cmp(&b.tokens))
+                            .then_with(|| b_kind.cmp(a_kind))
+                    })
+                    .expect("each model has a producing kind");
+                (
+                    model.to_owned(),
+                    ModelTally {
+                        tally,
+                        kind: kind.to_owned(),
+                    },
+                )
+            })
+            .collect(),
         stats: Default::default(),
         roles,
     }
