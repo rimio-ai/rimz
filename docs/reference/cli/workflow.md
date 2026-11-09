@@ -280,7 +280,9 @@ for           = "3m"
 | `prompt`, `prompt-file` | The run's prompt. |
 | `each-worktree` | Expand each fire over RimZ-owned checkouts. With `when`, launch once per checkout. A worktree-scoped run without it scopes to the task's `dir`, else its root; a project-scoped condition launch covers all checkouts permanently, while other triggers skip only a live held run. |
 | `when`, `for`, schedules, `root` | As on any task. |
-| `budget`, `budget-per-day` | Ignored on a hand-written row, and refused by `loop add --workflow`: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
+| `budget` | Ignored on a hand-written row, and refused by `loop add --workflow`: each agent step sets its own `budget`. The turn, room, and account caps still park a step agent like any agent in the room. |
+| `budget-per-day` | Gates each run the task starts: the day's reported run costs, plus the `budget` of every agent step in each live run of the task, plus the next run's own step budgets, must stay within the cap. A graph with no step budgets is admitted until the day's cost reaches it. Each run's cost reaches the task's history when the run ends. |
+| `surplus`, `surplus-after` | Gate each run the task starts on the account of every agent step and agent check in the graph. |
 
 Loop-started runs do not print validation warnings; ignored fields remain visible in `workflow show` and `workflow list`. `loop show` joins each checkout to its recorded run and lists every run the task started, finished runs included; `loop logs` gives each launch block its run's state and `workflow show` command, and `loop fire` prints that command under its `launched <id>` receipt. `loop list` keeps only active and parked runs; its launched-worktree count includes finished entries.
 

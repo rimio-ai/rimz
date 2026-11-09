@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use super::spec::{Check, CheckKind, OnBreak, Step, StepKind, WorkflowSpec};
 use crate::config::CapacityWait;
+use crate::harness::budget::BudgetSpec;
 use crate::store::workflow::RouteDefaults;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
@@ -104,6 +105,29 @@ pub struct WalkNode {
 }
 
 impl WorkflowSpec {
+    /// What one run reserves against a daily cap: its agent steps' per-launch budgets, summed.
+    pub(in crate::harness) fn reserved_usd(&self) -> f64 {
+        self.steps
+            .values()
+            .filter(|step| matches!(step.kind(), Some(StepKind::Agent(_))))
+            .filter_map(|step| step.budget.as_deref()?.parse::<BudgetSpec>().ok())
+            .fold(0.0, |total, budget| total + budget.cap_usd)
+    }
+
+    /// The profile of every agent step and agent check, beside the account a step pins; a
+    /// judge runs on its profile's own login.
+    pub(in crate::harness) fn agent_launches(&self) -> Vec<(&str, Option<&crate::ids::LoginName>)> {
+        let steps = self.steps.values().filter_map(|step| match step.kind() {
+            Some(StepKind::Agent(agent)) => Some((agent, step.account.as_ref())),
+            _ => None,
+        });
+        let checks = self.checks.values().filter_map(|check| match check.kind() {
+            Some(CheckKind::Agent(agent)) => Some((agent, None)),
+            _ => None,
+        });
+        steps.chain(checks).collect()
+    }
+
     /// Reverse postorder, with returning steps below their earlier sending check.
     pub fn walk(&self) -> Walk {
         let mut seen = BTreeSet::new();

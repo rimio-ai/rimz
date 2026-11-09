@@ -55,8 +55,17 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
     append_for_root(&task.entry().resolved_root(), record);
     let name = &record.task;
     let key = task.key(name);
-    let signal = strikes::classify(record);
-    let count = match strikes::note(&key, signal) {
+    let mut signal = strikes::classify(record);
+    let noted = match record.run_id.as_deref().filter(|_| record.is_report()) {
+        Some(run) => strikes::note_run(&key, run, signal).map(|(count, counted)| {
+            if !counted {
+                signal = strikes::Signal::Neutral;
+            }
+            count
+        }),
+        None => strikes::note(&key, signal),
+    };
+    let count = match noted {
         Ok(count) => count,
         Err(err) => {
             tracing::warn!(task = name, error = %err, "loop strike state update failed");
@@ -157,6 +166,10 @@ pub struct LoopRunRecord {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// Set only on a workflow run's terminal report: whether the run started an act step.
+    /// A report supersedes the run's launch row and any earlier report of the same run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acted: Option<bool>,
 }
 
 /// The fresh worktree one fire of a `fresh-worktree` task created.
@@ -169,6 +182,39 @@ pub struct FireWorktree {
 }
 
 impl LoopRunRecord {
+    /// Whether this row is a workflow run's terminal report rather than a fire.
+    fn is_report(&self) -> bool {
+        self.acted.is_some()
+    }
+
+    /// Whether `self`, a report, replaces `earlier`: the run's launch row or an earlier report.
+    fn supersedes(&self, earlier: &Self) -> bool {
+        self.is_report()
+            && self.run_id.is_some()
+            && earlier.run_id == self.run_id
+            && (earlier.is_report() || earlier.result == LoopRunResult::Launched)
+    }
+
+    /// Carry what the superseded row recorded at fire time and a report cannot know: the
+    /// trigger, the lock tenure that attributes refused fires, the fire's own waits, its tree
+    /// and its kind.
+    fn keep_fire_facts(&mut self, fire: &Self) {
+        if self.absorbed == 0 {
+            self.absorbed = fire.absorbed;
+        }
+        self.throttle_wait_ms = self.throttle_wait_ms.or(fire.throttle_wait_ms);
+        self.late_ms = self.late_ms.or(fire.late_ms);
+        self.holder = self.holder.or(fire.holder);
+        self.run_lock = self.run_lock.or(fire.run_lock);
+        self.signal = self.signal.take().or_else(|| fire.signal.clone());
+        self.condition = self.condition.take().or_else(|| fire.condition.clone());
+        self.watch = self.watch.take().or_else(|| fire.watch.clone());
+        self.message_id = self.message_id.take().or_else(|| fire.message_id.clone());
+        self.target = self.target.take().or_else(|| fire.target.clone());
+        self.worktree = self.worktree.take().or_else(|| fire.worktree.clone());
+        self.kind = self.kind.or(fire.kind);
+    }
+
     pub fn stages(&self) -> impl DoubleEndedIterator<Item = RunStage<'_>> {
         self.check
             .iter()
@@ -236,6 +282,63 @@ impl LoopRunRecord {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            acted: None,
+        }
+    }
+}
+
+/// Report a finished task-started workflow run to its loop task: one history row carrying the
+/// run id, its outcome and its summed attempt cost, and the strike it notes. The strike store
+/// counts a run id once, so a report repeated after a crash moves no count.
+pub(in crate::harness) fn report_run(
+    run: &crate::store::workflow::RunRecord,
+    journal: &[crate::store::workflow::JournalEntry],
+) -> RunTransition {
+    use crate::store::workflow::{JournalEvent, RunState};
+    let Some(task) = run.task.as_deref() else {
+        return RunTransition::Recorded;
+    };
+    let result = match run.state {
+        RunState::Done => LoopRunResult::Completed,
+        RunState::Failed => LoopRunResult::Failed,
+        RunState::Canceled => LoopRunResult::Canceled,
+        RunState::Active | RunState::Parked => return RunTransition::Recorded,
+    };
+    let ended = run.terminal_at.unwrap_or_else(Timestamp::now);
+    let mode = if run.manual {
+        LoopRunMode::Manual
+    } else {
+        LoopRunMode::Scheduled
+    };
+    let duration_ms = u64::try_from(ended.duration_since(run.created_at).as_millis()).unwrap_or(0);
+    let mut record = LoopRunRecord::new(task, result, mode, duration_ms);
+    record.at = ended;
+    record.checkout = Some(run.scope.path.clone());
+    record.run_id = Some(run.id.to_string());
+    let mut costs = journal
+        .iter()
+        .filter_map(|entry| match entry.event {
+            JournalEvent::Attempt { cost_usd, .. } | JournalEvent::Evaluation { cost_usd, .. } => {
+                cost_usd
+            }
+            _ => None,
+        })
+        .peekable();
+    record.cost_usd = costs
+        .peek()
+        .is_some()
+        .then(|| costs.fold(0.0, |sum, cost| sum + cost));
+    // Every step a run starts counts a visit, and a loop task's graph acts only in steps.
+    record.acted = Some(!run.visits.is_empty());
+    let catalog = super::catalog::TaskCatalog::load_lenient(Some(&run.project_root));
+    match catalog.for_run(task) {
+        Some(loaded) => {
+            record.kind = Some(loaded.kind());
+            record_transition(loaded, &record)
+        }
+        None => {
+            append_for_root(&run.project_root, &record);
+            RunTransition::Recorded
         }
     }
 }
@@ -424,6 +527,8 @@ pub enum RunPolarity {
 impl LoopRunRecord {
     pub fn polarity(&self) -> Option<RunPolarity> {
         match self.result {
+            // A workflow run's launch is not an outcome; its report is.
+            LoopRunResult::Launched if self.run_id.is_some() => None,
             LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
                 Some(RunPolarity::Good)
             }
@@ -558,8 +663,15 @@ impl HeldStats {
     }
 }
 
+/// The per-task summaries, and per task and workflow run whether its launch or report was folded.
+#[derive(Default)]
+struct FoldState {
+    stats: BTreeMap<String, LoopRunStats>,
+    runs: BTreeMap<(String, String), bool>,
+}
+
 struct StatsFold {
-    reader: crate::disk::rotating::IncrementalFold<BTreeMap<String, LoopRunStats>>,
+    reader: crate::disk::rotating::IncrementalFold<FoldState>,
     date: jiff::civil::Date,
     zone: jiff::tz::TimeZone,
 }
@@ -574,18 +686,35 @@ impl StatsFold {
     }
 
     fn refresh(&mut self, root: Option<&Path>, now: &Zoned) -> &BTreeMap<String, LoopRunStats> {
-        self.reader.refresh(|stats, record: LoopRunRecord| {
-            if matches_root(&record, root) {
-                fold_record(record, now, stats);
-            }
-        })
+        &self
+            .reader
+            .refresh(|state, record: LoopRunRecord| {
+                if matches_root(&record, root) {
+                    fold_record(record, now, state);
+                }
+            })
+            .stats
     }
 }
 
 pub fn task_records(state_root: &Path, task: &str, root: Option<&Path>) -> Vec<LoopRunRecord> {
-    let mut records = Vec::new();
-    crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
+    let mut records: Vec<LoopRunRecord> = Vec::new();
+    crate::disk::rotating::visit_records(&log_path(state_root), |mut record: LoopRunRecord| {
         if record.task == task && matches_root(&record, root) {
+            // A fast run can report before its launcher appends the launch row.
+            if record.result == LoopRunResult::Launched
+                && let Some(report) = records.iter_mut().find(|later| later.supersedes(&record))
+            {
+                report.keep_fire_facts(&record);
+                return;
+            }
+            records.retain(|earlier| {
+                let superseded = record.supersedes(earlier);
+                if superseded {
+                    record.keep_fire_facts(earlier);
+                }
+                !superseded
+            });
             records.push(record);
         }
     });
@@ -766,20 +895,27 @@ pub(super) struct DailyBudgetGate {
     pub(super) spend_usd: f64,
     pub(super) cap_usd: f64,
     pub(super) reserved_usd: f64,
+    /// What the task's live runs hold back until they report their cost.
+    pub(super) live_usd: f64,
 }
 
 impl DailyBudgetGate {
     pub(super) fn reason(self) -> String {
-        if self.reserved_usd > 0.0 {
+        let spent = if self.live_usd > 0.0 {
             format!(
-                "daily budget ${:.2} cannot fund the next ${:.2} run (${:.2} spent)",
-                self.cap_usd, self.reserved_usd, self.spend_usd
+                "${:.2} spent, ${:.2} held by live runs",
+                self.spend_usd, self.live_usd
             )
         } else {
+            format!("${:.2} spent", self.spend_usd)
+        };
+        if self.reserved_usd > 0.0 {
             format!(
-                "daily budget ${:.2} exhausted (${:.2} spent)",
-                self.cap_usd, self.spend_usd
+                "daily budget ${:.2} cannot fund the next ${:.2} run ({spent})",
+                self.cap_usd, self.reserved_usd
             )
+        } else {
+            format!("daily budget ${:.2} exhausted ({spent})", self.cap_usd)
         }
     }
 }
@@ -793,10 +929,9 @@ pub(super) fn daily_budget_gate(
     let Some(raw_cap) = entry.budget_per_day.as_deref() else {
         return Ok(None);
     };
-    let cap = raw_cap
+    raw_cap
         .parse::<crate::harness::budget::BudgetSpec>()
-        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?
-        .cap_usd;
+        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?;
     let raw_reserved = entry
         .budget
         .as_deref()
@@ -805,15 +940,37 @@ pub(super) fn daily_budget_gate(
         .parse::<crate::harness::budget::BudgetSpec>()
         .map_err(|err| format!("task `{task}` has invalid budget: {err}"))?
         .cap_usd;
+    reserved_budget_gate(state_root, task, entry, now, reserved, 0.0)
+}
+
+/// The daily gate for a task whose runs are workflow runs: the next run reserves its graph's
+/// agent-step budgets, and each live run holds back its own until it reports.
+pub(super) fn reserved_budget_gate(
+    state_root: &Path,
+    task: &str,
+    entry: &crate::config::TaskEntry,
+    now: &Zoned,
+    reserved: f64,
+    live: f64,
+) -> std::result::Result<Option<DailyBudgetGate>, String> {
+    let Some(raw_cap) = entry.budget_per_day.as_deref() else {
+        return Ok(None);
+    };
+    let cap = raw_cap
+        .parse::<crate::harness::budget::BudgetSpec>()
+        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?
+        .cap_usd;
     let spend = spend_on_local_day(
         &task_records(state_root, task, Some(&entry.resolved_root())),
         now,
     );
+    let held = spend + live;
     Ok(
-        ((spend >= cap) || (reserved > 0.0 && spend + reserved > cap)).then_some(DailyBudgetGate {
+        ((held >= cap) || (reserved > 0.0 && held + reserved > cap)).then_some(DailyBudgetGate {
             spend_usd: spend,
             cap_usd: cap,
             reserved_usd: reserved,
+            live_usd: live,
         }),
     )
 }
@@ -828,15 +985,33 @@ fn last_kind_after(
     }
 }
 
-fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
-    let entry = stats.entry(record.task.clone()).or_insert(LoopRunStats {
-        runs: 0,
-        last: None,
-        last_kind: None,
-        spend_today_usd: 0.0,
-        acting: None,
-        heard: None,
-    });
+fn fold_record(record: LoopRunRecord, now: &Zoned, state: &mut FoldState) {
+    let mut repeat = false;
+    if let Some(run) = record
+        .run_id
+        .clone()
+        .filter(|_| record.is_report() || record.result == LoopRunResult::Launched)
+    {
+        let key = (record.task.clone(), run);
+        match state.runs.get(&key) {
+            // The run's report is counted, whether it came before or after its launch row.
+            Some(true) => return,
+            Some(_) => repeat = true,
+            None => {}
+        }
+        *state.runs.entry(key).or_default() |= record.is_report();
+    }
+    let entry = state
+        .stats
+        .entry(record.task.clone())
+        .or_insert(LoopRunStats {
+            runs: 0,
+            last: None,
+            last_kind: None,
+            spend_today_usd: 0.0,
+            acting: None,
+            heard: None,
+        });
     entry.last_kind = last_kind_after(entry.last_kind, &record);
     if record.result == LoopRunResult::SignalSkipped {
         if let Some(heard) = HeardSignal::of(&record) {
@@ -844,7 +1019,9 @@ fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, 
         }
         return;
     }
-    entry.runs += 1;
+    if !repeat {
+        entry.runs += 1;
+    }
     entry.spend_today_usd += cost_on_local_day(&record, now).unwrap_or(0.0);
     entry.acting = ActingRun::after(entry.acting.take(), &record);
     if entry.last.as_ref().is_none_or(|last| record.at >= last.at) {

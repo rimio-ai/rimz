@@ -4215,7 +4215,8 @@ path = "crates/rimz/src/store"
 # Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
-surface-budget = 592
+# workflow::LoopReport and RunRecord::owes_loop_report mark a task-started run's outcome report for the engine, the tick backstop, and GC (+2).
+surface-budget = 594
 
 [[verdict]]
 kind = "item"
@@ -5067,7 +5068,8 @@ allowed-dependencies = [
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
 # normalize_cell_preset shares tuning normalization with replay (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
-surface-budget = 55
+# `resolve_agent_cells` lets loop surplus admission read every cell of a team or multi-cell step (+1).
+surface-budget = 56
 
 [[verdict]]
 kind = "item"
@@ -11213,6 +11215,11 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 kind = "item"
 key = "store::workflow::RunOrigin"
 reason = "A run record says whether a deployed workflow or a loop task's inline definition started it; overlap and views key on it."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::LoopReport"
+reason = "A run record carries whether it still owes its loop task the outcome report; the engine writes it, and the workflow tick and GC read it."
 
 [[verdict]]
 kind = "item"

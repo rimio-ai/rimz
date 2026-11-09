@@ -510,7 +510,10 @@ fn collect_owned(
     }
     for run in crate::store::workflow::list(paths)? {
         let home = paths.workflow(&run.id);
+        // A run that still owes its loop report keeps its home until the
+        // workflow tick's backstop reports it.
         if run.state.is_terminal()
+            && !run.owes_loop_report()
             && super::collect::is_older_than(&home.record, retention::OWNED_GRACE)?
             && (sweep.is_dry_run()
                 || run.notes.as_ref().is_none_or(|relative| {

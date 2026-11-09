@@ -53,6 +53,10 @@ fn loop_add_workflow_writes_a_task_that_fires_per_owned_checkout() {
             "--each-worktree",
             "--label",
             "keep CI green",
+            "--budget-per-day",
+            "5",
+            "--surplus",
+            "2x",
         ])
         .output()
         .unwrap(),
@@ -69,6 +73,8 @@ fn loop_add_workflow_writes_a_task_that_fires_per_owned_checkout() {
     assert_eq!(task["every"].as_str(), Some("1h"), "{task:?}");
     assert_eq!(task["each-worktree"].as_bool(), Some(true), "{task:?}");
     assert_eq!(task["label"].as_str(), Some("keep CI green"), "{task:?}");
+    assert_eq!(task["budget-per-day"].as_str(), Some("$5.00"), "{task:?}");
+    assert_eq!(task["surplus"].as_str(), Some("2x"), "{task:?}");
     for field in ["agent", "wait", "check", "stay", "timeout", "budget"] {
         assert!(!task.contains_key(field), "{field}: {task:?}");
     }
@@ -102,7 +108,7 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
     let steps = "[steps.<name>]";
     let checks = "[checks.<name>]";
     let profile = "agent` profile";
-    let spend = "not gated on spend";
+    let spend = "set `budget` on the workflow's agent `[steps.<name>]`";
     let window = "no provider window";
     let fanout = "fan-out needs --when, --every, or --cron";
     let clocked: &[(&[&str], &str, &str)] = &[
@@ -143,14 +149,11 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
             profile,
         ),
         (&["--budget", "5"], "--budget", spend),
-        (&["--budget-per-day", "5"], "--budget-per-day", spend),
         (
             &["--budget", "5", "--budget-per-day", "5"],
-            "--budget-per-day",
+            "--budget",
             spend,
         ),
-        (&["--surplus", "1.5x"], "--surplus", spend),
-        (&["--surplus-after", "3d"], "--surplus-after", spend),
         (&["--overlap", "queue"], "--overlap", "workflow skipped"),
         (
             &["--overlap", "queue", "--overlap-limit", "2"],

@@ -217,9 +217,13 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
             return;
         }
     };
+    // A finished run that still owes its loop task a report is due like an active one: its
+    // advance only reports.
     let active: BTreeMap<_, _> = records
         .into_iter()
-        .filter(|record| record.state == crate::store::workflow::RunState::Active)
+        .filter(|record| {
+            record.state == crate::store::workflow::RunState::Active || record.owes_loop_report()
+        })
         .map(|record| (record.id.clone(), record))
         .collect();
     let path = runtime.lane_path("workflow-tick.json");
@@ -232,7 +236,8 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
         // A deadline granted after `recheck_at` was published is not clamped
         // into it, so an unfired deadline is a due edge of its own.
         let deadline = record.deadline.filter(|_| !record.deadline_fired);
-        if record.recheck_at.is_some_and(|at| at > now)
+        if !record.owes_loop_report()
+            && record.recheck_at.is_some_and(|at| at > now)
             && record.held.is_none()
             && !deadline.is_some_and(|at| at <= now)
             && !record.wait.as_ref().is_some_and(|wait| wait.is_hold())

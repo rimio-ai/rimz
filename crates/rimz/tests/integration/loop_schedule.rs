@@ -8260,8 +8260,6 @@ fn loop_enable_disable_pause_workflow() {
 fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     let env = Env::new();
     env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-strikes", "feature-loop");
     let notify_log = env.project_root.join("loop-disabled-notify.log");
     let config_path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("mkdir config");
@@ -8279,14 +8277,10 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
             "loop",
             "add",
             "watchdog",
-            "--wait",
-            "@claude",
             "--every",
             "15m",
             "--check",
             "printf broken; exit 1",
-            "--prompt",
-            "fix it",
         ],
     );
 
@@ -8300,20 +8294,20 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     );
     assert_eq!(
         read_loop_arming(&env)
-            .get(&project_task_key(&env.project_root, "watchdog"))
+            .get(&machine_task_key("watchdog"))
             .and_then(|arming| arming.strikes),
         Some(3)
     );
 
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
-    assert!(fire.contains("task is disabled; firing anyway") && fire.contains("delivered"));
+    assert!(fire.contains("task is disabled; firing anyway"), "{fire}");
     assert_eq!(
-        read_loop_strikes(&env).get(&project_task_key(&env.project_root, "watchdog")),
+        read_loop_strikes(&env).get(&machine_task_key("watchdog")),
         Some(&4)
     );
     assert_eq!(
         read_loop_arming(&env)
-            .get(&project_task_key(&env.project_root, "watchdog"))
+            .get(&machine_task_key("watchdog"))
             .and_then(|arming| arming.strikes),
         Some(3),
         "manual fire must not replace an existing disable"
@@ -8331,12 +8325,10 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     assert_eq!(notification.lines().count(), 1, "{notification}");
 
     loop_ok(&env, &["loop", "enable", "watchdog"]);
-    assert!(
-        !read_loop_strikes(&env).contains_key(&project_task_key(&env.project_root, "watchdog"))
-    );
+    assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("watchdog")));
     assert!(
         read_loop_arming(&env)
-            .get(&project_task_key(&env.project_root, "watchdog"))
+            .get(&machine_task_key("watchdog"))
             .is_some_and(|arming| arming.enabled
                 && arming.pause_until.is_none()
                 && arming.strikes.is_none())

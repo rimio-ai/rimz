@@ -529,6 +529,19 @@ pub enum RunOrigin {
     Inline,
 }
 
+/// Whether a run still owes its loop task the report of how it ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopReport {
+    /// Nothing is owed: no task started the run, or it was recorded before reports existed.
+    #[default]
+    None,
+    /// A loop task started the run; its terminal outcome is not yet in the loop history.
+    Owed,
+    /// The terminal outcome reached the loop history and the strike count.
+    Sent,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
@@ -550,6 +563,8 @@ pub struct RunRecord {
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub manual: bool,
+    #[serde(default)]
+    pub loop_report: LoopReport,
     pub spec_dir: PathBuf,
     pub spec_digest: String,
     pub prompt: Option<String>,
@@ -655,6 +670,11 @@ impl RunRecord {
     /// Whether loop task `task` started this run, live or finished.
     pub fn ran_for(&self, task: &str) -> bool {
         self.task.as_deref() == Some(task)
+    }
+
+    /// A finished run whose loop task has not yet heard how it ended.
+    pub fn owes_loop_report(&self) -> bool {
+        self.state.is_terminal() && self.task.is_some() && self.loop_report == LoopReport::Owed
     }
 }
 

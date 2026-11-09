@@ -324,6 +324,41 @@ impl FireScope {
         }
     }
 
+    /// The scope of one resolved agent launch on the task's account, or the room's.
+    fn spawn(
+        entry: &TaskEntry,
+        workspace: &ResolvedWorkspace,
+        resolved: &ResolvedSingleAgentLaunch,
+    ) -> Result<Self> {
+        let launch = LaunchLogin::from(entry.account.clone());
+        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
+        let managed_launch = resolve_managed_spawn_state(entry, workspace, resolved)?;
+        let kind = AgentKind::new_unchecked(resolved.kind.clone());
+        let (login, account_skip) = match &entry.account {
+            None => (task_login(&launch, &resolved.kind, &runtime)?, None),
+            Some(name) => match pinned_login(
+                &kind,
+                name,
+                &MachineConfig::load_lenient().accounts,
+                &ambient_env(),
+                &read_accounts_cache(&runtime.shared_accounts_path()),
+            )? {
+                Ok(login) => (Some(login), None),
+                Err(reason) => (None, Some(reason)),
+            },
+        };
+        let mut scope = Self::new(
+            kind,
+            runtime,
+            StatePaths::for_project_root(&workspace.project_root)?,
+            Some(resolved.clone()),
+            login,
+        );
+        scope.account_skip = account_skip;
+        scope.managed_launch = managed_launch;
+        Ok(scope)
+    }
+
     fn login_key(&self) -> Option<crate::ids::LoginKey> {
         self.login.as_ref().map(ProviderLogin::key)
     }
@@ -364,34 +399,9 @@ impl FireContext {
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let workspace = WorkspaceResolver::resolve(&root, None)?;
-                let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
                 let resolved =
                     crate::harness::plan::resolve_single_agent_launch(spec, &workspace, &launch)?;
-                let managed_launch = resolve_managed_spawn_state(entry, &workspace, &resolved)?;
-                let kind = AgentKind::new_unchecked(resolved.kind.clone());
-                let (login, account_skip) = match &entry.account {
-                    None => (task_login(&launch, &resolved.kind, &runtime)?, None),
-                    Some(name) => match pinned_login(
-                        &kind,
-                        name,
-                        &MachineConfig::load_lenient().accounts,
-                        &ambient_env(),
-                        &read_accounts_cache(&runtime.shared_accounts_path()),
-                    )? {
-                        Ok(login) => (Some(login), None),
-                        Err(reason) => (None, Some(reason)),
-                    },
-                };
-                let mut scope = FireScope::new(
-                    kind,
-                    runtime,
-                    StatePaths::for_project_root(&workspace.project_root)?,
-                    Some(resolved),
-                    login,
-                );
-                scope.account_skip = account_skip;
-                scope.managed_launch = managed_launch;
-                scope
+                FireScope::spawn(entry, &workspace, &resolved)?
             }
             TaskAction::Deliver(target) => {
                 let project_root = WorkspaceResolver::persisted_project_root(&root)?;
@@ -1255,6 +1265,10 @@ impl<'a> TaskFire<'a> {
             "workflow must exist inside {}",
             home.display()
         );
+        // Under the run lock, so two fires cannot both fit under the cap.
+        if let Some(done) = self.prepare_workflow_admission(&dir)? {
+            return Ok(TaskFirePlan::Done(done));
+        }
         let prompt = || {
             if self.entry.prompt.is_none() && self.entry.prompt_file.is_none() {
                 return Ok(None);
@@ -1326,6 +1340,61 @@ impl<'a> TaskFire<'a> {
                 record.error = error;
             },
         )))
+    }
+
+    /// A task's daily cap and surplus gate admit each run its workflow starts. The cap counts
+    /// finished runs' reported cost plus what each live run of the task reserves, and the next
+    /// run reserves its graph's agent-step budgets; surplus reads every agent's account.
+    fn prepare_workflow_admission(&mut self, dir: &Path) -> Result<Option<TaskFireFinished>> {
+        let surplus = self.entry.surplus.is_some() || self.entry.surplus_after.is_some();
+        if self.entry.budget_per_day.is_none() && !surplus {
+            return Ok(None);
+        }
+        let spec = crate::harness::workflow::load(dir)?;
+        if self.entry.budget_per_day.is_some() {
+            let zoned_now = self.now.to_zoned(self.config.time_zone());
+            let live = live_reservation(&self.entry.resolved_root(), &self.name)?;
+            if let Some(gate) = run_log::reserved_budget_gate(
+                &logs_dir(),
+                &self.name,
+                &self.entry,
+                &zoned_now,
+                spec.reserved_usd(),
+                live,
+            )
+            .map_err(anyhow::Error::msg)?
+            {
+                return Ok(Some(
+                    self.record_gate(LoopRunResult::BudgetSkipped, gate.reason()),
+                ));
+            }
+        }
+        if !surplus {
+            return Ok(None);
+        }
+        let workspace = WorkspaceResolver::resolve(self.entry.resolved_root(), None)?;
+        for (agent, account) in spec.agent_launches() {
+            let launch = LaunchLogin::from(account.cloned());
+            // A team or multi-cell step launches every cell, each on the step's account or its
+            // own, as the engine's start groups count them.
+            for (resolved, pinned) in
+                crate::harness::plan::resolve_agent_cells(agent, &workspace, &launch)?
+            {
+                let entry = TaskEntry {
+                    agent: Some(agent.to_owned()),
+                    account: account.or(pinned.as_ref()).cloned(),
+                    workflow: None,
+                    ..self.entry.clone()
+                };
+                let scope = FireScope::spawn(&entry, &workspace, &resolved)?;
+                if let Some(reason) = scope.surplus_gate(&self.entry, self.now) {
+                    return Ok(Some(
+                        self.record_gate(LoopRunResult::SurplusSkipped, reason),
+                    ));
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn workflow_already_launched(&self) -> Result<bool> {
@@ -4239,6 +4308,25 @@ fn unresolved_managed_state(root: &Path, kind: &str) -> ManagedLaunchState {
     } else {
         ManagedLaunchState::Unresolved
     }
+}
+
+/// What the task's live workflow runs reserve against its daily cap until they report.
+fn live_reservation(root: &Path, task: &str) -> Result<f64> {
+    let state = StatePaths::for_project_root(root)?;
+    if !state.root.exists() {
+        return Ok(0.0);
+    }
+    let mut reserved = 0.0;
+    for record in crate::store::workflow::list(&state)? {
+        if !record.started_by(task) {
+            continue;
+        }
+        // The sealed copy is what the run spends by; a deployed source may have changed since.
+        let spec = crate::harness::workflow::load_run(&state.workflow(&record.id).home, &record)
+            .with_context(|| format!("reading run {}'s sealed definition", record.id))?;
+        reserved += spec.reserved_usd();
+    }
+    Ok(reserved)
 }
 
 fn surplus_gate_in(

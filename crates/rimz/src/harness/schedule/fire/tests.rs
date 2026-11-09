@@ -165,6 +165,29 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
         crate::disk::atomic::read_json_cache(&cache);
     assert!(stamps.is_empty());
+    record.state = crate::store::workflow::RunState::Failed;
+    record.task = Some("nightly".to_owned());
+    record.recheck_at = Some(Timestamp::from_second(10000).unwrap());
+    for (report, now, expected) in [
+        (crate::store::workflow::LoopReport::Owed, 1200, Some(1200)),
+        (crate::store::workflow::LoopReport::Sent, 1300, None),
+    ] {
+        record.loop_report = report;
+        std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        tick_workflows(
+            &runtime,
+            root.path(),
+            Timestamp::from_second(now).unwrap(),
+            LoopRunHost::Detached,
+        );
+        let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
+            crate::disk::atomic::read_json_cache(&cache);
+        assert_eq!(
+            stamps.get(&record.id).copied(),
+            expected.map(|second| Timestamp::from_second(second).unwrap()),
+            "a finished run is due only while it owes its report: {report:?}"
+        );
+    }
 }
 
 #[test]

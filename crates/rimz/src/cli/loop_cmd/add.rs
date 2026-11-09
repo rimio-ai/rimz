@@ -324,7 +324,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     if args.max_attempts.is_some() && args.verify.is_none() {
         bail!("--max-attempts requires --verify");
     }
-    if args.budget_per_day.is_some() && args.budget.is_none() {
+    if args.budget_per_day.is_some() && args.budget.is_none() && args.workflow.is_none() {
         bail!("--budget-per-day requires --budget");
     }
     if let Some(limit) = args.overlap_limit {
@@ -631,8 +631,7 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
     let fan_out = args.each_worktree;
     let checks = "checks and waits are the workflow's `[checks.<name>]` nodes";
     let profile = "choose it through the `agent` profile of the workflow's `[steps.<name>]`";
-    let spend =
-        "a workflow fire is not gated on spend; room and account caps still apply to its agents";
+    let spend = "set `budget` on the workflow's agent `[steps.<name>]`; `--budget-per-day` and `--surplus` gate the task's runs";
     let overlap = "a live run holds its scope, and a fire that finds it records `workflow skipped`";
     let no_window =
         "a workflow task has no provider window to read; use a clock trigger or another condition";
@@ -688,15 +687,7 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
             ],
             profile,
         ),
-        (
-            &[
-                (args.budget.is_some(), "--budget"),
-                (args.budget_per_day.is_some(), "--budget-per-day"),
-                (args.surplus.is_some(), "--surplus"),
-                (args.surplus_after.is_some(), "--surplus-after"),
-            ],
-            spend,
-        ),
+        (&[(args.budget.is_some(), "--budget")], spend),
         (
             &[
                 (args.overlap.is_some(), "--overlap"),
@@ -1082,6 +1073,7 @@ fn build_task_entry(
             entry.dir = (!args.project && workspace.worktree_root != workspace.project_root)
                 .then(|| workspace.worktree_root.clone());
             entry.workflow = Some(name);
+            entry.budget_per_day = budget_per_day;
         }
     }
     Ok((entry, resolved_for_preflight))

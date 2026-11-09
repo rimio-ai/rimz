@@ -5,6 +5,7 @@ use crate::config::{MachineConfig, TaskEntry};
 use crate::disk::paths::StatePaths;
 use crate::harness::schedule::catalog::{LoadedTask, TaskSource};
 use crate::harness::schedule::compile::{CompiledAction, InlineTask, TaskWorkflow};
+use crate::harness::schedule::run_log::LoopRunResult;
 use crate::store::workflow::{self as records, JournalEvent, RunRecord, RunState};
 use serde_json::{Value, json};
 
@@ -332,10 +333,15 @@ fn open_room(state: &StatePaths, root: &std::path::Path) {
 /// A task's fire: compile the row, materialize it, and start the run through `create`.
 fn fire(row: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let home = tempfile::tempdir().unwrap();
-    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
-    open_room(&state, home.path());
+    let (state, record) = fire_at(home.path(), row);
+    (home, state, record)
+}
+
+fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
+    let state = StatePaths::for_project_root_under(home, home).unwrap();
+    open_room(&state, home);
     // Parallel tests share the machine's start queue; the caps still apply.
-    let task = loaded("nightly", &format!("{row}throttle='off'\n"), home.path());
+    let task = loaded("nightly", &format!("{row}throttle='off'\n"), home);
     let record = create(
         &state,
         DefinitionSource::Inline {
@@ -343,14 +349,14 @@ fn fire(row: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
             definition: definition("nightly", &task),
         },
         ScopeRoots {
-            checkout: home.path().into(),
-            project: home.path().into(),
+            checkout: home.into(),
+            project: home.into(),
         },
         || Ok(None),
         false,
     )
     .unwrap();
-    (home, state, record)
+    (state, record)
 }
 
 fn step(state: &StatePaths, record: &RunRecord, host: &FakeHost) -> RunRecord {
@@ -431,6 +437,72 @@ fn verify_passes_reprompts_the_same_session_and_fails_at_the_third_attempt() {
     drop(home);
 }
 
+#[test]
+fn a_watchdog_reports_each_outcome_to_its_task_once() {
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\nverify='test -e passed'\n";
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".rimz")).unwrap();
+    fs::write(
+        home.path().join(".rimz/config.toml"),
+        format!("[tasks.nightly]\n{row}"),
+    )
+    .unwrap();
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(home.path()));
+    let key = catalog.for_run("nightly").unwrap().key("nightly");
+    let strikes = || crate::harness::schedule::strikes::load().get(&key).copied();
+    let reports = || {
+        crate::harness::schedule::run_log::task_records(
+            &crate::disk::paths::logs_dir(),
+            "nightly",
+            Some(home.path()),
+        )
+    };
+
+    let (state, failing) = fire_at(home.path(), row);
+    assert_eq!(failing.loop_report, records::LoopReport::Owed);
+    let host = FakeHost::new();
+    step(&state, &failing, &host);
+    for n in 1..=3 {
+        turn_end(&host, n);
+        step(&state, &failing, &host);
+    }
+    let failed = records::load(&state.workflow(&failing.id)).unwrap();
+    assert_eq!(
+        (failed.state, failed.loop_report),
+        (RunState::Failed, records::LoopReport::Sent)
+    );
+    assert_eq!(strikes(), Some(1));
+    // A crash between the report and its mark: the backstop's advance reports again.
+    let mut owed = failed.clone();
+    owed.loop_report = records::LoopReport::Owed;
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::write(&state.workflow(&failing.id), &owed, &guard).unwrap();
+    drop(guard);
+    let resent = step(&state, &failing, &host);
+    assert_eq!(resent.loop_report, records::LoopReport::Sent);
+    assert_eq!(strikes(), Some(1), "a run reported twice strikes once");
+    let rows = reports();
+    let failed_id = failing.id.to_string();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.result, row.run_id.as_deref(), row.acted))
+            .collect::<Vec<_>>(),
+        [(LoopRunResult::Failed, Some(failed_id.as_str()), Some(true))]
+    );
+
+    fs::write(home.path().join("passed"), "").unwrap();
+    let (state, passing) = fire_at(home.path(), row);
+    let host = FakeHost::new();
+    step(&state, &passing, &host);
+    turn_end(&host, 1);
+    assert_eq!(step(&state, &passing, &host).state, RunState::Done);
+    assert_eq!(strikes(), None, "a watchdog whose verify passes resets");
+    assert_eq!(
+        reports().last().map(|row| row.result),
+        Some(LoopRunResult::Completed)
+    );
+}
+
 fn judge_at(node: &str) -> (crate::disk::paths::WorkflowPaths, RunRecord) {
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
@@ -496,6 +568,16 @@ fn a_judge_chain_continues_on_fail_declines_on_pass_and_runs_on_after_a_timeout(
         "judge-2",
         "a tier with no answer continues to the next tier"
     );
+}
+
+#[test]
+fn only_a_verdict_that_routes_away_from_the_act_is_a_decline() {
+    let chain = "agent='claude'\nprompt='go'\nevery='1h'\non='fail'\njudge=[{agent='claude',prompt='a'},{agent='claude',prompt='b'}]\n";
+    let (_, spec) = report(chain);
+    let declines = |node, outcome| super::super::script::declines(&spec, node, outcome);
+    assert!(declines("judge-1", "pass") && declines("judge-2", "pass"));
+    assert!(!declines("judge-1", "fail") && !declines("judge-2", "fail"));
+    assert!(!declines("judge-1", "unknown"));
 }
 
 #[test]

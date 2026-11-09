@@ -13,6 +13,9 @@ use crate::disk::paths::loops_dir;
 use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
 
 const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
+/// The workflow run ids each count has taken a signal from, newest last.
+const COUNTED: OverlayStore = OverlayStore::new("loop-strike-runs.json", "loop-strike-runs.lock");
+const COUNTED_RUNS: usize = 64;
 pub(super) const DEFAULT_MAX_STRIKES: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,26 +39,19 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
     {
         return Signal::Neutral;
     }
-    let check = record.last_verdict();
     match record.result {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
-        | LoopRunResult::Replaced
         | LoopRunResult::Errored
         | LoopRunResult::BudgetExceeded => Signal::Strike,
+        // A workflow run's launch waits for its report, which decides.
+        LoopRunResult::Launched if record.run_id.is_some() => Signal::Neutral,
         LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-            if check == Some(false) {
-                Signal::Strike
-            } else {
-                Signal::Reset
-            }
+            Signal::Reset
         }
-        LoopRunResult::CheckSkipped => match check {
-            Some(true) => Signal::Reset,
-            Some(false) | None => Signal::Neutral,
-        },
-        LoopRunResult::BudgetSkipped
+        LoopRunResult::CheckSkipped
+        | LoopRunResult::BudgetSkipped
         | LoopRunResult::SurplusSkipped
         | LoopRunResult::AccountSkipped
         | LoopRunResult::ThrottleSkipped
@@ -65,6 +61,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::TakeoverBlocked
         | LoopRunResult::StartFailed
         | LoopRunResult::Canceled
+        | LoopRunResult::Replaced
         | LoopRunResult::SignalSkipped
         | LoopRunResult::WorkflowSkipped
         | LoopRunResult::Expired
@@ -90,6 +87,11 @@ pub fn load() -> BTreeMap<String, u32> {
 
 pub(super) fn note(key: &str, signal: Signal) -> Result<u32> {
     note_in(&loops_dir(), key, signal)
+}
+
+/// Note a workflow run's signal at most once per run id; the flag says whether it counted.
+pub(super) fn note_run(key: &str, run: &str, signal: Signal) -> Result<(u32, bool)> {
+    note_run_in(&loops_dir(), key, run, signal)
 }
 
 pub(super) fn clear(key: &str) -> Result<bool> {
@@ -126,11 +128,30 @@ fn note_in(state_root: &Path, key: &str, signal: Signal) -> Result<u32> {
         .map_err(Into::into)
 }
 
+/// The run id is recorded before the count moves, so a crash between the two loses the
+/// signal rather than counting it twice.
+fn note_run_in(state_root: &Path, key: &str, run: &str, signal: Signal) -> Result<(u32, bool)> {
+    let fresh = COUNTED.mutate::<Vec<String>, _>(state_root, |counted| {
+        let runs = counted.entry(key.to_owned()).or_default();
+        if runs.iter().any(|seen| seen == run) {
+            return (false, false);
+        }
+        runs.push(run.to_owned());
+        let excess = runs.len().saturating_sub(COUNTED_RUNS);
+        runs.drain(..excess);
+        (true, true)
+    })?;
+    let signal = if fresh { signal } else { Signal::Neutral };
+    Ok((note_in(state_root, key, signal)?, fresh))
+}
+
 fn clear_from(state_root: &Path, key: &str) -> Result<bool> {
+    COUNTED.remove::<Vec<String>>(state_root, key)?;
     STORE.remove::<u32>(state_root, key).map_err(Into::into)
 }
 
 fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
+    COUNTED.rename::<Vec<String>>(state_root, old, new)?;
     STORE
         .rename::<u32>(state_root, old, new)
         .map_err(Into::into)
@@ -141,6 +162,7 @@ fn prune_orphans_in(
     known: &BTreeSet<String>,
     scopes: &BTreeSet<String>,
 ) -> Result<usize> {
+    COUNTED.prune_orphans_in_scopes::<Vec<String>>(state_root, known, scopes)?;
     STORE
         .prune_orphans_in_scopes::<u32>(state_root, known, scopes)
         .map_err(Into::into)
@@ -183,6 +205,7 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            acted: None,
         }
     }
 
@@ -198,64 +221,59 @@ mod tests {
     }
 
     #[test]
-    fn overlap_results_are_neutral_or_striking() {
-        for (name, expected) in [("deferred", Signal::Neutral), ("replaced", Signal::Strike)] {
+    fn overlap_results_are_neutral() {
+        for name in ["deferred", "replaced", "overlapped"] {
             let result = serde_json::from_value::<LoopRunResult>(serde_json::json!(name));
             assert!(result.is_ok(), "{name} must be a history result");
-            assert_eq!(classify(&record(result.unwrap(), None)), expected);
+            assert_eq!(classify(&record(result.unwrap(), None)), Signal::Neutral);
         }
     }
 
     #[test]
-    fn classifies_failure_progress_and_poll_signals() {
+    fn classifies_outcomes_without_reading_the_guard() {
+        for (result, check) in [
+            (LoopRunResult::Completed, check(Some(1), false)),
+            (LoopRunResult::Delivered, check(Some(0), true)),
+            (LoopRunResult::Completed, None),
+            (LoopRunResult::Launched, None),
+        ] {
+            assert_eq!(
+                classify(&record(result, check)),
+                Signal::Reset,
+                "{result:?}"
+            );
+        }
+        let mut judged =
+            serde_json::to_value(record(LoopRunResult::CheckSkipped, check(Some(0), false)))
+                .unwrap();
+        judged["judge"] = serde_json::json!([
+            {"profile": "haiku", "kind": "claude", "verdict": true},
+        ]);
+        let judged: LoopRunRecord = serde_json::from_value(judged).unwrap();
         assert_eq!(
-            classify(&record(LoopRunResult::Completed, check(Some(1), false))),
-            Signal::Strike
+            classify(&judged),
+            Signal::Neutral,
+            "a pass that skips is no reset"
         );
-        assert_eq!(
-            classify(&record(LoopRunResult::Delivered, check(Some(0), true))),
-            Signal::Strike
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::CheckSkipped, check(Some(0), false))),
-            Signal::Reset
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::CheckSkipped, check(Some(1), false))),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::Completed, None)),
-            Signal::Reset
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::BudgetSkipped, None)),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::SurplusSkipped, None)),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::AccountSkipped, None)),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::ThrottleSkipped, None)),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::CapacityHeld, check(Some(1), false))),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::TakeoverBlocked, None)),
-            Signal::Neutral
-        );
-        assert_eq!(
-            classify(&record(LoopRunResult::WorkflowSkipped, None)),
-            Signal::Neutral
-        );
+        for result in [
+            LoopRunResult::CheckSkipped,
+            LoopRunResult::BudgetSkipped,
+            LoopRunResult::SurplusSkipped,
+            LoopRunResult::AccountSkipped,
+            LoopRunResult::ThrottleSkipped,
+            LoopRunResult::CapacityHeld,
+            LoopRunResult::TakeoverBlocked,
+            LoopRunResult::WorkflowSkipped,
+            LoopRunResult::Canceled,
+            LoopRunResult::Expired,
+            LoopRunResult::TargetGone,
+            LoopRunResult::StartFailed,
+        ] {
+            assert_eq!(
+                classify(&record(result, check(Some(1), false))),
+                Signal::Neutral
+            );
+        }
         for result in [
             LoopRunResult::Failed,
             LoopRunResult::VerifyFailed,
@@ -268,18 +286,37 @@ mod tests {
     }
 
     #[test]
-    fn strikes_read_the_last_guard_verdict() {
-        let mut wire =
-            serde_json::to_value(record(LoopRunResult::Completed, check(Some(1), false))).unwrap();
-        wire["judge"] = serde_json::json!([
-            {"profile": "haiku", "kind": "claude", "verdict": true},
-            {"profile": "sonnet", "kind": "claude", "error": "outage"}
-        ]);
-        let row: LoopRunRecord = serde_json::from_value(wire).unwrap();
+    fn a_workflow_launch_waits_for_its_report() {
+        let mut launch = record(LoopRunResult::Launched, None);
+        launch.run_id = Some("wf_1".to_owned());
+        assert_eq!(classify(&launch), Signal::Neutral);
+    }
+
+    #[test]
+    fn a_run_reported_twice_counts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "machine::nightly";
         assert_eq!(
-            classify(&row),
-            Signal::Reset,
-            "shell failure followed by a pass is not a strike"
+            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
+            (1, true)
+        );
+        assert_eq!(
+            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
+            (1, false)
+        );
+        assert_eq!(
+            note_run_in(dir.path(), key, "wf_2", Signal::Strike).unwrap(),
+            (2, true)
+        );
+        assert_eq!(
+            note_run_in(dir.path(), key, "wf_2", Signal::Reset).unwrap(),
+            (2, false)
+        );
+        assert!(clear_from(dir.path(), key).unwrap());
+        assert_eq!(
+            note_run_in(dir.path(), key, "wf_1", Signal::Strike).unwrap(),
+            (1, true),
+            "clearing a count forgets the runs it took"
         );
     }
 

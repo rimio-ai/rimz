@@ -269,6 +269,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,
+        acted: None,
     }
 }
 
@@ -938,5 +939,226 @@ fn append_caps_forensic_fields() {
             .expect("signal")
             .payload
             .contains_key("_truncated")
+    );
+}
+
+#[test]
+fn workflow_reports_supersede_the_launch_and_count_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |second, result, acted: Option<bool>| {
+        let mut row = record("wf", second, result);
+        row.run_id = Some("wf_1".to_owned());
+        row.acted = acted;
+        row.cost_usd = acted.map(|_| 2.0);
+        row
+    };
+    let mut launch = run(1, LoopRunResult::Launched, None);
+    launch.absorbed = 2;
+    launch.signal = Some(SignalRecord {
+        name: "ci.failed".parse().unwrap(),
+        payload: serde_json::Map::new(),
+    });
+    launch.run_lock = Some(RunLockInfo {
+        pid: 7,
+        started_at: Timestamp::from_second(1).unwrap(),
+    });
+    let skipped = run(2, LoopRunResult::WorkflowSkipped, None);
+    let report = run(3, LoopRunResult::Failed, Some(true));
+    let again = run(4, LoopRunResult::Failed, Some(true));
+    for row in [&launch, &skipped, &report, &again] {
+        append_to(dir.path(), row);
+    }
+    let mut reported = again.clone();
+    reported.absorbed = launch.absorbed;
+    reported.signal = launch.signal.clone();
+    reported.run_lock = launch.run_lock;
+    assert_eq!(
+        task_records(dir.path(), "wf", None),
+        vec![skipped, reported],
+        "a report replaces the launch and earlier reports, never a skip naming the run, \
+         and keeps the fire's own facts"
+    );
+    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let stats = &stats(dir.path(), &now, None)["wf"];
+    assert_eq!(
+        stats.runs, 2,
+        "the launch, its reports and the skip are two fires"
+    );
+    assert_eq!(stats.last.as_ref().map(|row| row.at.as_second()), Some(3));
+}
+
+#[test]
+fn a_launch_row_written_after_its_runs_report_folds_into_that_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut report = record("wf", 3, LoopRunResult::Completed);
+    report.run_id = Some("wf_1".to_owned());
+    report.acted = Some(false);
+    let mut launch = record("wf", 4, LoopRunResult::Launched);
+    launch.run_id = report.run_id.clone();
+    launch.kind = Some(super::super::TaskKind::OneOff);
+    launch.worktree = Some(FireWorktree {
+        path: PathBuf::from("/tree"),
+        base_fallback: None,
+    });
+    launch.signal = Some(SignalRecord {
+        name: "ci.failed".parse().unwrap(),
+        payload: serde_json::Map::new(),
+    });
+    append_to(dir.path(), &report);
+    append_to(dir.path(), &launch);
+    let mut folded = report.clone();
+    folded.kind = launch.kind;
+    folded.worktree = launch.worktree.clone();
+    folded.signal = launch.signal.clone();
+    assert_eq!(
+        task_records(dir.path(), "wf", None),
+        vec![folded],
+        "a fast run's report lands first and still takes its launch row's fire facts"
+    );
+    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let stats = &stats(dir.path(), &now, None)["wf"];
+    assert_eq!(stats.runs, 1);
+    assert_eq!(
+        stats.last.as_ref().map(|row| row.result),
+        Some(LoopRunResult::Completed),
+        "the late launch row does not stand in for the run's outcome"
+    );
+}
+
+#[test]
+fn workflow_daily_gate_holds_each_live_runs_reservation() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let mut spent = record("wf", 0, LoopRunResult::Completed);
+    spent.at = now.timestamp();
+    spent.cost_usd = Some(4.0);
+    append_to(dir.path(), &spent);
+    let entry = crate::config::TaskEntry {
+        budget_per_day: Some("$10.00".to_owned()),
+        ..crate::config::TaskEntry::default()
+    };
+    let gate =
+        |reserved, live| reserved_budget_gate(dir.path(), "wf", &entry, &now, reserved, live);
+    assert_eq!(
+        gate(3.0, 3.0),
+        Ok(None),
+        "4 spent + 3 held + 3 next fits 10"
+    );
+    let held = gate(3.0, 3.5).unwrap().expect("4 + 3.5 + 3 exceeds 10");
+    assert_eq!(
+        (held.spend_usd, held.live_usd, held.reserved_usd),
+        (4.0, 3.5, 3.0)
+    );
+    assert_eq!(
+        held.reason(),
+        "daily budget $10.00 cannot fund the next $3.00 run ($4.00 spent, $3.50 held by live runs)"
+    );
+    assert_eq!(
+        gate(0.0, 5.5),
+        Ok(None),
+        "an unbounded graph is admitted below the cap"
+    );
+    assert_eq!(
+        gate(0.0, 6.0)
+            .unwrap()
+            .map(DailyBudgetGate::reason)
+            .as_deref(),
+        Some("daily budget $10.00 exhausted ($4.00 spent, $6.00 held by live runs)")
+    );
+}
+
+#[test]
+fn a_workflow_report_strikes_or_resets_once_per_run() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    crate::Store::open(state.clone(), runtime)
+        .unwrap()
+        .record_workspace(&workspace)
+        .unwrap();
+    let entry = crate::config::TaskEntry {
+        check: Some("true".into()),
+        every: Some("1h".into()),
+        root: root.path().into(),
+        ..crate::config::TaskEntry::default()
+    };
+    super::super::instances::insert(&state, "nightly", &entry).unwrap();
+    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
+    let key = catalog.for_run("nightly").unwrap().key("nightly");
+    let run = |state: &str, visits: serde_json::Value| -> crate::store::workflow::RunRecord {
+        serde_json::from_value(serde_json::json!({
+            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
+            "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
+            "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
+            "created_at":"2026-01-01T00:00:00Z", "state":state, "node":"agent",
+            "entered_at":"2026-01-01T00:00:00Z", "visits":visits, "visit_grant":0,
+            "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
+            "loop_report":"owed"
+        }))
+        .unwrap()
+    };
+    let attempt = |cost: f64| -> crate::store::workflow::JournalEntry {
+        serde_json::from_value(serde_json::json!({
+            "seq":1, "at":"2026-01-01T00:00:30Z", "node":"agent", "event":"attempt",
+            "outcome":"ended", "visit":1, "key":null, "digests":{},
+            "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:30Z",
+            "cost_usd":cost
+        }))
+        .unwrap()
+    };
+    let failed = run(
+        "failed",
+        serde_json::json!({"agent": {"total": 1, "outcomes": []}}),
+    );
+    for _ in 0..2 {
+        report_run(&failed, &[attempt(0.5), attempt(0.25)]);
+        assert_eq!(
+            super::super::strikes::load().get(&key),
+            Some(&1),
+            "a re-reported run strikes once"
+        );
+    }
+    let rows = task_records(
+        &crate::disk::paths::logs_dir(),
+        "nightly",
+        Some(root.path()),
+    );
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        (
+            row.result,
+            row.run_id.as_deref(),
+            row.cost_usd,
+            row.acted,
+            row.duration_ms
+        ),
+        (
+            LoopRunResult::Failed,
+            Some(failed.id.to_string().as_str()),
+            Some(0.75),
+            Some(true),
+            Some(60_000)
+        )
+    );
+    report_run(&run("done", serde_json::json!({})), &[]);
+    assert_eq!(
+        super::super::strikes::load().get(&key),
+        None,
+        "a done run resets"
+    );
+    let rows = task_records(
+        &crate::disk::paths::logs_dir(),
+        "nightly",
+        Some(root.path()),
+    );
+    assert_eq!(rows.last().map(|row| row.acted), Some(Some(false)));
+    report_run(&run("canceled", serde_json::json!({})), &[]);
+    report_run(&failed, &[]);
+    assert_eq!(
+        super::super::strikes::load().get(&key),
+        None,
+        "cancel is neutral"
     );
 }
