@@ -13,10 +13,10 @@ These commands inspect, upgrade, repair, clean up, and remove RimZ. Which ones w
 | [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes, and reopens a closed `rimzd` tab | No |
 | [`reset`](#reset-a-wedged-room) | The current workspace's room | Tears the room down, archives its records, rebuilds | Yes |
 | [`gc`](#sweep-stale-state) | The current room; `--all` adds the machine | Removes stale state and landed worktrees; `--all` also prunes dead stores | No |
-| [`uninstall`](#uninstall-rimz) | The whole machine | Removes hooks, rooms, state, binaries | Yes |
+| [`uninstall`](#uninstall-rimz) | The whole machine | Removes hooks, rooms, runtime and cache, binaries; `--state` and `--config` add durable state and config | Yes |
 | [`ping`](#check-that-the-binary-runs) | Nothing | Nothing | No |
 
-"The current workspace" is the one the current directory resolves to, or `--root`; `gc` also follows the running room's identity ([room resolution](../cli.md#which-room-a-command-reaches)). All of these take the [global flags](../cli.md#global-flags). Configuring the machine is [`rimz config`](./config.md), and the workflows for a stuck room, a stale pane, and full removal are in the [troubleshooting guide](../../guide/troubleshooting.md).
+"The current workspace" is the one the current directory resolves to, or `--root`; `gc` and `workspace rotate-events` also follow the running room's identity ([room resolution](../cli.md#which-room-a-command-reaches)). All of these take the [global flags](../cli.md#global-flags). Configuring the machine is [`rimz config`](./config.md), and the workflows for a stuck room, a stale pane, and full removal are in the [troubleshooting guide](../../guide/troubleshooting.md).
 
 ## Check adapter coverage
 
@@ -34,7 +34,7 @@ WHAT EACH AGENT GIVES YOU
 AGENT        state  live  history  account  ask  subagents
 claude       ✓      ✓     ✓        ✓        ✓    ✓
 codex        ✓      ✓     ✓        ✓        ✓    ✓
-amp          ✓      !     !        !        ✓    ✗
+amp          ✓      ✗     ✗        !        !    ✗
 …
   legend ✓ full   ! partial   ✗ unsupported
 
@@ -61,7 +61,7 @@ Each JSON matrix is `{"agents": [...], "rows": [...]}`. A row is one capability,
 rimz workspace resolve [PATH]
 ```
 
-`resolve` prints, as JSON, the workspace that `PATH` (default `.`) belongs to. It writes nothing, so a script can call it to learn which room a directory maps to before running other tools.
+`resolve` prints, as JSON, the workspace that `PATH` (default `.`) belongs to. It writes nothing and needs no room, so a script can call it to learn which room a directory maps to. `--root` overrides the resolved project root. A `PATH` that does not exist fails with `the path does not exist`.
 
 ```console
 $ rimz workspace resolve
@@ -94,7 +94,7 @@ $ rimz workspace resolve
 rimz workspace migrate <OLD_ROOT> <NEW_ROOT>
 ```
 
-The workspace ID is derived from the project root, so a project moved on disk resolves to a new, empty workspace. `migrate` carries the old store over: it moves the store directory to the new ID and rewrites the workspace identity in its events, queued messages, and workspace record. `OLD_ROOT` may be a path that no longer exists. Run it before starting a room in the new location.
+The workspace ID is derived from the project root, so a project moved on disk resolves to a new, empty workspace. `migrate` carries the old store over: it moves the store directory to the new ID and rewrites the workspace identity in its events, queued messages, and workspace record. `OLD_ROOT` may be a path that no longer exists. When both roots resolve to the same ID, the store stays in place and only the identity is rewritten. Run it before starting a room in the new location.
 
 ```console
 $ rimz workspace migrate ~/code/query-engine ~/src/query-engine
@@ -109,7 +109,7 @@ It refuses, and changes nothing, when:
 
 | Condition | Error |
 | --- | --- |
-| `NEW_ROOT` does not exist | `new workspace root does not exist: PATH` |
+| `NEW_ROOT` does not exist | `resolving new root PATH`, then `could not resolve workspace from PATH: the path does not exist; check the path or create the directory first` |
 | No store exists for `OLD_ROOT` | `workspace store ID not found at PATH` |
 | A store already exists for `NEW_ROOT` | `destination workspace store ID already exists at PATH` |
 
@@ -128,7 +128,9 @@ rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATIO
 
 `SIZE` is an integer with an optional unit and no space: none or `B` for bytes, `K` or `KB`, `M` or `MB`, `G` or `GB` for powers of 1000, and `KiB`, `MiB`, `GiB` for powers of 1024.
 
-The output opens with `event-log rotated` (then the bytes rotated, the archive path, and the carryover agent count) or `event-log rotation skipped` (then the current size and the threshold). Both end with the number of archives and bytes pruned. How rotation and carryover work is in [store internals](../../internals/store.md#rotation-and-carryover).
+The current workspace must have a store: without one the command fails with ``no room at PATH: run `rimz start` there, or pass --root <room>``.
+
+The output opens with `event-log rotated` or `event-log rotation skipped`, followed by indented `key: value` lines. Both start with `workspace` (the workspace ID). A rotation then prints `bytes rotated`, `archive` (the archive path), and `carryover` (`N agent(s)`). A skip prints `current bytes` and `threshold`. Both end with `pruned` (`N archive(s)`) and `bytes pruned`. How rotation and carryover work is in [store internals](../../internals/store.md#rotation-and-carryover).
 
 ## Update RimZ
 
@@ -142,7 +144,7 @@ rimz update [--version <TAG>]
 | --- | --- |
 | Homebrew (the binary lives under a `Cellar` directory) | `brew update`, then `brew upgrade rimio-ai/rimz/rimz`. |
 | Cargo (the binary is in Cargo's bin directory) | `cargo install --locked rimz`. A source build (a version containing `+g`) prints a warning that the crates.io release will replace it. |
-| The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place. If the running version already matches, it prints `rimz VERSION is up to date.` without replacing the binary, then continues to packs. |
+| The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place, printing `Updated rimz OLD → NEW at PATH`. A numbered tag equal to the running version prints `rimz VERSION is up to date.` before any download. A source build (`+g` in its version) and `latest-main` always download; a staged build identical to the running one prints `rimz VERSION is already up to date.` and replaces nothing. Either way `update` continues to packs. |
 
 When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it and outdated language-server brokers retire without interrupting their servers. A reload that fails to start or exits nonzero does not stop pack updates. After packs, `update` exits 1 with ``RimZ updated, but `PATH reload` exited with STATUS; see its fixes above`` (or the error that prevented starting reload).
 
@@ -156,7 +158,7 @@ An official pack without the binary's `v<version>` tag, possible on `latest-main
 
 | Install | Accepted tags |
 | --- | --- |
-| Script or download | Any release tag, such as `v0.3.1` or an older tag to roll back, or the rolling `latest-main` build. |
+| Script or download | Any release tag, such as `v0.3.1` or an older tag to roll back, or the rolling `latest-main` build. A tag that is not a valid release tag fails with ``release tag `TAG` is invalid; use a tag such as `v0.3.1` or `latest-main` ``. |
 | Cargo | Numbered tags only. `v0.3` becomes `0.3.0`; `latest-main` is refused with ``Cargo cannot install release tag `latest-main`; use a version tag such as `v0.3.1` ``. |
 | Homebrew | None. `--version` fails with ``Homebrew cannot pin RimZ to `TAG`; reinstall the standalone build with `RIMZ_VERSION=TAG` or let `brew upgrade rimio-ai/rimz/rimz` select the release``. |
 
@@ -223,7 +225,7 @@ The closing block starts with `! K need you`. Each `! SESSION: problem` (or `! m
 | `another repair holds the room` | `rimz reload --repair once it finishes` |
 | `presence plugin silent` | `rimz attach --root PATH` |
 | `N language-server brokers too old to retire` | `rimz reload once idle` |
-| `no readable rimz on PATH; brokers not checked` | Put RimZ on PATH, then `rimz reload`. |
+| `no readable rimz on PATH; brokers not checked` | `put rimz on PATH, then rimz reload` |
 | `web daemon restart failed: ERROR` | `rimz web restart` |
 
 Zellij settings that cannot apply live appear in muted `Applies when the room next starts:` or `Applies when you next attach:` blocks, comparing your effective machine config with what RimZ last asserted. Each room gets a targeted reset or attach command. Reset closes the room's agents. Rooms started before settings tracking instead get `N rooms started before RimZ tracked room settings; changes there show after their next start.` No setting is inferred for those rooms. tmux has no pending settings; before tmux 3.7, a `history_limit` change still affects only new panes, not existing panes' scrollback. These notices do not count as problems; see [multiplexer settings](../../guide/multiplexer.md#change-what-the-room-asserts) for the classes.
@@ -238,23 +240,26 @@ rimz sidebar repair
 
 `sidebar repair` fixes the sidebar panes themselves, in every live room: it adds a missing sidebar, closes duplicate or unresponsive ones, and restores a sidebar's docking and width. A replacement pane must start and report on the current build before the old one closes. Each view with a successfully added or closed pane leaves a [`sidebar_view_repaired` diagnostic](../../internals/diagnostics.md#event-taxonomy) naming those panes; `rimz doctor` shows it as recovered information. After sidebar repair it also reopens a wholly closed `rimzd` tab, including in rooms opened by supervised runs. A tab still present is left to automatic daemon-pane repair. It publishes no build; use [`reload`](#reload-running-sidebars) for that.
 
+The report prints one line per outcome that occurred, in this order:
+
 | Line | Meaning |
 | --- | --- |
+| ``Presence plugin silent or stale in N sessions; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.`` | Plugin health is diagnostic; it does not prevent structural repair. |
 | `Recovered N sidebars in place.` | Sidebars added to a view that had none, or whose only sidebar was unresponsive. |
 | `Closed N duplicate or unresponsive sidebars.` | Extra or dead sidebar panes removed. |
 | `Repaired N sidebars geometry.` | Kept sidebars moved back to the full-height left dock. |
 | `Reopened the rimzd tab in N sessions.` | Wholly closed daemon tabs reopened from their room's recorded build. |
 | ``Deferred reopening the rimzd tab in N sessions (no attached client); attach and re-run `rimz sidebar repair`.`` | A detached Zellij session needs a client before its daemon tab can be reopened; no tab or sidebar was created. |
 | ``Could not reopen the rimzd tab in N sessions; re-run `rimz sidebar repair`.`` | Reopening the daemon tab failed this pass. |
+| `Reaped N orphaned sidebar processes.` | Sidebar processes whose pane is gone were stopped. |
 | `N sidebars still working but not docked.` | Running, but still outside the left dock after repair. |
-| ``N sidebars could not be repaired; attach and re-run `rimz sidebar repair`.`` | The add or repair did not complete this pass. |
-| ``Presence plugin silent or stale in N sessions; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.`` | Plugin health is diagnostic; it does not prevent structural repair. |
-| ``Repair busy in N sessions (another repair holds the lock); re-run `rimz sidebar repair` when it finishes.`` | Another pass held the per-session lock beyond the sixty-second wait. |
 | ``Deferred N sidebar repairs (no attached client); attach and re-run `rimz sidebar repair`.`` | A detached Zellij session cannot take a new pane or geometry change until a client attaches. |
-| `Sidebar structure is healthy across N sessions.` | Nothing needed repair. |
-| `No running sidebars to repair.` | No live room. |
+| ``N sidebars could not be repaired; attach and re-run `rimz sidebar repair`.`` | The add or repair did not complete this pass. |
+| ``Repair busy in N sessions (another repair holds the lock); re-run `rimz sidebar repair` when it finishes.`` | Another pass held the per-session lock beyond the sixty-second wait. A busy session skips its daemon-tab reopen. |
+| `Sidebar structure is healthy across N sessions.` | Nothing above occurred. |
+| `No running sidebars to repair.` | No live room. This line is printed alone. |
 
-Exit status is 1 after the full report if a sidebar repair or daemon-tab reopen failed or was deferred, a sidebar remained misdocked, or a session was busy; otherwise it is 0. A silent or stale plugin alone does not fail this standalone command; `rimz reload --repair` also names it in its closing block. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
+After the full report, the command exits 1 with `Sidebar repair is incomplete; see the report above.` if a sidebar repair or daemon-tab reopen failed or was deferred, a sidebar remained misdocked, or a session was busy. Otherwise it exits 0. A silent or stale plugin alone does not fail this standalone command; `rimz reload --repair` also names it in its closing block. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
 
 ## Reset a wedged room
 
@@ -266,30 +271,53 @@ rimz reset [--yes] [--no-start] [--hard] [--account <KIND@NAME>]... [PATH]
 
 1. deletes the room's multiplexer session and purges the multiplexer's resurrection cache for it;
 2. signals the room's orphaned processes and clears the runtime `sock/`, `live/`, and `lanes/` classes, keeping lock inodes;
-3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them, and drops every pending [`stop --when-idle`](./agents.md#stop) request, raised ask, card alert, and human-turn stamp;
-4. archives the active event log, clears rebuildable caches and its recorded provider accounts;
+3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them, and drops every pending [`stop --when-idle`](./agents.md#stop) request, raised ask, card alert, human-turn stamp, hibernation record, and queued hook frame;
+4. archives the active event log, clears the room's `cache/` (including skill copies in `cache/skills/` and system SSH-config copies in `cache/ssh-config/`), and clears its recorded provider accounts and run-only remote-control waivers;
 5. starts the room again and attaches, with no prior agents recovered.
-
-Your agents' own session files and the room's archived records stay on disk. A plain reset keeps the prior-agent carryover as history; the reborn room still starts with no agents. A plain reset run with no terminal (`--yes` from a script) ends none of the top-level agents: the ones the old room lost stay parked, and `rimz agents resume <lane>` brings a lane back. Their subagents are closed (`rimz.child-not-resumed`), because a resumed parent relaunches any children it still needs. With `--hard`, the prior-agent carryover is deleted: those agents are no longer offered for recovery, even if their identities remain in the pending record.
-
-On a room with scoped isolation, a process an agent left running in the background can still be inside the agent's scoped view, using the `/tmp` that `--hard` deletes. After step 2, `reset --hard` ends every such process and reports `Scoped views: ended N processes still inside the room's scoped views.` If one cannot be ended, reset stops before step 3 with each remaining pid and command line: stop them, then run `rimz reset --hard` again. Processes outside a scoped view are left alone, and a plain reset ends none ([temp units](../../internals/sandbox.md#temp-units)).
 
 | Flag | Effect |
 | --- | --- |
 | `--yes` | Skip the `[y/N]` prompt. Required when stdin is not a terminal. |
 | `--no-start` | Stop after step 4 and print ``Room torn down. Run `rimz start` to rebuild it.`` |
-| `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state except run records, and room tmp. Canceled run records and the rotated log archive remain. |
+| `--hard` | Also delete prior-agent carryover, the active event log, `audit/` (transcripts, messages, diagnostics), `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, `automation-notes/`, and `out/`. |
 | `--account <KIND@NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
 `rimz accounts use` moves a running room's launch default in place; `reset --account` rebuilds the room under a different account instead.
 
-Reset refuses before prompting or changing anything when `--mux` names a backend other than the one the room runs on. A listed session without its own live sidebar also refuses if another room holds the workspace: close that leftover session from its multiplexer instead. Without `--yes` and without a terminal it fails with `` `rimz reset` deletes the session and sweeps its processes; pass --yes to confirm without a terminal ``. Answering anything but `y` prints `Reset aborted; nothing changed.` and exits 0.
+### What survives
 
-The report goes to stderr before the rebuild:
+Your agents' own session files stay on disk, and so do the archived event logs. A plain reset also keeps transcripts, message history, run records, agent scratch under `owned/`, agent temp files, the room's `shared/`, `team-notes/`, `automation-notes/`, and `out/` directories, and the prior-agent carryover as history. Both resets keep the standing fleet budget choices, canceled run records, and state `locks/`. Waiters can read a canceled run's record after reset; terminal run records are reclaimed after the owned GC grace.
 
-The report names the session deletion, process sweep, temporary-file retention, cleared skill copies, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. A session that could not be deleted reads `session not deleted`, followed by a `Reset: could not delete the session:` line with the multiplexer's error; the teardown still runs its remaining steps. Hard reset additionally removes audit, owned state, `tmp/`, `shared/`, `team-notes/`, `automation-notes/`, and `out/`.
+The reborn room starts with no agents either way. A plain reset run with no terminal (`--yes` from a script) ends none of the top-level agents: the ones the old room lost stay parked, and `rimz agents resume <lane>` brings a lane back. Their subagents are closed (`rimz.child-not-resumed`), because a resumed parent relaunches any children it still needs. With `--hard`, the carryover is deleted: those agents are no longer offered for recovery, even if their identities remain in the pending record.
 
-For a room written by an older RimZ, reset instead removes the whole room and its runtime tree, without carrying over history. If a running room holds that workspace, reset refuses with the held-room error before prompting or changing anything; close that session from its multiplexer first. For other rooms, soft reset keeps transcripts, message history, run records, agent scratch, agent temp files, the room's `shared/`, `team-notes/`, `automation-notes/`, and `out/` directories, and standing fleet budget choices. Both resets clear skill copies in `cache/skills/` and system SSH-config copies in `cache/ssh-config/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `team-notes/`, `automation-notes/`, `out/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset of a current room removes state `locks/`.
+A process an agent left running in the background can still be inside the agent's scoped view, using the `/tmp` that `--hard` deletes. After step 2, `reset --hard` ends every such process. If one survives, reset stops before step 3, lists each remaining pid and command line, and ends with ``Stop them, then run `rimz reset --hard` again.`` Processes outside a scoped view are left alone, and a plain reset ends none ([temp units](../../internals/sandbox.md#temp-units)).
+
+A room written by an older RimZ is removed whole, with its runtime tree, and no history is carried over.
+
+### Refusals
+
+Reset refuses before prompting or changing anything when:
+
+- `--mux` names a backend other than the one the room runs on;
+- the room is held: a listed session without its own live sidebar, or an older-layout room, while another process holds the workspace (close that leftover session from its multiplexer instead);
+- without `--no-start`, the rebuilt room's multiplexer sockets would not fit the path budget;
+- stdin is not a terminal and `--yes` is absent: `` `rimz reset` deletes the session and sweeps its processes; pass --yes to confirm without a terminal ``.
+
+Answering anything but `y` or `yes` (any case) at the prompt prints `Reset aborted; nothing changed.` and exits 0.
+
+### The reset report
+
+The report goes to stderr before the rebuild, one line per fact:
+
+| Line | Meaning |
+| --- | --- |
+| `Reset: session deleted, N cache entries removed, N orphan processes swept.` | Steps 1 and 2. `session not deleted` replaces `session deleted` when the multiplexer refused. |
+| `Reset: could not delete the session: ERROR` | Only after `session not deleted`. The teardown still runs its remaining steps. |
+| `Scoped views: ended N processes still inside the room's scoped views.` | Only under `--hard`, when it ended any. |
+| `Room tmp: kept; skill copies: cleared.` | `cleared` replaces `kept` under `--hard`. |
+| `Records: archived N bytes to PATH.` | The active event log was archived. `Records: no active event log archived (N bytes).` when it was empty. |
+| `Records: canceled N runs, removed N debug entries, runtime removed.` | `runtime already clean` when there was no runtime state left to remove. |
+| `Records: prior agent rollup kept (N agents).` | `Records: prior agent rollup cleared.` under `--hard`. |
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 
@@ -299,11 +327,20 @@ What reset does to the store is in [store internals](../../internals/store.md#ma
 rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 ```
 
-`gc` removes state that has outlived its use and keeps anything dirty, unlanded, or unknown. By default it sweeps only the current room: `--root` overrides the running room's identity, which otherwise takes precedence over directory resolution. `--all` adds every room and shared machine state, while store maintenance and worktrees remain current-room only. Resolution failure exits non-zero and asks you to run inside a room or pass `--root`.
+`gc` removes state that has outlived its use and keeps anything dirty, unlanded, or unknown. By default it sweeps only the current room: the running room's identity when the command runs inside one, otherwise the room the current directory resolves to, and `--root` overrides both. `--all` adds every room and shared machine state; store maintenance and worktrees stay current-room only. When no room resolves, `gc` fails with `resolving the room for gc; run inside a room or pass --root`.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--older-than <DURATION>` | the `gc.older_than` setting, `7d` | The age cutoff for `runtime` and `temp files`. Units: `s`, `m`, `h`, `d` ([durations](../cli.md#durations)). Must be greater than zero. |
+| `--dry-run` | off | Report what would be removed and remove nothing. `messages`, `event log`, `agent cache`, and `loop schedules` show as skipped. |
+| `--json` | off | Print the report as JSON instead. |
+| `--all` | off | Sweep every room and shared machine state. |
+
+The sweep runs eight areas, in the order the report prints them. Before them, the report lists the lifetime classes swept in each selected room.
 
 | Area | Room scope (default) | Machine scope (`--all`) |
 | --- | --- | --- |
-| Room class blocks | The current room's lifetime classes. | Every remaining room, after dead workspace pruning. |
+| Room class blocks (not an area) | The current room's lifetime classes. | Every remaining room, after dead workspace pruning. |
 | `worktrees` | Removes current-repository RimZ-owned worktrees that are clean, landed, and have no pane, agent, armed loop-task holder, team board short of `Done`, or unfinished workflow run, as in [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). | Same. |
 | `workspaces` | Skipped; run with `--all`. | Deletes rooms written by an older RimZ, stores whose project folder is gone, and setups abandoned before any history, along with their runtime trees. Sweeps empty working directories of rooms removed now or earlier, keeping agent directories within the seven-day grace. Unreadable records with history are kept and reported. A dead workspace that cannot be removed is reported; any surviving workspace directory is retried by the next sweep. |
 | `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. Also the machine's account budget ledgers that no history pool reads, counted as `account budget ledgers`. | Every runtime root, stale shared provider probe markers, and the same account budget ledgers. |
@@ -315,56 +352,49 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 
 With either scope, a current room written by an older RimZ refuses the command with a layout error; run `rimz start` or `rimz reset` there to replace it with a fresh room.
 
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `--older-than <DURATION>` | the `gc.older_than` setting, `7d` | The age cutoff for `runtime` and `temp files`. Units: `s`, `m`, `h`, `d` ([durations](../cli.md#durations)). Must be greater than zero. |
-| `--dry-run` | off | Report what would be removed and remove nothing. `messages`, `event log`, `agent cache`, and `loop schedules` show as skipped. |
-| `--json` | off | Print the report as JSON instead. |
-| `--all` | off | Sweep every room and shared machine state. |
-
 GC never creates a store. Without one, `messages`, `event log`, `agent cache`, and repository `worktrees` show `skipped — no rimz store here`; outside a repository, `worktrees` shows `skipped — not inside a git repo`. An absent room state root produces no room class block.
 
-The `worktrees` area is the one that reaches past RimZ's own files: removing a tree deletes that checkout and its files, and deletes the branch behind it. A dirty, held, or unmerged tree is kept and reported rather than forced. Armed loop tasks hold the paths described under [`worktree sweep`](./worktree.md#sweep-landed-worktrees), even while paused. A team board short of `Done` or an unfinished workflow run holds its checkout too, as described under [`worktree sweep`](./worktree.md#sweep-landed-worktrees). If any task source, workflow record or workflows directory, or the owned-worktree listing cannot be read, the whole worktree area is skipped and names the failure; other areas still run. The branch is the exception: when `git branch -d` refuses it as unmerged, RimZ compares its content against the base and deletes it with `git branch -D` once that comparison says the work already landed. A branch it cannot prove landed is kept.
-
-### Automatic sweeps
-
-Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Each run is recorded in [`rimz stats --assists`](./stats.md#the-assist-timeline); repeated sweeps of the same workspace and scope fold into a `♻` line with summed reclaimed bytes, removal counts, and problem counts, and `--all` includes failed runs. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand. While a machine config file fails to load ([`rimz config get`](./config.md#read-a-value) names the error), automatic sweeps pause rather than fall back to the defaults, except that an unreadable `loop.toml` skips only worktrees when the core config remains readable. Loop arming overlays are retained when task sources cannot be read.
-
-One of those helpers is elected for a machine sweep when the last automatic machine attempt is at least 24 hours old, or none is recorded. It runs the same scope as `--all`, including its own room; the other helpers sweep only their rooms. Failed machine attempts also wait a day before retrying. Apart from temp pressure eviction below, closed rooms wait for that elected sweep or a manual `--all`; they do not start helpers themselves.
-
-Separately, each open room checks free disk space on its heavy refresh. Below `max(gc.tmp_floor_percent% of capacity, gc.tmp_floor_min)` (by default, the larger of 10% and 10 GiB), it starts a machine-wide temp-unit eviction helper, at most once per ten minutes per producer. One machine lock elects the helper; ended and rowless units from all known rooms, including closed rooms, go oldest-first until measured or estimated free space reaches the floor. The estimate starts with free space before eviction and adds each successfully removed tree's allocated bytes. This bounds each pass when filesystem reclamation is delayed, including when snapshots retain the removed blocks. Ended units are ordered by their newest owner's end, rowless ones by mtime. This bypasses `gc.tmp_grace`, never a live or not-yet-ended owner's hold, and never removes `tmp/_unnamed/`, owned state, or shared files. Each attempted removal appends a `tmp_evict` assist, including failures; one failed removal or assist append does not stop other candidates. Both `gc.auto = false` and a machine config that fails to load pause this helper too. Setting both floor settings to zero disables only pressure eviction.
-
-`rimz doctor` previews the machine-wide free-space and temp-unit inventory in `TEMP UNITS`. Its suggested `rimz gc --tmp-floor` runs only the pressure pass by hand. With `gc.auto = false`, doctor names the pause instead of offering that command. A hand `rimz gc --tmp-floor` then exits 0 with empty stdout and a stderr notice: pressure eviction is paused by `gc.auto = false`, `rimz gc --all` removes temp units past `gc.tmp_grace`, and `rimz config set gc.auto true` resumes pressure eviction. If another free-space pass holds the machine lock, it instead exits 0 with empty stdout and a stderr notice that another pass is already running. Both notices also apply with `--json`, which emits no JSON body for either case. A machine config that fails to load exits non-zero with the load error, as named by `rimz config get`.
-
-This internal flag conflicts with `--all`, `--dry-run`, `--unattended`, and `--older-than`; ordinary `gc --dry-run` previews only age-based collection. A completed pressure pass prints one line per attempted eviction and closes with `free <bytes> of <capacity>, floor <bytes>`; `--json` carries `free_bytes`, `total_bytes`, `floor_bytes`, and `evictions` (the assist records). Pressure-eviction reclaimed bytes are allocated blocks (`st_blocks × 512`), counting hardlinked files once per tree; ordinary GC and doctor's `--audit` inventory retain their apparent sizes. Default doctor runs count units without measuring their sizes. `free_bytes_after` and the closing free-space figure remain filesystem measurements, not the estimate, and may still be below the floor after the pass stops. The floor measures the filesystem holding the workspace directory; separately mounted room temp directories are not supported.
+The `worktrees` area is the one that reaches past RimZ's own files: removing a tree deletes that checkout and its files, and the branch behind it. A dirty, held, or unmerged tree is kept and reported, never forced. Armed loop tasks hold the paths described under [`worktree sweep`](./worktree.md#sweep-landed-worktrees), even while paused, and a team board short of `Done` or an unfinished workflow run holds its checkout too. When `git branch -d` refuses a branch as unmerged, RimZ compares its content against the base and deletes it with `git branch -D` once that comparison says the work already landed. A branch it cannot prove landed is kept. If any task source, workflow record or workflows directory, or the owned-worktree listing cannot be read, the whole worktree area is skipped and names the failure; other areas still run.
 
 ### The report
 
-If measuring space fails just after an eviction, the helper warns and the eviction record keeps the last successful free-space reading. Another removal still requires a fresh successful reading.
+`gc` shows progress while it runs, then prints a two-line header. The first line is `gc — reclaimed BYTES`, `gc — maintenance complete` (no bytes, but loop rows or wait outputs removed), `gc — no bytes reclaimed` (nothing removed, with problems), or `gc — all clean, nothing to reclaim`. A dry run reads `gc — would reclaim BYTES (dry run)` or `gc — nothing to reclaim (dry run)`. A problem count follows (`· 1 problem`) when a worktree removal failed, a dead workspace could not be removed, a workspace record was unreadable, or the event log needed repair.
 
-`gc` shows progress while it runs, then prints a line per area with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`. Kept lines name every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and the holders when present, including `loop task NAME`, `team NAME`, and `workflow run ADDRESS`; removed lines say `landed`, with the branch-deletion outcome. An unreadable workflow record or workflows directory in any room skips the worktree area with `workflow runs unavailable: <error>`, naming the path; the other areas still run.
+The second line is `checked N of 8 areas · cutoff DURATION`, ending in `· room <workspace-dir>` or `· machine` (`checked 8 areas` when none was skipped). A room sweep normally reads `checked 7 of 8 areas`, since `workspaces` is skipped with `skipped — machine area, run with --all`. A dry run also skips `messages`, `event log`, `agent cache`, and `loop schedules`.
 
-The header gives total reclaimed bytes and the area count/cutoff, ending in `· room <workspace-dir>` or `· machine`. It then lists the selected rooms with one `class · file count · bytes` row per lifetime class, plus `empty` and `transcript` rows, sorted by name, followed by the eight area verdicts and any kept/removed worktree reasons. The `audit` and `transcript` rows append `· <bytes> kept`: file bytes remaining after the sweep, or that would remain under `--dry-run`. The `transcript` row combines the conversation transcript and final message text.
+Next comes one block per selected room: the room name, then one `class · N files · BYTES` row per lifetime class, plus `empty` and `transcript` rows, sorted by name. The `audit`, `transcript`, `team-notes`, and `automation-notes` rows append `· BYTES kept`: file bytes remaining after the sweep, or that would remain under `--dry-run`. The `transcript` row combines the conversation transcript and final message text. A dry run shows a lock class as `class · N files would check`.
 
-The second line counts the areas that ran: normally `checked 7 of 8 areas` for a room, with `workspaces` skipped and a hint to use `--all`. Dry runs skip another four store and schedule areas. The header adds a problem count (`· 1 problem`) when a worktree removal failed, a dead workspace could not be removed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records carry `scope` (`room` or `machine`) and `class_bytes`, reclaimed bytes by class for the helper's own room only, even in a machine sweep. Other assist totals cover the run's full scope.
+Last come the eight area rows, each with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`. Kept lines name every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and the holders when present, including `loop task NAME`, `team NAME`, and `workflow run ADDRESS`. Removed lines say `landed`, with the branch-deletion outcome. An unreadable workflow record or workflows directory in any room skips the worktree area with `workflow runs unavailable: <error>`, naming the path.
 
-Owned state has a seven-day grace; agent temp units instead use `gc.tmp_grace` (default `1d`). A temp unit stays while any agent sharing it is live or has no recorded end, then expires only when both its latest end and its directory or any direct child's mtime are past the grace. Rowless units use mtime alone; `tmp/_unnamed/` stays with the room. Diagnostic audit files expire after 30 days or oldest-first above 64 MiB, excluding `audit/transcript/` and `audit/messages/` from both rules. Those histories follow `gc.transcript_retention`: `forever` by default, or a positive duration (`s`, `m`, `h`, `d`) that expires weekly files by their last modification. Hard reset and `uninstall --state` or `--all` still remove both. Team archives and automation notes follow independent `gc.team_notes_retention` and `gc.automation_notes_retention` keys (both default to `forever`). A duration expires whole closed runs by their newest recursive entry modification without following symlinks. An open team board or an unreadable manifest protects the run; a missing board is closed, while an unreadable or stageless board is open. Empty date directories go once their runs are removed. The `team-notes` and `automation-notes` rows report kept bytes too. The `empty` class keeps an agent's empty working directory while any retained session records it, then removes it once its directory mtime is older than seven days. The room-level directory stays while its store exists. Once the store is gone, a machine sweep removes agent directories past the same grace and removes the room-level directory when empty. Unknown entries and symlink targets stay untouched. The `workspaces` area reports both the files removed and the agent directories still within the grace. `--older-than` does not change those policies. Rooms written by an older RimZ are removed along with their runtime trees.
+Problems do not change the exit code: `gc` exits 0 whenever the sweep completes.
 
-Before removing an old terminal workflow home, GC fills in a missing `history.txt` in its kept notes folder. A copy failure keeps the home for the next sweep; `--dry-run` writes no copy. Notes already removed by their retention setting or by you are not recreated.
+### Retention
+
+Owned state has a seven-day grace. Agent temp units use `gc.tmp_grace` (default `1d`) instead. A temp unit stays while any agent sharing it is live or has no recorded end. It then expires only when both its latest end and the mtime of its directory or any direct child are past the grace. Rowless units use mtime alone, and `tmp/_unnamed/` stays with the room.
+
+Diagnostic audit files expire after 30 days, or oldest-first above 64 MiB. Neither rule applies to `audit/transcript/` and `audit/messages/`. Those histories follow `gc.transcript_retention`: `forever` by default, or a non-zero duration (`s`, `m`, `h`, `d`) that expires weekly files by their last modification. Hard reset and `uninstall --state` or `--all` still remove both.
+
+Team archives and automation notes follow their own `gc.team_notes_retention` and `gc.automation_notes_retention` keys, both `forever` by default. A duration expires whole closed runs by their newest recursive entry modification, without following symlinks. An open team board or an unreadable manifest protects the run. A missing board counts as closed, and an unreadable or stageless board as open. Empty date directories go once their runs are removed. Before removing an old terminal workflow home, GC fills in a missing `history.txt` in its kept notes folder. A copy failure keeps the home for the next sweep, and `--dry-run` writes no copy. Notes already removed by their retention setting or by you are not recreated.
+
+The `empty` class keeps an agent's empty working directory while any retained session records it, then removes it once its directory mtime is older than seven days. The room-level directory stays while its store exists. Once the store is gone, a machine sweep removes agent directories past the same grace, and the room-level directory when empty. The `workspaces` area reports both the files removed and the agent directories still within the grace. Unknown entries and symlink targets stay untouched.
+
+`--older-than` changes none of these policies.
 
 ### JSON output
+
+Fields appear in this order:
 
 | Field | Content |
 | --- | --- |
 | `scope` | `room` or `machine`. |
-| `rooms` | Per-room `name`, `classes` (`class`, `files_removed`, `bytes_removed`, `locks_would_check`). Only `audit`, `transcript`, `team-notes`, and `automation-notes` add `bytes_retained`, file bytes remaining after the sweep (or projected under `--dry-run`). Room scope lists only the current room, or none when its state root is absent. |
 | `dry_run` | `true` under `--dry-run`. |
 | `older_than_secs` | The cutoff in seconds. |
 | `reclaimed_bytes` | Bytes removed, or that would be removed, across all areas. |
-| `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reasons`: an array of `in_use`, `uncommitted_changes`, `unlanded`, `unknown`; `holders`: `agents`, `panes`, `loop_tasks` (task-name array), `teams` (team-name array), then `workflow_runs` (`{id, address}` objects, deduplicated by id), arrays `[]` when none), and `skipped` (`null`, `not_a_repo`, `no_store`, `roster_unavailable`, `loop_tasks_unavailable`, `workflow_runs_unavailable`, `list_failed`). The domain records match `worktree sweep --json`. |
-| `workspaces` | `removed` (`workspace_id`, `dir_name`, `reason`: `project_root_gone`, `abandoned_scaffold`, or `incompatible_layout`, `project_root`, `bytes`), `failed` (`dir_name`, `error`), `empty_dirs` (`dir_name`, `files_removed`, `bytes`, `agent_dirs_kept`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `skipped` (`room_scope` for a room sweep, otherwise `null`). `failed` is `[]` when no removals failed, including dry runs and room scope. `empty_dirs` lists every orphan tree visited, even when only recent agent directories remain, and is `[]` at room scope. Its bytes count toward `reclaimed_bytes`. Rooms written by an older RimZ are removed as `incompatible_layout`. |
-| `runtime` | `roots_scanned`, `heartbeats_removed`, `sidecars_removed`, `sockets_removed`, `probe_markers_removed`, `dirs_removed`, `bytes_removed`. |
+| `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reasons`, `holders`), and `skipped`. `reasons` is an array of `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. `holders` has `agents` (array), `panes` (a count), `loop_tasks` (task names), `teams` (team names), and `workflow_runs` (`{id, address}` objects, deduplicated by id); each array is `[]` when empty. `skipped` is `null`, `not_a_repo`, `no_store`, `roster_unavailable`, `loop_tasks_unavailable`, `workflow_runs_unavailable`, or `list_failed`. The domain records match `worktree sweep --json`. |
+| `workspaces` | `skipped` (`room_scope` for a room sweep, otherwise `null`), `removed` (`workspace_id`, `dir_name`, `reason`, `project_root`, `bytes`), `failed` (`dir_name`, `error`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `empty_dirs` (`dir_name`, `files_removed`, `bytes`, `agent_dirs_kept`). `reason` is `project_root_gone`, `abandoned_scaffold`, or `incompatible_layout` (a room written by an older RimZ). `workspace_id` and `project_root` are `null` for a directory that never recorded its workspace. `failed` is `[]` when no removals failed, including dry runs and room scope. `empty_dirs` lists every orphan tree visited, even when only recent agent directories remain, and is `[]` at room scope. Its bytes count toward `reclaimed_bytes`. |
 | `temps` | `files_removed`, `bytes_removed`. |
+| `runtime` | `roots_scanned`, `heartbeats_removed`, `sidecars_removed`, `sockets_removed`, `probe_markers_removed`, `dirs_removed`, `bytes_removed`. |
+| `rooms` | Per-room `name` and `classes` (`class`, `files_removed`, `bytes_removed`, `locks_would_check`). Only `audit`, `transcript`, `team-notes`, and `automation-notes` add `bytes_retained`, file bytes remaining after the sweep (or projected under `--dry-run`). Room scope lists only the current room, or none when its state root is absent. |
 | `messages` | `archived`, `reconciled`. |
 | `carryover_pruned` | Carryover entries pruned. |
 | `schedules_reaped` | Loop delivery tasks removed because their target is gone, plus RimZ-owned instance rows removed because they no longer compile to an action. |
@@ -374,6 +404,36 @@ Before removing an old terminal workflow home, GC fills in a missing `history.tx
 | `store_maintenance` | `done`, `skipped_dry_run`, or `skipped_no_store`. |
 
 What each sweep removes on disk is in [store internals](../../internals/store.md#maintenance).
+
+### Automatic sweeps
+
+Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand.
+
+One of those helpers is elected for a machine sweep when the last automatic machine attempt is at least 24 hours old, or none is recorded. It runs the same scope as `--all`, including its own room, and the other helpers sweep only their rooms. Failed attempts are stamped too, so a failing sweep retries a day later. Apart from free-space eviction below, closed rooms wait for that elected sweep or a manual `--all`, and start no helpers themselves.
+
+While a machine config file fails to load ([`rimz config get`](./config.md#read-a-value) names the error), automatic sweeps pause and do not fall back to the defaults. The one exception is an unreadable `loop.toml` while the core config stays readable: the sweep runs and skips only the worktree area. Loop arming overlays are kept while task sources cannot be read.
+
+Each run is recorded in [`rimz stats --assists`](./stats.md#the-assist-timeline). Repeated sweeps of the same workspace and scope fold into a `♻` line with summed reclaimed bytes, removal counts, and problem counts, and `--all` includes failed runs. An assist record carries `scope` (`room` or `machine`) and `class_bytes`, the reclaimed bytes by class for the helper's own room only, even in a machine sweep. Its other totals cover the run's full scope.
+
+### Free-space eviction
+
+Each open room also checks free disk space on its heavy refresh. Below the floor, `max(gc.tmp_floor_percent% of capacity, gc.tmp_floor_min)` (by default the larger of 10% and 10 GiB), it starts a machine-wide temp-unit eviction helper, at most once per ten minutes per producer. One machine lock elects the helper. The helper removes ended and rowless units from all known rooms, closed rooms included, oldest first, until measured or estimated free space reaches the floor. Ended units are ordered by their newest owner's end, rowless ones by mtime.
+
+The estimate starts with free space before eviction and adds each removed tree's allocated bytes. It bounds each pass when the filesystem reclaims space late, as when snapshots retain the removed blocks. The floor measures the filesystem that holds the workspace directory; separately mounted room temp directories are not supported.
+
+Eviction ignores `gc.tmp_grace`, but never takes a unit from a live or not-yet-ended owner, and never removes `tmp/_unnamed/`, owned state, or shared files. Each attempted removal appends a `tmp_evict` assist, failures included, and one failed removal or assist append does not stop the other candidates. If measuring space fails just after an eviction, the helper warns and the record keeps the last successful free-space reading; the next removal still needs a fresh reading. `gc.auto = false` and a machine config that fails to load both pause the helper. Setting both floor settings to zero disables only this eviction.
+
+`rimz doctor` previews the machine-wide free space and temp-unit inventory in `TEMP UNITS`, and suggests `rimz gc --tmp-floor`, a hidden flag that runs only this pass by hand. It conflicts with `--all`, `--dry-run`, and `--older-than`. A plain `gc --dry-run` previews only age-based collection.
+
+| Outcome | stdout | stderr | Exit |
+| --- | --- | --- | --- |
+| Pass completed | One `HANDLE: BYTES (WORKSPACE_ID)` line per attempted eviction (` failed: ERROR` appended on failure), then `free BYTES of BYTES, floor BYTES` | | 0 |
+| Pass completed, `--json` | `free_bytes`, `total_bytes`, `floor_bytes`, and `evictions` (the assist records) | | 0 |
+| `gc.auto = false` | Empty, also with `--json` | `pressure eviction is paused by gc.auto = false; rimz gc --all removes temp units past gc.tmp_grace; rimz config set gc.auto true resumes pressure eviction.` | 0 |
+| Another pass holds the lock | Empty, also with `--json` | `another free-space pass is already running` | 0 |
+| Machine config fails to load | | The load error, as `rimz config get` names it | 1 |
+
+With `gc.auto = false`, doctor names the pause instead of offering the command. Eviction counts reclaimed bytes as allocated blocks (`st_blocks × 512`), counting hardlinked files once per tree. Ordinary GC and doctor's `--audit` inventory report apparent sizes, and a default doctor run counts units without measuring them. `free_bytes_after` in each eviction record and the closing free-space figure are filesystem measurements, not the estimate, and may still be below the floor when the pass stops.
 
 ## Uninstall RimZ
 
@@ -393,14 +453,14 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | [Provider account](./accounts.md) homes under `~/.rimz/accounts/` | Kept: their credentials and history belong to the provider; the preview names each existing declared home and the `rm -rf` command to clear it by hand | |
 | RimZ role, effort, and closed-day spend history under `accounts/.history/` | Always kept: other homes sharing the accounts folder use these durable ledgers | |
 | Durable room stores, logs, and registries (`ws/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
-| Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `trust/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
+| Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `cursor-statusline.json`, `trust/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
 | Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`), installed `packs/`, and `handoffs/` | Always kept, including linked pack checkouts | |
 | `rimz` binaries at the running executable, Cargo's bin directory, and `/usr/local/bin` | Removed | `--keep-binary` keeps them; `RIMZ_SYSTEM_BIN_DIR` replaces `/usr/local/bin` |
 | Project `.rimz/` directories and RimZ-owned worktrees | Always kept: they can hold project config and unlanded work | |
 
-`--all` is `--state` plus `--config`. `--yes` skips the prompt and is required when stdin is not a terminal. The paths above are the defaults; `RIMZ_HOME` moves them. Anything else under the home, such as `cache/` and the `run` link, is removed.
+`--all` is `--state` plus `--config`. `--yes` skips the prompt. Without it and without a terminal, `uninstall` fails with `` `rimz uninstall` removes hooks, rooms, runtime/cache/data, and the binary; pass --yes to confirm without a terminal ``. Answering anything but `y` or `yes` (any case) prints `Uninstall aborted; nothing changed.` and exits 0. The paths above are the defaults; `RIMZ_HOME` moves them. Anything else under the home, such as `cache/` and the `run` link, is removed.
 
-Run it from outside any RimZ room: inside one it fails with `detach and rerun from outside the RimZ room`. A Homebrew install also needs `brew uninstall rimz`. When any step fails, the rest still run, and `uninstall` exits 1 with `uninstall incomplete:` and one line per failure. A binary it had no permission to delete gets a `sudo rm PATH` line to run.
+Run it from outside any RimZ room: inside one it fails with `detach and rerun from outside the RimZ room`. A Homebrew install also needs `brew uninstall rimz`. A successful run ends with `Uninstall complete.` When any step fails, the rest still run, and `uninstall` exits 1 with `uninstall incomplete:` and one `- FAILURE` line per failure. Each binary it had no permission to delete then gets a `sudo rm PATH` line under `Protected binary paths may need sudo:`.
 
 ## Check that the binary runs
 
