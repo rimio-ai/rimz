@@ -39,7 +39,9 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
 | [`tab_name.rs`](../../crates/rimz/src/mux/tab_name.rs) | Pure pane-derived tab labels, name ownership, and `TabNameIntent`. |
 | [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The two-phase focus intent, a rename-atomic runtime record, behind RimZ-initiated focus actions ([state.md → focus intent](./sidebar/state.md#focus-intent)). |
-| [`keymap.rs`](../../crates/rimz/src/mux/keymap.rs) | Best-effort installation of the resolved machine keymap; parsing lives in [`config/keys.rs`](../../crates/rimz/src/config/keys.rs), tmux compilation in [`tmux/keymap.rs`](../../crates/rimz/src/mux/tmux/keymap.rs). |
+| [`keymap.rs`](../../crates/rimz/src/mux/keymap.rs) | Best-effort installation of the resolved machine keymap ([room keys](#room-keys)). Parsing lives in [`config/keys.rs`](../../crates/rimz/src/config/keys.rs), tmux compilation in [`tmux/keymap.rs`](../../crates/rimz/src/mux/tmux/keymap.rs), and the Zellij plugin's encoded `keymap` value in [`zellij/keymap.rs`](../../crates/rimz/src/mux/zellij/keymap.rs). |
+| [`typing.rs`](../../crates/rimz/src/mux/typing.rs) | The per-pane terminal-input record and the non-typing exclusions that message typing holds and sidebar pens share ([messaging.md → four modes](./harness/messaging.md#four-modes-on-one-timing-axis)). |
+| [`room_settings.rs`](../../crates/rimz/src/mux/room_settings.rs) | The apply-class table and `lanes/room-settings.json` record of Zellij settings RimZ asserted ([room options](#room-options-and-the-cli-xor-problem)). |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
@@ -105,8 +107,8 @@ Selection admits nothing: whether a birth may proceed is [room admission](#room-
 | Session lifecycle | `name`, `ensure_session`, `attach_command`, `attach_existing_command`, `attach_readonly_command`, `attach_may_drop_early`, `detach`, `kill_session`, `list_sessions`, `list_sessions_within`, `session_liveness`, `version` | The attach methods return a `CommandSpec` for the CLI attach runner instead of running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view`, `view_geometry`, `pane_content_size`, `confirm_resume_tabs` | See [reading the room](#reading-the-room). `confirm_resume_tabs` reads tab structure only, never pane content. |
 | Pane I/O | `require_pane_in_session`, `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` writes one bracketed paste; the submit Enter is a separate `send_key`. Chunking, failure cleanup, and the write lock are in [messaging.md → writing to the pane](./harness/messaging.md#writing-to-the-pane). |
-| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_pane_on_exit`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
-| Focus and geometry | `focus_pane`, `toggle_fullscreen`, `nudge_sidebar_width`, `record_sidebar_width_default`, `apply_room_keymap`, `lagging_views`, `lagging_view`, `fit_views` | The last three fit hidden tmux windows ([attach and the terminal](#attach-and-the-terminal)); other backends inherit no-op defaults. |
+| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `open_popup`, `close_pane`, `close_pane_on_exit`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. `open_popup` is the [palette popup](#palette-popups). `close_pane_on_exit` is a tmux override; Zellij's managed panes already close on exit. |
+| Focus and geometry | `focus_pane`, `toggle_fullscreen`, `nudge_sidebar_width`, `record_sidebar_width_default`, `apply_room_keymap`, `lagging_views`, `lagging_view`, `fit_views` | Only tmux implements `apply_room_keymap`. Zellij keeps the no-op default and installs the keymap through its presence plugin ([room keys](#room-keys)). The last three fit hidden tmux windows ([attach and the terminal](#attach-and-the-terminal)), and Zellij keeps their no-op defaults. |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij only; tmux keeps the no-op default because its control-mode watch already pushes. |
 
@@ -124,7 +126,7 @@ Everything correctness-critical stays above the trait and is identical across ba
 
 ### Command discipline
 
-Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/command.rs) under a deadline. At the bound the child is SIGKILLed and the caller gets `MuxErr::Timeout`, which carries the bound as a `Duration` and prints it exactly: whole seconds, or milliseconds for a bound with a fractional second (`crates/rimz/src/utils/time.rs::format_duration_bound`). The start-path `note:` and refusal lines spell their bounds the same way.
+Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/command.rs) under a deadline. At the bound the child is SIGKILLed and the caller gets `MuxErr::Timeout`, which carries the bound as a `Duration` and prints it as whole seconds, or as milliseconds (floored) for a bound with a fractional second (`crates/rimz/src/utils/time.rs::format_duration_bound`). The start-path `note:` and refusal lines spell their bounds the same way.
 
 | Bound | Value | Why |
 | --- | --- | --- |
@@ -142,7 +144,7 @@ Zellij adds two rules inside these bounds, a rerun of its pre-dispatch refusal a
 
 ### Pane and view IDs
 
-Raw IDs stay inside the backend adapter, where native commands expect them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel normalized as `zellij:<raw>` or `tmux:<raw>`: in env vars (`RIMZ_PANE_ID`), store events, snapshots, and CLI arguments. [`pane_from_env_value`](../../crates/rimz/src/mux/mod.rs) is the one env-to-ID mapping, and `ensure_pane_backend` rejects a pane addressed to the wrong backend before any command runs.
+Raw IDs stay inside the backend adapter, where native commands expect them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel normalized as `zellij:<raw>` or `tmux:<raw>`: in env vars RimZ sets (such as a notification handler's `RIMZ_NOTIFY_PANE`), store events, snapshots, and CLI arguments. The multiplexers' own `ZELLIJ_PANE_ID` (a bare number) and `TMUX_PANE` (`%3`) arrive raw, and [`pane_from_env_value`](../../crates/rimz/src/mux/mod.rs) is the one mapping from them to a `PaneId`, and `ensure_pane_backend` rejects a pane addressed to the wrong backend before any command runs.
 
 `ViewId` names the view holding a pane (a Zellij tab, a tmux window) by the identity RimZ observes on every fast path: Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side field, and the producer lifts it into `TabFrame.view_id` so per-view sidebar bookkeeping runs over typed topology.
 
