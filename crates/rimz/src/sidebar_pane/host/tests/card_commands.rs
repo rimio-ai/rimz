@@ -27,21 +27,20 @@ fn acting_view(clients: &[(u32, u32)], allowed: bool) {
     let snapshot = snapshot_with_panes(
         &workspace(),
         vec![
-            crate::sidebar_pane::app::fixtures::pane("terminal_1", "tab_1", false),
-            crate::sidebar_pane::app::fixtures::pane("terminal_2", "tab_2", false),
+            crate::sidebar_pane::app::fixtures::pane("terminal_1", "tab_1"),
+            crate::sidebar_pane::app::fixtures::pane("terminal_2", "tab_2"),
         ],
     );
     let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
     for (sidebar, tab) in [(10, "tab_1"), (20, "tab_2")] {
         let mut pane =
-            crate::sidebar_pane::app::fixtures::pane(&format!("terminal_{sidebar}"), tab, false);
+            crate::sidebar_pane::app::fixtures::pane(&format!("terminal_{sidebar}"), tab);
         pane.command = Some("rimz-sidebar".into());
         panes.push(pane);
     }
     panes.push(crate::sidebar_pane::app::fixtures::pane(
         "terminal_30",
         "tab_3",
-        false,
     ));
     let mut frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
     frame.client_views = clients
@@ -103,14 +102,13 @@ fn unresponsive_view() -> (Room, Pane, Pty, Attachment) {
         vec![crate::sidebar_pane::app::fixtures::pane(
             "terminal_11",
             "tab_1",
-            false,
         )],
     );
     let mut pty = Pty::open(54, 30);
     let attached = room.attach_as(&pty, Some(own.clone()));
     painted(&mut pty);
     let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
-    let mut sidebar = crate::sidebar_pane::app::fixtures::pane(own.raw(), "tab_1", false);
+    let mut sidebar = crate::sidebar_pane::app::fixtures::pane(own.raw(), "tab_1");
     sidebar.command = Some("rimz-sidebar".into());
     panes.push(sidebar);
     let mut frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");

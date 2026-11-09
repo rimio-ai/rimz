@@ -38,7 +38,7 @@ fn pane(index: usize) -> PaneId {
 fn record(current: usize) -> Arc<ViewsRecord> {
     let snapshot = fixtures::agent_snapshot(&fixtures::workspace());
     let panes = (0..8)
-        .map(|index| fixtures::pane(&format!("terminal_{index}"), &format!("tab_{index}"), false))
+        .map(|index| fixtures::pane(&format!("terminal_{index}"), &format!("tab_{index}")))
         .collect();
     let mut fold = super::super::fetch::WorkspaceFold {
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),

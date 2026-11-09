@@ -69,7 +69,7 @@ impl InputOutcome {
         }
     }
 
-    pub(super) fn focus(pane: PaneId) -> Self {
+    fn focus(pane: PaneId) -> Self {
         Self {
             effects: vec![InputEffect::Focus(pane)],
             ..Self::default()
@@ -83,7 +83,7 @@ impl InputOutcome {
         }
     }
 
-    pub(super) fn dismiss() -> Self {
+    fn dismiss() -> Self {
         Self {
             redraw: true,
             effects: vec![InputEffect::DismissAlert],
@@ -818,7 +818,7 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
     InputOutcome::redraw()
 }
 
-pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) {
+fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) {
     if view.toggles.inactive_peek.take().is_some() {
         for group in snapshot
             .worktree_groups

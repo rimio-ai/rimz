@@ -19,7 +19,7 @@ fn sampled_focus_rig(mux: MuxName) -> (Rig, PaneId, PaneId, PaneId) {
     let (own, p, q) = (id(10), id(11), id(12));
     let clock = LoopClock::play(Timestamp::now());
     let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock);
-    let mut working = vec![pane(p.raw(), "tab_1", false), pane(q.raw(), "tab_1", false)];
+    let mut working = vec![pane(p.raw(), "tab_1"), pane(q.raw(), "tab_1")];
     working[0].pane_id = p.clone();
     working[1].pane_id = q.clone();
     let mut snapshot = snapshot_with_panes(&rig.ws, working.clone());
@@ -30,7 +30,7 @@ fn sampled_focus_rig(mux: MuxName) -> (Rig, PaneId, PaneId, PaneId) {
         working_pane_ids: vec![p.clone(), q.clone()],
         own_view_is_daemon: false,
     });
-    let mut sidebar = pane(own.raw(), "tab_1", false);
+    let mut sidebar = pane(own.raw(), "tab_1");
     sidebar.pane_id = own.clone();
     sidebar.command = Some("rimz-sidebar".into());
     working.push(sidebar);
@@ -75,7 +75,7 @@ fn every_coviewer_holds_its_card_and_a_release_freezes_without_a_selection_chang
         let (mut rig, own, p, q) = sampled_focus_rig(mux);
         let mut snapshot = rig.view().ctx().current.clone();
         let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
-        let mut sidebar = pane(own.raw(), "tab_1", false);
+        let mut sidebar = pane(own.raw(), "tab_1");
         sidebar.pane_id = own.clone();
         sidebar.command = Some("rimz-sidebar".into());
         panes.push(sidebar);
@@ -191,14 +191,14 @@ fn zellij_unattributable_focus_event_keeps_the_sample() {
         .iter()
         .flat_map(|tab| {
             tab.panes.iter().map(|entry| {
-                let mut pane = pane(entry.pane_id.raw(), "tab_1", false);
+                let mut pane = pane(entry.pane_id.raw(), "tab_1");
                 pane.pane_id = entry.pane_id.clone();
                 pane.command = entry.current.command.clone();
                 pane
             })
         })
         .collect();
-    panes.push(pane(foreign.raw(), "tab_2", false));
+    panes.push(pane(foreign.raw(), "tab_2"));
     let previous = fold.workspace.snapshot();
     let working = panes
         .iter()
@@ -209,7 +209,7 @@ fn zellij_unattributable_focus_event_keeps_the_sample() {
     snapshot.focused_pane = previous.focused_pane.clone();
     snapshot.viewed_panes = previous.viewed_panes.clone();
     snapshot.own_view = previous.own_view.clone();
-    let mut sidebar = pane("sidebar_2", "tab_2", false);
+    let mut sidebar = pane("sidebar_2", "tab_2");
     sidebar.command = Some("rimz-sidebar".into());
     panes.push(sidebar);
     let mut next =
@@ -739,7 +739,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
     let panes = [baseline.clone(), picked.clone()]
         .into_iter()
         .map(|id| {
-            let mut working = pane("terminal_1", "view_1", false);
+            let mut working = pane("terminal_1", "view_1");
             working.pane_id = id;
             working.view_kind = Some(match mux {
                 MuxName::Zellij => crate::ids::ViewKind::Tab,
@@ -965,7 +965,7 @@ fn tmux_focus_snapshot(rig: &Rig, third_window: &str, stamp: u64) -> SidebarSnap
     let panes = [("%1", "@1"), ("%2", "@2"), ("%3", third_window)]
         .into_iter()
         .map(|(raw, window)| {
-            let mut result = pane(raw, window, false);
+            let mut result = pane(raw, window);
             result.pane_id = tmux(raw);
             result.view_kind = Some(crate::ids::ViewKind::Window);
             result
@@ -2605,10 +2605,7 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
 #[test]
 fn input_browse_arms_freeze_before_next_fold() {
     let mut rig = Rig::new();
-    let panes = vec![
-        pane("terminal_1", "tab_0", false),
-        pane("terminal_2", "tab_0", false),
-    ];
+    let panes = vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")];
     let first = panes[0].pane_id.clone();
     let second = panes[1].pane_id.clone();
     rig.view().ctx().current = snapshot_with_panes(&rig.ws, panes);
@@ -2687,7 +2684,7 @@ fn working_focus_without_a_client_sample_does_not_create_a_rank_hold() {
     rows[0].attention_at_ms = Some(10);
     let mut other = rows[0].clone();
     other.id = "agent-2".into();
-    other.pane = Some(pane("terminal_1", "tab_0", false));
+    other.pane = Some(pane("terminal_1", "tab_0"));
     other.attention_at_ms = Some(20);
     rows.push(other);
     before.focused_pane = Some(focused.clone());
@@ -2729,7 +2726,7 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
         .clone();
     let mut other = before.worktree_groups[0].rows[0].clone();
     other.id = "agent-2".to_owned();
-    other.pane = Some(pane("terminal_1", "tab_0", false));
+    other.pane = Some(pane("terminal_1", "tab_0"));
     other.attention_score = 200;
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut before.worktree_groups)[0].rows)
         [0]
@@ -2865,9 +2862,7 @@ fn pane_return_focuses_the_work_pane_the_room_frame_lists_beside_the_sidebar() {
     let fold = super::super::super::fixtures::fold(snapshot.clone(), Some(&own), Vec::new());
     rig.views.lock().fold = Some(Arc::new(fold));
     rig.view().ctx().current = snapshot;
-    let focus = vec![InputEffect::Focus(
-        pane("terminal_9", "tab_0", false).pane_id,
-    )];
+    let focus = vec![InputEffect::Focus(pane("terminal_9", "tab_0").pane_id)];
     // The attach wire delivers the raw press; the key resolves only inside the reducer.
     let press = Wakeup::Press {
         code: KeyCode::Char('q'),

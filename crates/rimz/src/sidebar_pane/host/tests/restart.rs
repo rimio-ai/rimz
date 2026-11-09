@@ -19,10 +19,10 @@ impl Room {
         let rows = (0..2)
             .map(|index| {
                 let tab = format!("tab_{index}");
-                let mut chrome = pane(sidebar(index).raw(), &tab, false);
+                let mut chrome = pane(sidebar(index).raw(), &tab);
                 chrome.command = Some("rimz-sidebar".into());
                 panes.push(chrome);
-                let work = pane(working(index).raw(), &tab, false);
+                let work = pane(working(index).raw(), &tab);
                 panes.push(work.clone());
                 let mut row = first.clone();
                 row.id = format!("agent-{index}");

@@ -14,11 +14,11 @@ fn gate_now() -> Timestamp {
 
 /// A snapshot whose single pane renders as a bare process row.
 fn process_on(ws: &WorkspaceId, raw: &str) -> SidebarSnapshot {
-    snapshot_with_panes(ws, vec![pane(raw, "tab_0", false)])
+    snapshot_with_panes(ws, vec![pane(raw, "tab_0")])
 }
 
 fn process_on_cmd(ws: &WorkspaceId, raw: &str, command: Option<&str>) -> SidebarSnapshot {
-    let mut pane = pane(raw, "tab_0", false);
+    let mut pane = pane(raw, "tab_0");
     pane.command = command.map(str::to_owned);
     snapshot_with_panes(ws, vec![pane])
 }

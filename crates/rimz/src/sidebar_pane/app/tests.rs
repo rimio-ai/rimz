@@ -554,10 +554,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("/", "width.wider")]);
 
@@ -1067,7 +1064,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 checkout: None,
                 id: "agent-1".to_owned(),
                 name: "claude".to_owned(),
-                pane: Some(pane("terminal_11", "tab_1", false)),
+                pane: Some(pane("terminal_11", "tab_1")),
                 worktree_path: Some("/repo/main".to_owned()),
                 worktree_branch: Some("main".to_owned()),
                 channel: None,

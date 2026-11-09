@@ -296,7 +296,7 @@ fn room_reminder_delivery_fans_out_once_with_the_room_count() {
     Arc::make_mut(card).status = crate::agents::AgentStatus::Waiting;
     let mut other = row.clone();
     other.id = "agent-2".into();
-    other.pane = Some(pane("terminal_10", "tab_1", false));
+    other.pane = Some(pane("terminal_10", "tab_1"));
     group.rows = vec![row, other].into();
     snapshot.viewed_panes.clear();
     worker.config.notification_prefs.remind_secs = 1;
@@ -374,7 +374,7 @@ fn agent_delivery_pushes_the_room_reminder_out_by_an_interval() {
     row.unread = true;
     let mut other = row.clone();
     other.id = "agent-2".into();
-    other.pane = Some(pane("terminal_10", "tab_1", false));
+    other.pane = Some(pane("terminal_10", "tab_1"));
     group.rows = vec![row, other].into();
     set_status(&mut snapshot, 0, crate::agents::AgentStatus::Waiting);
     set_status(&mut snapshot, 1, crate::agents::AgentStatus::Running);
@@ -635,8 +635,8 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
     let mut panes = Vec::new();
     for index in 0..2 {
         let tab = format!("tab_{index}");
-        panes.push(pane(&format!("terminal_{index}"), &tab, false));
-        let mut chrome = pane(&format!("sidebar_{index}"), &tab, false);
+        panes.push(pane(&format!("terminal_{index}"), &tab));
+        let mut chrome = pane(&format!("sidebar_{index}"), &tab);
         chrome.command = Some("rimz-sidebar".into());
         panes.push(chrome);
     }
@@ -1278,7 +1278,7 @@ fn clock_thresholds_reach_every_consumer_as_content() {
     let fixture = FetchFixture::new();
     let start = jiff::Timestamp::from_second(1_750_000_000).unwrap();
     for presence in [true, false] {
-        let mut live_pane = pane("terminal_7", "tab_1", false);
+        let mut live_pane = pane("terminal_7", "tab_1");
         live_pane.command = Some("claude".into());
         let mut frame = crate::sidebar::frame::assemble_frame(
             vec![live_pane.clone()],
@@ -1855,13 +1855,13 @@ fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     .status = crate::agents::AgentStatus::Waiting;
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
         [0]
-    .pane = Some(pane("terminal_9", "tab_2", false));
+    .pane = Some(pane("terminal_9", "tab_2"));
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let frame = Arc::new(crate::sidebar::frame::assemble_frame(
         vec![
-            pane("terminal_7", "tab_1", false),
-            pane("terminal_8", "tab_2", false),
-            pane("terminal_9", "tab_2", false),
+            pane("terminal_7", "tab_1"),
+            pane("terminal_8", "tab_2"),
+            pane("terminal_9", "tab_2"),
         ],
         crate::utils::time::unix_now_ms(),
         "rimz-test",
@@ -1974,10 +1974,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
     .unwrap()
     .status = crate::agents::AgentStatus::Waiting;
     let frame = Arc::new(crate::sidebar::frame::assemble_frame(
-        vec![
-            pane("terminal_7", "tab_1", false),
-            pane("terminal_8", "tab_2", false),
-        ],
+        vec![pane("terminal_7", "tab_1"), pane("terminal_8", "tab_2")],
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     ));
@@ -2053,10 +2050,7 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
 
     let now_ms = crate::utils::time::unix_now_ms();
     let frame = crate::sidebar::frame::assemble_frame(
-        vec![
-            pane("terminal_7", "tab_1", false),
-            pane(SINGLE_SINK_PANE, "tab_1", false),
-        ],
+        vec![pane("terminal_7", "tab_1"), pane(SINGLE_SINK_PANE, "tab_1")],
         now_ms,
         "rimz-test",
     );
@@ -2228,11 +2222,8 @@ fn produce_gate_forced_attempts_bypass_and_advance_local_cadence() {
 
 #[test]
 fn tab_name_memo_deduplicates_within_one_pane_observation() {
-    let mut frame = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_7", "tab_1", false)],
-        12,
-        "rimz-test",
-    );
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(vec![pane("terminal_7", "tab_1")], 12, "rimz-test");
     frame.topology_stamp_ms = Some(11);
     let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_7");
     let rename = crate::sidebar::produce::tab_status::TabRename {
@@ -2273,7 +2264,7 @@ fn tab_name_memo_deduplicates_within_one_pane_observation() {
 
 #[test]
 fn released_tab_deduplicates_and_settles_on_the_next_observation() {
-    let mut pane = pane("terminal_7", "tab_1", false);
+    let mut pane = pane("terminal_7", "tab_1");
     pane.title = Some("opus".to_owned());
     pane.view_name = Some("opus".to_owned());
     let mut frame = crate::sidebar::frame::assemble_frame(vec![pane], 12, "rimz-test");
@@ -2583,7 +2574,7 @@ impl FetchFixture {
 
     fn write_pane_frame(&self) {
         let mut frame = crate::sidebar::frame::assemble_frame(
-            vec![pane("terminal_7", "tab_1", false)],
+            vec![pane("terminal_7", "tab_1")],
             crate::utils::time::unix_now_ms(),
             "rimz-test",
         );
@@ -2600,7 +2591,7 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
     assert!(HostInputs::seeded(&producer, session, None).is_none());
 
     let frame =
-        crate::sidebar::frame::assemble_frame(vec![pane("terminal_7", "tab_1", false)], 1, session);
+        crate::sidebar::frame::assemble_frame(vec![pane("terminal_7", "tab_1")], 1, session);
     let projection = serde_json::from_value(serde_json::json!({
         "session_name": session,
         "wiring": { "kinds": ["codex"], "default_models": {} },
@@ -2884,7 +2875,7 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
     let fixture = FetchFixture::new();
     let panes = ["terminal_7", "terminal_8", "terminal_9"];
     let frame = crate::sidebar::frame::assemble_frame(
-        panes.iter().map(|raw| pane(raw, "tab_1", false)).collect(),
+        panes.iter().map(|raw| pane(raw, "tab_1")).collect(),
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
@@ -3072,12 +3063,12 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
 #[test]
 fn one_cycle_shares_rosters_and_cards_across_renderers() {
     let fixture = FetchFixture::new();
-    let mut agent_pane = pane("terminal_9", "tab_1", false);
+    let mut agent_pane = pane("terminal_9", "tab_1");
     agent_pane.command = Some("codex".into());
     let frame = crate::sidebar::frame::assemble_frame(
         vec![
-            pane("terminal_7", "tab_1", false),
-            pane("terminal_8", "tab_1", false),
+            pane("terminal_7", "tab_1"),
+            pane("terminal_8", "tab_1"),
             agent_pane,
         ],
         crate::utils::time::unix_now_ms(),
@@ -3151,7 +3142,7 @@ fn a_lagging_cursor_replays_only_the_latest_room_fold() {
         let frame = crate::sidebar::frame::assemble_frame(
             ["terminal_7", "terminal_8", &newest]
                 .into_iter()
-                .map(|id| pane(id, "tab_1", false))
+                .map(|id| pane(id, "tab_1"))
                 .collect(),
             now + fold,
             "rimz-test",
@@ -3203,8 +3194,8 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         (0..40)
             .flat_map(|n| {
                 [
-                    pane(&format!("terminal_{n}"), &format!("tab_{n}"), false),
-                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}"), false),
+                    pane(&format!("terminal_{n}"), &format!("tab_{n}")),
+                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}")),
                 ]
             })
             .collect(),
@@ -3309,8 +3300,8 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
         (0..40)
             .flat_map(|n| {
                 [
-                    pane(&format!("terminal_{n}"), &format!("tab_{n}"), false),
-                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}"), false),
+                    pane(&format!("terminal_{n}"), &format!("tab_{n}")),
+                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}")),
                 ]
             })
             .collect(),
@@ -3853,7 +3844,7 @@ fn staggered_requests(idle: bool) {
         .unwrap()
     } else {
         crate::sidebar::frame::assemble_frame(
-            panes.iter().map(|id| pane(id, "tab_1", false)).collect(),
+            panes.iter().map(|id| pane(id, "tab_1")).collect(),
             crate::utils::time::unix_now_ms(),
             "rimz-test",
         )
@@ -3953,7 +3944,7 @@ fn completion_and_wakes_use_frozen_membership_but_content_is_room_shared() {
     let frame = crate::sidebar::frame::assemble_frame(
         ["terminal_7", "terminal_8", "terminal_9"]
             .iter()
-            .map(|raw| pane(raw, "tab_1", false))
+            .map(|raw| pane(raw, "tab_1"))
             .collect(),
         crate::utils::time::unix_now_ms(),
         "rimz-test",
@@ -4105,10 +4096,10 @@ fn a_full_wake_channel_does_not_block_failure_publication_or_peer_completion() {
 }
 
 fn heal_frame(sidebars: &[&str], observed_at_ms: u64) -> PaneFrame {
-    let mut panes = vec![pane("terminal_1", "tab_1", false)];
+    let mut panes = vec![pane("terminal_1", "tab_1")];
     panes.extend(sidebars.iter().map(|raw| crate::pane::PaneRef {
         command: Some(crate::pane::SIDEBAR_CHROME_TITLE.to_owned()),
-        ..pane(raw, "tab_1", false)
+        ..pane(raw, "tab_1")
     }));
     let mut frame = crate::sidebar::frame::assemble_frame(panes, observed_at_ms, "rimz-test");
     frame.observed_at_ms = observed_at_ms;

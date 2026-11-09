@@ -7,7 +7,7 @@ fn scroll_rig() -> (Rig, FrameOutput) {
 }
 
 fn scroll_rig_with(amend: impl FnOnce(&mut SidebarSnapshot)) -> (Rig, FrameOutput) {
-    let mut rig = Rig::with_own_pane(pane("terminal_99", "tab_0", false).pane_id);
+    let mut rig = Rig::with_own_pane(pane("terminal_99", "tab_0").pane_id);
     let mut snapshot = agent_snapshot(&rig.ws);
     let first = snapshot.worktree_groups[0].rows[0].clone();
     let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
@@ -16,7 +16,7 @@ fn scroll_rig_with(amend: impl FnOnce(&mut SidebarSnapshot)) -> (Rig, FrameOutpu
             let mut row = first.clone();
             row.id = format!("agent-{index}");
             row.name = format!("scroll-card-{index}");
-            row.pane = Some(pane(&format!("terminal_{index}"), "tab_0", false));
+            row.pane = Some(pane(&format!("terminal_{index}"), "tab_0"));
             row
         })
         .collect();
@@ -270,16 +270,12 @@ impl SharedPanes {
         let mut panes = Vec::new();
         for (index, rig) in self.panes.iter().enumerate() {
             let own = &rig.state.pane.config.own_pane;
-            let mut sidebar = pane(own.raw(), &format!("tab_{index}"), false);
+            let mut sidebar = pane(own.raw(), &format!("tab_{index}"));
             sidebar.pane_id = own.clone();
             sidebar.command = Some("rimz-sidebar".into());
             panes.push(sidebar);
             if index >= 2 {
-                let mut working = pane(
-                    &format!("mirror_work_{index}"),
-                    &format!("tab_{index}"),
-                    false,
-                );
+                let mut working = pane(&format!("mirror_work_{index}"), &format!("tab_{index}"));
                 working.pane_id = PaneId::from_parts(mux, working.pane_id.raw());
                 working.command = Some("sh".into());
                 panes.push(working);
@@ -1503,7 +1499,7 @@ fn source_click(mux: MuxName, cross_tab: bool) {
         crate::diag::DiagSink::disabled(),
     );
     source.state.pane.focus_peers = Some(peers.clone());
-    let old_target = pane("terminal_19", "tab_1", false).pane_id;
+    let old_target = pane("terminal_19", "tab_1").pane_id;
     let old = peers.arm(old_target.clone(), Instant::now());
     assert!(old.is_current());
     let index = usize::from(cross_tab);
@@ -1620,7 +1616,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         let (_, row) = source.state.pane.ui.painted_rows[0].clone();
         let input = if keyboard {
             source.view().ui().selected_index = Some(0);
-            source.view().ui().selected_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+            source.view().ui().selected_pane = Some(pane("terminal_0", "tab_0").pane_id);
             Wakeup::Key(KeyAction::Enter)
         } else {
             Wakeup::MouseClick {
@@ -1632,7 +1628,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
             .state
             .apply_input([input], &mut source.terminal)
             .unwrap();
-        let target = pane("terminal_0", "tab_0", false).pane_id;
+        let target = pane("terminal_0", "tab_0").pane_id;
         assert!(
             applied
                 .effects
@@ -1690,7 +1686,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
                 .pane_id
                 .to_string()
         );
-        let _next = peers.arm(pane("terminal_19", "tab_1", false).pane_id, Instant::now());
+        let _next = peers.arm(pane("terminal_19", "tab_1").pane_id, Instant::now());
         let log = std::fs::read_to_string(crate::diag::focus_trace::log_path(source._dir.path()))
             .unwrap();
         let last: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
@@ -1740,7 +1736,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
             assert!(
                 hidden
                     .state
-                    .known_non_owner(&pane("terminal_0", "tab_0", false).pane_id)
+                    .known_non_owner(&pane("terminal_0", "tab_0").pane_id)
             );
             assert!(
                 !hidden
@@ -1771,7 +1767,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
         ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let (_, _, mut anchor) = hidden_destination();
         anchor.issued_at_ms = target.state.pane.clock.now_ms();
-        anchor.pane_id = pane("terminal_0", "tab_0", false).pane_id;
+        anchor.pane_id = pane("terminal_0", "tab_0").pane_id;
         anchor.placement = Some(crate::mux::focus_anchor::FocusPlacement {
             row_id: "agent-0".into(),
             viewport_row: 0,
@@ -2035,7 +2031,7 @@ fn automatic_moves_guard_the_first_frame_until_400ms_and_input_paints_clear_it()
         assert_eq!(
             outcome.effects,
             vec![InputEffect::Focus(
-                pane(&format!("terminal_{target}"), "tab_0", false).pane_id
+                pane(&format!("terminal_{target}"), "tab_0").pane_id
             )],
             "click={click_ms}, input={input_paint}, second move={second_move}",
         );
@@ -2086,9 +2082,7 @@ fn resize_delivery_is_not_a_user_input_paint_for_the_click_guard() {
         .unwrap();
     assert_eq!(
         outcome.effects,
-        vec![InputEffect::Focus(
-            pane("terminal_1", "tab_0", false).pane_id
-        )]
+        vec![InputEffect::Focus(pane("terminal_1", "tab_0").pane_id)]
     );
 }
 
@@ -2104,9 +2098,7 @@ fn row_click_resolves_painted_identity_through_an_unpainted_fold() {
         .unwrap();
     assert_eq!(
         outcome.effects,
-        vec![InputEffect::Focus(
-            pane("terminal_1", "tab_0", false).pane_id
-        )]
+        vec![InputEffect::Focus(pane("terminal_1", "tab_0").pane_id)]
     );
 }
 
@@ -2243,7 +2235,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
         working_pane_ids: vec![pane_id.clone()],
         own_view_is_daemon: false,
     });
-    pulled.focused_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+    pulled.focused_pane = Some(pane("terminal_0", "tab_0").pane_id);
     pulled.viewed_panes.clear();
     pulled.pane_session_name = Some("rimz-test".to_owned());
     rig.state.pane.optimistic_watch_until = None;
@@ -2672,7 +2664,7 @@ fn fitted_grow_hold(resize_first: bool) {
         let pane = if own_pane {
             rig.state.pane.config.own_pane.clone()
         } else {
-            pane("terminal_100", "tab_0", false).pane_id
+            pane("terminal_100", "tab_0").pane_id
         };
         push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
             pane,
@@ -2811,7 +2803,7 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
         let pane = if own_rows {
             rig.state.pane.config.own_pane.clone()
         } else {
-            pane("terminal_100", "tab_0", false).pane_id
+            pane("terminal_100", "tab_0").pane_id
         };
         push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
             pane,
@@ -2877,7 +2869,7 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
         rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         let mut newer = anchor;
         newer.nonce = FocusNonce::new();
-        newer.pane_id = pane("terminal_0", "tab_0", false).pane_id;
+        newer.pane_id = pane("terminal_0", "tab_0").pane_id;
         let (push, newer_ack) = focus_push(&mut rig, newer);
         if nonowner_push {
             rig.state.on_focus_push(push, &mut rig.terminal).unwrap();

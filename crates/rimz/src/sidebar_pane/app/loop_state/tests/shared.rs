@@ -20,7 +20,6 @@ fn shared_rig(views: Arc<ViewsHandle>, index: usize, rows: usize) -> Rig {
             row.pane = Some(pane(
                 &format!("terminal_{index}_{slot}"),
                 &format!("tab_{index}"),
-                false,
             ));
             row
         })

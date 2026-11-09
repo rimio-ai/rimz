@@ -353,7 +353,7 @@ fn self_close_watchdog_verifies_panes_while_empty_confirming() {
 
 #[test]
 fn frame_timing_suspends_unwatched_animation() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.view().ctx().current = animating_agent_snapshot(&rig.ws);
     rig.view().ctx().current.own_view = Some(own_view());
@@ -377,7 +377,7 @@ fn frame_timing_suspends_unwatched_animation() {
 
 #[test]
 fn frame_timing_keeps_unknown_hot_but_holds_hidden_and_detached_dirty() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.view().ctx().current = animating_agent_snapshot(&rig.ws);
     rig.view().ctx().current.own_view = None;
@@ -409,8 +409,8 @@ fn frame_timing_keeps_unknown_hot_but_holds_hidden_and_detached_dirty() {
 
 #[test]
 fn frame_timing_resumes_on_own_pane_focus() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let foreign_pane = pane("terminal_2", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
+    let foreign_pane = pane("terminal_2", "tab_0").pane_id;
 
     for (focused, resumes) in [(own_pane.clone(), true), (foreign_pane, false)] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
@@ -435,7 +435,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
 #[test]
 fn frame_timing_caps_idle_wait_at_tab_read_dwell() {
     let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_clock(
         Some(own_pane.clone()),
         BodyLens::default(),
@@ -464,7 +464,7 @@ fn frame_timing_caps_idle_wait_at_tab_read_dwell() {
 
 #[test]
 fn frame_timing_cancels_hidden_tab_read_dwell() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let own_pane = pane("terminal_1", "tab_0").pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
     let view = rig
         .state

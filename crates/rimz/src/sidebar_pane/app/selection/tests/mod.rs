@@ -100,7 +100,7 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     );
     let mut next = rows[0].clone();
     next.id = "next-agent".into();
-    next.pane = Some(pane("terminal_11", "tab_0", false));
+    next.pane = Some(pane("terminal_11", "tab_0"));
     next.last_activity = now + std::time::Duration::from_secs(1);
     next.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
     let card = rows[0].as_agent_mut().unwrap();
@@ -188,7 +188,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         checkout: None,
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
-        pane: Some(pane("terminal_9", "tab_0", false)),
+        pane: Some(pane("terminal_9", "tab_0")),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         channel: None,
@@ -218,7 +218,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         checkout: None,
         id: "terminal_10".to_owned(),
         name: "zsh".to_owned(),
-        pane: Some(pane("terminal_10", "tab_0", false)),
+        pane: Some(pane("terminal_10", "tab_0")),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         channel: None,
@@ -358,7 +358,7 @@ fn filter_row(
         checkout: None,
         id: id.to_owned(),
         name: name.to_owned(),
-        pane: Some(pane(pane_name, "tab_0", false)),
+        pane: Some(pane(pane_name, "tab_0")),
         worktree_path: Some(worktree.to_owned()),
         worktree_branch: None,
         channel: None,

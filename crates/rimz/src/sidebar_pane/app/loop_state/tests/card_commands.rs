@@ -11,7 +11,7 @@ fn command_rig() -> (Rig, SidebarSnapshot) {
     let mut snapshot = snapshot_with_panes(
         &rig.ws,
         (1..=4)
-            .map(|n| pane(&format!("terminal_{n}"), "tab_0", false))
+            .map(|n| pane(&format!("terminal_{n}"), "tab_0"))
             .collect(),
     );
     snapshot.now = rig.state.pane.clock.timestamp();
@@ -69,7 +69,7 @@ fn sample_focus(rig: &mut Rig, snapshot: &mut SidebarSnapshot, focused: PaneId) 
     snapshot.viewed_panes = vec![focused.clone()];
     snapshot.client_views[0].pane_id = focused;
     let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
-    let mut own = pane("terminal_99", "tab_0", false);
+    let mut own = pane("terminal_99", "tab_0");
     own.command = Some("rimz-sidebar".into());
     panes.push(own);
     let mut frame =

@@ -10,10 +10,7 @@ fn browse_roams_other_tabs_rows() {
     let remote = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_9", "tab_7", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_9", "tab_7")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(0),
@@ -41,10 +38,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         baseline_pane: Some(anchor.clone()),
@@ -74,10 +68,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(0),
@@ -117,9 +108,9 @@ fn continued_browse_keeps_the_first_anchor() {
     let snapshot = snapshot_with_panes(
         &ws,
         vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", false),
+            pane("terminal_1", "tab_0"),
+            pane("terminal_2", "tab_0"),
+            pane("terminal_3", "tab_0"),
         ],
     );
     let mut ui = render::ViewState {
@@ -150,10 +141,7 @@ fn browse_drops_when_its_pane_leaves_the_room() {
     let real = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
+        vec![pane("terminal_1", "tab_0"), pane("terminal_2", "tab_0")],
     );
     let mut ui = render::ViewState {
         selected_index: Some(1),

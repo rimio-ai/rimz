@@ -639,7 +639,7 @@ fn unselected_blank_team_member_does_not_keep_breath_grid_awake() {
 
     let mut teammate = group.rows[0].clone();
     teammate.id = "agent-2".to_owned();
-    teammate.pane = Some(pane("terminal_10", "tab_0", false));
+    teammate.pane = Some(pane("terminal_10", "tab_0"));
     let teammate_card = teammate.as_agent_mut().unwrap();
     teammate_card.team = Some("forge".to_owned());
     teammate_card.task = None;
