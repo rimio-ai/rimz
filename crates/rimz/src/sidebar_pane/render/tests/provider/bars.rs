@@ -1580,3 +1580,72 @@ fn provider_stats_read_todays_jsonl_spend_and_tokens() {
     assert!(stats.contains("486k"), "today's JSONL tokens: {stats:?}");
     assert!(stats.contains("↗ 64k"), "the output split: {stats:?}");
 }
+
+#[test]
+fn a_spent_longer_window_paints_a_shorter_unknown_window_spent() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 40)));
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+    panel.windows[0].used_percentage = None;
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(
+        bar_row_facts(&rows[0]).0,
+        theme.muted().fg,
+        "an unknown 5h beside a live 7d paints the unknown track"
+    );
+
+    panel.windows[1].used_percentage = Some(100);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    let (label, glyph, has_reset) = bar_row_facts(&rows[0]);
+    assert_eq!(
+        label,
+        mana_style(&theme, 0, &Default::default()).fg,
+        "the spent 7d forces the unknown 5h spent"
+    );
+    assert_eq!(glyph, label);
+    assert!(!has_reset);
+    assert!(!rows[0].to_string().contains('▰'));
+}
+
+#[test]
+fn a_lifted_bar_draws_no_ticks_beside_a_matching_sub_cap() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    let weekly = RateLimitWindow {
+        duration_mins: Some(7 * 24 * 60),
+        lifted: true,
+        ..Default::default()
+    };
+    panel.windows = vec![
+        weekly.clone(),
+        RateLimitWindow {
+            scope: Some(crate::agents::RateLimitWindowScope {
+                id: "model:fable".to_owned(),
+                label: "Fable".to_owned(),
+            }),
+            used_percentage: Some(58),
+            lifted: false,
+            ..weekly
+        },
+    ];
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1, "the sub-cap takes no row of its own");
+    let text = rows[0].to_string();
+    assert!(text.starts_with("7d"), "{text}");
+    assert!(text.contains('∞'), "{text}");
+    assert_eq!(budget_track(&rows[0]), "▰".repeat(17), "{text}");
+}
+
+#[test]
+fn missing_credit_draws_unlimited_on_an_api_row() {
+    let theme = Theme::fixed(false);
+    let panel = provider_panel("codex", "Codex", 33, false, false, None);
+    assert!(panel.extra_credits.is_none());
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    let text = rows[0].to_string();
+    assert!(text.starts_with("api"), "{text}");
+    assert!(text.contains('∞'), "{text}");
+    assert!(!budget_track(&rows[0]).contains('▱'), "{text}");
+}

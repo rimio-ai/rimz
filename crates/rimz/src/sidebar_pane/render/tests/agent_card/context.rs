@@ -2981,3 +2981,80 @@ fn codex_compaction_events_render_an_estimate_until_the_first_real_call() {
         "the call restores segmented fill:\n{rendered}"
     );
 }
+
+#[test]
+fn a_correlated_zero_rich_call_stops_the_lifecycle_split_in_bar_and_legend() {
+    let theme = Theme::fixed(false);
+    let input = theme
+        .style(theme.component(Component::Input), Modifier::empty())
+        .fg;
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.usage.context_pct = Some(50);
+    codex.usage.context_window = Some(258_400);
+    codex.usage.cache_read_input_tokens = Some(120_000);
+    codex.usage.fresh_input_tokens = Some(9_200);
+    codex.usage.output_tokens = Some(800);
+    let mut context = codex_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: None,
+        used_percentage: None,
+        remaining_percentage: None,
+        current_context_tokens: None,
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            cache_creation_input_tokens: Some(0),
+            cache_read_input_tokens: Some(0),
+        }),
+        session_usage: None,
+    });
+    codex.context = Some(context);
+    let render = |agent: crate::agents::AgentState| {
+        let snapshot = snapshot_with(vec![agent]);
+        let cost_rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
+        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines
+    };
+    let fills = |lines: &[Line<'static>]| {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| {
+                span.content
+                    .contains(theme.glyph(GlyphRole::MeterBarFilled))
+            })
+            .map(|span| span.style.fg)
+            .collect::<Vec<_>>()
+    };
+    let text = |lines: &[Line<'static>]| {
+        lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let lines = render(codex.clone());
+    let rendered = text(&lines);
+    assert!(rendered.contains("▤ 0"), "{rendered}");
+    assert!(!rendered.contains("◌ 120k"), "{rendered}");
+    // The zero call is also the meter's numerator, so the bar is an empty
+    // track whichever composition would segment it.
+    assert!(rendered.contains("0.0%"), "{rendered}");
+    assert!(fills(&lines).is_empty(), "{rendered}");
+
+    codex.context = None;
+    let lines = render(codex);
+    assert!(text(&lines).contains("◌ 120k ↘ 9k"), "{}", text(&lines));
+    assert!(
+        fills(&lines).contains(&input),
+        "the lifecycle split alone segments the bar"
+    );
+}
