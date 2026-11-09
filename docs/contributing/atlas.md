@@ -2,6 +2,8 @@
 
 `cargo xtask atlas` produces Markdown evidence for architecture review. Its five commands survey a scope, inspect a module, list raw index occurrences, prove a pass, and keep target constraints from regressing. Atlas locates and sizes; reading decides. Every section below is tagged **finding** (a row is a candidate on its own) or **evidence** (a row needs a reader), and the [vocabulary](#vocabulary) at the end defines the terms the output does not explain.
 
+The `rank` and `hot` survey sections and the complexity contract rows read metrics from `rust-code-analysis-cli`. `cargo xtask install-dev` installs it with the other contributor tools in [`scripts/install-dev-tools.sh`](../../scripts/install-dev-tools.sh); to install it alone, run `cargo install rust-code-analysis-cli --locked`.
+
 ## Review workflow
 
 The verbs map onto an architecture review pass, and the pass contract is where the review's plan meets the coder's proof.
