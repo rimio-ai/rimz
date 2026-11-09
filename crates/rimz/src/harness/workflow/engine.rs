@@ -63,11 +63,13 @@ pub enum DefinitionSource<'a> {
     Deployed { dir: &'a Path, task: Option<String> },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
     /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
-    /// the project root, where the task fired.
+    /// the project root, where the task fired. `capacity_until` is the fire's default capacity
+    /// give-up, for an agent step that sets no `capacity-wait`.
     Inline {
         task: String,
         definition: InlineDefinition,
         fire_tree: bool,
+        capacity_until: Option<Timestamp>,
     },
 }
 
@@ -101,16 +103,21 @@ pub fn create(
                 task: task.clone(),
                 spec_dir: dir,
                 fire_tree: false,
+                capacity_until: None,
             }
         }
         DefinitionSource::Inline {
-            task, fire_tree, ..
+            task,
+            fire_tree,
+            capacity_until,
+            ..
         } => RunStart {
             origin: RunOrigin::Inline,
             name: task.clone(),
             task: Some(task.clone()),
             spec_dir: std::path::PathBuf::new(),
             fire_tree: *fire_tree,
+            capacity_until: *capacity_until,
         },
     };
     // A run already holding the scope wins before the definition or the
@@ -129,19 +136,20 @@ pub fn create(
         DefinitionSource::Deployed { .. } => publish(state, id, start, roots, prompt, manual)?,
         DefinitionSource::Inline { definition, .. } => {
             let paths = state.workflow(&id);
-            let published = workflow::seal_definition(&paths, &definition.text, &definition.assets)
-                .map_err(WorkflowErr::from)
-                .and_then(|()| Ok(paths.definition.canonicalize()?))
-                .and_then(|spec_dir| {
-                    publish(
-                        state,
-                        id,
-                        RunStart { spec_dir, ..start },
-                        roots,
-                        prompt,
-                        manual,
-                    )
-                });
+            let published =
+                workflow::seal_definition(&paths.definition, &definition.text, &definition.assets)
+                    .map_err(WorkflowErr::from)
+                    .and_then(|()| Ok(paths.definition.canonicalize()?))
+                    .and_then(|spec_dir| {
+                        publish(
+                            state,
+                            id,
+                            RunStart { spec_dir, ..start },
+                            roots,
+                            prompt,
+                            manual,
+                        )
+                    });
             if published.is_err() {
                 // Nothing was published, so the sealed root has no record to keep it.
                 let _ = std::fs::remove_dir_all(&paths.home);
@@ -160,6 +168,7 @@ struct RunStart {
     task: Option<String>,
     spec_dir: std::path::PathBuf,
     fire_tree: bool,
+    capacity_until: Option<Timestamp>,
 }
 
 /// Validate the definition at `start.spec_dir` and publish the run's record.
@@ -240,6 +249,7 @@ fn publish(
         prompt,
         scope,
         fire_tree: start.fire_tree,
+        capacity_until: start.capacity_until,
         project_root: roots.project.clone(),
         created_at: now,
         notes: None,
@@ -1298,7 +1308,8 @@ fn prepare_capacity(
             Some(crate::config::CapacityWait::Duration(duration)) => {
                 wait.first.checked_add(duration).ok()
             }
-            _ => None,
+            Some(crate::config::CapacityWait::Forever) => None,
+            None => t.record.capacity_until,
         };
         persist(t, guard)?;
         return Ok(Some(Decision::Stop));

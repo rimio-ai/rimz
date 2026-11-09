@@ -506,6 +506,11 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
         "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\ntakeover=true\nthen='@done'\n",
     );
     record.task = Some("nightly".into());
+    // A fire's cutoff stands, however late in the run the first hold comes.
+    let cutoff = Timestamp::now()
+        .checked_add(jiff::SignedDuration::from_hours(1))
+        .unwrap();
+    record.capacity_until = Some(cutoff);
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     workflow::write(&paths, &record, &guard).unwrap();
@@ -554,6 +559,11 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     let wait = current.wait.unwrap();
     assert_eq!(wait.outcome, "capacity");
     assert_eq!(serde_json::to_value(&wait).unwrap()["hold"], "capacity");
+    assert_eq!(
+        wait.gives_up_at,
+        Some(cutoff),
+        "the run's cutoff bounds the hold"
+    );
     prepare(
         &state,
         &paths,
@@ -931,6 +941,7 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
                 .collect(),
         },
         fire_tree: false,
+        capacity_until: None,
     }
 }
 

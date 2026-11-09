@@ -59,7 +59,7 @@ Every other key deserializes leniently and never touches the hash. `trust::Proje
 | team | `keep-warm`, `leader`, `scratch-files`, `stages` |
 | team role | `owns`, `budget`, `keep-warm`, `flip-compact`, `idle-compact`, `smart-compact` |
 | profile | `budget`, `keep-warm`, `idle-compact`, `smart-compact`, `empty-dir` |
-| task | `team`, `max-strikes`, `account`, `budget`, `budget-per-day`, `surplus`, `surplus-after`, `throttle`, `capacity-wait`, `overlap`, `overlap-limit` |
+| task | `team`, `max-strikes`, `once-per-checkout`, `account`, `budget`, `budget-per-day`, `surplus`, `surplus-after`, `throttle`, `capacity-wait`, `overlap`, `overlap-limit` |
 | packs | `expect` |
 
 The overlap keys decide how many already-approved triggers run the approved command. They do not change the command, so editing them does not re-key a grant.

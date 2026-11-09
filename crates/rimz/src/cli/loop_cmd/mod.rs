@@ -76,6 +76,8 @@ enum LoopSubcmd {
     Remove(NamesArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
+    /// Publish a task's compiled graph as a workflow and point the task at it.
+    Eject(EjectArgs),
     /// Pause a task for a bounded duration.
     Pause(PauseArgs),
     /// Enable tasks here without replaying missed fires.
@@ -415,6 +417,16 @@ struct RenameArgs {
 }
 
 #[derive(Debug, Args)]
+struct EjectArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
+    name: String,
+    /// The workflow's name under `~/.rimz/workflows/`; defaults to the task's name.
+    workflow: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct ShowArgs {
     /// Print the task, worktree conditions, launch ledger and run history as JSON.
     #[arg(long)]
@@ -515,6 +527,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             .iter()
             .try_for_each(|name| add::remove(name, globals)),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
+        LoopSubcmd::Eject(args) => add::eject(&args, globals),
         LoopSubcmd::Pause(args) => add::pause(args, globals),
         LoopSubcmd::Enable(args) => add::enable(args, globals),
         LoopSubcmd::Disable(args) => add::disable(args, globals),

@@ -28,6 +28,7 @@ pub mod catalog;
 pub mod compile;
 mod condition;
 mod config_edit;
+mod eject;
 pub mod fanout;
 #[doc(hidden)]
 pub mod fire;

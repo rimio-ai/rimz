@@ -18,6 +18,7 @@ rimz loop fire watchdog
 | `rimz loop add <NAME>` | Add a task, or replace a same-named task (machine replacement requires the same project root). |
 | `rimz loop remove <NAME>...` | Delete tasks from the stores that own them. Run history stays. |
 | `rimz loop rename <NAME> <NEW_NAME>` | Rename a task in its store. |
+| `rimz loop eject <NAME> [<WORKFLOW>]` | Publish a task's compiled graph as a workflow and point the task at it. |
 | `rimz loop enable <NAME>...\|--all` | Arm tasks on this machine and clear holds and strikes. |
 | `rimz loop disable <NAME>...\|--all` | Hold tasks on this machine until enabled. |
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
@@ -302,11 +303,11 @@ A project task runs unattended only when both hold:
 
 A trusted project task wins over a machine task of the same name. While the project is untrusted, the project task does not fire and the machine task keeps running.
 
-`add --project`, and `remove` or `rename` of a project task, change the trust surface. What they print depends on trust before the write:
+`add --project`, and `remove`, `rename`, or `eject` of a project task, change the trust surface. What they print depends on trust before the write:
 
 | Trust before | Result |
 | --- | --- |
-| `trusted`, or no project config | Trust is granted again for the new config. `add` prints `trust: granted — task enabled and ready to fire`; `remove` and `rename` print `trust: kept`. |
+| `trusted`, or no project config | Trust is granted again for the new config. `add` prints `trust: granted — task enabled and ready to fire`; `remove`, `rename`, and `eject` print `trust: kept`. |
 | `untrusted` or `stale`, stdin a terminal | The surface diff and `grant trust now?`. Accepting grants trust. |
 | `untrusted` or `stale`, no terminal, or declined | ``trust: <state> — project tasks stay inert until you run `rimz trust grant` (review with `rimz trust`)``. |
 
@@ -525,7 +526,7 @@ All three write machine-local state and never edit a task definition or a trust-
 
 ## Fire and stop a run
 
-`loop fire <name>` runs the task now in the foreground, with the scheduled runner's check, overlap guard, resource gates, and run record. It runs a disabled or paused task anyway, after saying so, and leaves one-shots and subscriptions in place. An unmet condition prints `condition not met (k of n); running anyway, task stays armed`; expressions without a conjunction count omit `(k of n)`. This cache-only observation uses the selected checkout for fan-out tasks and never changes arming or records scheduled condition evidence. Met conditions and non-condition tasks add no notice. It prints the check's output and the agent's replies as they arrive, then a verdict per stage and, for a supervised run, its run id and transcript. The pane opens beside your shell and closes when the run ends; `--keep` leaves it open.
+`loop fire <name>` runs the task now in the foreground, with the scheduled runner's check, overlap guard, resource gates, and run record. It runs a disabled or paused task anyway, after saying so, and leaves one-shots and subscriptions in place. An unmet condition prints `condition not met (k of n); running anyway, task stays armed`; expressions without a conjunction count omit `(k of n)`. This cache-only observation uses the selected checkout for fan-out tasks and never changes arming or records scheduled condition evidence. Met conditions and non-condition tasks add no notice. It prints the check's output and the agent's replies as they arrive, then a verdict per stage and, for a supervised run, its run id and transcript. The pane opens beside your shell and closes when the run ends; `--keep` leaves it open. A task that names a `workflow` refuses `--keep` with ``workflow task `<name>` cannot use --keep; set `keep = true` on the workflow's agent `[steps.<name>]` ``, since its definition decides what each step keeps.
 
 For an untrusted or stale project task on a terminal, `fire` asks `grant trust and fire?` and refuses if declined; without a terminal it refuses. A scheduled fire of such a task is always refused.
 
@@ -539,6 +540,19 @@ For an untrusted or stale project task on a terminal, `fire` asks `grant trust a
 A task whose previous run is still active never starts another concurrently. By default it records `overlapped`; retaining policies record `deferred` unless the queue is full. `loop stop <name>` cancels each live workflow run the task started, as `rimz workflow cancel` does, printing ``loop `<name>`: stopped · run <id>`` for each, and exits `1` naming every run it could not cancel, after trying them all. For a run still on the older run lock, it marks a linked supervised run canceled, waits up to 5 seconds for the overlap lock, sends SIGTERM to a remaining holder, and waits again. A check-only run has no supervised agent to cancel, so it skips the initial wait and receives SIGTERM immediately; the post-SIGTERM wait is unchanged. It prints ``loop `<name>`: stopped`` (with the run id, and `· SIGTERM` when it signaled) or `no active run`, and exits `0`. When the run stopped but its pane was not confirmed closed, it prints the `stopped` line and then exits `1` naming the pane and the command that closes it, `rimz agents stop <run-id>`; a second `loop stop` finds no active run and leaves the pane open. When the lock is still held it exits `1` with the holder's PID and the lock path; SIGKILL is left to you. A fired one-shot (`--at`, `--in`, `--after-reset`) gives up its task row when its run starts; while that run is active, `stop`, `show`, and `logs` still find it by name from inside its project, and `list` and `watch` there keep a row for it.
 
 During a check, the runner forwards SIGTERM to the check's process group and keeps the lock until the check exits, bounded only by its own timeout. The stopped run records one `canceled` row. If triggers were waiting, an extra stop receipt line reports their count, says the next starts now, and names `rimz loop pause <name>` to drop them.
+
+### Launch memory
+
+A remembering task starts at most one run per checkout from its scheduled fires: a `stay` task, a `workflow` task with `when`, and any row that sets `once-per-checkout = true`, whatever its trigger; `once-per-checkout = false` turns the memory off. A scheduled fire records the checkout when it creates the run, the live run keeps the checkout taken, and the way the run ends decides whether the record stays:
+
+| The run | Remembered after it ends |
+| --- | --- |
+| Acted: reached an agent or message step | Yes |
+| Canceled, acted or not | Yes |
+| Failed | No |
+| Ended on its own without acting | No |
+
+A checkout that is not remembered can start a run again at the task's next scheduled fire. `loop remove` clears the task's memory. A redefinition (`loop add` under the same name) cancels the task's runs that have not acted and forgets their checkouts, while a checkout whose run acted stays remembered; `loop rename` moves the memory. A manual `loop fire` ignores the memory and replaces the checkout's entry once its own run starts.
 
 ### Overlapping triggers
 
@@ -681,6 +695,25 @@ Condition runs in `loop logs` include `when: <expression> · held <duration>` an
 `loop rename <name> <new-name>` moves the task to the new key in its store. Its workflow launch entries and live workflow runs, active or parked, follow it; finished run records keep the name they ran under. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
 `loop remove <name>...` deletes each task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Comment lines above the removed task's headers stay above the next header, or at the end of the file. Missing names do not stop later removals or cause a nonzero exit. Removal clears the task's resident or workflow launch entries and detaches its active and parked workflow runs, which continue as independent runs. Re-adding a condition workflow task skips that independent run without adopting it, then permits a fresh launch after it ends. Replacing a task under the same name keeps its launch entries. Run history stays readable through `rimz loop logs <name>`. For a project task, both commands print the [trust result](#project-tasks).
+
+## Eject a task
+
+`rimz loop eject <name> [<workflow>]` turns a task's compiled graph, the one [`rimz workflow show <name>`](./workflow.md#loop-tasks) draws, into a deployed workflow at `~/.rimz/workflows/<workflow>/`, named after the task unless you give a name. The directory holds `workflow.toml` and the files the graph reads, each copied as the task's fire would read it now: the prompt or prompt file as `prompts/prompt.md`, each judge's prompt as `prompts/judge-<n>.md`, and the system-prompt file as `prompts/system.md`. An agent step without a `timeout` gets `loop.toml`'s `default-timeout` (2h when unset) written into the file. The command then rewrites the task's row in its own store (`loop.toml`, or the project's `.rimz/config.toml`) to `workflow = "<workflow>"`. The row keeps its trigger and timing (`every`, `at`, `cron`, `signal`, `match`, `when`, `for`, `watch`, `once`, `deadline`, `provider`), `root` and `dir`, `label`, `each-worktree`, `overlap` and `overlap-limit`, `budget-per-day`, `surplus` and `surplus-after`, and `max-strikes`, and eject writes `once-per-checkout` with the task's own value, so a task that launched at most once per checkout still does and one that did not still does not; every other field now lives in the workflow. Arming, strikes, launch memory and run history stay with the task. Live runs keep the graph they were sealed with, and still hold the task's scope, so the next fire after an eject follows the task's overlap policy against them. From then on the workflow directory is what the task runs: edit it, and `rimz workflow validate <workflow>` checks it.
+
+It prints ``ejected loop task `<name>` to workflow `<workflow>` at <dir>`` and a line naming the row's new `workflow` value, then for a project task the [trust result](#project-tasks). It refuses, changing nothing:
+
+| Task or target | Refusal |
+| --- | --- |
+| The workflow directory exists with other contents | ``workflow `<workflow>` already exists at <dir>``, with the command to pick another name. |
+| A room-instance row: a `--wait` delivery or a one-shot | It is bound to the room's session and cannot outlive it. |
+| A `workflow =` task | It already runs that workflow; edit the workflow instead. |
+| A `fresh-worktree` task | A workflow task's row refuses `fresh-worktree`, since a workflow's steps place their own agents; remove it or keep the task inline. |
+| A project task while the project is untrusted | Its commands would leave project trust; trust the project first. |
+| A graph that does not validate | Every validation error, as `workflow validate` prints them. |
+
+The directory appears whole: it is written beside the workflows under `~/.rimz/workflows/.eject/`, validated there, and renamed into place. A rerun after a crash between publishing the directory and rewriting the row finds the same contents and finishes the rewrite.
+
+A task that fires on a signal, a condition, or a watch keeps its trigger's evidence: the fire hands it to the run as the run prompt, which each agent step's prompt ends with, where the inline graph put it before the prompt.
 
 ## Timer
 

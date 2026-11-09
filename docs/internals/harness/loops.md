@@ -405,7 +405,7 @@ A terminal `Watch` outcome takes the same path with the watch already evaluated:
 
 `resolve_effect_prompt` builds the delivered text. The base is `prompt`, or `prompt-file` read at fire time. A relative path in a project task resolves against `<root>/.rimz/`, made absolute when `config::effective` loads it. Any other relative path resolves at fire time against the directory that holds `loop.toml`. `resolve_task_prompt` lets a wait row have no prompt at all, while a `Spawn` row requires one. Nothing is substituted: `{{key}}` is delivered as typed.
 
-A fire that launches an agent (a row with `agent` and no `watch`, resident or single run) goes through `compose_launch`. The [Loop reminder](#the-loop-reminder) already carries the standing frame, so the message is the event and the prompt:
+A fire that launches an agent (a row with `agent` or `workflow` and no `watch`, resident or single run) goes through `compose_launch`. The [Loop reminder](#the-loop-reminder) already carries the standing frame, so the message is the event and the prompt. A `workflow` row hands the message to its run as the run prompt (`runner::TaskFire::run_prompt`), which each agent step's prompt ends with; a row without a prompt, as an ejected task's is, hands the event line alone, and nothing for a fire with no event:
 
 | Evidence | Message |
 | --- | --- |

@@ -1107,6 +1107,33 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
     Ok(())
 }
 
+pub(super) fn eject(args: &EjectArgs, globals: &GlobalFlags) -> Result<()> {
+    let workflow = args.workflow.as_deref().unwrap_or(&args.name);
+    let catalog = task_catalog(globals)?;
+    let project_mutation = project_mutation_pre_state(&catalog, &args.name)?;
+    let dir = catalog.eject(
+        &args.name,
+        workflow,
+        &MachineConfig::load_lenient(),
+        &crate::cli::workflow_view::definitions(),
+    )?;
+    let mut out = ui::out();
+    writeln!(
+        out,
+        "ejected loop task `{}` to workflow `{workflow}` at {}",
+        args.name,
+        dir.display()
+    )?;
+    writeln!(
+        out,
+        "the task now runs `workflow = \"{workflow}\"`; edit the workflow to change what it does"
+    )?;
+    if let Some((root, pre_state)) = project_mutation {
+        finish_project_mutation(&mut out, &root, false, pre_state)?;
+    }
+    Ok(())
+}
+
 fn project_mutation_pre_state(
     catalog: &TaskCatalog,
     name: &str,

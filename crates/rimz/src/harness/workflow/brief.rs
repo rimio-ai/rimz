@@ -21,7 +21,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
     if record.prompt.is_some() {
         origin.push_str(if record.task.is_some() {
-            " The loop task's prompt ends it."
+            " The loop fire's prompt ends it: the task's prompt, what fired it, or both."
         } else {
             " The text given with `--prompt` to `rimz workflow run` ends it."
         });

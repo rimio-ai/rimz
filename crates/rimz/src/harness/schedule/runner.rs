@@ -897,15 +897,9 @@ impl<'a> TaskFire<'a> {
         }
         // The last rung: a fresh task's run works in a tree cut for this fire alone.
         self.prepare_fire_tree()?;
-        let named_prompt = matches!(source, WorkflowSource::Deployed(_))
-            && (self.entry.prompt.is_some() || self.entry.prompt_file.is_some());
-        let prompt = || {
-            if !named_prompt {
-                return Ok(None);
-            }
-            self.resolve_effect_prompt()
-                .map(Some)
-                .map_err(|error| format!("{error:#}"))
+        let prompt = || match &source {
+            WorkflowSource::Deployed(_) => self.run_prompt().map_err(|error| format!("{error:#}")),
+            WorkflowSource::Inline(_) => Ok(None),
         };
         let definition = match &source {
             WorkflowSource::Deployed(dir) => crate::harness::workflow::DefinitionSource::Deployed {
@@ -920,6 +914,7 @@ impl<'a> TaskFire<'a> {
                         assets: definition.assets.clone(),
                     },
                     fire_tree: fresh,
+                    capacity_until: self.default_capacity_cutoff()?,
                 }
             }
         };
@@ -1157,6 +1152,14 @@ impl<'a> TaskFire<'a> {
             }
             TaskWorkflow::Inline(inline) => inline,
         };
+        self.inline_definition(inline).map(WorkflowSource::Inline)
+    }
+
+    /// The inline graph this fire runs, its prompt asset carrying the fire's evidence.
+    pub(in crate::harness) fn inline_definition(
+        &self,
+        inline: &super::compile::InlineTask,
+    ) -> Result<crate::harness::workflow::InlineDefinition> {
         let mut definition = inline.definition(&self.name, &self.task, &self.config)?;
         if let Some(prompt) = definition.assets.get_mut(super::compile::PROMPT) {
             *prompt = self.resolve_effect_prompt()?.into_bytes();
@@ -1164,7 +1167,61 @@ impl<'a> TaskFire<'a> {
         if self.keep {
             definition.text = super::compile::keep_agent(&definition.text)?;
         }
-        Ok(WorkflowSource::Inline(definition))
+        Ok(definition)
+    }
+
+    /// When a scheduled fire's agent gives up waiting for capacity when its row sets no
+    /// `capacity-wait`: a second before the task's next clock fire and never past its
+    /// deadline, or never for a task no clock fires again. The run carries the instant, so a
+    /// guard that runs first does not move it.
+    pub(in crate::harness) fn default_capacity_cutoff(&self) -> Result<Option<Timestamp>> {
+        if self.mode != LoopRunMode::Scheduled || self.entry.capacity_wait.is_some() {
+            return Ok(None);
+        }
+        let next = match self
+            .task
+            .trigger()
+            .as_ref()
+            .ok()
+            .map(|parsed| &parsed.trigger)
+        {
+            Some(Trigger::Schedule(schedule)) if !schedule.once => {
+                let runtime = RuntimePaths::for_project_root(&self.entry.resolved_root())?;
+                let key = self
+                    .checkout
+                    .as_ref()
+                    .filter(|_| self.entry.each_worktree)
+                    .map_or_else(
+                        || self.name.clone(),
+                        |checkout| super::fire::scope_key(&self.name, checkout),
+                    );
+                let stamp = super::fire::last_stamps(&runtime)
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(self.now);
+                schedule
+                    .schedule
+                    .next_after(stamp, &self.now.to_zoned(self.config.time_zone()))
+                    .and_then(|at| at.checked_sub(Duration::from_secs(1)).ok())
+            }
+            _ => None,
+        };
+        Ok(match (next, self.entry.deadline) {
+            (Some(next), Some(deadline)) => Some(next.min(deadline)),
+            (next, deadline) => next.or(deadline),
+        })
+    }
+
+    /// The run prompt a deployed workflow's run starts with, which each agent step's prompt
+    /// ends with: the row's prompt with the fire's evidence, or the evidence alone for a row
+    /// whose prompt lives in the workflow, as an ejected task's does.
+    pub(in crate::harness) fn run_prompt(&self) -> Result<Option<String>> {
+        let prompt = if self.entry.prompt.is_none() && self.entry.prompt_file.is_none() {
+            self.effect_prompt(String::new())
+        } else {
+            self.resolve_effect_prompt()?
+        };
+        Ok((!prompt.is_empty()).then_some(prompt))
     }
 
     /// A task's daily cap and surplus gate admit each run its workflow starts. The cap counts
@@ -1714,7 +1771,11 @@ impl<'a> TaskFire<'a> {
     }
 
     fn resolve_effect_prompt(&self) -> Result<String> {
-        let mut body = resolve_task_prompt(&self.name, &self.entry)?;
+        Ok(self.effect_prompt(resolve_task_prompt(&self.name, &self.entry)?))
+    }
+
+    /// `body` with the evidence of what fired this run.
+    fn effect_prompt(&self, mut body: String) -> String {
         let signal_trigger =
             self.entry.signal.is_some() || self.entry.watch.is_some() || self.entry.when.is_some();
         let evidence = if let Some(condition) = &self.condition {
@@ -1726,7 +1787,8 @@ impl<'a> TaskFire<'a> {
         } else {
             prompt::Evidence::Scheduled
         };
-        if self.entry.agent.is_some() && self.entry.watch.is_none() {
+        let launches = self.entry.agent.is_some() || self.entry.workflow.is_some();
+        if launches && self.entry.watch.is_none() {
             body = prompt::compose_launch(&self.name, &evidence, &body);
         } else if self.entry.wait.is_some()
             || signal_trigger
@@ -1742,7 +1804,7 @@ impl<'a> TaskFire<'a> {
                 self.now,
             );
         }
-        Ok(body)
+        body
     }
 
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {

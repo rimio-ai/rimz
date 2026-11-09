@@ -300,6 +300,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             verify: Some("cargo xtask gate".to_owned()),
             max_attempts: Some(3),
             max_strikes: Some(4),
+            once_per_checkout: Some(false),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             dir: Some(PathBuf::from("/linked")),
