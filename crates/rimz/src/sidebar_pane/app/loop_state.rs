@@ -2362,6 +2362,8 @@ impl LoopState {
             return Ok(());
         }
         self.pane.ui.gate_notice = source.gate_notice;
+        // No client views a hidden pane, so its mirror shows no room mode.
+        self.pane.ui.room_modes.clear();
         let (result, frame) = self.pane.paint.compose_frame(
             terminal,
             &source.snapshot,
@@ -3202,6 +3204,7 @@ impl PaneState {
             };
         // The notice is pane chrome over the view's gate, which another pane may have moved.
         self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
+        self.ui.room_modes = viewer_modes(&v.viewers, &v.context.current.client_modes);
         let user_input = user_input || v.state.scroll_ease.in_flight();
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
@@ -3826,6 +3829,20 @@ impl PaneState {
             now_ms,
         )
     }
+}
+
+/// The distinct non-normal modes of `viewers`, in `RoomMode` order.
+fn viewer_modes(
+    viewers: &[MuxClientId],
+    modes: &[crate::pane::ClientRoomMode],
+) -> Vec<crate::pane::RoomMode> {
+    modes
+        .iter()
+        .filter(|mode| viewers.contains(&mode.client_id))
+        .map(|mode| mode.mode)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn alert_active(view: &ViewContext) -> bool {

@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 
 use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
-    hook_drainer_alert_lines, key_hint_line, pane_notice_line, repo_header_lines, search_line,
+    hook_drainer_alert_lines, key_row_line, pane_notice_line, repo_header_lines, search_line,
     truth_notice_lines,
 };
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
@@ -634,10 +634,11 @@ pub(super) fn build_bottom_chrome(
             inner,
         ));
     }
-    if !view.pending_keys.is_empty() {
-        bottom.push_inert(pad_chrome(key_hint_line(
+    if !view.pending_keys.is_empty() || !ui.room_modes.is_empty() {
+        bottom.push_inert(pad_chrome(key_row_line(
             theme,
             &snapshot.keys,
+            &ui.room_modes,
             &view.pending_keys,
             inner,
         )));

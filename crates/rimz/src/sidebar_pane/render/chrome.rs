@@ -1,6 +1,7 @@
 use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
 use crate::config::keys::sidebar::{SidebarAction, SidebarChord, SidebarKey, SidebarKeymap};
+use crate::pane::RoomMode;
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
@@ -142,15 +143,45 @@ pub(super) fn pane_notice_line(theme: &Theme, notice: &str, keys: &SidebarKeymap
     )
 }
 
-/// The which-key row for a pending prefix: the keys pressed so far, then each
-/// continuation key and its short label, right-aligned and cut from the right
-/// when the row is too narrow.
-pub(super) fn key_hint_line(
+/// The bottom key row: the room modes of this pane's viewers on the left,
+/// then, for a pending prefix, the keys pressed so far and each continuation
+/// key with its short label, right-aligned. The hint is cut from the right
+/// first, so the marks keep their place.
+pub(super) fn key_row_line(
     theme: &Theme,
     keys: &SidebarKeymap,
+    modes: &[RoomMode],
     pending: &[SidebarChord],
     width: usize,
 ) -> Line<'static> {
+    let marks = modes
+        .iter()
+        .map(|mode| room_mode_label(*mode))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut spans = vec![Span::styled(
+        marks,
+        theme.styled(Component::RoomModeMark, Modifier::BOLD),
+    )];
+    let marks_width = layout::spans_width(&spans);
+    if !pending.is_empty() {
+        let hint = key_hint_spans(theme, keys, pending);
+        let gap = usize::from(marks_width > 0);
+        let room = width.saturating_sub(marks_width + gap);
+        let pad = room.saturating_sub(layout::spans_width(&hint));
+        spans.push(Span::raw(" ".repeat(gap + pad)));
+        spans.extend(layout::trim_spans_to_width(hint, room));
+    }
+    let used = layout::spans_width(&spans);
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    Line::from(layout::trim_spans_to_width(spans, width))
+}
+
+fn key_hint_spans(
+    theme: &Theme,
+    keys: &SidebarKeymap,
+    pending: &[SidebarChord],
+) -> Vec<Span<'static>> {
     let key_style = theme.styled(Component::KeyHint, Modifier::BOLD);
     let mut spans = vec![Span::styled(sequence_text(pending), key_style)];
     for (rest, action) in keys.continuations(pending) {
@@ -158,11 +189,16 @@ pub(super) fn key_hint_line(
         spans.push(Span::styled(sequence_text(rest), key_style));
         spans.push(Span::styled(format!(" {}", action.label()), theme.faint()));
     }
-    let used = layout::spans_width(&spans);
-    if used < width {
-        spans.insert(0, Span::raw(" ".repeat(width - used)));
+    spans
+}
+
+fn room_mode_label(mode: RoomMode) -> &'static str {
+    match mode {
+        RoomMode::Prefix => "PREFIX",
+        RoomMode::Resize => "RESIZE",
+        RoomMode::Scrollback => "SCROLL",
+        RoomMode::Move => "MOVE",
     }
-    Line::from(layout::trim_spans_to_width(spans, width))
 }
 
 pub(super) fn hook_drainer_alert_lines(
@@ -1206,7 +1242,7 @@ mod tests {
             alt: false,
         }];
         let text = |keys: &SidebarKeymap| {
-            key_hint_line(&theme, keys, &f, 200)
+            key_row_line(&theme, keys, &[], &f, 200)
                 .spans
                 .iter()
                 .map(|span| span.content.to_string())
@@ -1226,8 +1262,42 @@ mod tests {
         assert!(line.contains("x done"), "{line:?}");
         assert!(!line.contains("d done"), "{line:?}");
         assert_eq!(
-            key_hint_line(&theme, &SidebarKeymap::default(), &f, 12).width(),
+            key_row_line(&theme, &SidebarKeymap::default(), &[], &f, 12).width(),
             12
+        );
+    }
+
+    #[test]
+    fn mode_marks_sit_left_of_the_hint_and_stay_when_it_truncates() {
+        use crate::pane::RoomMode;
+        let theme = Theme::fixed(false);
+        let keys = SidebarKeymap::default();
+        let f = [SidebarChord {
+            key: SidebarKey::Char('f'),
+            ctrl: false,
+            alt: false,
+        }];
+        let text = |modes: &[RoomMode], pending: &[SidebarChord], width| {
+            let line = key_row_line(&theme, &keys, modes, pending, width);
+            assert_eq!(line.width(), width);
+            line.spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(&[RoomMode::Prefix], &[], 20).trim_end(), "PREFIX");
+        let modes = [RoomMode::Resize, RoomMode::Scrollback, RoomMode::Move];
+        assert_eq!(text(&modes, &[], 30).trim_end(), "RESIZE SCROLL MOVE");
+
+        let wide = text(&[RoomMode::Prefix], &f, 200);
+        assert!(wide.starts_with("PREFIX "), "{wide:?}");
+        assert!(wide.contains("f  "), "{wide:?}");
+        let narrow = text(&[RoomMode::Prefix], &f, 12);
+        assert!(narrow.starts_with("PREFIX "), "{narrow:?}");
+        assert_eq!(
+            text(&modes, &f, 10),
+            "RESIZE SCR",
+            "marks fill a row too narrow for them"
         );
     }
 

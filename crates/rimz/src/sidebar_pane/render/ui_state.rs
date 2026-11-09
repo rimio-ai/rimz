@@ -53,6 +53,9 @@ pub(in crate::sidebar_pane) struct UiState {
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
     pub(in crate::sidebar_pane) gate_notice: Option<GateNotice>,
+    /// The distinct non-normal modes of the clients viewing this pane, in
+    /// `RoomMode` order, set at each routed composition and empty in a mirror.
+    pub(in crate::sidebar_pane) room_modes: Vec<crate::pane::RoomMode>,
 }
 
 /// A jumpable delegation entry under the selected card.

@@ -389,3 +389,22 @@ fn active_alert_suppresses_gate_hold_notice() {
     assert!(text.contains("Sidebar degraded"), "{text}");
     assert!(!text.contains("pane updates held"), "{text}");
 }
+
+#[test]
+fn mode_row_shows_only_while_a_viewer_is_in_a_room_mode_and_moves_no_other_chrome() {
+    let snapshot = snapshot_with(Vec::new());
+    let view = ViewState::default();
+    let (normal, _) = bottom_chrome_texts_with_ui(&snapshot, None, &view, &UiState::default());
+    assert!(
+        !normal.iter().any(|line| line.contains("PREFIX")),
+        "{normal:?}"
+    );
+    let pane_ui = UiState {
+        room_modes: vec![crate::pane::RoomMode::Prefix],
+        ..UiState::default()
+    };
+    let (prefix, _) = bottom_chrome_texts_with_ui(&snapshot, None, &view, &pane_ui);
+    assert_eq!(prefix.len(), normal.len() + 1, "{prefix:?}");
+    assert_eq!(prefix[..normal.len()], normal[..]);
+    assert_eq!(prefix.last().unwrap().trim(), "PREFIX");
+}
