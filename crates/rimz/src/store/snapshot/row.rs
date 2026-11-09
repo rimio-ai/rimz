@@ -311,7 +311,7 @@ impl SidebarRow {
         reading
     }
 
-    /// The latest call's composition when the rich token blob is absent.
+    /// The latest call's composition ([`AgentCard::call_split`]).
     pub fn call_split(&self) -> Option<RowCallSplit> {
         self.as_agent().and_then(AgentCard::call_split)
     }
@@ -893,23 +893,37 @@ impl AgentCard {
             .or_else(|| self.call_split().map(|split| split.filled()))
     }
 
-    /// The latest call's composition when the rich `context.tokens.
-    /// current_usage` blob is absent.
+    /// The latest call's composition: the rich `context.tokens.current_usage`
+    /// blob, else the lifecycle rail's split. Each counts only when the
+    /// authoritative `current_context_tokens` scalar is absent or equals its
+    /// filled side, and a correlated rich blob stands even when it sums to 0.
     pub fn call_split(&self) -> Option<RowCallSplit> {
-        self.usage.input_context_tokens()?;
-        let fresh_input = self.usage.fresh_input_tokens?;
-        let split = RowCallSplit {
-            cache_read: self.usage.cache_read_input_tokens.unwrap_or(0),
-            cache_write: self.usage.cache_write_input_tokens.unwrap_or(0),
-            fresh_input,
-            output: self.usage.output_tokens.unwrap_or(0),
-        };
-        let authoritative = self
+        let tokens = self
             .context
             .as_ref()
-            .and_then(|context| context.tokens.as_ref())
-            .and_then(|tokens| tokens.current_context_tokens);
-        (authoritative.is_none() || authoritative == Some(split.filled())).then_some(split)
+            .and_then(|context| context.tokens.as_ref());
+        let authoritative = tokens.and_then(|tokens| tokens.current_context_tokens);
+        let correlated = |split: RowCallSplit| {
+            (authoritative.is_none() || authoritative == Some(split.filled())).then_some(split)
+        };
+        let rich = tokens
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .map(|usage| RowCallSplit {
+                cache_read: usage.cache_read_input_tokens.unwrap_or(0),
+                cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
+                fresh_input: usage.input_tokens.unwrap_or(0),
+                output: usage.output_tokens.unwrap_or(0),
+            });
+        if let Some(split) = rich.and_then(correlated) {
+            return Some(split);
+        }
+        self.usage.input_context_tokens()?;
+        correlated(RowCallSplit {
+            cache_read: self.usage.cache_read_input_tokens.unwrap_or(0),
+            cache_write: self.usage.cache_write_input_tokens.unwrap_or(0),
+            fresh_input: self.usage.fresh_input_tokens?,
+            output: self.usage.output_tokens.unwrap_or(0),
+        })
     }
 
     /// Evidence that the session has already done work. A compacted session may
@@ -983,8 +997,9 @@ pub struct ProcessCard {
     pub io_bps: Option<u64>,
 }
 
-/// A row-level per-call token composition — the fallback the renderer legends
-/// when no rich per-call blob exists.
+/// The latest call's token composition, from the rich per-call blob or the
+/// lifecycle rail ([`AgentCard::call_split`]); the renderer legends it and
+/// segments the context bar by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowCallSplit {
     /// Tokens read back from cache (`◌`).

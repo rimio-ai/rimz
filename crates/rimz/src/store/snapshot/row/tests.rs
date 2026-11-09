@@ -1340,3 +1340,71 @@ fn current_context_scalar_controls_total_and_lifecycle_split_correlation() {
     assert_eq!(card.context_used_tokens(), Some(101));
     assert_eq!(card.call_split(), None);
 }
+
+#[test]
+fn call_split_prefers_the_correlated_rich_call_over_the_lifecycle_split() {
+    let lifecycle = RowCallSplit {
+        cache_read: 80,
+        cache_write: 5,
+        fresh_input: 15,
+        output: 9,
+    };
+    let rich = |input, write, read, output| AgentCurrentUsage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_creation_input_tokens: write,
+        cache_read_input_tokens: read,
+    };
+    let mut card = AgentCard {
+        usage: AgentUsageSummary {
+            cache_read_input_tokens: Some(lifecycle.cache_read),
+            cache_write_input_tokens: Some(lifecycle.cache_write),
+            fresh_input_tokens: Some(lifecycle.fresh_input),
+            output_tokens: Some(lifecycle.output),
+            ..AgentUsageSummary::default()
+        },
+        context: Some(context_with_tokens(AgentTokenUsage {
+            current_usage: Some(rich(Some(3), Some(2), Some(40), Some(7))),
+            ..AgentTokenUsage::default()
+        })),
+        ..AgentCard::default()
+    };
+    fn tokens(card: &mut AgentCard) -> &mut AgentTokenUsage {
+        card.context
+            .as_mut()
+            .and_then(|context| context.tokens.as_mut())
+            .unwrap()
+    }
+    let rich_split = RowCallSplit {
+        cache_read: 40,
+        cache_write: 2,
+        fresh_input: 3,
+        output: 7,
+    };
+    assert_eq!(card.call_split(), Some(rich_split), "maps every field");
+    tokens(&mut card).current_context_tokens = Some(45);
+    assert_eq!(card.call_split(), Some(rich_split), "the scalar agrees");
+
+    tokens(&mut card).current_context_tokens = Some(100);
+    assert_eq!(
+        card.call_split(),
+        Some(lifecycle),
+        "an uncorrelated rich call falls to the lifecycle split"
+    );
+    tokens(&mut card).current_context_tokens = Some(101);
+    assert_eq!(card.call_split(), None, "neither source matches the scalar");
+
+    tokens(&mut card).current_context_tokens = None;
+    tokens(&mut card).current_usage = Some(rich(Some(0), None, None, None));
+    assert_eq!(
+        card.call_split(),
+        Some(RowCallSplit {
+            cache_read: 0,
+            cache_write: 0,
+            fresh_input: 0,
+            output: 0,
+        }),
+        "a correlated zero call stands; absent fields read 0"
+    );
+    assert_eq!(card.context_used_tokens(), Some(0));
+}

@@ -861,7 +861,16 @@ fn card_after_a_completed_compaction_reads_only_the_fresh_sidecar() {
     let row = row_from_agent(&agent, epoch());
     assert_eq!(row.context_gauge_percent(), Some(3));
     assert_eq!(row.context_used_tokens(), Some(6_000));
-    assert_eq!(row.call_split(), None);
+    assert_eq!(
+        row.call_split(),
+        Some(crate::store::snapshot::RowCallSplit {
+            cache_read: 0,
+            cache_write: 0,
+            fresh_input: 6_000,
+            output: 0,
+        }),
+        "the fresh sidecar's call is the composition"
+    );
 }
 
 /// What Claude reports once the boundary record is on disk: a bare total.

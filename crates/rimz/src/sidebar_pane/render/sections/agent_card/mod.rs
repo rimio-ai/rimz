@@ -6,7 +6,7 @@
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::model_display::{model_label_parts, window_short};
-use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
+use crate::agents::{AgentContext, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{
