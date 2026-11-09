@@ -156,7 +156,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `1ec086301` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
-| `message` | holds; landed pass-31a | `d4db61e64` | 30 | synthetic-message delivery owned by `synthetic.rs`; compact, reply machine and dispatch modes hold; approved SLOC ceiling +23 for request type and struct-literal composition at seven call sites. |
+| `message` | holds; landed pass-31a; pass-33c | `d4f8e5a02` | 30 | each attempt's batch fate settles in `execute_attempt`; send drops two unconstructed `SendErr` variants; approved SLOC ceiling +23 for request type and struct-literal composition at seven call sites. |
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
