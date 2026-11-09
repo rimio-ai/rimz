@@ -632,7 +632,12 @@ impl RunRecord {
 
     /// The shared predicate for a live run of a loop task.
     pub fn started_by(&self, task: &str) -> bool {
-        !self.state.is_terminal() && self.task.as_deref() == Some(task)
+        !self.state.is_terminal() && self.ran_for(task)
+    }
+
+    /// Whether loop task `task` started this run, live or finished.
+    pub fn ran_for(&self, task: &str) -> bool {
+        self.task.as_deref() == Some(task)
     }
 }
 

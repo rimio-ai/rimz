@@ -1046,12 +1046,25 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
         workflow_task_history(&room, "review")["runs"],
         history["runs"]
     );
-    success(room.command(&["loop", "fire", "review"]).output().unwrap());
+    let manual = success(room.command(&["loop", "fire", "review"]).output().unwrap());
     let second = workflow_launches(&room)["tasks"]["review"][key]["run"]
         .as_str()
         .unwrap()
         .to_owned();
     assert_ne!(second, first.id.as_str());
+    assert!(
+        manual.contains(&format!("launched {second}"))
+            && manual.contains("  → rimz workflow show 'review#project'\n"),
+        "{manual}"
+    );
+    let logs = success(room.command(&["loop", "logs", "review"]).output().unwrap());
+    assert!(
+        logs.contains(&format!("  run: {} · canceled at ", first.id))
+            && logs.contains(&format!("  run: {second} · active at "))
+            && logs.contains("  → rimz workflow show 'review#project'\n")
+            && logs.contains(&format!("  → rimz workflow show {}\n", first.id)),
+        "{logs}"
+    );
     assert_eq!(
         workflow_task_history(&room, "review")["workflow_runs"][0]["id"],
         second

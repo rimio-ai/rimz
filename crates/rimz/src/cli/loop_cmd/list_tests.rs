@@ -197,6 +197,10 @@ fn workflow_run_json_includes_only_nonempty_detail() {
         text: Some("review the probe".into()),
         parked_at: None,
         detail: "user: review the probe".into(),
+        terminal_at: None,
+        live: true,
+        target: None,
+        command: None,
     };
     assert_eq!(
         serde_json::to_value(&row).unwrap()["detail"],
@@ -373,6 +377,10 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         text: Some("review the probe 界 ".repeat(8)),
         parked_at: None,
         detail: String::new(),
+        terminal_at: None,
+        live: true,
+        target: None,
+        command: None,
     };
     row.workflow_runs = vec![run()];
     row.head = "every 5m".into();

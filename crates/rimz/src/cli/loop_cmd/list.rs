@@ -1218,6 +1218,14 @@ pub(super) struct WorkflowRunRow {
     parked_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_at: Option<Timestamp>,
+    #[serde(skip)]
+    live: bool,
+    #[serde(skip)]
+    target: Option<String>,
+    #[serde(skip)]
+    pub(super) command: Option<String>,
 }
 
 impl WorkflowRunRow {
@@ -1250,15 +1258,27 @@ impl WorkflowRunRow {
                         text: None,
                         parked_at: None,
                         detail: String::new(),
+                        terminal_at: None,
+                        live: false,
+                        target: None,
+                        command: None,
                     }),
             );
         }
-        for run in Self::of_task(records, task, root, specs, now) {
-            if !runs.iter().any(|listed| listed.id == run.id) {
-                runs.push(run);
-            }
-        }
+        let mut others = records
+            .iter()
+            .filter(|record| record.ran_for(task) && record.project_root == root)
+            .filter(|record| !runs.iter().any(|listed| listed.id == record.id))
+            .map(|record| Self::of_record(record, specs.get(&record.id), now))
+            .collect::<Vec<_>>();
+        others.sort_by_key(|run| run.finished_at().map(std::cmp::Reverse));
+        runs.extend(others);
         runs
+    }
+
+    /// When a finished or gone run ended, as far as its row knows; `None` while live.
+    pub(super) fn finished_at(&self) -> Option<Timestamp> {
+        (!self.live).then(|| self.terminal_at.unwrap_or(self.since))
     }
 
     pub(super) fn of_task(
@@ -1275,7 +1295,7 @@ impl WorkflowRunRow {
             .collect()
     }
 
-    fn of_record(
+    pub(super) fn of_record(
         record: &rimz::store::workflow::RunRecord,
         spec: Option<&rimz::harness::workflow::WorkflowSpec>,
         now: Timestamp,
@@ -1294,11 +1314,24 @@ impl WorkflowRunRow {
                 .filter(|_| record.state == rimz::store::workflow::RunState::Parked)
                 .map(|park| park.at),
             detail: crate::cli::workflow_view::detail(record, spec, now, None),
+            terminal_at: record.terminal_at.filter(|_| record.state.is_terminal()),
+            live: !record.state.is_terminal(),
+            target: None,
+            command: None,
         }
     }
 
+    /// Names the run as `rimz workflow show` selects it: `target` and its full `command`.
+    pub(super) fn named(&mut self, target: String, command: String) {
+        self.target = Some(target);
+        self.command = Some(command);
+    }
+
     pub(super) fn name(&self) -> &str {
-        self.address.as_deref().unwrap_or(self.id.as_str())
+        self.target
+            .as_deref()
+            .or(self.address.as_deref())
+            .unwrap_or(self.id.as_str())
     }
 
     /// `<address> <node> <reason>[: <text>]` and its age, kept apart so only the text clips.
