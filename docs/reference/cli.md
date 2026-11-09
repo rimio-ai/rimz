@@ -8,7 +8,7 @@ This page indexes every command and states the rules that hold across all of the
 
 | Scene | Commands | Reference |
 | --- | --- | --- |
-| Open and attach a room | `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
+| Open and attach a room | `rimz`, `start`, `attach`, `sessions`, `list` (alias `ls`), `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
 | Reach a room from elsewhere | `remote`, `web` | [Remote](./cli/remote.md) · [Web](./cli/web.md) |
 | Run and steer agents | `agents`, `subagents`, `teams`, `asks`, `answer`, `message` (alias `msg`), `wait`, `transcript`, `pane`, `events` | [Agents](./cli/agents.md) · [Subagents](./cli/subagents.md) · [Teams](./cli/teams.md) · [Asks](./cli/asks.md) · [Message](./cli/message.md) · [Wait](./cli/wait.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) · [Events](./cli/events.md) |
 | Provider accounts and usage | `accounts` | [Accounts](./cli/accounts.md) |
@@ -38,12 +38,12 @@ These flags work on every command and in any position after `rimz`.
 | --- | --- |
 | `--root <PATH>` | Target the room for `PATH` instead of the one the current directory resolves to. See [Which room a command reaches](#which-room-a-command-reaches). |
 | `--mux <zellij\|tmux>` | Use this backend for the invocation. See [Which backend a command uses](#which-backend-a-command-uses). |
-| `--zellij`, `--tmux` | Shorthands for `--mux zellij` and `--mux tmux`. Passing more than one backend selector fails with `choose one of --mux, --zellij, --tmux`. |
+| `--zellij`, `--tmux` | Shorthands for `--mux zellij` and `--mux tmux`. Passing more than one backend selector fails with `choose one of --mux, --zellij, --tmux` (exit `1`). |
 | `--color <auto\|always\|never>` | When to color human output. Default `auto`. See [Color](#color). |
-| `-h`, `--help` | Print the flags and defaults of the command it follows. |
+| `-h`, `--help` | Print the flags and defaults of the command it follows. `-h` prints the summary and `--help` the long form. |
 | `-V`, `--version` | Print the RimZ version (top level only). |
 
-Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-attach` or `--print`, `--no-resume`, `--refresh-ms`), and `start` takes `--account`, covered in [Start the room](./cli/getting-started.md#start-the-room).
+Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-attach` or its alias `--print`, `--no-resume`, `--refresh-ms <MS>`), and `start` takes `--account <KIND@NAME>`. `--attach`, `--no-attach`, and `--print` exclude each other. These options are covered in [Start the room](./cli/getting-started.md#start-the-room).
 
 ## Conventions
 
@@ -55,9 +55,9 @@ Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-a
 
 A command reaches the room for the directory it runs in. RimZ resolves that directory to its enclosing Git repository, else the nearest project-marker directory, else the directory itself, so every worktree of one repository shares one room.
 
-Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room or its agents (`agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `pane`, `palette`, `transcript`, `events`, `hooks`, `gc`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `web`, `channel`, `worktree`, `trust`, `loop add`, `doctor`, `setup`, `reset`, `workspace`) resolve from the directory alone.
+Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room or its agents (`accounts`, `agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `loop` other than `loop add` and `loop explain`, `workflow`, `pane`, `palette`, `sidebar`, `transcript`, `events`, `hooks`, `gc`, `workspace rotate-events`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `reset`, `web`, `worktree`, `trust`, `loop add`, `loop explain`, `doctor`, `setup`, `paths`, `workspace resolve`, `workspace migrate`) resolve from the directory alone. A Git submodule is its own repository and gets its own room.
 
-`--root <PATH>` overrides both. Use it in a monorepo whose packages you run as separate rooms, or to reach a room from outside its directory.
+`--root <PATH>` overrides both. `loop add` and `loop explain` take their own `--root`, which names the project root and defaults to `.`. Use `--root` in a monorepo whose packages you run as separate rooms, or to reach a room from outside its directory.
 
 A launch from an agent's pane with `--root` naming another room is refused; drop `--root` and use `--cwd <PATH>` to launch in another directory within the caller's room.
 
@@ -67,7 +67,7 @@ RimZ picks the multiplexer backend in this order and stops at the first step tha
 
 1. `--mux`, `--zellij`, or `--tmux` on the command line.
 2. The multiplexer you are already inside, detected from `ZELLIJ` or `ZELLIJ_PANE_ID`, then `TMUX` or `TMUX_PANE`.
-3. `default` in the `[mux]` config table. If that backend is not installed, the command fails and names it.
+3. `default` in the `[mux]` config table, when that backend is installed. When it is not, RimZ logs a warning and goes on to step 4.
 4. The installed backend. When both Zellij and tmux are installed, RimZ uses tmux.
 
 With neither installed, the command fails with `no multiplexer found: install zellij or tmux`. The `[mux]` table is described in the [configuration guide](../guide/configuration.md#multiplexer-room-options).
@@ -91,6 +91,8 @@ Commands that report an outcome add their own codes, so a script branches withou
 | Command | Codes | Reference |
 | --- | --- | --- |
 | `accounts redeem` | `0` reset, dry-run, or declined; `3` no credit; `4` nothing to reset; `5` already redeemed; `6` unknown; `7` cooldown; `1` refused or failed | [Redeem a credit](./cli/accounts.md#redeem) |
+| `rimz`, `start`, `attach` | When the command enters the room, the multiplexer client's exit code once you detach | [Start the room](./cli/getting-started.md#start-the-room) |
+| `remote connect` | `65` minor version difference, `66` major version difference, `67` path missing on the host, `127` no `rimz` on the host's `PATH`, `255` SSH failure. A fatal SSH run keeps its own status | [Remote exit codes](./cli/remote.md#exit-codes) |
 | `agents -p`, `agents wait`, `subagents wait`, `teams wait`, `message --wait` | The run's status: `0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled | [Supervised runs](./cli/agents.md#supervised-runs--p) |
 | `subagents <PROFILE>`, `subagents fanout` | `125` a room or account cap, or a Qwen quota window, refused the launch; with `--wait`, the run's status | [Launch one child](./cli/subagents.md#launch-one-child) |
 | `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |
@@ -101,23 +103,25 @@ Commands that report an outcome add their own codes, so a script branches withou
 
 ### Durations
 
-A duration is one integer followed by one unit: `30s`, `15m`, `4h`, `30d`. Compound values such as `1h30m` are rejected. The units are `ms`, `s`, `m`, `h`, and `d`, and each flag accepts the subset that fits it (a supervised `--timeout` takes `s` through `d`; `agents top --interval` stops at `m`). A value with a unit the flag does not accept fails at parse time and lists the units it takes:
+A duration is one integer followed by one unit: `30s`, `15m`, `4h`, `30d`. Compound values such as `1h30m` are rejected. The units are `ms`, `s`, `m`, `h`, and `d`, and each flag accepts the subset that fits it (a supervised `--timeout` takes `s` through `d`, and `agents top --interval` stops at `m` and also reads a bare integer as seconds). A value with a unit the flag does not accept fails at parse time and lists the units it takes:
 
 ```console
 $ rimz gc --older-than 1h30m
 error: invalid value '1h30m' for '--older-than <OLDER_THAN>': unknown duration unit `h30m`; use s/m/h/d
+
+For more information, try '--help'.
 ```
 
 ### Color
 
-`--color auto`, the default, colors output when stdout is a terminal. The environment adjusts that decision, checked in this order:
+`--color auto`, the default, colors stdout and stderr each when that stream is a terminal. The environment adjusts that decision, checked in this order:
 
 | Condition | Result |
 | --- | --- |
 | `NO_COLOR` is set and non-empty | No color. |
 | `CLICOLOR_FORCE` is set and non-empty | Color, even through a pipe. |
 | `CLICOLOR=0` | No color. |
-| stdout is a terminal, and `TERM` is set to something other than `dumb` (or `CLICOLOR` is set, or `CI` is set) | Color. |
+| The stream is a terminal, and `TERM` is set to something other than `dumb` (or `CLICOLOR` is set, or `CI` is set) | Color. |
 | Anything else | No color. |
 
 `--color always` and `--color never` skip these checks.
