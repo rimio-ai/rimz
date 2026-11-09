@@ -215,6 +215,12 @@ impl<'a> RunCommands<'a> {
         RunTargets::load(globals).commands(record)
     }
 
+    /// What `workflow show` selects this run by: its address, or its id when the address
+    /// would select another run.
+    pub(in crate::cli) fn target(&self) -> &str {
+        &self.target
+    }
+
     pub(in crate::cli) fn command(
         &self,
         verb: &str,
@@ -455,4 +461,112 @@ fn pick(
         bail!("{miss}");
     }
     bail!("{miss}\n{hint}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(root: &str) -> rimz::ResolvedWorkspace {
+        let root = PathBuf::from(root);
+        rimz::ResolvedWorkspace {
+            workspace_id: rimz::ids::WorkspaceId::from_project_root(&root),
+            project_root: root.clone(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: root.clone(),
+            worktree_branch: None,
+            session_name: format!("rimz-{}", root.display()),
+            mux_hint: None,
+        }
+    }
+
+    fn run(root: &str, lane: &str, state: &str, second: i64) -> Located {
+        let at = jiff::Timestamp::from_second(second).unwrap();
+        let record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version": 1, "id": WorkflowRunId::new(), "workflow": "review", "task": "sweep",
+            "spec_dir": "/spec", "spec_digest": "digest",
+            "scope": { "kind": "worktree", "path": format!("{root}/{lane}") },
+            "project_root": root, "created_at": at, "state": state, "node": "gate",
+            "entered_at": at, "terminal_at": (state != "active").then_some(at),
+            "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+        }))
+        .unwrap();
+        let state =
+            rimz::StatePaths::for_project_root_under(Path::new(root), Path::new("/rimz-home"))
+                .unwrap();
+        Located {
+            paths: state.workflow(&record.id),
+            state,
+            record,
+        }
+    }
+
+    #[test]
+    fn batch_targets_select_their_own_runs() {
+        let runs = vec![
+            run("/repo", "one", "done", 10),
+            run("/repo", "one", "done", 20),
+            run("/repo", "two", "active", 5),
+            run("/repo", "two", "done", 30),
+            run("/other", "three", "done", 40),
+        ];
+        let globals = GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let targets = RunTargets {
+            globals,
+            runs: Some(runs),
+            home: Some(workspace("/repo")),
+            rooms: RefCell::new(BTreeMap::from([(
+                PathBuf::from("/other"),
+                Some(workspace("/other")),
+            )])),
+        };
+        let all = targets.runs.as_deref().unwrap();
+        let mut by_id = Vec::new();
+        for located in all {
+            let commands = targets.commands(&located.record);
+            let target = commands.target();
+            let root = located.record.project_root.to_str().unwrap();
+            let selected = match Target::parse(target).unwrap() {
+                Target::Id(id) => {
+                    by_id.push(located.record.scope.path.clone());
+                    id
+                }
+                parsed => {
+                    let picked = pick(
+                        &parsed,
+                        target,
+                        "show",
+                        Some(&workspace(root)),
+                        || Some("/repo".into()),
+                        all,
+                        None,
+                        &[],
+                    )
+                    .unwrap();
+                    let Picked::Run(index) = picked else {
+                        panic!("{target} names one run");
+                    };
+                    all[index].record.id.clone()
+                }
+            };
+            assert_eq!(selected, located.record.id, "{target}");
+            let command = commands.command("show", None, &[], &[]);
+            assert_eq!(command.contains("--root"), root == "/other", "{command}");
+            assert!(
+                command.ends_with(&format!("workflow show {}", shell_command([target]))),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            by_id,
+            [PathBuf::from("/repo/one"), PathBuf::from("/repo/two")]
+        );
+    }
 }

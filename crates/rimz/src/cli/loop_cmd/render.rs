@@ -1258,7 +1258,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     }
     writeln!(out)?;
     write_show_facts(out, view)?;
-    write_workflow_runs(out, view, now)?;
+    write_workflow_runs(out, view, now, runs)?;
     if let ShowThrottle::Full(readings) = &view.throttle {
         write_throttle_readings(out, readings)?;
     }
@@ -1545,6 +1545,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 &view.history.fires,
                 &attribution,
                 None,
+                None,
                 args.runs,
                 false,
             )?;
@@ -1698,7 +1699,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         let paths = StatePaths::for_project_root(&root)?;
         let records = rimz::store::workflow::list(&paths)?;
         let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
-        list::WorkflowRunRow::for_show(
+        let mut rows = list::WorkflowRunRow::for_show(
             &records,
             &args.name,
             &root,
@@ -1708,7 +1709,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 .unwrap_or(&BTreeMap::new()),
             &specs,
             now_zoned.timestamp(),
-        )
+        );
+        name_workflow_runs(&mut rows, &records, globals);
+        rows
     } else {
         Vec::new()
     };
@@ -1822,9 +1825,15 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     subscriptions_error.map_or(Ok(()), Err)
 }
 
-/// One line per run not already named by a worktree, folded rows included:
-/// `<address or id> <checkout-name> <state> <node> <detail> <age>`.
-fn write_workflow_runs(out: &mut impl Write, view: &ShowView, now: Timestamp) -> Result<()> {
+/// One line per run not already named by a worktree: live runs first, then finished and gone
+/// runs newest first, adjacent ones that agree on checkout, state, and node folded, `limit`
+/// finished rows at most; then the `workflow show` command for the first row that has one.
+fn write_workflow_runs(
+    out: &mut impl Write,
+    view: &ShowView,
+    now: Timestamp,
+    limit: usize,
+) -> Result<()> {
     let mut runs = view
         .workflow_runs
         .iter()
@@ -1834,23 +1843,62 @@ fn write_workflow_runs(out: &mut impl Write, view: &ShowView, now: Timestamp) ->
                     matches!(&row.state, CheckoutState::Workflow { run, .. } if run == &record.id)
                 })
         })
-        .peekable();
-    if runs.peek().is_none() {
+        .collect::<Vec<_>>();
+    if runs.is_empty() {
         return Ok(());
     }
-    writeln!(out, "\nRUNS")?;
-    let mut table = ui::Table::new(["RUN", "CHECKOUT", "STATE", "NODE", "DETAIL", "AGE"]).indent(2);
+    runs.sort_by_key(|run| run.finished_at().map(std::cmp::Reverse));
+    let mut rows: Vec<(&list::WorkflowRunRow, usize, Option<Timestamp>)> = Vec::new();
     for run in runs {
+        if let Some(at) = run.finished_at()
+            && let Some((newest, count, oldest)) = rows.last_mut()
+            && newest.finished_at().is_some()
+            && (&newest.checkout, newest.state, &newest.node)
+                == (&run.checkout, run.state, &run.node)
+        {
+            *count += 1;
+            *oldest = Some(at);
+            continue;
+        }
+        rows.push((run, 1, run.finished_at()));
+    }
+    let total = rows.len();
+    let mut finished = 0;
+    rows.retain(|(run, ..)| {
+        finished += usize::from(run.finished_at().is_some());
+        run.finished_at().is_none() || finished <= limit
+    });
+    if rows.len() < total {
+        writeln!(out, "\nRUNS ({} of {total} rows)", rows.len())?;
+    } else {
+        writeln!(out, "\nRUNS")?;
+    }
+    let mut table = ui::Table::new(["RUN", "CHECKOUT", "STATE", "NODE", "DETAIL", "AGE"]).indent(2);
+    for (run, count, oldest) in &rows {
+        let at = run.finished_at().unwrap_or(run.since);
+        let (state, detail) = if *count > 1 {
+            (
+                format!("{} ×{count}", run.state),
+                oldest
+                    .and_then(|oldest| ui::folded_span(oldest, at))
+                    .unwrap_or_default(),
+            )
+        } else {
+            (run.state.to_owned(), run.detail.clone())
+        };
         table.row([
             ui::cell(run.name()),
             ui::cell(display_path(&run.checkout)),
-            ui::cell(run.state),
+            ui::cell(state),
             ui::cell(&run.node),
-            ui::cell(&run.detail),
-            ui::cell(ui::rel_age(run.since, now)),
+            ui::cell(detail),
+            ui::cell(ui::rel_age(at, now)),
         ]);
     }
     table.render(out)?;
+    if let Some(command) = rows.iter().find_map(|(run, ..)| run.command.as_deref()) {
+        writeln!(out, "  → {command}")?;
+    }
     Ok(())
 }
 
@@ -2182,6 +2230,7 @@ fn write_last_run(
             &mut body,
             Some(entry),
             &summary,
+            None,
             prose,
             run_report::Forensics::Summary,
         )?;
@@ -2239,6 +2288,7 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
             &records,
             &attribution,
             None,
+            None,
             args.runs,
             false,
         )?;
@@ -2270,6 +2320,10 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
     let in_flight = in_flight.filter(|_| !args.failed);
+    let workflow_runs = entry
+        .filter(|entry| entry.workflow.is_some())
+        .map(|entry| workflow_log_runs(entry, &history.fires, globals))
+        .transpose()?;
     let mut out = ui::out();
     let attribution = refused_fire_attribution(&history.fires);
     let shown = write_log_records(
@@ -2278,6 +2332,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         &history.fires,
         &attribution,
         args.heard.then_some(history.records.as_slice()),
+        workflow_runs.as_deref(),
         args.runs,
         args.failed,
     )?;
@@ -2311,13 +2366,71 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) -> bool {
+    record.result == LoopRunResult::Launched
+        && runs.iter().any(|run| {
+            record.run_id.as_deref() == Some(run.id.as_str())
+                && run.state == rimz::store::workflow::RunState::Failed.as_str()
+        })
+}
+
+/// Names each row as `rimz workflow show` selects it, against one load of every room's runs.
+fn name_workflow_runs(
+    rows: &mut [list::WorkflowRunRow],
+    records: &[rimz::store::workflow::RunRecord],
+    globals: &GlobalFlags,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let targets = crate::cli::workflow_view::resolve::RunTargets::load(globals);
+    for row in rows {
+        if let Some(record) = records.iter().find(|record| record.id == row.id) {
+            let commands = targets.commands(record);
+            row.named(
+                commands.target().to_owned(),
+                commands.command("show", None, &[], &[]),
+            );
+        }
+    }
+}
+
+/// The runs a workflow task's log blocks name, live or finished, whichever task started them.
+fn workflow_log_runs(
+    entry: &TaskEntry,
+    fires: &[LoopRunRecord],
+    globals: &GlobalFlags,
+) -> Result<Vec<list::WorkflowRunRow>> {
+    let paths = StatePaths::for_project_root(&entry.resolved_root())?;
+    let named = fires
+        .iter()
+        .filter_map(|fire| fire.run_id.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut records = rimz::store::workflow::list(&paths)?;
+    records.retain(|record| named.contains(record.id.as_str()));
+    let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
+    let mut rows = records
+        .iter()
+        .map(|record| {
+            list::WorkflowRunRow::of_record(record, specs.get(&record.id), Timestamp::now())
+        })
+        .collect::<Vec<_>>();
+    name_workflow_runs(&mut rows, &records, globals);
+    Ok(rows)
+}
+
 /// History blocks oldest first, limited from the newest after folding and filtering.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the history, its two optional joins (heard signals, workflow runs), and the screen's flags"
+)]
 fn write_log_records(
     out: &mut impl Write,
     entry: Option<&TaskEntry>,
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
     heard: Option<&[LoopRunRecord]>,
+    workflow_runs: Option<&[list::WorkflowRunRow]>,
     limit: usize,
     failed: bool,
 ) -> Result<usize> {
@@ -2340,7 +2453,11 @@ fn write_log_records(
     }
     let visible = rows
         .iter()
-        .filter(|row| !failed || record_is_failure(row.latest))
+        .filter(|row| {
+            !failed
+                || record_is_failure(row.latest)
+                || launched_run_failed(row.latest, workflow_runs.unwrap_or_default())
+        })
         .rev()
         .take(limit)
         .collect::<Vec<_>>();
@@ -2408,7 +2525,7 @@ fn write_log_records(
             },
             _ => run_report::Forensics::Full,
         };
-        run_report::write_record_forensics(out, entry, record, prose, detail)?;
+        run_report::write_record_forensics(out, entry, record, workflow_runs, prose, detail)?;
     }
     Ok(visible.len())
 }

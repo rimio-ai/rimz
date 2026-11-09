@@ -2066,6 +2066,7 @@ fn logs_text(records: &[LoopRunRecord], limit: usize, failed: bool) -> String {
             .iter()
             .any(|record| record.result == LoopRunResult::SignalSkipped)
             .then_some(records),
+        None,
         limit,
         failed,
     )
@@ -2395,6 +2396,7 @@ fn logs_heard_without_heard_records_matches_plain_logs_and_limits() {
             &records,
             &refused_fire_attribution(&records),
             Some(&records),
+            None,
             limit,
             false,
         )
@@ -4631,6 +4633,7 @@ fn loop_logs_forensics_print_a_signal_payload_under_its_name() {
             &mut out,
             None,
             &detail,
+            None,
             ui::prose::Prose::Raw,
             Forensics::Full,
         )
@@ -4849,4 +4852,188 @@ fn throttle_skipped_notes_use_the_warning_tone() {
         )),
         "{out:?}"
     );
+}
+
+fn task_run(state: &str, lane: &str, node: &str, second: i64) -> rimz::store::workflow::RunRecord {
+    let at = Timestamp::from_second(second).unwrap();
+    let terminal = !matches!(state, "active" | "parked");
+    serde_json::from_value(serde_json::json!({
+        "version": 1, "id": rimz::ids::WorkflowRunId::new(), "workflow": "review",
+        "task": "sweep", "spec_dir": "/spec", "spec_digest": "digest",
+        "scope": { "kind": "worktree", "path": format!("/repo/{lane}") },
+        "project_root": "/repo", "created_at": at, "state": state, "node": node,
+        "entered_at": at, "terminal_at": terminal.then_some(at),
+        "visits": {}, "visit_grant": 0, "deadline_fired": false, "next_seq": 1,
+    }))
+    .unwrap()
+}
+
+fn task_rows(records: &[rimz::store::workflow::RunRecord]) -> Vec<list::WorkflowRunRow> {
+    let mut rows = list::WorkflowRunRow::for_show(
+        records,
+        "sweep",
+        Path::new("/repo"),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        Timestamp::from_second(100).unwrap(),
+    );
+    for row in &mut rows {
+        let id = row.id.to_string();
+        row.named(id.clone(), format!("rimz workflow show {id}"));
+    }
+    rows
+}
+
+#[test]
+fn workflow_run_projection_lists_finished_runs_without_a_ledger_entry() {
+    let live = task_run("active", "a", "gate", 10);
+    let done = task_run("done", "b", "merge", 30);
+    let failed = task_run("failed", "c", "gate", 40);
+    let mut other = task_run("done", "d", "gate", 50);
+    other.task = Some("other".into());
+    let rows = task_rows(&[done.clone(), live.clone(), failed.clone(), other]);
+    let json = serde_json::to_value(&rows).unwrap();
+    let ids = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [&live.id, &failed.id, &done.id].map(|id| serde_json::json!(id)),
+        "{json}"
+    );
+    assert!(json[0].get("terminal_at").is_none(), "{json}");
+    for (row, state, node, at) in [
+        (&json[1], "failed", "gate", 40),
+        (&json[2], "done", "merge", 30),
+    ] {
+        assert_eq!(row["state"], state, "{json}");
+        assert_eq!(row["node"], node, "{json}");
+        assert_eq!(
+            row["terminal_at"],
+            serde_json::json!(Timestamp::from_second(at).unwrap()),
+            "{json}"
+        );
+    }
+}
+
+fn runs_section(view: &ShowView, runs: usize) -> String {
+    let mut out = Vec::new();
+    render_show(&mut out, view, runs).unwrap();
+    let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    text.split("\nRUNS")
+        .nth(1)
+        .map(|section| format!("RUNS{section}"))
+        .unwrap_or_else(|| panic!("no RUNS section: {text}"))
+}
+
+#[test]
+fn workflow_runs_fold_finished_rows_and_cap_them_by_runs() {
+    let mut view = workflow_view();
+    view.worktrees.clear();
+    view.entry.each_worktree = false;
+    let live = task_run("active", "x", "gate", 5);
+    let records = [
+        live.clone(),
+        task_run("done", "a", "merge", 70),
+        task_run("done", "a", "merge", 60),
+        task_run("done", "a", "merge", 50),
+        task_run("failed", "a", "merge", 45),
+        task_run("done", "a", "merge", 40),
+    ];
+    view.workflow_runs = task_rows(&records);
+    let text = runs_section(&view, 10);
+    let lines = text.lines().collect::<Vec<_>>();
+    assert!(lines[0] == "RUNS", "{text}");
+    let folded = lines
+        .iter()
+        .filter(|line| line.contains("done ×3"))
+        .collect::<Vec<_>>();
+    assert_eq!(folded.len(), 1, "{text}");
+    assert!(
+        folded[0].contains("over ") && folded[0].contains(records[1].id.as_str()),
+        "{text}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains(" failed "))
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(records[5].id.as_str())
+                && line.contains(" done ")
+                && !line.contains('×')),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("→ rimz workflow show {}", live.id)),
+        "{text}"
+    );
+    let capped = runs_section(&view, 1);
+    assert!(capped.starts_with("RUNS (2 of 4 rows)\n"), "{capped}");
+    assert!(capped.contains(live.id.as_str()), "{capped}");
+    assert!(capped.contains("done ×3"), "{capped}");
+    assert!(!capped.contains(" failed "), "{capped}");
+}
+
+fn workflow_logs(records: &[LoopRunRecord], runs: &[list::WorkflowRunRow], failed: bool) -> String {
+    let mut out = Vec::new();
+    write_log_records(
+        &mut out,
+        None,
+        records,
+        &refused_fire_attribution(records),
+        None,
+        Some(runs),
+        10,
+        failed,
+    )
+    .unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn workflow_log_blocks_show_their_runs_state_and_command() {
+    let failed = task_run("failed", "a", "gate", 40);
+    let done = task_run("done", "b", "merge", 50);
+    let holder = task_run("active", "c", "gate", 20);
+    let gone = rimz::ids::WorkflowRunId::new();
+    let runs = task_rows(&[failed.clone(), done.clone(), holder.clone()]);
+    let naming = |mut record: LoopRunRecord, id: &rimz::ids::WorkflowRunId| {
+        record.run_id = Some(id.to_string());
+        record
+    };
+    let records = [
+        naming(scheduled(10, LoopRunResult::Launched), &failed.id),
+        naming(scheduled(20, LoopRunResult::Launched), &done.id),
+        naming(scheduled(30, LoopRunResult::Launched), &gone),
+        naming(scheduled(60, LoopRunResult::WorkflowSkipped), &holder.id),
+    ];
+    let text = workflow_logs(&records, &runs, false);
+    for (id, state) in [
+        (&failed.id, "failed at gate"),
+        (&done.id, "done at merge"),
+        (&holder.id, "active at gate"),
+    ] {
+        assert!(text.contains(&format!("  run: {id} · {state}")), "{text}");
+        assert!(
+            text.contains(&format!("  → rimz workflow show {id}\n")),
+            "{text}"
+        );
+    }
+    assert!(text.contains(&format!("  run: {gone} · gone\n")), "{text}");
+    assert!(!text.contains(&format!("workflow show {gone}")), "{text}");
+    let failures = workflow_logs(&records, &runs, true);
+    assert!(
+        failures.contains(&format!("run: {} · failed", failed.id)),
+        "{failures}"
+    );
+    assert!(!failures.contains(done.id.as_str()), "{failures}");
 }

@@ -395,6 +395,9 @@ pub(super) fn run_one(
     }
     fire.release_run_lock()?;
     present_finished(name, &entry, &action, mode, keep, &finished)?;
+    if mode == LoopRunMode::Manual {
+        write_launched_run_command(&entry, &action, &finished.record, globals)?;
+    }
     if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);
     }
@@ -639,6 +642,34 @@ fn present_finished(
         prose: ui::prose::Prose::for_stdout(),
     };
     print_run_summary(name, entry, action, mode, keep, &summary)
+}
+
+/// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, as `workflow run`
+/// prints it.
+fn write_launched_run_command(
+    entry: &TaskEntry,
+    action: &TaskAction,
+    record: &LoopRunRecord,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if action.kind() != TaskActionKind::Workflow || record.result != LoopRunResult::Launched {
+        return Ok(());
+    }
+    let Some(id) = record
+        .run_id
+        .as_deref()
+        .and_then(|id| id.parse::<rimz::ids::WorkflowRunId>().ok())
+    else {
+        return Ok(());
+    };
+    let paths = StatePaths::for_project_root(&entry.resolved_root())?;
+    let run = rimz::store::workflow::load(&paths.workflow(&id))?;
+    writeln!(
+        ui::out(),
+        "  → {}",
+        crate::cli::workflow_view::resolve::run_command(&run, "show", globals, None, &[], &[])
+    )?;
+    Ok(())
 }
 
 fn execute_prepared_delivery(

@@ -508,7 +508,7 @@ pub(super) fn render_record_detail(
         write!(out, " · {late}")?;
     }
     writeln!(out)?;
-    write_record_forensics(out, Some(entry), record, prose, Forensics::Summary)?;
+    write_record_forensics(out, Some(entry), record, None, prose, Forensics::Summary)?;
     let is_cut = record.stages().next().is_some_and(|stage| {
         matches!(stage, RunStage::Check(check) if summary_check_tail(record, check).is_some())
     });
@@ -522,6 +522,7 @@ pub(super) fn write_record_forensics(
     out: &mut impl Write,
     entry: Option<&TaskEntry>,
     record: &LoopRunRecord,
+    workflow_runs: Option<&[list::WorkflowRunRow]>,
     prose: ui::prose::Prose,
     detail: Forensics,
 ) -> std::io::Result<()> {
@@ -613,7 +614,7 @@ pub(super) fn write_record_forensics(
     if let Some(message_id) = &record.message_id {
         write_detail_link(out, "message", message_id.as_str())?;
     }
-    write_stored_run_links(out, record, run_record.as_ref())
+    write_stored_run_links(out, record, workflow_runs, run_record.as_ref())
 }
 
 fn write_check_section(
@@ -737,8 +738,17 @@ fn write_summary_run_links(out: &mut impl Write, record: &LoopRunRecord) -> std:
 fn write_stored_run_links(
     out: &mut impl Write,
     record: &LoopRunRecord,
+    workflow_runs: Option<&[list::WorkflowRunRow]>,
     run_record: Option<&rimz::store::run::RunRecord>,
 ) -> std::io::Result<()> {
+    if let Some(runs) = workflow_runs
+        && let Some(id) = record
+            .run_id
+            .as_deref()
+            .and_then(|id| id.parse::<rimz::ids::WorkflowRunId>().ok())
+    {
+        return write_workflow_run_link(out, &id, runs);
+    }
     if let Some(run_id) = &record.run_id {
         write_detail_link(out, "run", run_id)?;
         if let Some(tail) = run_record
@@ -753,6 +763,35 @@ fn write_stored_run_links(
         }
     }
     Ok(())
+}
+
+/// `run: <id> · <state> at <node>[ · <detail>]` and the `workflow show` command, or
+/// `gone` once the run's home is removed.
+fn write_workflow_run_link(
+    out: &mut impl Write,
+    id: &rimz::ids::WorkflowRunId,
+    runs: &[list::WorkflowRunRow],
+) -> std::io::Result<()> {
+    let Some(run) = runs.iter().find(|run| &run.id == id) else {
+        return write_detail_link(out, "run", &format!("{id} · gone"));
+    };
+    let mut state = format!("{id} · {} at {}", run.state, run.node);
+    if !run.detail.is_empty() {
+        state.push_str(&format!(" · {}", run.detail));
+    }
+    write_detail_link(out, "run", &state)?;
+    match &run.command {
+        Some(command) => write_detail_command(out, command),
+        None => Ok(()),
+    }
+}
+
+fn write_detail_command(out: &mut impl Write, command: &str) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::muted(), &format!("  → {command}"))
+    )
 }
 
 fn record_spend_label(record: &LoopRunRecord) -> Option<String> {
@@ -908,6 +947,7 @@ mod tests {
             &mut out,
             Some(&entry),
             &record,
+            None,
             ui::prose::Prose::Raw,
             Forensics::Full,
         )
@@ -1030,6 +1070,7 @@ mod tests {
             &mut out,
             None,
             &record,
+            None,
             ui::prose::Prose::Raw,
             Forensics::Full,
         )
@@ -1048,6 +1089,7 @@ mod tests {
             &mut out,
             Some(&entry),
             &record,
+            None,
             ui::prose::Prose::Raw,
             Forensics::Summary,
         )
@@ -1067,6 +1109,7 @@ mod tests {
             &mut out,
             Some(&entry),
             &record,
+            None,
             ui::prose::Prose::Raw,
             Forensics::Summary,
         )
