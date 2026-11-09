@@ -53,10 +53,11 @@ The lens is room-shared, intersects a committed search, and clears automatically
 
 ```sh
 rimz sidebar close
+rimz sidebar close --pane tmux:%4
 rimz sidebar reopen
 ```
 
-`close` closes the highlighted row's pane immediately, without confirmation. For a session with a bound pane it uses the same stop path as `rimz agents stop`, stopping launched children before their parent. For an agent without a bound session, a shell, editor, TUI or untracked agent, it closes the row's pane and whatever runs there. Only resumable root sessions with a saved conversation enter the reopen list; child sessions and process rows cannot be reopened this way.
+`close` closes the highlighted row's pane immediately, without confirmation. With `--pane <PANE_ID>` it closes the card that owns that pane instead, whatever is highlighted and whichever tabs the attached clients view; a pane no card owns is refused with `sidebar close: no card owns pane <PANE_ID>`. The sidebar's `d d` runs this form for the selected card. For a session with a bound pane it uses the same stop path as `rimz agents stop`, stopping launched children before their parent. For an agent without a bound session, a shell, editor, TUI or untracked agent, it closes the row's pane and whatever runs there. Only resumable root sessions with a saved conversation enter the reopen list; child sessions and process rows cannot be reopened this way.
 
 `reopen` resumes the most recently sidebar-closed agent that is not already live, in a new focused tab, not its old tab. A team seat uses `rimz agents TEAM.ROLE --continue`, with its saved worktree name when applicable; a solo session uses `rimz agents resume @SESSION-ID`. Resume receipts stay off stdout. Each command tries one entry. A failed resume reports its error and drops only that entry, leaving older cards for the next `reopen`.
 

@@ -2262,3 +2262,53 @@ fn step_budget_bounds_continuous_progress() {
         None
     );
 }
+
+#[test]
+fn width_reset_drops_a_pending_burst_writes_an_unpinned_target_and_broadcasts() {
+    let (dir, runtime, mut controller) = controller(MuxName::Tmux);
+    controller.current_view_cols = Some(200);
+    controller
+        .convergence
+        .seed_native_step(native_step(10, true));
+    crate::mux::width_target::pin(&runtime, controller.width, target(82), 200).unwrap();
+    controller.adjust(50, WidthAdjust::Wider);
+    controller.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+    controller.classification_resize_at_ms = Some(crate::utils::time::unix_now_ms());
+    let socket_path = runtime.sock_dir.join("reset.sock");
+    let socket = bind_wake_socket(&socket_path).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    crate::wakeup::heartbeat::write_heartbeat(
+        &runtime,
+        runtime.workspace_id.clone(),
+        &SidebarInstanceId::new(),
+        MuxName::Tmux,
+        "rimz-test",
+        &socket_path,
+        None,
+        None,
+    )
+    .unwrap();
+
+    controller.reset();
+
+    assert!(controller.key_burst.is_none(), "the burst cannot pin later");
+    assert!(
+        controller.classification_deadline.is_none()
+            && controller.classification_resize_at_ms.is_none(),
+        "an earlier drag cannot be classified into a pin after the reset"
+    );
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    let expected = crate::mux::width_target::resolve(&runtime, controller.width, Some(200));
+    assert!(!expected.pinned);
+    assert_eq!(
+        controller.convergence.target(),
+        Some(expected.cols(Some(200)))
+    );
+    let mut payload = [0_u8; 1024];
+    let received = socket.recv(&mut payload).expect("receive reset broadcast");
+    let envelope: SidebarEventEnvelope = serde_json::from_slice(&payload[..received]).unwrap();
+    assert_eq!(envelope.event, SidebarEvent::WidthTargetChanged);
+    drop(dir);
+}

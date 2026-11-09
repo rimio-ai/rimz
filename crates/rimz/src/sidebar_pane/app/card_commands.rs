@@ -38,7 +38,7 @@ impl CardInput {
         if now >= self.expires {
             return Err("request expired; try again");
         }
-        let (view, destination) = views.command_target()?;
+        let (view, destination) = views.command_target_for(&self.request)?;
         if view != self.view || destination != pane {
             return Err("view changed while the request was queued; try again");
         }
@@ -51,15 +51,16 @@ pub(super) fn reduce(
     view: &mut ViewState,
     snapshot: &SidebarSnapshot,
 ) -> (InputOutcome, CardReply) {
-    let mut redraw = std::mem::take(&mut view.help_visible);
-    if view.search_draft.take().is_some() {
-        anchor_selection(view, snapshot);
-        redraw = true;
+    let mut outcome = InputOutcome::default();
+    // A pane-named close is routed to any ready view, not the presser's, so
+    // it leaves that view's help and search draft as they are.
+    if !matches!(request, CardRequest::CloseTarget { pane: Some(_) }) {
+        outcome.redraw = std::mem::take(&mut view.help_visible);
+        if view.search_draft.take().is_some() {
+            anchor_selection(view, snapshot);
+            outcome.redraw = true;
+        }
     }
-    let mut outcome = InputOutcome {
-        redraw,
-        ..Default::default()
-    };
     let target = match request {
         CardRequest::Walk {
             direction,
@@ -156,12 +157,17 @@ pub(super) fn reduce(
             }
             return (outcome, CardReply::Done);
         }
-        CardRequest::CloseTarget => {
+        CardRequest::CloseTarget { pane: named } => {
+            let wanted = named.as_ref().or(view.selected_pane.as_ref());
             let Some((row, pane)) = snapshot.rows().find_map(|row| {
                 let pane = &row.pane.as_ref()?.pane_id;
-                (Some(pane) == view.selected_pane.as_ref()).then_some((row, pane))
+                (Some(pane) == wanted).then_some((row, pane))
             }) else {
-                return (outcome, request.refused("no highlighted card"));
+                let reason = match named {
+                    Some(pane) => format!("no card owns pane {pane}"),
+                    None => "no highlighted card".to_owned(),
+                };
+                return (outcome, request.refused(reason));
             };
             let target = if row.as_agent().is_some() {
                 CardTarget::Agent {

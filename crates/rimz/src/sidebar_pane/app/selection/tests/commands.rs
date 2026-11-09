@@ -268,7 +268,11 @@ fn card_close_target_is_the_highlight_session_key_or_process_pane() {
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
         ..Default::default()
     };
-    let (outcome, reply) = reduce(&CardRequest::CloseTarget, &mut view, &snapshot);
+    let (outcome, reply) = reduce(
+        &CardRequest::CloseTarget { pane: None },
+        &mut view,
+        &snapshot,
+    );
     assert_eq!(
         serde_json::to_value(&reply).unwrap(),
         serde_json::json!({"reply": "close_target", "agent": {
@@ -279,9 +283,49 @@ fn card_close_target_is_the_highlight_session_key_or_process_pane() {
     view.selected_index = Some(1);
     view.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
     assert_eq!(
-        reduce(&CardRequest::CloseTarget, &mut view, &snapshot).1,
+        reduce(
+            &CardRequest::CloseTarget { pane: None },
+            &mut view,
+            &snapshot
+        )
+        .1,
         CardReply::CloseTarget {
             target: CardTarget::Pane(view.selected_pane.clone().unwrap())
+        }
+    );
+}
+
+#[test]
+fn card_close_with_a_pane_names_that_rows_target_and_refuses_an_unknown_pane() {
+    let snapshot = filterable_snapshot(&workspace());
+    let mut view = ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+        help_visible: true,
+        search_draft: Some("cla".into()),
+        ..Default::default()
+    };
+    let other = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let close = |pane: &PaneId| CardRequest::CloseTarget {
+        pane: Some(pane.clone()),
+    };
+    let (outcome, reply) = reduce(&close(&other), &mut view, &snapshot);
+    assert_eq!(
+        reply,
+        CardReply::CloseTarget {
+            target: CardTarget::Pane(other.clone())
+        },
+        "the named pane wins over the highlight"
+    );
+    assert!(
+        view.help_visible && view.search_draft.as_deref() == Some("cla") && !outcome.redraw,
+        "another viewer's close leaves the routed view's help and draft alone"
+    );
+    let unknown = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    assert_eq!(
+        reduce(&close(&unknown), &mut view, &snapshot).1,
+        CardReply::Refused {
+            reason: "sidebar close: no card owns pane zellij:terminal_99".into()
         }
     );
 }

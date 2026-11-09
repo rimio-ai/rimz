@@ -1027,29 +1027,32 @@ An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `Esc` c
 `?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists the keys you configured under `[keys.sidebar]`, so it differs from this frame after a rebind.
 
 ```
-╭ help ────────────────────────────────────╮
-│ keys                                     │
-│   /    search         ✕ Esc   clear      │
-│ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
-│ ↕ gg/G ends           ↕ ^f/^b page       │
-│ ⏎ 1-9  direct         ↕ ^d/^u half page  │
-│ ␣ n/N  next/prev      ↕ H/M/L screen     │
-│ ⏎ Tab  last card      ⏎ Enter focus/open │
-│ ✉ m    read/unread    ✉ U     read all   │
-│ ↔ ←/→  account tabs   ⟳ R     reload     │
-│   zi   inactive fold  ↕ </>   width      │
-│   za   card fold        zR/zM all groups │
-│                                          │
-│ filter                                   │
-│ ? f?   waiting        ! f!    attention  │
-│ ⏸︎ fp   paused         ✓ fd    done       │
-│ ⢿ fw   working        ○ fi    idle       │
-│ ☾ fz   sleeping       ␣ fn    needs you  │
-│ ● fu   unread         ≡ F     all        │
-│                                          │
-│ ▐ alt p sidebar                          │
-│   alt g zoom                             │
-╰──────────── any key to close ────────────╯
+╭ help ─────────────────────────────────────╮
+│ keys                                      │
+│   /    search         ✕ Esc   clear       │
+│ ↕ j/k  cards/entries  ↕ J/K   worktrees   │
+│ ↕ gg/G ends           ↕ ^f/^b page        │
+│ ⏎ 1-9  direct         ↕ ^d/^u half page   │
+│ ␣ n/N  next/prev      ↕ H/M/L screen      │
+│ ⏎ Tab  last card      ⏎ Enter focus/open  │
+│ ✉ m    read/unread    ✉ U     read all    │
+│ ↔ ←/→  account tabs   ⟳ R     reload      │
+│   zi   inactive fold  ↕ </>   width       │
+│   za   card fold        zR/zM all groups  │
+│   dd   close            :     commands    │
+│ ⏎ q    return         ↕ =     reset width │
+│   ^l   redraw                             │
+│                                           │
+│ filter                                    │
+│ ? f?   waiting        ! f!    attention   │
+│ ⏸︎ fp   paused         ✓ fd    done        │
+│ ⢿ fw   working        ○ fi    idle        │
+│ ☾ fz   sleeping       ␣ fn    needs you   │
+│ ● fu   unread         ≡ F     all         │
+│                                           │
+│ ▐ alt p sidebar                           │
+│   alt g zoom                              │
+╰──────────── any key to close ─────────────╯
 ```
 
 ## Keys and mouse
@@ -1075,12 +1078,17 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `z i` | toggle the inactive peek; opening reveals its chip and first receipt, closing returns to the chip; selection stays put |
 | `←` / `→` | switch the dashboard tab |
 | `<` / `>` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
+| `=` | return the sidebar to its configured width in every tab of the room, dropping a width set with `<` / `>` |
+| `d d` | close the selected card's pane, as [`rimz sidebar close`](../reference/cli/sidebar.md#close-and-reopen) does |
+| `:` | open the [command palette](../reference/cli/palette.md) in a popup, starting on the selected card |
+| `q` | focus the first work pane in the sidebar's tab, the pane `rimz sidebar focus --toggle` returns to; a notice says when the tab has none |
+| `Ctrl+l` | clear the pane and paint it again from scratch |
 | `R` | reload this tab's sidebar |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
 | `Esc` | peel one layer per press: a pending key sequence, then the search draft, then the committed text search, then a pane notice, then recovered alerts or an active `Sidebar degraded` alert; while help is open, close help only |
 
-`g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, or `n` / `N` shows as a `⚠` notice above the bottom row until the next key.
+`g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, `n` / `N`, `d d` or `q` shows as a `⚠` notice above the bottom row until the next key, and so does the first error line of a `d d` or `:` command that fails.
 
 | filter key | cards shown |
 |------------|-------------|

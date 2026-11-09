@@ -928,3 +928,51 @@ fn card_failed_jump_restores_previous_card_with_the_baseline() {
         assert_eq!(view.previous_card, Some(previous));
     }
 }
+
+#[test]
+fn close_and_palette_keys_spawn_their_rimz_commands_for_the_selected_card() {
+    let mut rig = Rig::new();
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    let card = rig
+        .state
+        .views
+        .mirror()
+        .rows()
+        .next()
+        .unwrap()
+        .pane
+        .clone()
+        .unwrap()
+        .pane_id;
+    rig.view().ui().selected_index = Some(0);
+    rig.view().ui().selected_pane = Some(card.clone());
+    let room = rig.state.pane.config.room.session_name.clone();
+    rig.input(KeyAction::Close);
+    rig.input(KeyAction::Palette);
+    let mode = ["--mode".to_owned(), "commands".to_owned()];
+    assert_eq!(
+        super::super::super::key_spawn::take_spawned(),
+        vec![
+            super::super::super::key_spawn::close_argv(&card, &room, MuxName::Tmux),
+            super::super::super::key_spawn::palette_argv(
+                &mode,
+                &room,
+                MuxName::Tmux,
+                Some(&card),
+                None
+            ),
+        ],
+        "no client views the pane, so the palette names none"
+    );
+
+    let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
+    let mut played = Rig::with_clock(None, BodyLens::default(), None, clock);
+    played.view().ctx().current = agent_snapshot(&played.ws);
+    played.view().ui().selected_index = Some(0);
+    played.view().ui().selected_pane = Some(card);
+    played.input(KeyAction::Close);
+    assert!(
+        super::super::super::key_spawn::take_spawned().is_empty(),
+        "a play clock runs no command"
+    );
+}

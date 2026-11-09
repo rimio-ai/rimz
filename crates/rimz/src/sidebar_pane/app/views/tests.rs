@@ -740,3 +740,63 @@ fn a_departed_clients_context_is_frozen_beside_surviving_coviewers() {
         2
     );
 }
+
+#[test]
+fn a_pane_scoped_close_acts_while_clients_view_different_tabs() {
+    let clock = clock();
+    let mut views = Views::default();
+    views.reconcile_frame(&frame(&[(1, 11), (2, 21)]), clock.now(), HOLD);
+    let bare = CardRequest::CloseTarget { pane: None };
+    assert!(views.command_target_for(&bare).is_err());
+    let scoped = CardRequest::CloseTarget {
+        pane: Some(pane(21)),
+    };
+    let (_, target) = views
+        .command_target_for(&scoped)
+        .expect("a pane-scoped close needs no view agreement");
+    assert!([pane(10), pane(20)].contains(target), "{target}");
+}
+
+#[test]
+fn the_palette_client_is_the_sole_viewer_of_the_pressing_sidebar() {
+    let clock = clock();
+    let mut views = Views::default();
+    views.reconcile_frame(&frame(&[(1, 11), (2, 21)]), clock.now(), HOLD);
+    assert_eq!(views.sole_viewer(&pane(10)), Some(&MuxClientId::Zellij(1)));
+    views.reconcile_frame(&frame(&[(1, 11), (2, 12)]), clock.now(), HOLD);
+    assert_eq!(views.sole_viewer(&pane(10)), None, "two clients view it");
+    assert_eq!(views.sole_viewer(&pane(20)), None, "no client views it");
+}
+
+#[test]
+fn toggle_back_matches_the_cli_rule_on_one_listing() {
+    let frame = frame(&[]);
+    let mut listing: Vec<crate::pane::PaneRef> = Vec::new();
+    for tab in &frame.tabs {
+        for state in &tab.panes {
+            let mut entry = crate::sidebar_pane::app::fixtures::pane(
+                state.pane_id.raw(),
+                tab.view_id.as_str(),
+                false,
+            );
+            entry.pane_id = state.pane_id.clone();
+            entry.command = state.current.command.clone();
+            listing.push(entry);
+        }
+    }
+    let cli: Vec<_> = listing
+        .iter()
+        .map(|pane| {
+            (
+                &pane.pane_id,
+                pane.view_id.as_deref(),
+                pane.is_rimz_sidebar(),
+            )
+        })
+        .collect();
+    for (sidebar, expected) in [(10, 11), (20, 21)] {
+        let rule = crate::pane::toggle_back_pane(&cli, &pane(sidebar)).cloned();
+        assert_eq!(rule, Some(pane(expected)), "the CLI rule");
+        assert_eq!(toggle_back(&frame, &pane(sidebar)), rule, "the key agrees");
+    }
+}

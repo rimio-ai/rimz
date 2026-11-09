@@ -3491,7 +3491,8 @@ path = "crates/rimz/src/pane"
 # PaneTitle, PaneTitleOrigin and the title's text/lead accessors and builders carry origin metadata (+6).
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
 # RoomMode and ClientRoomMode carry non-normal client modes without changing pane-view identity (+2).
-surface-budget = 52
+# toggle_back_pane is the one sidebar toggle-back rule `rimz sidebar focus --toggle` and the in-pane `q` share (+1).
+surface-budget = 53
 
 [[verdict]]
 kind = "item"
@@ -3507,6 +3508,11 @@ reason = "Frames and snapshots serialize modes as client-tagged entries because 
 kind = "item"
 key = "pane::attended_until"
 reason = "Off Linux, live message sends and sidebar pens share the attached-client input-hold rule."
+
+[[verdict]]
+kind = "item"
+key = "pane::toggle_back_pane"
+reason = "`rimz sidebar focus --toggle` over a pane listing and the sidebar's `q` over the room frame return to the same work pane; the CLI reaches only pub items."
 
 [[module]]
 path = "crates/rimz/src/proc"

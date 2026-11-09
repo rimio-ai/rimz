@@ -369,3 +369,67 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
 
     assert!(rig.state.pane.ui.meter_pixels.is_none());
 }
+
+/// The screen `bytes` alone draw on a blank 80x24 terminal.
+fn screen_of(bytes: &[u8]) -> String {
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
+    parser.process(bytes);
+    parser.screen().contents()
+}
+
+fn pane_80x24() -> std::io::Result<ratatui::backend::WindowSize> {
+    Ok(ratatui::backend::WindowSize {
+        columns_rows: ratatui::layout::Size::new(80, 24),
+        pixels: ratatui::layout::Size::default(),
+    })
+}
+
+/// The bytes written to `file` since the last call.
+fn written_since(file: &std::fs::File, seen: &mut usize) -> Vec<u8> {
+    use std::os::unix::fs::FileExt;
+    let len = usize::try_from(file.metadata().unwrap().len()).unwrap();
+    let mut bytes = vec![0; len - *seen];
+    file.read_exact_at(&mut bytes, *seen as u64).unwrap();
+    *seen = len;
+    bytes
+}
+
+#[test]
+fn ctrl_l_clears_the_pane_and_repaints_an_unchanged_frame_whole() {
+    let mut rig = Rig::new();
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    let file = tempfile::tempfile().unwrap();
+    let backend = PaneBackend::ambient(file.try_clone().unwrap().into(), pane_80x24).unwrap();
+    rig.terminal = Terminal::new(backend).unwrap();
+    let mut seen = 0;
+    let now = rig.state.pane.clock.now();
+    rig.state.draw_frame(&mut rig.terminal, now, false).unwrap();
+    let first = screen_of(&written_since(&file, &mut seen));
+    assert!(first.contains("claude"), "{first}");
+
+    rig.input(KeyAction::Redraw);
+    rig.state.pane.dirty = true;
+    rig.state.paint_now(&mut rig.terminal, now).unwrap();
+    let bytes = written_since(&file, &mut seen);
+    assert!(
+        bytes.windows(4).any(|window| window == b"\x1b[2J"),
+        "the pane is cleared"
+    );
+    assert_eq!(screen_of(&bytes), first, "every cell is written again");
+}
+
+#[test]
+fn a_spawn_failure_notice_reaches_the_pane_notice() {
+    let mut rig = Rig::new();
+    rig.state
+        .on_wakeup(
+            &mut rig.terminal,
+            Wakeup::Notice("no client attached".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        rig.view().ui().notice.as_deref(),
+        Some("no client attached")
+    );
+    assert!(rig.state.pane.dirty, "the notice paints");
+}

@@ -47,6 +47,18 @@ pub(super) enum InputEffect {
         std::sync::Arc<super::card_commands::CardInput>,
         crate::sidebar_pane::CardReply,
     ),
+    /// Run `rimz sidebar close --pane` for this card's pane on a worker.
+    Close(PaneId),
+    /// Open the palette popup: `args` picks its mode, `from_pane` the card it
+    /// starts on. The loop adds the room and the tmux client.
+    Palette {
+        args: Vec<String>,
+        from_pane: Option<PaneId>,
+    },
+    /// Write the configured, unpinned room width target and broadcast it.
+    WidthReset,
+    /// Clear the pane before the input's paint, so every cell repaints.
+    Repaint,
 }
 
 impl InputOutcome {
@@ -446,8 +458,43 @@ fn key_outcome(
         }
         KeyAction::TabPrev => cycle_dashboard_tab(view, snapshot, -1),
         KeyAction::TabNext => cycle_dashboard_tab(view, snapshot, 1),
+        KeyAction::Close => match selected_row_pane(view) {
+            Some(pane) => effect(InputEffect::Close(pane)),
+            None => notice(view, "sidebar close: no highlighted card"),
+        },
+        KeyAction::Palette => effect(InputEffect::Palette {
+            args: vec!["--mode".into(), "commands".into()],
+            from_pane: selected_row_pane(view),
+        }),
+        KeyAction::PaneReturn => match ui.return_pane.take() {
+            Some(pane) => InputOutcome::focus(pane),
+            None => notice(view, "pane return: no work pane in this tab"),
+        },
+        KeyAction::WidthReset => effect(InputEffect::WidthReset),
+        KeyAction::Redraw => InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Repaint],
+        },
         KeyAction::Other => InputOutcome::default(),
     }
+}
+
+/// The highlighted card's pane, as `Enter` reads it.
+fn selected_row_pane(view: &ViewState) -> Option<PaneId> {
+    view.selected_index.and(view.selected_pane.clone())
+}
+
+fn effect(effect: InputEffect) -> InputOutcome {
+    InputOutcome {
+        effects: vec![effect],
+        ..InputOutcome::default()
+    }
+}
+
+/// Show `reason` as the pane notice.
+fn notice(view: &mut ViewState, reason: &str) -> InputOutcome {
+    view.notice = Some(reason.to_owned());
+    InputOutcome::redraw()
 }
 
 /// Run a room card request from an in-pane key: a refusal becomes the pane

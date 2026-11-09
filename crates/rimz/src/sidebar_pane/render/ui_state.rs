@@ -25,6 +25,12 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
     /// Row identity per roster ordinal in the last painted hit map.
     pub(in crate::sidebar_pane) painted_roster: Vec<String>,
+    /// The pane `q` focuses, read from the room frame just before a
+    /// `pane.return` press reduces and taken by it.
+    pub(in crate::sidebar_pane) return_pane: Option<crate::ids::PaneId>,
+    /// `Ctrl+l` asked for a full repaint: the next composition clears the
+    /// pane first, so every cell is written again.
+    pub(in crate::sidebar_pane) clear_pending: bool,
     /// Maximum offset in the last drawn frame, absent before the first draw.
     pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
     /// Visible cards' own first lines in absolute pane rows, signed when clipped above the zone.

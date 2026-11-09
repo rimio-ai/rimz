@@ -24,6 +24,8 @@ pub(in crate::sidebar_pane) enum Wakeup {
     FocusSuperseded {
         input: crate::ids::FocusNonce,
     },
+    /// A key effect's worker failed; its reason becomes the pane notice.
+    Notice(String),
     FocusDispatched {
         input: crate::ids::FocusNonce,
         nonce: crate::ids::FocusNonce,
@@ -101,6 +103,16 @@ pub(in crate::sidebar_pane) enum KeyAction {
     /// Cycle the provider dashboard's tab.
     TabPrev,
     TabNext,
+    /// Close the selected card through `rimz sidebar close --pane`.
+    Close,
+    /// Open the command palette in a popup.
+    Palette,
+    /// Focus the work pane the sidebar toggle returns to.
+    PaneReturn,
+    /// Return the room width target to the configured, unpinned width.
+    WidthReset,
+    /// Clear the pane and paint the whole frame again.
+    Redraw,
     /// Otherwise-unbound keypress, a pending prefix, or a cancelled one.
     /// Closes the help overlay; no-op when it is already closed.
     Other,
@@ -197,8 +209,7 @@ fn chord(code: KeyCode, mods: KeyModifiers) -> Option<SidebarChord> {
     })
 }
 
-/// The resolver's action for a table action. The effects that spawn, write
-/// the room width, or repaint have no action yet.
+/// The resolver's action for a table action.
 fn key_action(action: SidebarAction) -> KeyAction {
     use crate::agents::AgentStatus as S;
     let status = |status| KeyAction::Filter(Some(BodyFilter::Status(status)));
@@ -245,11 +256,11 @@ fn key_action(action: SidebarAction) -> KeyAction {
         SidebarAction::Help => KeyAction::Help,
         SidebarAction::DashboardPrev => KeyAction::TabPrev,
         SidebarAction::DashboardNext => KeyAction::TabNext,
-        SidebarAction::CardClose
-        | SidebarAction::PaletteCommands
-        | SidebarAction::PaneReturn
-        | SidebarAction::WidthReset
-        | SidebarAction::ViewRedraw => KeyAction::Other,
+        SidebarAction::CardClose => KeyAction::Close,
+        SidebarAction::PaletteCommands => KeyAction::Palette,
+        SidebarAction::PaneReturn => KeyAction::PaneReturn,
+        SidebarAction::WidthReset => KeyAction::WidthReset,
+        SidebarAction::ViewRedraw => KeyAction::Redraw,
     }
 }
 
