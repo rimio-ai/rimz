@@ -104,6 +104,7 @@ impl std::fmt::Display for LspServerKind {
 pub enum LspPolicy {
     #[default]
     Optional,
+    Warm,
     Required,
 }
 

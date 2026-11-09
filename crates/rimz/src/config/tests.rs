@@ -3208,6 +3208,20 @@ fn lsp_configuration_has_documented_defaults() {
 }
 
 #[test]
+fn lsp_server_policy_parses_warm_and_refuses_unknown_values() {
+    let server = "[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = ";
+    for (policy, expected) in [
+        ("optional", crate::config::LspPolicy::Optional),
+        ("warm", crate::config::LspPolicy::Warm),
+        ("required", crate::config::LspPolicy::Required),
+    ] {
+        let config: MachineConfig = toml::from_str(&format!("{server}'{policy}'")).unwrap();
+        assert_eq!(config.lsp.servers["rust"].policy, expected);
+    }
+    assert!(toml::from_str::<MachineConfig>(&format!("{server}'eager'")).is_err());
+}
+
+#[test]
 fn model_tier_cells_validate_at_machine_load() {
     for text in [
         "[tiers.typo]",

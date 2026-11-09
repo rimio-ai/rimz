@@ -4833,12 +4833,13 @@ fn lsp_admission_policy_errors_warn_unless_required_markers_match() {
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
     let mut machine: MachineConfig = toml::from_str("[lsp]\nidle-timeout = 'tomorrow'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
     let runtime = env.runtime_paths();
-    for required in [false, true] {
-        machine.lsp.servers.get_mut("rust").unwrap().policy = if required {
-            rimz::config::LspPolicy::Required
-        } else {
-            rimz::config::LspPolicy::Optional
-        };
+    for policy in [
+        rimz::config::LspPolicy::Optional,
+        rimz::config::LspPolicy::Warm,
+        rimz::config::LspPolicy::Required,
+    ] {
+        let required = policy == rimz::config::LspPolicy::Required;
+        machine.lsp.servers.get_mut("rust").unwrap().policy = policy;
         for matched in [false, true] {
             machine.lsp.servers.get_mut("rust").unwrap().root_markers =
                 vec![if matched { "Cargo.toml" } else { "absent" }.into()];
@@ -4873,11 +4874,17 @@ fn lsp_admission_policy_errors_warn_unless_required_markers_match() {
 
 #[test]
 fn lsp_admission_optional_entry_errors_are_isolated() {
-    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
     let env = Env::new();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    for policy in ["optional", "warm"] {
+        assert_entry_errors_are_isolated(&env, policy);
+    }
+}
+
+fn assert_entry_errors_are_isolated(env: &Env, policy: &str) {
+    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
     let runtime = env.runtime_paths();
-    let base = json!({"command":["/bin/true"],"extensions":["rs"],"root-markers":["Cargo.toml"]});
+    let base = json!({"command":["/bin/true"],"extensions":["rs"],"root-markers":["Cargo.toml"],"policy":policy});
     for (field, value, expected) in [
         ("command", json!([]), "needs command"),
         ("extensions", json!([]), "needs command"),
@@ -4903,9 +4910,12 @@ fn lsp_admission_optional_entry_errors_are_isolated() {
             runtime: &runtime,
         };
         let result = admit_launch(&request, &mut WaitQueue::default())
-            .expect("optional entry errors must warn");
-        assert_eq!(result.startup_refused.len(), 1, "{field}");
-        assert!(result.startup_refused[0].contains(expected), "{field}");
+            .unwrap_or_else(|error| panic!("{policy} entry errors must warn: {error}"));
+        assert_eq!(result.startup_refused.len(), 1, "{policy} {field}");
+        assert!(
+            result.startup_refused[0].contains(expected),
+            "{policy} {field}"
+        );
         assert!(result.admitted.is_empty());
     }
     let mut machine = MachineConfig::default();
@@ -4922,7 +4932,7 @@ fn lsp_admission_optional_entry_errors_are_isolated() {
         runtime: &runtime,
     };
     let result = admit_launch(&request, &mut WaitQueue::default())
-        .expect("an optional entry with an invalid name must warn");
+        .unwrap_or_else(|error| panic!("a {policy} entry with an invalid name must warn: {error}"));
     assert_eq!(
         result.startup_refused,
         [
@@ -5003,4 +5013,186 @@ fn lsp_required_launch_has_one_queue_slot_for_all_its_servers() {
     assert_eq!(queue_order(directory.path()).unwrap(), [paths[1].clone()]);
     drop(newer);
     assert!(queue_order(directory.path()).unwrap().is_empty());
+}
+
+/// Runs a failing headless launch so only its language-server admission leaves a trace.
+fn launch_with_lsp(env: &Env, lsp: &str) -> std::process::Output {
+    crate::common::write_kind_base(env, "claude");
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(env, &env.project_root);
+    let agent_bin = crate::common::write_failing_agent_shim(env, "claude", 1);
+    let shell = crate::common::write_fake_login_shell(env, "lsp-test-sh", &[]);
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[agents]\nisolation = 'host'\n{lsp}"),
+    )
+    .unwrap();
+    env.rimz()
+        .args(["agents", "claude", "inspect", "-p"])
+        .env("SHELL", shell)
+        .env("PATH", crate::common::path_with_front(&agent_bin))
+        .output()
+        .unwrap()
+}
+
+fn stub_server(name: &str, policy: &str, estimate: &str) -> String {
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    format!(
+        "[lsp.servers.{name}]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = '{policy}'\nmemory-estimate = '{estimate}'\nwait-timeout = '1s'\n",
+        serde_json::to_string(&stub).unwrap()
+    )
+}
+
+fn lsp_entry_directory(env: &Env, server: &str) -> std::path::PathBuf {
+    env.runtime_root
+        .join("rimz/lsp")
+        .join(registry::key(&env.project_root.canonicalize().unwrap(), server).unwrap())
+}
+
+fn lsp_entry(env: &Env, server: &str) -> Value {
+    serde_json::from_slice(
+        &std::fs::read(lsp_entry_directory(env, server).join("entry.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn lsp_warm_launch_starts_a_server_that_fits_before_any_query() {
+    let env = Env::new();
+    let lsp = format!(
+        "[lsp]\nreserve-percent = 0\nreserve-min = '0'\n{}",
+        stub_server("rust", "warm", "1M")
+    );
+    let output = launch_with_lsp(&env, &lsp);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("language server"), "{stderr}");
+    let entry = lsp_entry(&env, "rust");
+    assert!(
+        entry["state"].get("dormant").is_none(),
+        "a warm server that fits starts at launch: {entry}"
+    );
+    assert!(lsp_records(&env, "warm_deferred").is_empty());
+}
+
+#[test]
+fn lsp_warm_launch_short_on_memory_stays_dormant_without_evicting_or_refusing() {
+    let env = Env::new();
+    let mut victim_broker = std::process::Command::new("sleep")
+        .arg("3471")
+        .spawn()
+        .unwrap();
+    let victim_root = env.home_root.join("victim");
+    std::fs::create_dir_all(&victim_root).unwrap();
+    let token = rimz::proc::process_start_token(victim_broker.id()).unwrap();
+    let now = rimz::utils::time::unix_now_ms();
+    let victim: registry::Entry = serde_json::from_value(json!({
+        "root": victim_root, "server": "rust", "nonce": "victim", "broker_pid": victim_broker.id(),
+        "broker_start_token": token, "server_pid": null, "server_start_token": null,
+        "state": "ready", "started_at_ms": now - 900_000, "ready_at_ms": now - 600_000,
+        "estimate_bytes": 1_000_000, "settings_hash": "s", "request_count": 1,
+        "last_request_at_ms": now - 600_000, "peak_rss_kb": 0, "leases": []
+    }))
+    .unwrap();
+    let lsp_dir = env.runtime_root.join("rimz/lsp");
+    registry::testkit::publish(&lsp_dir, &victim).unwrap();
+    let lsp = format!(
+        "[lsp]\nreserve-min = '1000000G'\n{}",
+        stub_server("rust", "warm", "1M")
+    );
+    let output = launch_with_lsp(&env, &lsp);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("language server"), "{stderr}");
+    assert!(!stderr.contains("waiting to start"), "{stderr}");
+    let entry = lsp_entry(&env, "rust");
+    assert!(entry["state"].get("dormant").is_some(), "{entry}");
+    let records = lsp_records(&env, "warm_deferred");
+    assert_eq!(records.len(), 1, "{records:?}");
+    let details = &records[0]["details"];
+    assert_eq!(records[0]["server"], "rust");
+    assert_eq!(details["cause"], "memory");
+    assert_eq!(details["estimate_bytes"], 1_000_000);
+    assert_eq!(details["pending_bytes"], 0, "a ready server owes no growth");
+    assert!(details["available_bytes"].is_u64());
+    assert!(details["reserve_bytes"].is_u64());
+    assert_eq!(details["holders"][0]["root"], json!(victim_root));
+    assert!(lsp_records(&env, "evicted").is_empty());
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &std::fs::read(
+                lsp_dir
+                    .join(registry::key(&victim_root, "rust").unwrap())
+                    .join("entry.json")
+            )
+            .unwrap()
+        )
+        .unwrap()["state"],
+        "ready"
+    );
+    assert!(rimz::proc::process_is_live(
+        victim_broker.id(),
+        Some(&victim.broker_start_token)
+    ));
+    victim_broker.kill().unwrap();
+    victim_broker.wait().unwrap();
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["lsp"]["ready"]["last_refusal"].is_null(),
+        "a deferred warm start is not a refusal: {}",
+        report["lsp"]["ready"]
+    );
+    env.rimz()
+        .args(["lsp", "find", "anything"])
+        .assert()
+        .code(4)
+        .stderr(predicates::str::contains("not started: memory short"));
+}
+
+#[test]
+fn lsp_warm_launch_yields_to_a_live_required_ticket() {
+    let env = Env::new();
+    let _ticket = rimz::lsp::admission::testkit::enqueue_servers(
+        &env.runtime_root.join("rimz/lsp/queue"),
+        &[1_000_000],
+    )
+    .unwrap();
+    let lsp = format!(
+        "[lsp]\nreserve-percent = 0\nreserve-min = '0'\n{}",
+        stub_server("rust", "warm", "1M")
+    );
+    launch_with_lsp(&env, &lsp);
+    let entry = lsp_entry(&env, "rust");
+    assert!(entry["state"].get("dormant").is_some(), "{entry}");
+    let records = lsp_records(&env, "warm_deferred");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["details"], json!({"cause": "required queue"}));
+}
+
+#[test]
+fn lsp_warm_server_named_first_yields_to_a_waiting_required_server_in_its_launch() {
+    let env = Env::new();
+    let lsp = format!(
+        "[lsp]\nreserve-percent = 0\nreserve-min = '0'\n{}{}",
+        stub_server("a-ruff", "warm", "1M"),
+        stub_server("rust", "required", "1000000G")
+    );
+    let output = launch_with_lsp(&env, &lsp);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("waiting to start language server rust"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("required but memory stayed short for 1s"),
+        "{stderr}"
+    );
+    let entry = lsp_entry(&env, "a-ruff");
+    assert!(entry["state"].get("dormant").is_some(), "{entry}");
+    let records = lsp_records(&env, "warm_deferred");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["server"], "a-ruff");
+    assert_eq!(records[0]["details"], json!({"cause": "required queue"}));
 }

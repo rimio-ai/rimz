@@ -472,17 +472,99 @@ fn running_holders(entries: &[registry::Entry]) -> Vec<Holder> {
         .iter()
         .filter(|entry| entry.state.is_running() && entry.broker_is_alive())
     {
-        let rss_bytes = entry
-            .server_pid
-            .and_then(crate::proc::tree_totals)
-            .map_or(0, |totals| totals.rss_kb.saturating_mul(1024));
         holders.push(Holder {
             root: entry.root.clone(),
             server: entry.server.clone(),
-            rss_bytes,
+            rss_bytes: tree_rss_bytes(entry),
         });
     }
     holders
+}
+
+fn tree_rss_bytes(entry: &registry::Entry) -> u64 {
+    entry
+        .server_pid
+        .and_then(crate::proc::tree_totals)
+        .map_or(0, |totals| totals.rss_kb.saturating_mul(1024))
+}
+
+/// What other starting or indexing servers have left to grow toward their admitted estimate.
+/// MemAvailable already excludes what they have made resident, so only the remainder is owed.
+/// Their resident size is the one `shortfall` read for its holders.
+fn pending_growth(entries: &[registry::Entry], shortfall: &Shortfall) -> u64 {
+    let rss_bytes = |entry: &registry::Entry| {
+        shortfall
+            .holders
+            .iter()
+            .find(|holder| holder.root == entry.root && holder.server == entry.server)
+            .map_or(0, |holder| holder.rss_bytes)
+    };
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.state,
+                registry::State::Starting | registry::State::Indexing
+            ) && (entry.root != shortfall.root || entry.server != shortfall.server)
+                && entry.broker_is_alive()
+        })
+        .map(|entry| entry.estimate_bytes.saturating_sub(rss_bytes(entry)))
+        .fold(0, u64::saturating_add)
+}
+
+/// Whether a warm server starts at launch. A deferral is recorded, never refused.
+fn warm_start(
+    root: &Path,
+    server: &str,
+    estimate_bytes: u64,
+    entries: &[registry::Entry],
+    policy: &crate::config::LspConfig,
+) -> bool {
+    let details = match warm_deferral(root, server, estimate_bytes, entries, policy) {
+        Ok(None) => return true,
+        Ok(Some(details)) => details,
+        Err(error) => serde_json::json!({"cause": "error", "reason": error.to_string()}),
+    };
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: root.to_owned(),
+        server: server.to_owned(),
+        event: "warm_deferred".into(),
+        details,
+    });
+    false
+}
+
+fn warm_deferral(
+    root: &Path,
+    server: &str,
+    estimate_bytes: u64,
+    entries: &[registry::Entry],
+    policy: &crate::config::LspConfig,
+) -> Result<Option<serde_json::Value>> {
+    if !queue_paths()?.is_empty() {
+        return Ok(Some(serde_json::json!({"cause": "required queue"})));
+    }
+    let shortfall = measure_shortfall(root, server, estimate_bytes, entries, policy)?;
+    warm_verdict(&shortfall, entries)
+}
+
+/// The deferral record for a warm start that does not fit beside other servers' pending growth.
+fn warm_verdict(
+    shortfall: &Shortfall,
+    entries: &[registry::Entry],
+) -> Result<Option<serde_json::Value>> {
+    let pending = pending_growth(entries, shortfall);
+    if shortfall
+        .headroom()
+        .fits(shortfall.estimate_bytes.saturating_add(pending))
+    {
+        return Ok(None);
+    }
+    let mut details = serde_json::to_value(shortfall)?;
+    details["cause"] = "memory".into();
+    details["pending_bytes"] = pending.into();
+    Ok(Some(details))
 }
 
 fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Result<()> {
@@ -607,7 +689,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         let (estimate, wait_timeout) = match validate_server(&root, server, config) {
             Ok(Some(validated)) => validated,
             Ok(None) => continue,
-            Err(LspErr::Configuration(message)) if config.policy == LspPolicy::Optional => {
+            Err(LspErr::Configuration(message)) if config.policy != LspPolicy::Required => {
                 queue.startup_refused.insert(format!("server:{server}"));
                 record_refusal(&root, server, &message);
                 result.startup_refused.push(message);
@@ -623,6 +705,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         queue.ticket = None;
         return Ok(result);
     }
+    matched.sort_by_key(|(_, config, ..)| config.policy != LspPolicy::Required);
     let _lock = registry::lock()?;
     let mut entries = registry::sweep_locked()?;
     let required_need = matched
@@ -673,13 +756,18 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
                 }
             }
         }
+        let eager = match config.policy {
+            LspPolicy::Optional => false,
+            LspPolicy::Warm => warm_start(&root, server, estimate_bytes, &entries, request.policy),
+            LspPolicy::Required => true,
+        };
         let serve = ServeRequest {
             root: root.clone(),
             project: request.project.into(),
             server: server.clone(),
             config: config.clone(),
             policy: request.policy.clone(),
-            eager: config.policy == LspPolicy::Required,
+            eager,
             settings_hash,
         };
         let Some(entry) = spawn_broker(request.runtime, &serve, config.policy, &mut result)? else {
@@ -1000,6 +1088,60 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["6", "0"]
         );
+    }
+
+    #[test]
+    fn warm_start_charges_other_starting_servers_their_remaining_growth() {
+        let pid = std::process::id();
+        let other: registry::Entry = serde_json::from_value(serde_json::json!({
+            "root": "/other", "server": "rust", "nonce": "n", "broker_pid": pid,
+            "broker_start_token": crate::proc::process_start_token(pid).unwrap(),
+            "server_pid": null, "server_start_token": null, "state": "starting",
+            "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 1000,
+            "settings_hash": "s", "request_count": 0, "last_request_at_ms": null,
+            "peak_rss_kb": 0, "leases": []
+        }))
+        .unwrap();
+        let verdict = |entries: &[registry::Entry], rss_bytes: u64| {
+            let shortfall = Shortfall {
+                root: "/new".into(),
+                server: "rust".into(),
+                estimate_bytes: 1000,
+                available_bytes: 1500,
+                swap_free_bytes: 0,
+                reserve_bytes: 0,
+                holders: vec![Holder {
+                    root: "/other".into(),
+                    server: "rust".into(),
+                    rss_bytes,
+                }],
+            };
+            warm_verdict(&shortfall, entries).unwrap()
+        };
+        let fits =
+            |entries: &[registry::Entry], rss_bytes: u64| verdict(entries, rss_bytes).is_none();
+        assert!(fits(&[], 0), "no other server: start");
+        let deferred = verdict(std::slice::from_ref(&other), 0).expect("a fresh start: defer");
+        assert_eq!(deferred["cause"], "memory");
+        assert_eq!(deferred["pending_bytes"], 1000);
+        let mut indexing = other.clone();
+        indexing.state = registry::State::Indexing;
+        let deferred = verdict(&[indexing.clone()], 400).expect("indexing short of its estimate");
+        assert_eq!(deferred["pending_bytes"], 600);
+        assert!(fits(&[indexing], 1000), "indexing at its estimate");
+        assert!(
+            fits(std::slice::from_ref(&other), 1000),
+            "starting at its estimate"
+        );
+        let mut ready = other.clone();
+        ready.state = registry::State::Ready;
+        assert!(fits(&[ready], 0), "ready servers are not counted");
+        let mut dead = other.clone();
+        dead.broker_start_token = "dead".into();
+        assert!(fits(&[dead], 0), "a dead broker is not counted");
+        let mut own = other;
+        own.root = "/new".into();
+        assert!(fits(&[own], 0), "its own key is not counted");
     }
 
     #[test]
