@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::git_line;
 use crate::RuntimePaths;
 use crate::disk::single_flight::{Coalesced, ProducerGuard};
 use crate::forge::pr_state::{
@@ -73,20 +72,29 @@ pub(super) fn produce_pr_states(
         return cache;
     }
 
-    let targets = build_targets(&condition_scopes, &needed, &diff_cache, state);
-    let groups = group_targets(targets);
+    let discovered = build_targets(&condition_scopes, &needed, &diff_cache, state);
+    let groups = group_targets(discovered.targets);
     let target_paths = current_target_paths(&groups);
     let due_and_reconcile = |cache: &PrStateCache, now_ms| {
         let due = due_repo_keys(&groups, cache, &hot, &focused, now_ms);
-        let needs_reconcile = needs_target_reconcile(cache, &needed, &diff_cache, &target_paths)
-            || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms)
-            || cache.branches.iter().any(|(repo, rows)| {
-                rows.keys()
-                    .any(|branch| !branch_is_demanded(&groups, repo, branch))
-            });
-        (due, needs_reconcile)
+        let retry = DiscoveryRetry::new(
+            cache,
+            &discovered.retryable,
+            &condition_scopes,
+            &hot,
+            &focused,
+            now_ms,
+        );
+        let needs_reconcile =
+            needs_target_reconcile(cache, &needed, &diff_cache, &target_paths, &retry)
+                || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms)
+                || cache.branches.iter().any(|(repo, rows)| {
+                    rows.keys()
+                        .any(|branch| !branch_is_demanded(&groups, &retry, repo, branch))
+                });
+        (due, retry, needs_reconcile)
     };
-    let (due, needs_reconcile) = due_and_reconcile(&cache, now_ms);
+    let (due, _, needs_reconcile) = due_and_reconcile(&cache, now_ms);
     if due.is_empty() && !needs_reconcile {
         return cache;
     }
@@ -95,7 +103,7 @@ pub(super) fn produce_pr_states(
     let fresh = || {
         let cache = read_pr_state_cache(&path);
         let now_ms = unix_now_ms();
-        let (due, needs_reconcile) = due_and_reconcile(&cache, now_ms);
+        let (due, _, needs_reconcile) = due_and_reconcile(&cache, now_ms);
         (due.is_empty() && !needs_reconcile).then_some(cache)
     };
     let guard: Option<ProducerGuard> = match crate::disk::single_flight::coalesce(
@@ -110,11 +118,12 @@ pub(super) fn produce_pr_states(
     };
     let prior = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
-    let (due, needs_reconcile) = due_and_reconcile(&prior, now_ms);
+    let (due, retry, needs_reconcile) = due_and_reconcile(&prior, now_ms);
     if due.is_empty() && !needs_reconcile {
         return prior;
     }
-    let (cache, failed) = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
+    let (cache, failed) =
+        probe_due_repos(&groups, &due, &retry, &prior, &needed, &diff_cache, now_ms);
     if guard.is_some()
         && write_pr_state_cache(&path, &cache)
         && let Some(project_root) = snapshot.project_root.as_deref()
@@ -157,23 +166,27 @@ fn cached_due_repo_keys(
 ) -> Option<BTreeSet<String>> {
     let mut inputs = BTreeMap::<String, RepoDueInputs>::new();
     let mut demanded = BTreeMap::<&str, BTreeSet<&str>>::new();
+    let mut retrying = BTreeSet::<(&str, &str)>::new();
     for (scope, branches) in branch_demand {
         if let Some(repo) = cache
             .path_repos
             .get(scope)
             .filter(|repo| repo.as_str() != UNSUPPORTED_REPO_KEY)
         {
-            demanded
-                .entry(repo)
-                .or_default()
-                .extend(branches.iter().map(String::as_str));
+            let branches = branches.iter().map(String::as_str);
+            if cache.discovery_failures.contains_key(scope) {
+                retrying.extend(branches.map(|branch| (repo.as_str(), branch)));
+            } else {
+                demanded.entry(repo).or_default().extend(branches);
+            }
         }
     }
     if cache.branches.iter().any(|(repo, rows)| {
         rows.keys().any(|branch| {
-            !demanded
-                .get(repo.as_str())
-                .is_some_and(|branches| branches.contains(branch.as_str()))
+            !retrying.contains(&(repo.as_str(), branch.as_str()))
+                && !demanded
+                    .get(repo.as_str())
+                    .is_some_and(|branches| branches.contains(branch.as_str()))
         })
     }) {
         return None;
@@ -187,6 +200,12 @@ fn cached_due_repo_keys(
         }
     }
     for path in needed {
+        if cache.discovery_failures.contains_key(path) {
+            if discovery_retry_due(cache, path, hot, focused, now_ms) {
+                return None;
+            }
+            continue;
+        }
         let head_sha = target_head_sha(diff_cache, path);
         let has_uncached = !cache.head_seen.contains_key(path);
         let pending_ci = path_has_pending_ci(cache, path);
@@ -407,119 +426,99 @@ impl Target {
     }
 }
 
+/// Every needed path's discovery outcome: a target, a retryable failure, or,
+/// absent from both, definitively unsupported.
+#[derive(Default)]
+struct Discovered {
+    targets: Vec<Target>,
+    retryable: BTreeSet<String>,
+}
+
+/// This pass's retryable discovery failures: the paths, those whose backoff
+/// entry is absent or due, and the branch rows their prior bindings demand.
+#[derive(Default)]
+struct DiscoveryRetry {
+    paths: BTreeSet<String>,
+    due: BTreeSet<String>,
+    rows: BTreeSet<(String, String)>,
+}
+
+impl DiscoveryRetry {
+    fn new(
+        cache: &PrStateCache,
+        paths: &BTreeSet<String>,
+        branch_demand: &BTreeMap<String, BTreeSet<String>>,
+        hot: &BTreeSet<String>,
+        focused: &BTreeSet<String>,
+        now_ms: u64,
+    ) -> Self {
+        let due = paths
+            .iter()
+            .filter(|path| discovery_retry_due(cache, path, hot, focused, now_ms))
+            .cloned()
+            .collect();
+        let rows = paths
+            .iter()
+            .filter_map(|path| {
+                let repo = cache
+                    .path_repos
+                    .get(path)
+                    .filter(|repo| repo.as_str() != UNSUPPORTED_REPO_KEY)?;
+                let branches = branch_demand.get(path)?;
+                Some(branches.iter().map(|branch| (repo.clone(), branch.clone())))
+            })
+            .flatten()
+            .collect();
+        Self {
+            paths: paths.clone(),
+            due,
+            rows,
+        }
+    }
+}
+
+/// A retryable path is timed by its `discovery_failures` entry alone; a path
+/// without one has never been stamped and is due now.
+fn discovery_retry_due(
+    cache: &PrStateCache,
+    path: &str,
+    hot: &BTreeSet<String>,
+    focused: &BTreeSet<String>,
+    now_ms: u64,
+) -> bool {
+    cache.discovery_failures.get(path).is_none_or(|entry| {
+        let path_hot = hot.contains(path) || focused.contains(path);
+        repo_due(Some(entry), repo_tier_ttl(path_hot), now_ms, false, false)
+    })
+}
+
+/// A discovery read failed (a git file, a canonical path, or a git command),
+/// so the path's absence says nothing about its forge.
+struct RetryableDiscovery;
+
 fn build_targets(
     branch_demand: &BTreeMap<String, BTreeSet<String>>,
     needed: &[String],
     diff_cache: &DiffStatsCache,
     state: &mut super::ProducerRefreshState,
-) -> Vec<Target> {
-    let mut targets = Vec::new();
+) -> Discovered {
+    let mut discovered = Discovered::default();
     let mut seen_branches = BTreeSet::new();
     let mut reached = BTreeSet::new();
     for path in needed {
-        let worktree = Path::new(path);
-        let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
-            continue;
-        };
-        let Some(git_dir) = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
-            .ok()
-            .flatten()
-        else {
-            continue;
-        };
-        let Some(common_dir) =
-            super::git_refs::common_dir(&git_dir).and_then(|path| path.canonicalize().ok())
-        else {
-            continue;
-        };
-        let branch = super::git_refs::head_branch(&git_dir, &common_dir).unwrap_or_else(|| {
-            git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
-                .filter(|branch| branch != "HEAD")
-        });
-        let Some(branch) = branch else {
-            continue;
-        };
-        let trunk = is_trunk_branch(
-            &branch,
-            diff_cache
-                .entries
-                .get(path)
-                .and_then(|entry| entry.trunk.as_deref()),
-        );
-        reached.insert(common_dir.clone());
-        let stamp = std::fs::metadata(common_dir.join("config"))
-            .ok()
-            .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
-        if !state
-            .pr_origins
-            .get(&common_dir)
-            .is_some_and(|origin| origin.0 == stamp)
-        {
-            let Some(output) = super::git_output(worktree, &["remote", "get-url", "origin"]) else {
+        let target = match discover_target(path, diff_cache, state, &mut reached) {
+            Ok(Some(target)) => target,
+            Ok(None) => continue,
+            Err(RetryableDiscovery) => {
+                discovered.retryable.insert(path.clone());
                 continue;
-            };
-            let remote = if output.status.success() {
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(str::to_owned)
-            } else if output.status.code() == Some(2) {
-                // Git remote get-url exits 2 when the remote has no URL.
-                None
-            } else {
-                continue;
-            };
-            state.pr_origins.insert(common_dir.clone(), (stamp, remote));
-        }
-        let Some(remote) = state
-            .pr_origins
-            .get(&common_dir)
-            .and_then(|origin| origin.1.as_deref())
-        else {
-            continue;
-        };
-        let Some(remote) = forge::RemoteRepo::parse(remote) else {
-            continue;
-        };
-        let Some(forge_cli) = remote.forge_cli() else {
-            continue;
-        };
-        let marker = crate::worktree::read_marker_from_checkout_metadata(worktree)
-            .ok()
-            .flatten();
-        let head_sha = target_head_sha(diff_cache, path);
-        let inherited_head = head_sha.is_some_and(|head| {
-            marker
-                .as_ref()
-                .is_some_and(|marker| marker.base_ref == head)
-                || diff_cache
-                    .entries
-                    .get(path)
-                    .and_then(|entry| entry.merge_base.as_deref())
-                    == Some(head)
-        });
-        let repo_slug = remote.repo_slug().map(str::to_owned);
-        let target = Target {
-            branch_only: false,
-            path: path.clone(),
-            branch,
-            trunk,
-            forge_cli,
-            repo_key: remote.repo_key(forge_cli),
-            repo_slug,
-            remote,
-            worktree: worktree.to_path_buf(),
-            head_sha: head_sha.map(str::to_owned),
-            inherited_head,
-            marker_created_at: marker.as_ref().map(|marker| marker.created_at),
-            from_pr: marker.and_then(|marker| marker.from_pr),
+            }
         };
         for branch in branch_demand.get(path).into_iter().flatten() {
             if !seen_branches.insert((target.repo_key.clone(), branch.clone())) {
                 continue;
             }
-            targets.push(Target {
+            discovered.targets.push(Target {
                 branch_only: true,
                 // NUL cannot occur in a checkout path; this key is never published.
                 path: format!("\0{branch}"),
@@ -532,12 +531,129 @@ fn build_targets(
                 ..target.clone()
             });
         }
-        targets.push(target);
+        discovered.targets.push(target);
     }
     state
         .pr_origins
         .retain(|common_dir, _| reached.contains(common_dir));
-    targets
+    discovered
+}
+
+/// One needed path's target, `None` when its inputs say it has no forge
+/// target, or `RetryableDiscovery` when a read failed.
+fn discover_target(
+    path: &str,
+    diff_cache: &DiffStatsCache,
+    state: &mut super::ProducerRefreshState,
+    reached: &mut BTreeSet<PathBuf>,
+) -> Result<Option<Target>, RetryableDiscovery> {
+    let worktree = Path::new(path);
+    let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
+        return Ok(None);
+    };
+    let Some(git_dir) = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
+        .map_err(|_| RetryableDiscovery)?
+    else {
+        return Ok(None);
+    };
+    let Some(common_dir) = super::git_refs::common_dir(&git_dir) else {
+        return Ok(None);
+    };
+    let common_dir = match common_dir.canonicalize() {
+        Ok(common_dir) => common_dir,
+        // The repository the checkout names is gone, not unreadable.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(RetryableDiscovery),
+    };
+    reached.insert(common_dir.clone());
+    let branch = match super::git_refs::head_branch(&git_dir, &common_dir) {
+        Some(branch) => branch,
+        None => {
+            let output = super::git_output(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .filter(|output| output.status.success())
+                .ok_or(RetryableDiscovery)?;
+            first_line(&output.stdout).filter(|branch| branch != "HEAD")
+        }
+    };
+    let Some(branch) = branch else {
+        return Ok(None);
+    };
+    let trunk = is_trunk_branch(
+        &branch,
+        diff_cache
+            .entries
+            .get(path)
+            .and_then(|entry| entry.trunk.as_deref()),
+    );
+    let stamp = std::fs::metadata(common_dir.join("config"))
+        .ok()
+        .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
+    if !state
+        .pr_origins
+        .get(&common_dir)
+        .is_some_and(|origin| origin.0 == stamp)
+    {
+        let output = super::git_output(worktree, &["remote", "get-url", "origin"])
+            .ok_or(RetryableDiscovery)?;
+        let remote = if output.status.success() {
+            first_line(&output.stdout)
+        } else if output.status.code() == Some(2) {
+            // Git remote get-url exits 2 when the remote has no URL.
+            None
+        } else {
+            return Err(RetryableDiscovery);
+        };
+        state.pr_origins.insert(common_dir.clone(), (stamp, remote));
+    }
+    let Some(remote) = state
+        .pr_origins
+        .get(&common_dir)
+        .and_then(|origin| origin.1.as_deref())
+        .and_then(forge::RemoteRepo::parse)
+    else {
+        return Ok(None);
+    };
+    let Some(forge_cli) = remote.forge_cli() else {
+        return Ok(None);
+    };
+    let marker = crate::worktree::read_marker_from_checkout_metadata(worktree)
+        .ok()
+        .flatten();
+    let head_sha = target_head_sha(diff_cache, path);
+    let inherited_head = head_sha.is_some_and(|head| {
+        marker
+            .as_ref()
+            .is_some_and(|marker| marker.base_ref == head)
+            || diff_cache
+                .entries
+                .get(path)
+                .and_then(|entry| entry.merge_base.as_deref())
+                == Some(head)
+    });
+    let repo_slug = remote.repo_slug().map(str::to_owned);
+    Ok(Some(Target {
+        branch_only: false,
+        path: path.to_owned(),
+        branch,
+        trunk,
+        forge_cli,
+        repo_key: remote.repo_key(forge_cli),
+        repo_slug,
+        remote,
+        worktree: worktree.to_path_buf(),
+        head_sha: head_sha.map(str::to_owned),
+        inherited_head,
+        marker_created_at: marker.as_ref().map(|marker| marker.created_at),
+        from_pr: marker.and_then(|marker| marker.from_pr),
+    }))
+}
+
+fn first_line(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 fn group_targets(targets: Vec<Target>) -> BTreeMap<String, RepoGroup> {
@@ -574,10 +690,19 @@ fn needs_target_reconcile(
     needed: &[String],
     diff_cache: &DiffStatsCache,
     target_paths: &BTreeSet<String>,
+    retry: &DiscoveryRetry,
 ) -> bool {
+    if !retry.due.is_empty()
+        || cache
+            .discovery_failures
+            .keys()
+            .any(|path| !retry.paths.contains(path))
+    {
+        return true;
+    }
     needed
         .iter()
-        .filter(|path| !target_paths.contains(*path))
+        .filter(|path| !target_paths.contains(*path) && !retry.paths.contains(*path))
         .any(|path| {
             cache.states.contains_key(path)
                 || cache.branch_ci.contains_key(path)
@@ -622,26 +747,42 @@ fn reconcile_target_bookkeeping(
     needed: &[String],
     diff_cache: &DiffStatsCache,
     target_paths: &BTreeSet<String>,
+    retry: &DiscoveryRetry,
     now_ms: u64,
 ) -> PrStateCache {
     let current_needed_paths = needed.iter().cloned().collect::<BTreeSet<_>>();
+    let kept = |path: &String| {
+        current_needed_paths.contains(path)
+            && (target_paths.contains(path) || retry.paths.contains(path))
+    };
+    cache.states.retain(|path, _| kept(path));
+    cache.branch_ci.retain(|path, _| kept(path));
+    cache.head_seen.retain(|path, _| kept(path));
+    cache.path_repos.retain(|path, _| kept(path));
+    cache.target_seen.retain(|path, _| kept(path));
     cache
-        .states
-        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
-    cache
-        .branch_ci
-        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
-    cache
-        .head_seen
-        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
-    cache
-        .path_repos
-        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
-    cache
-        .target_seen
-        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+        .discovery_failures
+        .retain(|path, _| retry.paths.contains(path));
+    for path in &retry.due {
+        // The marker means definitively unsupported; this attempt was not.
+        if cache.path_repos.get(path).map(String::as_str) == Some(UNSUPPORTED_REPO_KEY) {
+            cache.path_repos.remove(path);
+        }
+        let failures = next_consecutive_failures(cache.discovery_failures.get(path), false);
+        cache.discovery_failures.insert(
+            path.clone(),
+            RepoProbe {
+                refreshed_at_ms: now_ms,
+                ok: false,
+                consecutive_failures: failures,
+            },
+        );
+    }
     let mut saw_unsupported = false;
-    for path in needed.iter().filter(|path| !target_paths.contains(*path)) {
+    for path in needed
+        .iter()
+        .filter(|path| !target_paths.contains(*path) && !retry.paths.contains(*path))
+    {
         saw_unsupported = true;
         cache.states.remove(path);
         cache.branch_ci.remove(path);
@@ -728,15 +869,22 @@ fn assign_states(
 fn probe_due_repos(
     groups: &BTreeMap<String, RepoGroup>,
     due: &BTreeSet<String>,
+    retry: &DiscoveryRetry,
     prior: &PrStateCache,
     needed: &[String],
     diff_cache: &DiffStatsCache,
     now_ms: u64,
 ) -> (PrStateCache, BTreeSet<String>) {
     let target_paths = current_target_paths(groups);
-    let mut cache =
-        reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths, now_ms);
-    reconcile_branch_rows(&mut cache, groups);
+    let mut cache = reconcile_target_bookkeeping(
+        prior.clone(),
+        needed,
+        diff_cache,
+        &target_paths,
+        retry,
+        now_ms,
+    );
+    reconcile_branch_rows(&mut cache, groups, retry);
 
     let due_groups = groups
         .iter()
@@ -881,18 +1029,30 @@ fn apply_repo_probe(
     );
 }
 
-fn branch_is_demanded(groups: &BTreeMap<String, RepoGroup>, repo: &str, branch: &str) -> bool {
+fn branch_is_demanded(
+    groups: &BTreeMap<String, RepoGroup>,
+    retry: &DiscoveryRetry,
+    repo: &str,
+    branch: &str,
+) -> bool {
     groups.get(repo).is_some_and(|group| {
         group
             .targets
             .iter()
             .any(|target| target.branch_only && target.branch == branch)
-    })
+    }) || retry
+        .rows
+        .iter()
+        .any(|(row_repo, row_branch)| row_repo == repo && row_branch == branch)
 }
 
-fn reconcile_branch_rows(cache: &mut PrStateCache, groups: &BTreeMap<String, RepoGroup>) {
+fn reconcile_branch_rows(
+    cache: &mut PrStateCache,
+    groups: &BTreeMap<String, RepoGroup>,
+    retry: &DiscoveryRetry,
+) {
     cache.branches.retain(|repo, rows| {
-        rows.retain(|branch, _| branch_is_demanded(groups, repo, branch));
+        rows.retain(|branch, _| branch_is_demanded(groups, retry, repo, branch));
         !rows.is_empty()
     });
 }

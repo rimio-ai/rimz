@@ -27,14 +27,21 @@ pub(crate) struct PrStateCache {
     #[serde(default)]
     pub(crate) head_seen: BTreeMap<String, String>,
     /// Last repo classification seen for a worktree. Supported repos store
-    /// their repo key; unsupported/undiscoverable paths store an empty marker.
-    /// This preserves the no-fork fresh path: per-repo TTL can be evaluated
-    /// before shelling out for branch/remote metadata.
+    /// their repo key; definitively unsupported paths store
+    /// `UNSUPPORTED_REPO_KEY`. A path whose discovery failed keeps its prior
+    /// binding. This preserves the no-fork fresh path: per-repo TTL can be
+    /// evaluated before shelling out for branch/remote metadata.
     #[serde(default)]
     pub(crate) path_repos: BTreeMap<String, String>,
-    /// Branch/incarnation identity observed for each supported worktree.
+    /// Branch/incarnation identity of each supported worktree's last
+    /// successful PR reading.
     #[serde(default)]
     pub(crate) target_seen: BTreeMap<String, TargetStamp>,
+    /// Retry backoff by worktree path, for needed paths whose latest discovery
+    /// attempt failed on a read rather than finding no forge. Each entry is
+    /// `ok: false` with at least one consecutive failure.
+    #[serde(default)]
+    pub(crate) discovery_failures: BTreeMap<String, RepoProbe>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +227,8 @@ impl<'de> Deserialize<'de> for PrStateCache {
             path_repos: BTreeMap<String, String>,
             #[serde(default)]
             target_seen: BTreeMap<String, TargetStamp>,
+            #[serde(default)]
+            discovery_failures: BTreeMap<String, RepoProbe>,
         }
 
         let disk = DiskCache::deserialize(deserializer)?;
@@ -232,6 +241,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             head_seen: disk.head_seen,
             path_repos: disk.path_repos,
             target_seen: disk.target_seen,
+            discovery_failures: disk.discovery_failures,
         };
         if legacy {
             // Old freshness stamps predate branch CI, and trunk paths were
