@@ -1,4 +1,4 @@
-//! Team and resident-loop standing subscriptions pinned to registered root sessions.
+//! Team standing subscriptions pinned to registered root sessions.
 
 use std::collections::BTreeSet;
 
@@ -141,54 +141,6 @@ pub(crate) fn arm_member(
             index,
             source: Box::new(source.into()),
         })?;
-    }
-    Ok(count)
-}
-
-pub(crate) fn arm_loop(
-    workspace: &ResolvedWorkspace,
-    agents: &[AgentState],
-    member: &AgentState,
-    task: &str,
-    bindings: &[TeamSignalBinding],
-) -> Result<usize, TeamBindingFailure> {
-    let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
-        .map_err(|err| arm::ArmFailure::State(err.into()))?;
-    let peers: Vec<_> = agents.iter().collect();
-    let handle = crate::address::agent_handle(member, &peers, true);
-    let target = TaskTarget {
-        kind: member.kind.clone(),
-        session: member.agent_id.clone(),
-        handle,
-    };
-    let mut specs = Vec::new();
-    for (index, binding) in bindings.iter().enumerate() {
-        let name = format!(
-            "loop-{task}-{}-{}",
-            member.name.as_deref().unwrap_or(member.agent_id.as_str()),
-            index + 1
-        );
-        if catalog
-            .visible()
-            .get(&name)
-            .is_some_and(|row| row.source() != super::catalog::TaskSource::Instance)
-        {
-            return Err(arm::ArmFailure::ConfigOwned(name).into());
-        }
-        let name = name.parse()?;
-        specs.push(binding_spec(
-            workspace,
-            agents,
-            member,
-            &target,
-            name,
-            binding,
-            DeliveryProvenance::Resident(task.to_owned()),
-        )?);
-    }
-    let count = specs.len();
-    for spec in specs {
-        arm::arm_delivery(workspace, spec)?;
     }
     Ok(count)
 }

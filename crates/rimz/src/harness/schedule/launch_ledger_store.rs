@@ -1,4 +1,5 @@
-//! Locked durable mutations of launch memory, judge declines, and capacity waits.
+//! Locked durable mutations of launch memory, judge declines, and capacity waits, and the lock
+//! a capped task's budget admission holds.
 //!
 //! The catalog's per-task removals and renames (`remove`, `remove_workflows`,
 //! `rename_workflows`, `remove_declines`, `rename_declines`, `remove_capacity`, `rename_capacity`)
@@ -9,7 +10,19 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::launch_ledger::{self, DeclineRecord, LaunchRecord};
+use super::launch_ledger;
+#[cfg(test)]
+use super::launch_ledger::LaunchRecord;
+
+/// Held by a capped task's fire from its daily-budget read until `create` publishes its run, so
+/// the next fire's read counts that run: each checkout of an each-worktree task fires under its
+/// own lease.
+pub(super) fn hold_budget(
+    paths: &crate::StatePaths,
+    task: &str,
+) -> Result<crate::disk::lock::WorkspaceLock, crate::disk::lock::LockErr> {
+    crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path(&format!("loop-budget.{task}.lock")))
+}
 
 pub(super) fn record_workflow(
     paths: &crate::StatePaths,
@@ -128,83 +141,6 @@ fn mutate<T: Clone + PartialEq + serde::Serialize, R>(
     after_write().map_err(LedgerWriteErr::Completion)
 }
 
-pub(super) fn record_decline(
-    paths: &crate::StatePaths,
-    task: &str,
-    checkout: &Path,
-    record: DeclineRecord,
-    after_write: impl FnOnce() -> std::io::Result<()>,
-) -> Result<(), LedgerWriteErr> {
-    mutate(
-        paths,
-        launch_ledger::decline_path,
-        "loop-declines.lock",
-        launch_ledger::load_declines,
-        |declines| declines,
-        |declines| {
-            declines
-                .entry(task.to_owned())
-                .or_default()
-                .insert(checkout.to_owned(), record);
-        },
-        after_write,
-    )
-}
-
-pub(super) fn record_capacity(
-    paths: &crate::StatePaths,
-    task: &str,
-    checkout: &Path,
-    update: impl FnOnce(Option<launch_ledger::CapacityRecord>) -> launch_ledger::CapacityRecord,
-) -> Result<launch_ledger::CapacityRecord, LedgerWriteErr> {
-    let mut record = None;
-    mutate(
-        paths,
-        launch_ledger::capacity_path,
-        "loop-capacity-waits.lock",
-        launch_ledger::load_capacity,
-        |waits| waits,
-        |waits| {
-            let checkouts = waits.entry(task.to_owned()).or_default();
-            let next = update(checkouts.remove(checkout));
-            checkouts.insert(checkout.to_owned(), next.clone());
-            record = Some(next);
-        },
-        || Ok(()),
-    )?;
-    // A successful mutate always calls its edit closure.
-    Ok(record.expect("capacity edit supplied its record"))
-}
-
-pub(super) fn remove_checkout_capacity(
-    paths: &crate::StatePaths,
-    task: &str,
-    checkout: &Path,
-) -> Result<(), LedgerWriteErr> {
-    if !launch_ledger::load_capacity(paths)?
-        .get(task)
-        .is_some_and(|checkouts| checkouts.contains_key(checkout))
-    {
-        return Ok(());
-    }
-    mutate(
-        paths,
-        launch_ledger::capacity_path,
-        "loop-capacity-waits.lock",
-        launch_ledger::load_capacity,
-        |waits| waits,
-        |waits| {
-            if let Some(checkouts) = waits.get_mut(task) {
-                checkouts.remove(checkout);
-                if checkouts.is_empty() {
-                    waits.remove(task);
-                }
-            }
-        },
-        || Ok(()),
-    )
-}
-
 pub(super) fn remove_capacity(paths: &crate::StatePaths, task: &str) -> Result<(), LedgerWriteErr> {
     if !launch_ledger::load_capacity(paths)?.contains_key(task) {
         return Ok(());
@@ -262,29 +198,6 @@ pub(super) fn remove_declines(paths: &crate::StatePaths, task: &str) -> Result<(
     )
 }
 
-pub(super) fn remove_checkout_decline(
-    paths: &crate::StatePaths,
-    task: &str,
-    checkout: &Path,
-) -> Result<(), LedgerWriteErr> {
-    mutate(
-        paths,
-        launch_ledger::decline_path,
-        "loop-declines.lock",
-        launch_ledger::load_declines,
-        |declines| declines,
-        |declines| {
-            if let Some(checkouts) = declines.get_mut(task) {
-                checkouts.remove(checkout);
-                if checkouts.is_empty() {
-                    declines.remove(task);
-                }
-            }
-        },
-        || Ok(()),
-    )
-}
-
 pub(super) fn rename_declines(
     paths: &crate::StatePaths,
     task: &str,
@@ -308,6 +221,9 @@ pub(super) fn rename_declines(
     )
 }
 
+/// Seeds a launch ledger row: fires record launch memory in `WorkflowLedger` now, and these
+/// rows remain only as existing data the readers honour.
+#[cfg(test)]
 pub(super) fn record(
     paths: &crate::StatePaths,
     task: &str,
@@ -728,43 +644,50 @@ mod tests {
     }
 
     #[test]
-    fn malformed_workflow_memory_blocks_only_workflow_catalog_edits() {
+    fn malformed_workflow_memory_blocks_edits_of_tasks_that_record_there() {
         use super::super::{catalog::TaskCatalog, instances};
         let mut outcomes = Vec::new();
-        for workflow in [false, true] {
-            for rename in [false, true] {
-                let home = tempfile::tempdir().unwrap();
-                let paths = crate::StatePaths::for_project_root(home.path()).unwrap();
-                let workspace =
-                    crate::workspace::WorkspaceResolver::resolve(home.path(), None).unwrap();
-                crate::workspace::record::write(
-                    &paths,
-                    &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
-                )
-                .unwrap();
-                instances::insert(
-                    &paths,
-                    "land",
-                    &crate::config::TaskEntry {
-                        root: home.path().to_owned(),
-                        workflow: workflow.then(|| "review".into()),
-                        check: (!workflow).then(|| "true".into()),
-                        every: Some("1h".into()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-                std::fs::write(launch_ledger::workflow_path(&paths), "malformed").unwrap();
-                let catalog = TaskCatalog::load(Some(home.path())).unwrap();
-                let result = if rename {
-                    catalog.rename("land", "renamed")
-                } else {
-                    catalog.remove("land")
-                };
-                outcomes.push(result.is_err());
-            }
+        for (kind, rename) in [
+            ("check", false),
+            ("check", true),
+            ("stay", false),
+            ("workflow", false),
+            ("workflow", true),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let paths = crate::StatePaths::for_project_root(home.path()).unwrap();
+            let workspace =
+                crate::workspace::WorkspaceResolver::resolve(home.path(), None).unwrap();
+            crate::workspace::record::write(
+                &paths,
+                &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+            )
+            .unwrap();
+            instances::insert(
+                &paths,
+                "land",
+                &crate::config::TaskEntry {
+                    root: home.path().to_owned(),
+                    workflow: (kind == "workflow").then(|| "review".into()),
+                    check: (kind == "check").then(|| "true".into()),
+                    agent: (kind == "stay").then(|| "claude".into()),
+                    prompt: (kind == "stay").then(|| "fix".into()),
+                    stay: kind == "stay",
+                    every: Some("1h".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            std::fs::write(launch_ledger::workflow_path(&paths), "malformed").unwrap();
+            let catalog = TaskCatalog::load(Some(home.path())).unwrap();
+            let result = if rename {
+                catalog.rename("land", "renamed")
+            } else {
+                catalog.remove("land")
+            };
+            outcomes.push(result.is_err());
         }
-        assert_eq!(outcomes, vec![false, false, true, true]);
+        assert_eq!(outcomes, vec![false, false, true, true, true]);
     }
 
     #[test]

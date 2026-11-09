@@ -36,6 +36,7 @@ pub(super) fn prepare_run_layout(
         .description
         .clone_from(&request.launch.cohort.description);
     supervised.workflow.clone_from(&leader.workflow);
+    supervised.loop_task.clone_from(&leader.loop_task);
     supervised
         .reminder_section
         .clone_from(&leader.reminder_section);
@@ -370,7 +371,6 @@ fn prepare(
                 },
                 match args.starter {
                     Starter::Workflow => Some(trust::Unattended::Workflow),
-                    Starter::Loop => Some(trust::Unattended::Loop),
                     Starter::Team => Some(trust::Unattended::Team),
                     Starter::Agent => Some(trust::Unattended::Agent),
                     Starter::Human => agent_launched.then_some(trust::Unattended::Agent),
@@ -694,7 +694,6 @@ fn prepare(
             report_to: request.report_to,
             managed_launches,
             loop_task: None,
-            loop_notes_at: request.loop_notes_at,
             cleanup_worktree: request.retries == 0,
             inherit_cwd: request.worktree.is_none()
                 && request.from_pr.is_none()

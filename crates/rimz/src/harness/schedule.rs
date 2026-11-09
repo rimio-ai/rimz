@@ -199,16 +199,14 @@ impl TaskAction {
         }
         if entry.overlap.is_some() {
             for (set, hint) in [
-                (entry.stay, "a resident task launches once per checkout"),
-                (
-                    entry.when.is_some(),
-                    "overlap supports repeating clock and signal triggers only",
-                ),
                 (
                     entry.wait.is_some(),
                     "a wait delivery has no run to overlap",
                 ),
-                (entry.workflow.is_some(), "workflow admission owns its runs"),
+                (
+                    entry.each_worktree,
+                    "waiting triggers are kept per task, and an each-worktree task fires per checkout",
+                ),
                 (
                     ephemeral_lifetime(entry),
                     "a one-shot has no task left to drain",
@@ -395,10 +393,6 @@ impl TaskAction {
             Self::Deliver(_) => TaskActionKind::Deliver,
             Self::CheckOnly => TaskActionKind::CheckOnly,
         }
-    }
-
-    const fn is_check_only(&self) -> bool {
-        matches!(self, Self::CheckOnly)
     }
 }
 

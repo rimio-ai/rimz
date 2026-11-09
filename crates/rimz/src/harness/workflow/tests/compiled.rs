@@ -171,6 +171,13 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
         "loop's default timeout"
     );
 
+    let (_, spec) = report("agent='claude'\nprompt='go'\nevery='1h'\nworktree='x'\n");
+    assert_eq!(
+        (spec.workflow.scope, spec.steps["agent"].worktree.as_deref()),
+        (records::ScopeKind::Worktree, Some("x")),
+        "a hand-written named tree is every fire's agent tree, under the row's checkout"
+    );
+
     let (_, spec) = report("agent='claude'\nprompt='go'\nevery='1h'\nverify='make test'\n");
     let agent = &spec.steps["agent"];
     assert_eq!(
@@ -203,7 +210,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     );
 
     let (_, spec) = report(
-        "agent='claude'\nprompt='settle'\nstay=true\neach-worktree=true\nwhen=['ci=failed']\nfor='5m'\njudge={agent='claude',prompt='ready?',recheck='1h'}\non='success'\n",
+        "agent='claude'\nprompt='settle'\nstay=true\neach-worktree=true\nwhen=['ci=failed']\nfor='5m'\njudge={agent='claude',prompt='ready?',recheck='1h'}\non='success'\nsubscribe=[{signal='ci.failed',prompt='repair'}]\n",
     );
     assert_eq!(
         (
@@ -228,6 +235,15 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
         (stay.lifecycle(), stay.timeout.as_deref()),
         (crate::store::workflow::StepLifecycle::Stay, None),
         "a resident takes no default timeout"
+    );
+    assert_eq!(
+        stay.subscribe
+            .iter()
+            .flatten()
+            .map(crate::harness::workflow::spec::Wake::prompt)
+            .collect::<Vec<_>>(),
+        [Some("repair")],
+        "a binding's prompt reaches the step"
     );
 
     let (_, spec) = report(
@@ -347,6 +363,7 @@ fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
         DefinitionSource::Inline {
             task: "nightly".into(),
             definition: definition("nightly", &task),
+            fire_tree: false,
         },
         ScopeRoots {
             checkout: home.into(),
@@ -503,6 +520,120 @@ fn a_watchdog_reports_each_outcome_to_its_task_once() {
     );
 }
 
+#[test]
+fn a_limited_attempt_ends_the_run_and_reports_as_the_budget_ended_it() {
+    for verify in ["", "verify='true'\n"] {
+        let row = format!("agent='claude'\nprompt='fix it'\nevery='1h'\n{verify}");
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".rimz")).unwrap();
+        fs::write(
+            home.path().join(".rimz/config.toml"),
+            format!("[tasks.nightly]\n{row}"),
+        )
+        .unwrap();
+        let catalog =
+            crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(home.path()));
+        let key = catalog.for_run("nightly").unwrap().key("nightly");
+        let strikes = || crate::harness::schedule::strikes::load().get(&key).copied();
+        let last = || {
+            crate::harness::schedule::run_log::task_records(
+                &crate::disk::paths::logs_dir(),
+                "nightly",
+                Some(home.path()),
+            )
+            .pop()
+            .unwrap()
+        };
+
+        // A budget-refused launch runs no turn: the run fails without a strike.
+        let (state, refused) = fire_at(home.path(), &row);
+        let host = FakeHost::new();
+        *host.failure.borrow_mut() = Some(LaunchFailure {
+            outcome: AttemptOutcome::Limited,
+            reason: "fleet budget $0.00/day is spent".into(),
+        });
+        let ended = step(&state, &refused, &host);
+        assert_eq!(ended.state, RunState::Failed, "{verify}: {ended:?}");
+        assert!(!ended.visits.contains_key("verify"), "{verify}: {ended:?}");
+        let report = last();
+        assert_eq!(
+            (report.result, report.error.as_deref(), strikes()),
+            (
+                LoopRunResult::BudgetSkipped,
+                Some("fleet budget $0.00/day is spent"),
+                None
+            ),
+            "{verify}: {report:?}"
+        );
+
+        // A turn the budget stopped mid-run strikes, as a budget-exceeded run did.
+        let (state, exceeded) = fire_at(home.path(), &row);
+        let host = FakeHost::new();
+        step(&state, &exceeded, &host);
+        host.observed.borrow_mut().status = RunStatus::BudgetExceeded;
+        let ended = step(&state, &exceeded, &host);
+        assert_eq!(ended.state, RunState::Failed, "{verify}: {ended:?}");
+        assert!(!ended.visits.contains_key("verify"), "{verify}: {ended:?}");
+        assert_eq!(
+            (last().result, strikes()),
+            (LoopRunResult::BudgetExceeded, Some(1)),
+            "{verify}"
+        );
+    }
+}
+
+#[test]
+fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    open_room(&state, home.path());
+    let text = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\n\
+                timeout='1h'\nthen='done'\n[checks.done]\nshell='true'\n\
+                on={pass='@done',fail='@failed',invalid='@failed'}\n";
+    let record = create(
+        &state,
+        DefinitionSource::Inline {
+            task: "nightly".into(),
+            definition: InlineDefinition {
+                text: text.into(),
+                assets: Default::default(),
+            },
+            fire_tree: false,
+        },
+        ScopeRoots {
+            checkout: home.path().into(),
+            project: home.path().into(),
+        },
+        || Ok(None),
+        false,
+    )
+    .unwrap();
+    let host = FakeHost::new();
+    let mut current = step(&state, &record, &host);
+    for _ in 0..400 {
+        if current.state != RunState::Active {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        current = step(&state, &record, &host);
+    }
+    assert_eq!(current.state, RunState::Done, "{current:?}");
+    assert!(current.visits.contains_key("build"), "{current:?}");
+    let rows = crate::harness::schedule::run_log::task_records(
+        &crate::disk::paths::logs_dir(),
+        "nightly",
+        Some(home.path()),
+    );
+    let id = record.id.to_string();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.result, row.run_id.as_deref(), row.acted))
+            .collect::<Vec<_>>(),
+        [(LoopRunResult::Completed, Some(id.as_str()), Some(false))],
+        "a visited command step is not an act"
+    );
+}
+
 fn judge_at(node: &str) -> (crate::disk::paths::WorkflowPaths, RunRecord) {
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
@@ -571,6 +702,244 @@ fn a_judge_chain_continues_on_fail_declines_on_pass_and_runs_on_after_a_timeout(
 }
 
 #[test]
+fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() {
+    let row = "agent='claude'\nprompt='go'\nevery='1h'\ncheck='printf shell-evidence; exit 1'\n\
+               on='fail'\njudge=[{agent='codex',prompt='Is there work?'}]\n";
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".rimz")).unwrap();
+    fs::write(
+        home.path().join(".rimz/config.toml"),
+        format!("[tasks.nightly]\n{row}"),
+    )
+    .unwrap();
+    let (state, record) = fire_at(home.path(), row);
+    let (_, spec) = report(row);
+    assert_eq!(route(&spec, "check", "fail"), "judge-1");
+    let mut record = serde_json::to_value(record).unwrap();
+    record["node"] = json!("judge-1");
+    record["next_seq"] = json!(2);
+    record["attempt"] = json!({"kind":"judge","seq":1,"node":"judge-1",
+        "started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":null}});
+    let record: RunRecord = serde_json::from_value(record).unwrap();
+    let paths = state.workflow(&record.id);
+    let mut t = super::super::state::Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    let reason = "account codex:default budget $10.00/day is spent";
+    t.finish_judge(
+        1,
+        super::super::script::Evaluation {
+            object: Err(reason.into()),
+            failure: "budget",
+            stderr_tail: None,
+            limited: None,
+            cost_usd: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (t.record.state, t.record.recheck_at),
+        (RunState::Failed, None),
+        "a refused judge ends the run instead of waiting or routing to the act"
+    );
+    assert_eq!(route(&spec, "judge-1", "budget"), "@failed");
+    crate::harness::schedule::run_log::report_run(&t.record, &t.entries, false);
+    let last = crate::harness::schedule::run_log::task_records(
+        &crate::disk::paths::logs_dir(),
+        "nightly",
+        Some(home.path()),
+    )
+    .pop()
+    .unwrap();
+    assert_eq!(
+        (last.result, last.error.as_deref()),
+        (LoopRunResult::BudgetSkipped, Some(reason)),
+        "{last:?}"
+    );
+}
+
+#[test]
+fn a_judges_account_over_its_day_cap_or_parked_is_refused_before_it_spawns() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
+    };
+    use crate::harness::budget::{BudgetParkStamp, DailyBudgetLedger, DailyBudgetScope};
+    let now: jiff::Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
+    for parked in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let state = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = crate::disk::paths::RuntimePaths::for_state(&state).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let config = MachineConfig {
+            timezone: Some("UTC".into()),
+            accounts: toml::from_str("[budget]\ncodex = '10/day'\n").unwrap(),
+            ..Default::default()
+        };
+        let profile = crate::harness::headless::HeadlessProfile::resolve(
+            &config,
+            "codex",
+            root.path(),
+            &state,
+            &runtime,
+            now,
+        )
+        .unwrap();
+        let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
+        write_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+            &ProviderSpendingCache {
+                day_cutoff_secs: jiff::civil::date(2026, 6, 2)
+                    .to_zoned(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp()
+                    .as_second() as u64,
+                day_by_login: std::collections::BTreeMap::from([(
+                    key.clone(),
+                    SpendWindow {
+                        usd: if parked { 0.0 } else { 12.0 },
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        if parked {
+            DailyBudgetScope::Account(key)
+                .write_ledger(
+                    &runtime,
+                    &state,
+                    &DailyBudgetLedger {
+                        parked: Some(BudgetParkStamp {
+                            at_cost: 12.0,
+                            at: now,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let refusal = super::super::script::budget_refusal(
+            &config,
+            &profile,
+            &crate::agents::ManagedLaunchState::Unsupported,
+            None,
+            &state,
+            &runtime,
+            now,
+        );
+        assert!(
+            refusal
+                .as_deref()
+                .is_some_and(|reason| reason.contains("codex")),
+            "parked={parked}: {refusal:?}"
+        );
+    }
+}
+
+#[test]
+fn a_judge_on_a_spent_quota_binding_or_short_of_its_tasks_surplus_is_refused() {
+    use crate::agents::account::AccountUsageKey;
+    use crate::agents::{
+        AgentRateLimits, ManagedLaunchState, ProviderAccountBinding, ProviderAccountScope,
+        RateLimitCacheEntry, RateLimitWindow, RateLimitsCache,
+    };
+    let now = jiff::Timestamp::now();
+    let root = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::disk::paths::RuntimePaths::for_state(&state).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let config = MachineConfig::default();
+    let profile = crate::harness::headless::HeadlessProfile::resolve(
+        &config,
+        "codex",
+        root.path(),
+        &state,
+        &runtime,
+        now,
+    )
+    .unwrap();
+    let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
+    let window = |used, resets_in: i64, mins| RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: Some(now + jiff::SignedDuration::from_secs(resets_in)),
+        duration_mins: Some(mins),
+        ..RateLimitWindow::default()
+    };
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let binding = ProviderAccountBinding::decode(
+        r#"{"scope":{"kind":"sub_provider","provider":"openai","variant":"oauth"},"account_key":"owner"}"#,
+    )
+    .unwrap();
+    let week = 7 * 24 * 60;
+    let entries = std::collections::BTreeMap::from([
+        (
+            AccountUsageKey::new(key.clone(), scope.clone()),
+            RateLimitCacheEntry {
+                scope,
+                account_key: Some("owner".to_owned()),
+                limits: AgentRateLimits {
+                    windows: vec![window(100, 3_600, 300)],
+                },
+                ..Default::default()
+            },
+        ),
+        (
+            key.clone().into(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![window(90, i64::from(week) * 60 / 2, week)],
+                },
+                ..Default::default()
+            },
+        ),
+    ]);
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(&runtime),
+        &RateLimitsCache {
+            entries,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let refuse = |managed: &ManagedLaunchState, task| {
+        super::super::script::budget_refusal(
+            &config, &profile, managed, task, &state, &runtime, now,
+        )
+    };
+    let quota = refuse(&ManagedLaunchState::Bound(binding), None);
+    assert!(
+        quota
+            .as_deref()
+            .is_some_and(|reason| reason.contains("exhausted")),
+        "{quota:?}"
+    );
+    let gated = crate::config::TaskEntry {
+        surplus: Some("1.5x".into()),
+        ..Default::default()
+    };
+    let surplus = refuse(&ManagedLaunchState::Unsupported, Some(&gated));
+    assert!(
+        surplus
+            .as_deref()
+            .is_some_and(|reason| reason.contains("window surplus")),
+        "{surplus:?}"
+    );
+    let ungated = crate::config::TaskEntry::default();
+    assert_eq!(
+        (
+            refuse(&ManagedLaunchState::Unsupported, None),
+            refuse(&ManagedLaunchState::Unsupported, Some(&ungated)),
+        ),
+        (None, None),
+        "a kind-wide account has no bound quota, and surplus is read only for a task that sets it"
+    );
+}
+
+#[test]
 fn only_a_verdict_that_routes_away_from_the_act_is_a_decline() {
     let chain = "agent='claude'\nprompt='go'\nevery='1h'\non='fail'\njudge=[{agent='claude',prompt='a'},{agent='claude',prompt='b'}]\n";
     let (_, spec) = report(chain);
@@ -618,4 +987,156 @@ fn a_resident_launches_at_its_destination_and_a_wait_delivers_to_its_pinned_sess
             &[Some(crate::ids::AgentSessionId::from("s-1"))]
         );
     }
+}
+
+#[test]
+fn a_deduping_tasks_decline_waits_in_its_run_and_another_tasks_ends_it() {
+    let guard = "check='true'\non='fail'\njudge={agent='claude',prompt='ready?',recheck='30m'}\n";
+    for (row, expected) in [
+        (
+            format!("agent='claude'\nprompt='settle'\nstay=true\nevery='1h'\n{guard}"),
+            "recheck-check",
+        ),
+        (
+            format!("agent='claude'\nprompt='settle'\nstay=true\nwhen=['ci=failed']\n{guard}"),
+            "held-check",
+        ),
+        (
+            format!("agent='claude'\nprompt='fix it'\nevery='1h'\n{guard}"),
+            "Done",
+        ),
+    ] {
+        let (_home, state, record) = fire(&row);
+        let host = FakeHost::new();
+        let mut current = step(&state, &record, &host);
+        for _ in 0..400 {
+            if current.state != RunState::Active || current.node != "check" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            current = step(&state, &record, &host);
+        }
+        let at = if current.state == RunState::Active {
+            current.node.clone()
+        } else {
+            format!("{:?}", current.state)
+        };
+        assert_eq!(at, expected, "{row}: {current:?}");
+        assert!(host.launched.borrow().is_empty(), "{row}");
+    }
+}
+
+/// Step until the run leaves `from` (or ends), as a shell check finishes off-thread.
+fn settle(state: &StatePaths, record: &RunRecord, host: &FakeHost, from: &str) -> RunRecord {
+    let mut current = step(state, record, host);
+    for _ in 0..400 {
+        if current.state != RunState::Active || current.node != from {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        current = step(state, record, host);
+    }
+    current
+}
+
+/// Age the run's current node by `secs`, so its wait or hold times out at the next step; the
+/// recheck time a sleep stamped from its entry is cleared, so the next step reads it again.
+fn age(state: &StatePaths, current: &mut RunRecord, secs: u64) {
+    current.entered_at = jiff::Timestamp::now() - std::time::Duration::from_secs(secs);
+    current.recheck_at = None;
+    super::attempts::update(state, current);
+}
+
+#[test]
+fn a_shell_decline_reruns_the_shell_after_the_resident_retry_and_launches_once_it_passes() {
+    for (cadence, wait) in [
+        ("when=['ci=failed']\n", "held-check"),
+        ("every='1h'\n", "recheck-check"),
+    ] {
+        let (home, state, record) = fire(&format!(
+            "agent='claude'\nprompt='settle'\nstay=true\n{cadence}check='test -e ready'\non='success'\n"
+        ));
+        let host = FakeHost::new();
+        let mut current = settle(&state, &record, &host, "check");
+        assert_eq!(current.node, wait, "{cadence}: {current:?}");
+        age(&state, &mut current, 299);
+        assert_eq!(
+            step(&state, &record, &host).node,
+            wait,
+            "{cadence}: the retry is not due yet"
+        );
+        fs::write(home.path().join("ready"), "").unwrap();
+        let mut current = records::load(&state.workflow(&record.id)).unwrap();
+        age(&state, &mut current, 301);
+        let current = settle(&state, &record, &host, wait);
+        let current = settle(&state, &record, &host, current.node.clone().as_str());
+        assert_eq!(
+            (current.node.as_str(), host.launched.borrow().len()),
+            ("agent", 1),
+            "{cadence}: the shell ran again, passed, and launched: {current:?}"
+        );
+    }
+}
+
+#[test]
+fn a_judge_decline_waits_for_the_declining_judges_own_recheck() {
+    let (_, spec) = report(
+        "agent='claude'\nprompt='settle'\nstay=true\nwhen=['ci=failed']\ncheck='true'\non='success'\njudge=[{agent='claude',prompt='a',recheck='1h'},{agent='claude',prompt='b',recheck='10m'},{agent='claude',prompt='c'}]\n",
+    );
+    let wait = |node: &str| {
+        let check = &spec.checks[node];
+        (check.timeout.clone(), route(&spec, node, "timeout"))
+    };
+    assert_eq!(
+        (
+            route(&spec, "check", "fail"),
+            route(&spec, "judge-1", "fail"),
+            route(&spec, "judge-2", "fail"),
+            route(&spec, "judge-3", "fail"),
+        ),
+        (
+            "held-check".into(),
+            "held-judge-1".into(),
+            "held-judge-2".into(),
+            "held-judge-3".into()
+        )
+    );
+    assert_eq!(
+        [
+            wait("held-check"),
+            wait("held-judge-1"),
+            wait("held-judge-2"),
+            wait("held-judge-3"),
+        ],
+        [
+            (Some("300s".into()), "check".into()),
+            (Some("1h".into()), "check".into()),
+            (Some("10m".into()), "check".into()),
+            (Some("365d".into()), "@done".into()),
+        ],
+        "each tier waits its own recheck; one without a recheck waits for the next edge"
+    );
+}
+
+#[test]
+fn a_clock_tasks_judge_decline_without_a_recheck_holds_its_run_untimed() {
+    let row = |recheck: &str| {
+        format!(
+            "agent='claude'\nprompt='settle'\nstay=true\nevery='1h'\ncheck='true'\non='success'\njudge={{agent='claude',prompt='a'{recheck}}}\n"
+        )
+    };
+    let (_, spec) = report(&row(""));
+    assert_eq!(route(&spec, "judge-1", "fail"), "hold-judge-1");
+    let hold = &spec.checks["hold-judge-1"];
+    assert_eq!(
+        (hold.sleep.as_deref(), hold.then.as_deref()),
+        (Some("365d"), Some("@done")),
+        "the live run is the hold: it never re-asks the judge"
+    );
+    let (_, spec) = report(&row(",recheck='0'"));
+    assert_eq!(
+        route(&spec, "judge-1", "fail"),
+        "@done",
+        "a zero recheck ends the run, so the next fire asks again"
+    );
 }

@@ -964,8 +964,8 @@ fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
     env.record(&env.project_root);
     register_calling_agent(&env);
     for (name, extra) in [
-        ("machine", vec![]),
-        ("project", vec!["--project"]),
+        ("machine", vec!["--check", "true"]),
+        ("project", vec!["--check", "true", "--project"]),
         ("delivery", vec!["--wait"]),
     ] {
         let mut args = vec![
@@ -974,8 +974,6 @@ fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
             name,
             "--every",
             "1h",
-            "--check",
-            "true",
             "--label",
             "  gate docs  ",
         ];
@@ -1200,42 +1198,6 @@ fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
         assert_eq!(rows[0]["check_in"], timeout, "keepalive {switch}");
         assert_eq!(rows[0]["check_in_s"], timeout_s, "keepalive {switch}");
         assert!(rows[0].get("watcher_pid").is_none());
-    }
-}
-
-#[test]
-fn loop_clock_wait_does_not_expose_check_guard_timeout_as_budget() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let armed = env
-        .rimz()
-        .args([
-            "loop",
-            "add",
-            "clock",
-            "--wait",
-            "@planner",
-            "--every",
-            "1m",
-            "--check",
-            "false",
-            "--timeout",
-            "2s",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        armed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&armed.stderr)
-    );
-    let rows: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-    assert_eq!(rows[0]["type"], "schedule");
-    assert_eq!(rows[0]["state"], "waiting");
-    for key in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
-        assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
     }
 }
 

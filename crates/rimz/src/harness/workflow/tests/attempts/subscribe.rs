@@ -2,7 +2,7 @@ use super::until::{UNTIL, check, turn};
 use super::*;
 use crate::harness::schedule::signal::Signal;
 
-const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}}]\nthen='@done'\n";
+const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
 
 fn signal(name: &str, payload: Value) -> Signal {
     Signal {
@@ -71,6 +71,15 @@ fn a_staying_step_forwards_only_delivering_signals_to_its_leader() {
         forwards[1].1.starts_with("deploy.done\nenv: prod\n"),
         "{}",
         forwards[1].1
+    );
+    assert!(
+        forwards[1].1.ends_with(").\n\nredeploy"),
+        "the binding's prompt follows its signal: {}",
+        forwards[1].1
+    );
+    assert!(
+        text.ends_with(")."),
+        "a binding without a prompt adds none: {text}"
     );
     assert_eq!(
         forwarded(&state, &record),
@@ -166,7 +175,7 @@ fn a_held_until_session_and_its_check_both_take_the_signal() {
 fn a_subscribed_step_brief_lists_each_subscription_with_its_scope() {
     let text = STAY.replace(
         "subscribe=[",
-        "subscribe=['team.stage', {signal='team.stage', match={board='/b'}}, 'review.ready', {signal='pr.opened', match={repo='o/r'}}, ",
+        "subscribe=['team.stage', {signal='team.stage', match={board='/b'}}, 'team.*', 'review.ready', {signal='pr.opened', match={repo='o/r'}}, ",
     );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
@@ -174,7 +183,7 @@ fn a_subscribed_step_brief_lists_each_subscription_with_its_scope() {
     let note = host.launched.borrow().last().unwrap().workflow_note.clone();
     assert!(
         note.contains(
-            "You subscribe to `team.stage` for this checkout's team board, `team.stage` where board=/b, `review.ready` anywhere in the room, `pr.opened` for this checkout where repo=o/r, `ci.failed` for this checkout, and `deploy.done` where env=prod. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
+            "You subscribe to `team.stage` for this checkout's team board, `team.stage` where board=/b, `team.*` for this checkout's team, `review.ready` anywhere in the room, `pr.opened` for this checkout where repo=o/r, `ci.failed` for this checkout, and `deploy.done` where env=prod. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
         ),
         "{note}"
     );
@@ -182,4 +191,144 @@ fn a_subscribed_step_brief_lists_each_subscription_with_its_scope() {
     advance_ok(&state, &record.id, &host);
     let note = host.launched.borrow().last().unwrap().workflow_note.clone();
     assert!(!note.contains("You subscribe"), "{note}");
+}
+
+#[test]
+fn a_staying_steps_defaults_follow_the_checkout_its_leader_launched_in() {
+    let (dir, state, record) = setup(&STAY.replace(
+        "lifecycle='stay'\nsubscribe=['ci.failed',",
+        "lifecycle='stay'\nworktree='review'\nsubscribe=['ci.failed', 'team.stage',",
+    ));
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    let review = crate::worktree::worktree_path(
+        &record.project_root,
+        &crate::config::MachineConfig::load_lenient().agents.worktree,
+        "review",
+    )
+    .unwrap();
+    let board = crate::harness::scratch::durable_board_path(&review);
+    for (name, payload) in [
+        ("ci.failed", json!({"path": dir.path().to_string_lossy()})),
+        ("ci.failed", json!({"path": review.to_string_lossy()})),
+        ("team.stage", json!({"board": board.to_string_lossy()})),
+    ] {
+        wake(&state, &signal(name, payload), &host).unwrap();
+    }
+    let signals = forwarded(&state, &record)
+        .into_iter()
+        .map(|(_, signal, _)| signal)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signals,
+        vec!["ci.failed".to_owned(), "team.stage".into()],
+        "the launch checkout's CI and board deliver, the firing checkout's do not"
+    );
+}
+
+#[test]
+fn every_distinct_delivering_binding_forwards_its_own_prompt() {
+    let (dir, state, record) = setup(&STAY.replace(
+        "subscribe=['ci.failed',",
+        "subscribe=[{signal='ci.failed', match={branch='feat'}, prompt='one'}, {signal='ci.failed', prompt='two'}, {signal='ci.failed', match={branch='feat'}, prompt='dup'}, ",
+    ));
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    wake(
+        &state,
+        &signal(
+            "ci.failed",
+            json!({"path": dir.path().to_string_lossy(), "branch": "feat"}),
+        ),
+        &host,
+    )
+    .unwrap();
+    let prompts = host
+        .forwards
+        .borrow()
+        .iter()
+        .map(|(_, text)| text.rsplit('\n').next().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prompts,
+        vec!["one".to_owned(), "two".into()],
+        "identical bindings coalesce into the first"
+    );
+    assert_eq!(forwarded(&state, &record).len(), 2);
+}
+
+#[test]
+fn a_staying_step_never_hears_its_own_leaders_lifecycle_signals() {
+    let (_dir, state, record) = setup(&STAY.replace(
+        "subscribe=['ci.failed',",
+        concat!(
+            "subscribe=[{signal='agent.idle', match={handle='@builder'}}, ",
+            "{signal='agent.idle', match={handle='@other'}}, "
+        ),
+    ));
+    let lifecycle = |payload: Value| Signal {
+        source: crate::store::event::SignalSource::Lifecycle,
+        ..signal("agent.idle", payload)
+    };
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(live.attempt.unwrap().run.unwrap().handle, "@builder");
+    for payload in [
+        json!({"handle": "@builder"}),
+        json!({"handle": "@builder#main"}),
+        json!({"handle": "@other"}),
+    ] {
+        wake(&state, &lifecycle(payload), &host).unwrap();
+    }
+    assert_eq!(
+        forwarded(&state, &record).len(),
+        1,
+        "only another agent's idle forwards; the leader's own never wakes it"
+    );
+    cancel(&state, &record.id, &host, None).unwrap();
+}
+
+#[test]
+fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
+    let (dir, state, record) = setup(&STAY.replace(
+        "subscribe=['ci.failed',",
+        "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, 'agent.idle', ",
+    ));
+    let lifecycle = |name: &str, payload: Value| Signal {
+        source: crate::store::event::SignalSource::Lifecycle,
+        ..signal(name, payload)
+    };
+    let cohort = |channel: &str| json!({"team": "forge", "instance": format!("forge#{channel}")});
+    let here =
+        crate::harness::spec::resolve_room_channel(dir.path(), dir.path(), Some("forge"), None)
+            .unwrap();
+    let idle = lifecycle("team.idle", cohort(&here));
+    assert!(
+        !hears_lifecycle(&state, &idle).unwrap(),
+        "nothing is live before the leader launches"
+    );
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    assert!(hears_lifecycle(&state, &idle).unwrap());
+    assert!(!hears_lifecycle(&state, &lifecycle("worktree.created", json!({}))).unwrap());
+    for signal in [
+        lifecycle("team.idle", cohort("elsewhere")),
+        lifecycle("agent.done", json!({"handle": "@leader"})),
+        lifecycle("agent.idle", json!({"handle": "@other"})),
+        idle.clone(),
+        lifecycle("agent.done", json!({"handle": "@other"})),
+    ] {
+        wake(&state, &signal, &host).unwrap();
+    }
+    let signals = forwarded(&state, &record)
+        .into_iter()
+        .map(|(_, signal, _)| signal)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signals,
+        vec!["team.idle".to_owned(), "agent.done".into()],
+        "the checkout's cohort and the named agent deliver; a self-scoped agent selector is dropped"
+    );
+    cancel(&state, &record.id, &host, None).unwrap();
+    assert!(!hears_lifecycle(&state, &idle).unwrap());
 }

@@ -154,6 +154,9 @@ pub struct LoopRunRecord {
     pub message_id: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// The task's workflow run still active when an `overlapped` or `deferred` fire found it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking_run: Option<crate::ids::WorkflowRunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -276,6 +279,7 @@ impl LoopRunRecord {
             condition: None,
             message_id: None,
             run_id: None,
+            blocking_run: None,
             transcript_path: None,
             last_message: None,
             target: None,
@@ -287,18 +291,44 @@ impl LoopRunRecord {
     }
 }
 
+/// What a run report does when its task strikes out: notify the user. The notice's sender,
+/// `sidebar::notify`, sits in a later atlas layer than `harness`, and the engine reports in
+/// whichever process makes the run's terminal transition, so the binary registers the CLI's
+/// notifier at dispatch, in every process.
+/// `loop_repeated_failures_auto_disable_notify_once_and_enable` in the integration suite
+/// fails without that registration.
+static LOOP_DISABLED: std::sync::OnceLock<fn(&str, &Path, u32)> = std::sync::OnceLock::new();
+
+/// Register the strike-out notice a run report sends; later registrations are ignored.
+pub fn on_loop_disabled(notify: fn(&str, &Path, u32)) {
+    let _ = LOOP_DISABLED.set(notify);
+}
+
 /// Report a finished task-started workflow run to its loop task: one history row carrying the
 /// run id, its outcome and its summed attempt cost, and the strike it notes. The strike store
-/// counts a run id once, so a report repeated after a crash moves no count.
+/// counts a run id once, so a report repeated after a crash moves no count. `acted` says the
+/// run entered an agent or message step: a scheduled `--until` row is consumed then, and a
+/// waiting trigger is drained once the run is over. A run in its fire's own tree settles that
+/// tree here, so whichever report lands first, the engine's or the backstop's, settles it.
 pub(in crate::harness) fn report_run(
     run: &crate::store::workflow::RunRecord,
     journal: &[crate::store::workflow::JournalEntry],
+    acted: bool,
 ) -> RunTransition {
     use crate::store::workflow::{JournalEvent, RunState};
     let Some(task) = run.task.as_deref() else {
         return RunTransition::Recorded;
     };
+    let gave_up = capacity_give_up(run, journal);
     let result = match run.state {
+        RunState::Failed if gave_up.is_some() => LoopRunResult::ThrottleSkipped,
+        RunState::Failed if let Some(turned) = budget_ended(journal) => {
+            if turned {
+                LoopRunResult::BudgetExceeded
+            } else {
+                LoopRunResult::BudgetSkipped
+            }
+        }
         RunState::Done => LoopRunResult::Completed,
         RunState::Failed => LoopRunResult::Failed,
         RunState::Canceled => LoopRunResult::Canceled,
@@ -313,7 +343,7 @@ pub(in crate::harness) fn report_run(
     let duration_ms = u64::try_from(ended.duration_since(run.created_at).as_millis()).unwrap_or(0);
     let mut record = LoopRunRecord::new(task, result, mode, duration_ms);
     record.at = ended;
-    record.checkout = Some(run.scope.path.clone());
+    record.checkout = Some(run.firing_checkout().to_path_buf());
     record.run_id = Some(run.id.to_string());
     let mut costs = journal
         .iter()
@@ -328,18 +358,119 @@ pub(in crate::harness) fn report_run(
         .peek()
         .is_some()
         .then(|| costs.fold(0.0, |sum, cost| sum + cost));
-    // Every step a run starts counts a visit, and a loop task's graph acts only in steps.
-    record.acted = Some(!run.visits.is_empty());
+    record.acted = Some(acted);
+    // A failed run names why its last attempt ended, as a fire's own refusal would.
+    record.error = matches!(
+        result,
+        LoopRunResult::Failed | LoopRunResult::BudgetSkipped | LoopRunResult::BudgetExceeded
+    )
+    .then(|| {
+        journal.iter().rev().find_map(|entry| match &entry.event {
+            JournalEvent::Attempt { reason, .. } => reason.clone(),
+            JournalEvent::Route { outcome, input } if outcome == "budget" => {
+                input["reason"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        })
+    })
+    .flatten()
+    .or(gave_up);
+    if run.fire_tree {
+        // The report supersedes the launch row, so it carries the tree that row named.
+        record.worktree = task_records(&logs_dir(), task, Some(&run.project_root))
+            .into_iter()
+            .rev()
+            .find(|row| row.run_id == record.run_id)
+            .and_then(|row| row.worktree);
+    }
+    super::runner::settle_fire_tree(run, acted);
     let catalog = super::catalog::TaskCatalog::load_lenient(Some(&run.project_root));
-    match catalog.for_run(task) {
-        Some(loaded) => {
-            record.kind = Some(loaded.kind());
-            record_transition(loaded, &record)
+    let Some(loaded) = catalog.for_run(task) else {
+        // A consumed one-shot's row is gone; the row its fire wrote still names the kind.
+        record.kind = task_records(&logs_dir(), task, Some(&run.project_root))
+            .into_iter()
+            .rev()
+            .find(|row| row.run_id == record.run_id)
+            .and_then(|row| row.kind);
+        append_for_root(&run.project_root, &record);
+        return RunTransition::Recorded;
+    };
+    record.kind = Some(loaded.kind());
+    let transition = record_transition(loaded, &record);
+    if let RunTransition::AutoDisabled { strikes } = transition
+        && let Some(notify) = LOOP_DISABLED.get()
+    {
+        notify(task, &loaded.entry().resolved_root(), strikes);
+    }
+    if acted
+        && !run.manual
+        && loaded.is_ephemeral()
+        && loaded.entry().deadline.is_some()
+        && let Err(error) = catalog.consume_scheduled(task)
+    {
+        tracing::warn!(task, %error, "acted --until row not consumed");
+    }
+    drain_waiting(task, &loaded.entry().resolved_root());
+    transition
+}
+
+/// Whether the run's last attempt ended at its budget, and if so whether a turn ran: a launch
+/// or a judge the budget refused has no agent, as a fire whose launch it refused did.
+fn budget_ended(journal: &[crate::store::workflow::JournalEntry]) -> Option<bool> {
+    use crate::store::workflow::{AttemptOutcome, JournalEvent};
+    journal.iter().rev().find_map(|entry| match &entry.event {
+        JournalEvent::Attempt {
+            outcome, handle, ..
+        } => Some((*outcome == AttemptOutcome::Limited).then_some(handle.is_some())),
+        JournalEvent::Route { outcome, .. } if outcome == "budget" => Some(Some(false)),
+        _ => None,
+    })?
+}
+
+/// Why a failed run ended by giving up on capacity, worded as a fire's own give-up was: the
+/// engine's `capacity` route out of the agent step is the run's last decision.
+fn capacity_give_up(
+    run: &crate::store::workflow::RunRecord,
+    journal: &[crate::store::workflow::JournalEntry],
+) -> Option<String> {
+    use crate::store::workflow::{JournalEvent, RunState};
+    if run.state != RunState::Failed {
+        return None;
+    }
+    let input = journal.iter().rev().find_map(|entry| match &entry.event {
+        JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
+        JournalEvent::Attempt { .. } => Some(None),
+        _ => None,
+    })??;
+    let waited = std::time::Duration::from_millis(input["waited_ms"].as_u64().unwrap_or(0));
+    Some(format!(
+        "gave up waiting for capacity after {}; {}",
+        crate::utils::time::format_duration_compact(waited),
+        input["reason"].as_str().unwrap_or("no capacity")
+    ))
+}
+
+/// Start the next waiting trigger now that the run holding the task is over.
+fn drain_waiting(task: &str, root: &Path) {
+    let result = (|| -> anyhow::Result<()> {
+        let paths = crate::StatePaths::for_project_root(root)?;
+        let waiting = super::backlog::load(&paths)?
+            .tasks
+            .get(task)
+            .is_some_and(|task| !task.triggers.is_empty());
+        if waiting {
+            let runtime = crate::RuntimePaths::for_state(&paths)?;
+            super::fire::spawn_loop_drain(
+                &runtime,
+                root,
+                task,
+                super::fire::LoopRunHost::Detached,
+            )?;
         }
-        None => {
-            append_for_root(&run.project_root, &record);
-            RunTransition::Recorded
-        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        tracing::warn!(task, %error, "loop backlog drain not started; the tick retries it");
     }
 }
 

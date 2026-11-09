@@ -31,7 +31,7 @@ use rimz::harness::schedule::run_log::{
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    AfterReset, CheckEcho, InFlightRun, RunLockInfo, RunLockState, RunLocks,
+    AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,
     SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
     parse_mode, parse_task_timeout, preflight_entry, task_login, window_condition_provider,
 };
@@ -102,8 +102,11 @@ enum LoopSubcmd {
     /// Execute a check without inheriting its caller's controlling terminal.
     #[command(hide = true)]
     CheckExec {
-        #[arg(long, allow_hyphen_values = true)]
-        command: String,
+        #[arg(long, allow_hyphen_values = true, required_unless_present = "argv")]
+        command: Option<String>,
+        /// The program and its arguments, run without a shell.
+        #[arg(last = true, conflicts_with = "command")]
+        argv: Vec<std::ffi::OsString>,
     },
     /// Run one scheduler pass for roots without an open room.
     #[command(hide = true)]
@@ -235,7 +238,7 @@ struct AddArgs {
     /// Outcome every stage must land on for the action to run; required with --judge.
     #[arg(long, value_name = "fail|success|any")]
     on: Option<String>,
-    /// Poll-until deadline as a duration such as `30m`; resolves at add time.
+    /// Refused: fire on a condition with `--when` instead; stored `--until` rows still run.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
     /// One-shot time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `HH:MM` with --every.
@@ -480,16 +483,31 @@ fn resolve_caller_workspace() -> Result<rimz::ResolvedWorkspace> {
         .with_context(|| format!("resolving the caller's checkout `{checkout}`"))
 }
 
+/// Let a run report from any process send the strike-out notice.
+pub(super) fn register_loop_notices() {
+    rimz::harness::schedule::run_log::on_loop_disabled(run_tasks::notify_loop_disabled);
+}
+
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        LoopSubcmd::CheckExec { command } => {
+        LoopSubcmd::CheckExec { command, argv } => {
             use std::os::unix::process::CommandExt;
 
             nix::unistd::setsid().context("detaching loop check from the caller's terminal")?;
-            Err(std::process::Command::new("sh")
-                .args(["-c", &command])
-                .exec()
-                .into())
+            let mut child = match (&command, argv.split_first()) {
+                (Some(command), _) => {
+                    let mut child = std::process::Command::new("sh");
+                    child.args(["-c", command]);
+                    child
+                }
+                (None, Some((program, args))) => {
+                    let mut child = std::process::Command::new(program);
+                    child.args(args);
+                    child
+                }
+                (None, None) => anyhow::bail!("check-exec needs --command or a program"),
+            };
+            Err(child.exec().into())
         }
         LoopSubcmd::Add(args) => add::add(*args, globals),
         LoopSubcmd::Remove(args) => args
@@ -561,38 +579,36 @@ fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
 fn stop_active_run(
     name: &str,
     root: &Path,
-    cause: schedule::backlog::StopCause,
     expected: Option<RunLockInfo>,
     globals: &GlobalFlags,
 ) -> Result<(schedule::runner::StopOutcome, Option<String>)> {
     use crate::cli::supervised::StopRunErr;
 
     let mut pane_open = None;
-    let outcome =
-        schedule::runner::stop_task(name, root, cause, expected, |workspace, paths, record| {
-            let Some(record) = record else {
-                return Ok(());
-            };
-            let id = paths.workspace_id.clone();
-            let store = crate::cli::open_existing_store_at(paths)?
-                .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
-            let Some(workspace) = workspace else {
-                return crate::cli::supervised::cancel_supervised_run(&store, record);
-            };
-            match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
-                // Cancellation succeeded; still finish the ladder before reporting
-                // the pane which only the run's own stop can now close.
-                Err(StopRunErr::PaneOpen(open)) => {
-                    pane_open = Some(format!(
-                        "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
-                        record.run_id
-                    ));
-                    Ok(())
-                }
-                Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
-                Ok(()) => Ok(()),
+    let outcome = schedule::runner::stop_task(name, root, expected, |workspace, paths, record| {
+        let Some(record) = record else {
+            return Ok(());
+        };
+        let id = paths.workspace_id.clone();
+        let store = crate::cli::open_existing_store_at(paths)?
+            .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
+        let Some(workspace) = workspace else {
+            return crate::cli::supervised::cancel_supervised_run(&store, record);
+        };
+        match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
+            // Cancellation succeeded; still finish the ladder before reporting
+            // the pane which only the run's own stop can now close.
+            Err(StopRunErr::PaneOpen(open)) => {
+                pane_open = Some(format!(
+                    "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
+                    record.run_id
+                ));
+                Ok(())
             }
-        });
+            Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
+            Ok(()) => Ok(()),
+        }
+    });
     let (outcome, transition) = match (outcome, &pane_open) {
         (Err(err), Some(open)) => return Err(err.context(open.clone())),
         (outcome, _) => outcome?,

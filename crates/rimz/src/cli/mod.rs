@@ -229,6 +229,7 @@ fn try_hot_cli(args: Vec<OsString>) -> Option<(String, Cli)> {
 /// Entry point used by `main.rs`.
 pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
     hooks::register_drainer();
+    loop_cmd::register_loop_notices();
     reject_removed_top_level_tokens()?;
     let preparsed = preparsed
         .map(|cli| ("hooks".to_owned(), cli))

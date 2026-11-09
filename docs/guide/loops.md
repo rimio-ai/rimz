@@ -228,17 +228,13 @@ Most recurring automation should stay a plain script. A cron job that runs the t
 # Watchdog: run the suite every 15m; Codex wakes only when it fails
 rimz loop add watchdog --check "cargo test" --on fail \
     --agent codex --prompt "fix the failing test" --every 15m
-
-# Trigger-when-green: poll CI until it passes, then hand the merge to the planner
-rimz loop add ci-green --check "gh run watch --exit-status" --on success \
-    --until 30m --every 2m --wait @planner --prompt "CI is green; merge"
 ```
 
-A fire runs the check before its agent action, at the project root, or in the fire's fresh worktree when the task has `--worktree`, so the guard reads the tree the agent will work in. A `--wait` check runs at the root of the checkout the wait was armed from, linked worktrees included, and a task stored with `dir` by an earlier version keeps that directory. Scheduled condition agent tasks first look at capacity and leave the guard for a later retry while capacity is unavailable. `--on fail` (the default) fires the agent action on a non-zero exit or a timeout, `--on success` on a zero exit, and a check that spends no tokens is the whole point: the agent's turn is the exception, not the schedule.
+A fire runs the check before its agent action, at the project root, or in the fire's fresh worktree when the task has `--worktree`, so the guard reads the tree the agent will work in. A `--wait` check runs at the root of the checkout the wait was armed from, linked worktrees included, and a task stored with `dir` by an earlier version keeps that directory. `--on fail` (the default) fires the agent action on a non-zero exit or a timeout, `--on success` on a zero exit, and a check that spends no tokens is the whole point: the agent's turn is the exception, not the schedule.
 
 When the guard fires, RimZ appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence. That adds a rung to the escalation ladder: the script handles the routine, the agent handles the failure, and you hear about it only when the agent itself gets stuck. The turn runs like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you.
 
-`--until 30m` is the poll-until deadline: the task retires when the check trips or the deadline passes, whichever comes first. A one-shot guarded by a check retires only when the guard fires, so a skipped check leaves a bare `--at` task armed for the same time next day.
+`loop add` no longer accepts `--until`: fire on a condition with `--when`, or `rimz loop eject` the task and wait in a workflow check. A task stored with a poll-until deadline still runs: each fire starts one run, the task retires once a run reaches its action, and a fire past the deadline records `expired`. A one-shot guarded by a check retires only when the guard fires, so a skipped check leaves a bare `--at` task armed for the same time next day.
 
 A check is killed after five minutes unless `--check-timeout` says otherwise, falling back to the task's `--timeout` when set. A killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the check a cap longer than the pipeline, or poll on `--every` with a command that returns at once. Pipe nothing: plain `sh` takes a pipeline's last exit status, so `cargo test | tail` can hide a failure; RimZ trims the captured output itself.
 
@@ -386,7 +382,7 @@ Every scheduled `--agent` turn gets a timeout: the task's own `--timeout`, or th
 
 Loop-owned agent panes close on every terminal outcome, including failure and timeout, unless explicitly kept. The pane's wrapper handles cleanup even if the waiting check process has died; run records and `rimz loop logs` retain the evidence.
 
-A `--worktree` task gets a new tree for every fire, the same `git worktree add` from trunk that `rimz worktree new` runs, named `<prefix>-<yyyymmdd-hhmmss>` in UTC. A fire that never starts an agent (the guard said no, the task is check-only, or a gate stopped it) deletes its tree and branch as it ends, so a nightly guard leaves no tree behind for the nights it does nothing. A fire that starts an agent hands the tree to it: when the agent exits, or when its launch fails partway (a failed `--verify` or a budget refusal included), the usual [worktree cleanup](./worktrees.md) removes it if it is clean and landed, and a tree with commits or changes stays for you to merge or remove. `rimz loop show <name>` lists those under `KEPT WORKTREES`, and `rimz loop logs <name>` names each fire's tree on its `worktree:` line. While a fire runs, `rimz worktree sweep` and `rimz gc` leave its tree alone.
+A `--worktree` task gets a new tree for every fire, the same `git worktree add` from trunk that `rimz worktree new` runs, named `<prefix>-<yyyymmdd-hhmmss>` in UTC. A fire cuts its tree only when it will start a run, and a run that never starts an agent (the guard said no, or the task is check-only) deletes its tree and branch as it ends, so a nightly guard leaves no tree behind for the nights it does nothing. A run that starts an agent keeps the tree until it ends: then the usual [worktree cleanup](./worktrees.md) removes it if it is clean and landed, and a tree with commits or changes, or an agent pane still open, stays for you to merge or remove. `rimz loop show <name>` lists those under `KEPT WORKTREES`, and `rimz loop logs <name>` names each fire's tree on its `worktree:` line. While a fire runs, `rimz worktree sweep` and `rimz gc` leave its tree alone.
 
 ### What a fire leaves behind
 
@@ -431,7 +427,7 @@ Each task names one action (`--agent`, `--wait`, or a bare `--check`), carries a
 | Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
 | Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
 | Raw cron | `--cron`, a five-field expression with names such as `mon-fri` and steps, or a macro such as `@daily` | per the expression | `--cron "*/15 * * * *"` |
-| Poll-until | `--every <duration>` plus `--check`, `--on`, `--until`, and an agent action ([above](#guard-a-turn-with-a-check)) | until the check trips or the deadline passes | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
+| Poll-until (stored tasks only) | `--every <duration>` plus `--check`, `--on`, a deadline, and an agent action ([above](#guard-a-turn-with-a-check)) | until the check trips or the deadline passes | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
 | Signal | `--signal <name-or-family>`, narrowed with `--match key=value` ([above](#signals-the-rooms-event-bus)) | on every delivering emit, or once with `--once` | `--signal ci.failed`, `--signal 'ci.*'` |
 
 One pair is worth a second look. `--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` is the calendar's 07:00 sharp. Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.

@@ -56,7 +56,8 @@ impl Asset {
     }
 }
 
-const PROMPT: &str = "prompts/prompt.md";
+/// The task prompt asset, which a fire rewrites with its trigger's evidence.
+pub(super) const PROMPT: &str = "prompts/prompt.md";
 const SYSTEM_PROMPT: &str = "prompts/system.md";
 const AGENT: &str = "agent";
 /// A wait with no recheck ends after this long; the workflow bound on a check timeout.
@@ -144,6 +145,18 @@ impl InlineTask {
     }
 }
 
+/// Keep the agent step's session when its run ends, as a `--keep` fire asks.
+pub(super) fn keep_agent(text: &str) -> Result<String> {
+    let mut table: Table = toml::from_str(text)?;
+    if let Some(Value::Table(step)) = table
+        .get_mut("steps")
+        .and_then(|steps| steps.get_mut(AGENT))
+    {
+        step.insert("keep".into(), true.into());
+    }
+    Ok(toml::to_string(&table)?)
+}
+
 enum JudgeText {
     Inline(String),
     File(std::path::PathBuf),
@@ -158,9 +171,29 @@ fn judge_text(entry: &TaskEntry, tier: usize, task: &LoadedTask) -> Result<Judge
         .ok_or_else(|| anyhow::anyhow!("judge {tier} is gone from the task"))?;
     Ok(match (&judge.prompt, &judge.prompt_file) {
         (Some(prompt), _) => JudgeText::Inline(prompt.clone()),
-        (None, Some(path)) => JudgeText::File(runner::agent_check::prompt_path(path, task)?),
+        (None, Some(path)) => JudgeText::File(judge_prompt_path(path, task)?),
         (None, None) => anyhow::bail!("judge {tier} has no prompt"),
     })
+}
+
+/// A judge's prompt file, read from the origin of the task's own prompt file: the machine
+/// config directory, or a project task's `.rimz` directory.
+pub(super) fn judge_prompt_path(
+    path: &std::path::Path,
+    task: &LoadedTask,
+) -> Result<std::path::PathBuf> {
+    if !matches!(task.source(), super::catalog::TaskSource::Project { .. }) {
+        return runner::resolve_config_path(path);
+    }
+    let expanded = runner::expand_tilde(path);
+    if expanded.is_absolute() {
+        return Ok(expanded);
+    }
+    let config = super::catalog::project_config_path(&task.entry().root);
+    Ok(config
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("project config has no parent"))?
+        .join(expanded))
 }
 
 fn read(text: &JudgeText) -> Result<String> {
@@ -451,24 +484,29 @@ impl<'a> Graph<'a> {
         let mut on = routes([("failed", "@failed"), ("invalid", "@failed")]);
         let timed = if entry.stay {
             step.insert("lifecycle".into(), "stay".into());
-            if entry.takeover {
-                step.insert("takeover".into(), true.into());
-            }
+            // A resident launches beside its checkout's occupants unless it takes them over.
+            step.insert(
+                if entry.takeover { "takeover" } else { "share" }.into(),
+                true.into(),
+            );
             if !entry.subscribe.is_empty() {
                 let wakes = entry.subscribe.iter().map(|binding| {
-                    if binding.matches.is_empty() {
+                    if binding.matches.is_empty() && binding.prompt.is_none() {
                         return Value::from(binding.signal.as_str());
                     }
-                    let matches = binding
-                        .matches
-                        .iter()
-                        .map(|(key, value)| (key.clone(), Value::from(value.as_str())))
-                        .collect::<Table>();
-                    table([
-                        ("signal", binding.signal.as_str().into()),
-                        ("match", matches.into()),
-                    ])
-                    .into()
+                    let mut wake = table([("signal", binding.signal.as_str().into())]);
+                    if !binding.matches.is_empty() {
+                        let matches = binding
+                            .matches
+                            .iter()
+                            .map(|(key, value)| (key.clone(), Value::from(value.as_str())))
+                            .collect::<Table>();
+                        wake.insert("match".into(), matches.into());
+                    }
+                    if let Some(prompt) = &binding.prompt {
+                        wake.insert("prompt".into(), prompt.as_str().into());
+                    }
+                    wake.into()
                 });
                 step.insert("subscribe".into(), wakes.collect::<Vec<_>>().into());
             }

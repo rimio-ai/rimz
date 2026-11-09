@@ -49,6 +49,7 @@ pub struct StopMark {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StopCause {
+    /// Only an older RimZ wrote this mark; `replace` now cancels the blocking workflow run.
     Replace,
     Stop,
 }

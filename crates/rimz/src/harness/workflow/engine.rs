@@ -49,6 +49,8 @@ pub enum WorkflowErr {
     Throttle(#[from] throttle::ThrottleError),
     #[error("{0}")]
     Refused(String),
+    #[error("no room at {}; run `rimz start` there first", .0.display())]
+    NoRoom(std::path::PathBuf),
 }
 
 type Result<T> = std::result::Result<T, WorkflowErr>;
@@ -60,9 +62,12 @@ pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
     Deployed { dir: &'a Path, task: Option<String> },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
+    /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
+    /// the project root, where the task fired.
     Inline {
         task: String,
         definition: InlineDefinition,
+        fire_tree: bool,
     },
 }
 
@@ -95,13 +100,17 @@ pub fn create(
                     .to_owned(),
                 task: task.clone(),
                 spec_dir: dir,
+                fire_tree: false,
             }
         }
-        DefinitionSource::Inline { task, .. } => RunStart {
+        DefinitionSource::Inline {
+            task, fire_tree, ..
+        } => RunStart {
             origin: RunOrigin::Inline,
             name: task.clone(),
             task: Some(task.clone()),
             spec_dir: std::path::PathBuf::new(),
+            fire_tree: *fire_tree,
         },
     };
     // A run already holding the scope wins before the definition or the
@@ -111,6 +120,7 @@ pub fn create(
         start.origin,
         &start.name,
         start.task.as_deref(),
+        start.fire_tree,
         &roots,
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
@@ -149,6 +159,7 @@ struct RunStart {
     name: String,
     task: Option<String>,
     spec_dir: std::path::PathBuf,
+    fire_tree: bool,
 }
 
 /// Validate the definition at `start.spec_dir` and publish the run's record.
@@ -205,10 +216,7 @@ fn publish(
     // often to keep a folder each time.
     let keeps_notes = in_room || (start.origin == RunOrigin::Deployed && room);
     if (in_room || start.task.is_some()) && !room {
-        return Err(WorkflowErr::Refused(format!(
-            "no room at {}; run `rimz start` there first",
-            roots.project.display()
-        )));
+        return Err(WorkflowErr::NoRoom(roots.project.clone()));
     }
     let now = Timestamp::now();
     let mut record = RunRecord {
@@ -231,6 +239,7 @@ fn publish(
         spec_digest: script::digest(&bytes),
         prompt,
         scope,
+        fire_tree: start.fire_tree,
         project_root: roots.project.clone(),
         created_at: now,
         notes: None,
@@ -267,6 +276,7 @@ fn publish(
         record.origin,
         &record.workflow,
         record.task.as_deref(),
+        record.fire_tree,
         &roots,
     )?;
     if keeps_notes {
@@ -285,17 +295,24 @@ fn publish(
 }
 
 /// A live run blocks a new one on the same scope when it shares the new run's origin and name,
-/// or its task, so a task cannot dodge overlap by changing what it runs.
+/// or its task, so a task cannot dodge overlap by changing what it runs. A run in its loop fire's
+/// own tree holds the project root it fired from, so each fire's fresh tree still overlaps.
 fn refuse_existing(
     state: &StatePaths,
     origin: RunOrigin,
     name: &str,
     task: Option<&str>,
+    fire_tree: bool,
     roots: &ScopeRoots,
 ) -> Result<()> {
     match workflow::list(state)?.into_iter().find(|r| {
+        let checkout = if fire_tree {
+            &roots.project
+        } else {
+            roots.path(r.scope.kind)
+        };
         !r.state.is_terminal()
-            && r.scope.path == roots.path(r.scope.kind)
+            && r.firing_checkout() == checkout
             && ((r.origin == origin && r.workflow == name)
                 || task.is_some_and(|task| r.task.as_deref() == Some(task)))
     }) {
@@ -332,6 +349,15 @@ fn spawn(record: &RunRecord) -> Result<()> {
                 // The advance must survive closing the pane that woke it.
                 command.process_group(0);
             }
+            // A task's run carries neither its firer's lane nor its agent identity.
+            if record.task.is_some() {
+                command.env_remove(crate::workspace::ENV_CHANNEL);
+                for (key, _) in std::env::vars_os()
+                    .filter(|(key, _)| key.as_encoded_bytes().starts_with(b"RIMZ_AGENT_"))
+                {
+                    command.env_remove(key);
+                }
+            }
             command.args(spawn_args(record));
             Ok(())
         },
@@ -364,11 +390,27 @@ fn report_to_loop(paths: &WorkflowPaths, record: &mut RunRecord, guard: &Workspa
         tracing::warn!(run = %record.id, %error, "workflow journal unreadable for its loop report");
         Vec::new()
     });
-    crate::harness::schedule::run_log::report_run(record, &journal);
+    crate::harness::schedule::run_log::report_run(record, &journal, acted(paths, record));
     record.loop_report = workflow::LoopReport::Sent;
     if let Err(error) = workflow::write(paths, record, guard) {
         tracing::warn!(run = %record.id, %error, "workflow loop report mark not written");
     }
+}
+
+/// Whether the run entered an agent or message step, read against its sealed graph; a graph
+/// that no longer reads counts any visited step.
+fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
+    let Ok(spec) = spec::load_run(&paths.home, record) else {
+        return !record.visits.is_empty();
+    };
+    record.visits.keys().any(|step| {
+        spec.steps
+            .get(step)
+            .and_then(spec::Step::kind)
+            .is_some_and(|kind| {
+                matches!(kind, spec::StepKind::Agent(_) | spec::StepKind::Message(_))
+            })
+    })
 }
 
 fn window_wait(
@@ -496,23 +538,15 @@ enum Decision {
     Stop,
     Again,
     Evaluate(Box<RunRecord>),
-    Launch(
-        Box<(
-            RunRecord,
-            std::result::Result<String, String>,
-            Option<throttle::Turn>,
-        )>,
-    ),
+    Launch(Box<agent::Launch>),
     End(Box<RunRecord>),
     Push(Box<RunRecord>),
-    Evict(Box<RunRecord>),
     Message(Box<Notice>),
     Admit(Box<(u64, String, throttle::Run)>),
 }
 
 #[derive(Default)]
 struct Admission {
-    eviction: Option<(u64, String, Option<String>)>,
     capacity: Option<(
         u64,
         String,
@@ -562,24 +596,8 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_ADMISSION_GATE");
                 continue;
             }
-            Decision::Evict(record) => {
-                let error = host
-                    .evict(
-                        &record.scope.path,
-                        &record.project_root,
-                        &record.break_agents,
-                    )
-                    .err();
-                admission.eviction = Some((
-                    record.next_seq,
-                    record.node,
-                    error.map(|error| error.to_string()),
-                ));
-                continue;
-            }
             Decision::Launch(launch) => {
-                let (record, prompt, turn) = *launch;
-                if agent::launch(state, &paths, &spec, &record, prompt, turn, host)? {
+                if agent::launch(state, &paths, &spec, *launch, host)? {
                     continue;
                 }
                 return Ok(());
@@ -972,6 +990,7 @@ fn prepare(
         return Ok(Decision::Stop);
     }
     let mut launch_error = None;
+    let mut evict = None;
     if let Some(step) = spec.steps.get(&t.record.node) {
         if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
@@ -1011,42 +1030,28 @@ fn prepare(
                 persist(&mut t, &guard)?;
                 return Ok(Decision::Stop);
             }
-            let mut evict = false;
-            if let Some((_, _, error)) = admission
-                .eviction
-                .take()
-                .filter(|(seq, node, _)| *seq == t.record.next_seq && *node == t.record.node)
-            {
-                // A confirmed stop admits only this launch; later visits read occupancy afresh.
-                launch_error = launch_error.or(error);
-            } else if launch_error.is_none() && !step.share.unwrap_or_default() {
-                match host.occupancy(
-                    &t.record.scope.path,
-                    &t.record.project_root,
-                    &t.record.break_agents,
-                )? {
-                    Occupancy::Free => {}
-                    Occupancy::Blocked(_) => {
-                        t.step_wait("takeover", None);
-                        persist(&mut t, &guard)?;
-                        return Ok(Decision::Stop);
-                    }
-                    Occupancy::Occupied(_) if !step.takeover.unwrap_or_default() => {
-                        t.step_wait("occupied", None);
-                        persist(&mut t, &guard)?;
-                        return Ok(Decision::Stop);
-                    }
-                    Occupancy::Occupied(_) => evict = true,
+            if launch_error.is_none() && !step.share.unwrap_or_default() {
+                // A step launched into a named worktree occupies that checkout, not the run's.
+                let destination = destination(&t.record, step)?;
+                let occupancy =
+                    host.occupancy(&destination, &t.record.project_root, &t.record.break_agents)?;
+                if let Some(wait) = occupancy_wait(&occupancy, step.takeover.unwrap_or_default()) {
+                    t.step_wait(wait, None);
+                    persist(&mut t, &guard)?;
+                    return Ok(Decision::Stop);
                 }
+                // An occupant can arrive while the launch is prepared, so the host reads again.
+                evict = Some(super::Eviction {
+                    checkout: destination,
+                    project_root: t.record.project_root.clone(),
+                    excluded: t.record.break_agents.clone(),
+                });
             }
             t.now = Timestamp::now();
-            if launch_error.is_none() {
-                if let Some(decision) = prepare_capacity(&mut t, step, groups, admission, &guard)? {
-                    return Ok(decision);
-                }
-                if evict {
-                    return Ok(Decision::Evict(Box::new(t.record)));
-                }
+            if launch_error.is_none()
+                && let Some(decision) = prepare_capacity(&mut t, step, groups, admission, &guard)?
+            {
+                return Ok(decision);
             }
         }
     } else if spec.checks.contains_key(&t.record.node) {
@@ -1189,7 +1194,7 @@ fn prepare(
             Some((_, _, Ok(throttle::Attempt::Turn(turn)))) => Some(turn),
             _ => None,
         };
-        return Ok(Decision::Launch(Box::new((t.record, prompt, turn))));
+        return Ok(Decision::Launch(Box::new((t.record, prompt, turn, evict))));
     }
     Ok(Decision::Evaluate(Box::new(t.record)))
 }
@@ -1254,7 +1259,15 @@ fn prepare_capacity(
                 task: t.record.task.clone().unwrap_or_default(),
                 root: t.record.project_root.clone(),
                 checkout: t.record.scope.path.clone(),
-                disk: t.record.scope.path.clone(),
+                // A worktree not made yet is measured where it will be made.
+                disk: destination(&t.record, step)
+                    .ok()
+                    .and_then(|dir| {
+                        dir.ancestors()
+                            .find(|dir| dir.exists())
+                            .map(Path::to_path_buf)
+                    })
+                    .unwrap_or_else(|| t.record.scope.path.clone()),
                 workspace: crate::ids::WorkspaceId::from_project_root(&t.record.project_root),
                 groups,
                 gives_up_ms: t
@@ -1291,6 +1304,53 @@ fn prepare_capacity(
         return Ok(Some(Decision::Stop));
     }
     Ok(None)
+}
+
+/// Whether a lifecycle signal came from the attempt's own leader: its handle, compared
+/// without a channel, or the session its supervised run recorded.
+fn from_leader(state: &StatePaths, leader: &workflow::AttemptRun, signal: &Signal) -> bool {
+    if signal.source != crate::store::event::SignalSource::Lifecycle {
+        return false;
+    }
+    let name = |handle: &str| {
+        handle
+            .split_once('#')
+            .map_or(handle, |(name, _)| name)
+            .to_owned()
+    };
+    let field = |key: &str| signal.payload.get(key).and_then(serde_json::Value::as_str);
+    if field("handle").is_some_and(|handle| name(handle) == name(&leader.handle)) {
+        return true;
+    }
+    field("session").is_some_and(|session| {
+        crate::harness::run::load(state, &leader.run_id)
+            .ok()
+            .and_then(|run| run.agent_id)
+            .is_some_and(|agent| agent.as_str() == session)
+    })
+}
+
+/// The wait an occupied checkout puts an agent step in, or `None` when the step may launch: an
+/// open turn blocks every step, and any occupant blocks a step without `takeover`.
+fn occupancy_wait(occupancy: &Occupancy, takeover: bool) -> Option<&'static str> {
+    match occupancy {
+        Occupancy::Blocked(_) => Some("takeover"),
+        Occupancy::Occupied(_) if !takeover => Some("occupied"),
+        Occupancy::Free | Occupancy::Occupied(_) => None,
+    }
+}
+
+/// The checkout a step launches into: its named worktree, else the run's scope.
+fn destination(record: &RunRecord, step: &super::Step) -> Result<std::path::PathBuf> {
+    let Some(name) = &step.worktree else {
+        return Ok(record.scope.path.clone());
+    };
+    crate::worktree::worktree_path(
+        &record.project_root,
+        &crate::config::MachineConfig::load_lenient().agents.worktree,
+        name,
+    )
+    .map_err(|error| WorkflowErr::Refused(format!("{error:#}")))
 }
 
 fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec) -> Result<()> {
@@ -1815,9 +1875,13 @@ pub(crate) fn reassign_task(
     Ok(reassigned)
 }
 
-/// Fill a run's checkout and board defaults into one subscription before it is matched.
+/// Fill a checkout's path, board and cohort defaults into one subscription before it is matched.
+///
+/// `team.stage` defaults to the checkout's board; another team signal, which carries no board,
+/// defaults to the cohort of its team that launches in the checkout.
 fn delivers(
-    record: &RunRecord,
+    project_root: &Path,
+    checkout: &Path,
     (selector, mut matches): (
         crate::harness::schedule::signal::SignalSelector,
         BTreeMap<String, String>,
@@ -1826,15 +1890,28 @@ fn delivers(
 ) -> bool {
     match arm::default_signal_match_key(&selector, &matches) {
         Some("path") => {
-            matches.insert(
-                "path".into(),
-                record.scope.path.to_string_lossy().into_owned(),
-            );
+            matches.insert("path".into(), checkout.to_string_lossy().into_owned());
+        }
+        Some("instance") if signal.name.as_str() != "team.stage" => {
+            if let Some(team) = signal
+                .payload
+                .get("team")
+                .and_then(serde_json::Value::as_str)
+            {
+                let channel = crate::harness::spec::resolve_room_channel(
+                    project_root,
+                    checkout,
+                    Some(team),
+                    None,
+                )
+                .unwrap_or_else(|| "external".into());
+                matches.insert("instance".into(), format!("{team}#{channel}"));
+            }
         }
         Some("instance") if !matches.contains_key("board") => {
             matches.insert(
                 "board".into(),
-                crate::harness::scratch::durable_board_path(&record.scope.path)
+                crate::harness::scratch::durable_board_path(checkout)
                     .to_string_lossy()
                     .into_owned(),
             );
@@ -1847,6 +1924,8 @@ fn delivers(
 /// A subscribed signal bound for a live staying session's leader.
 struct Forward {
     step: String,
+    /// The delivering binding's `prompt`, sent after the signal.
+    prompt: Option<String>,
     seq: u64,
     run: workflow::AttemptRun,
     message: crate::ids::MessageId,
@@ -1868,7 +1947,7 @@ impl Forward {
 
     /// Queue the journaled forward off-lock; a failure leaves the journal row and warns.
     fn send(&self, host: &dyn AttemptHost, record: &RunRecord, signal: &Signal) {
-        let text = forward_text(record, &self.step, signal);
+        let text = forward_text(record, &self.step, self.prompt.as_deref(), signal);
         if let Err(error) = host.forward(&self.run, &self.message, &text) {
             tracing::warn!(
                 run = %record.id, step = %self.step, %error,
@@ -1878,31 +1957,50 @@ impl Forward {
     }
 }
 
-/// The live staying session a subscribed signal goes to.
-fn subscriber(spec: &WorkflowSpec, record: &RunRecord, signal: &Signal) -> Result<Option<Forward>> {
+/// The forwards a live staying session's leader gets, one per distinct delivering binding.
+///
+/// Defaults resolve against the checkout the leader launched in; bindings with the same
+/// selector and filter coalesce into the first. The leader never hears its own lifecycle.
+fn subscribers(
+    state: &StatePaths,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    signal: &Signal,
+) -> Result<Vec<Forward>> {
     let Some(attempt) = record.session_attempt() else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let (Some(step), Some(run)) = (spec.steps.get(&attempt.node), &attempt.run) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    if attempt.lifecycle.is_turn() || attempt.ending.is_some() {
-        return Ok(None);
+    if attempt.lifecycle.is_turn() || attempt.ending.is_some() || from_leader(state, run, signal) {
+        return Ok(Vec::new());
     }
-    let subscribed = step
-        .subscriptions()?
-        .into_iter()
-        .any(|subscription| delivers(record, subscription, signal));
-    Ok(subscribed.then(|| Forward {
-        step: attempt.node.clone(),
-        seq: attempt.seq,
-        run: run.clone(),
-        message: crate::ids::MessageId::new(),
-    }))
+    let checkout = destination(record, step)?;
+    let mut seen = Vec::new();
+    let mut forwards = Vec::new();
+    for wake in step.subscribe.iter().flatten() {
+        let subscription = wake.step_subscription()?;
+        if seen.contains(&subscription) {
+            continue;
+        }
+        seen.push(subscription.clone());
+        if !delivers(&record.project_root, &checkout, subscription, signal) {
+            continue;
+        }
+        forwards.push(Forward {
+            step: attempt.node.clone(),
+            prompt: wake.prompt().map(str::to_owned),
+            seq: attempt.seq,
+            run: run.clone(),
+            message: crate::ids::MessageId::new(),
+        });
+    }
+    Ok(forwards)
 }
 
 /// The SIGNAL notice a subscribed step's leader receives.
-fn forward_text(record: &RunRecord, step: &str, signal: &Signal) -> String {
+fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &Signal) -> String {
     let subject = crate::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
     let mut lines = vec![if subject.is_empty() {
         signal.name.to_string()
@@ -1915,7 +2013,42 @@ fn forward_text(record: &RunRecord, step: &str, signal: &Signal) -> String {
         record.workflow,
         id = record.id,
     ));
+    if let Some(prompt) = prompt {
+        lines.extend([String::new(), prompt.to_owned()]);
+    }
     lines.join("\n")
+}
+
+/// Whether a live staying session subscribes to the family of a lifecycle signal, the only
+/// receiver a lifecycle signal has among workflow runs. Reads records and sealed specs.
+pub(crate) fn hears_lifecycle(state: &StatePaths, signal: &Signal) -> Result<bool> {
+    for record in workflow::list(state)? {
+        let Some(attempt) = record.session_attempt() else {
+            continue;
+        };
+        if record.state != RunState::Active
+            || attempt.lifecycle.is_turn()
+            || attempt.ending.is_some()
+            || attempt
+                .run
+                .as_ref()
+                .is_some_and(|run| from_leader(state, run, signal))
+        {
+            continue;
+        }
+        let spec = spec::load_run(&state.workflow(&record.id).home, &record)?;
+        let Some(step) = spec.steps.get(&attempt.node) else {
+            continue;
+        };
+        if step
+            .subscriptions()?
+            .iter()
+            .any(|(selector, _)| selector.family() == signal.name.family())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Result<()> {
@@ -1929,21 +2062,29 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
             }
             let spec = spec::load_run(&paths.home, &current)?;
             let woken = match spec.checks.get(&current.node) {
-                Some(check) => check
-                    .subscriptions()?
-                    .into_iter()
-                    .any(|subscription| delivers(&current, subscription, signal)),
+                Some(check) => check.subscriptions()?.into_iter().any(|subscription| {
+                    delivers(
+                        &current.project_root,
+                        &current.scope.path,
+                        subscription,
+                        signal,
+                    )
+                }),
                 None => false,
             };
-            let forward = subscriber(&spec, &current, signal)?;
-            let entry = forward.as_ref().map(|forward| forward.entry(signal));
+            let forwards = subscribers(state, &spec, &current, signal)?;
+            let entries = forwards.iter().map(|forward| forward.entry(signal));
             if !woken {
-                let (Some(forward), Some(entry)) = (forward, entry) else {
+                if forwards.is_empty() {
                     return Ok(());
-                };
-                workflow::append(&paths, &entry, &guard)?;
+                }
+                for entry in entries {
+                    workflow::append(&paths, &entry, &guard)?;
+                }
                 drop(guard);
-                forward.send(host, &current, signal);
+                for forward in &forwards {
+                    forward.send(host, &current, signal);
+                }
                 return Ok(());
             }
             let mut t = Transition {
@@ -1969,10 +2110,10 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
                     signal: signal.name.as_str().into(),
                 },
             );
-            t.entries.extend(entry);
+            t.entries.extend(entries);
             persist(&mut t, &guard)?;
             drop(guard);
-            if let Some(forward) = forward {
+            for forward in &forwards {
                 forward.send(host, &t.record, signal);
             }
             spawn(&t.record)

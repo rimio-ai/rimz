@@ -16,6 +16,8 @@ use crate::store::workflow::{self, RunRecord, RunState};
 mod condition;
 mod judge;
 #[cfg(test)]
+pub(super) use judge::budget_refusal;
+#[cfg(test)]
 pub(super) use judge::declines;
 
 pub use condition::{CaseMark, CaseMarks, case_marks, unread_reasons};
@@ -125,7 +127,8 @@ pub(super) fn evaluate(
         .envs(crate::workspace::pin_env(
             &state.workspace_id,
             &record.project_root,
-        ));
+        ))
+        .envs(loop_task_env(record));
     let output = with_child(
         state,
         paths,
@@ -214,13 +217,7 @@ fn evaluate_shell(
             .expect("prepared hosted shell check");
         let log = paths.check_log(attempt.seq);
         let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
-        let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
-        env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
-        env.insert(
-            "RIMZ_WORKFLOW_DEFINITION".into(),
-            record.spec_dir.display().to_string(),
-        );
-        env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
+        let env = child_env(state, paths, record);
         let output = with_child(
             state,
             paths,
@@ -291,13 +288,7 @@ pub(super) fn execute_step(
     let log = paths.step_log(seq);
     let file = std::fs::File::create(&log)
         .map_err(|error| ChildError::Failed(format!("{}: {error}", log.display())))?;
-    let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
-    env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
-    env.insert(
-        "RIMZ_WORKFLOW_DEFINITION".into(),
-        record.spec_dir.display().to_string(),
-    );
-    env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
+    let env = child_env(state, paths, record);
     with_child(
         state,
         paths,
@@ -393,4 +384,36 @@ fn with_child<T>(
         Ok(())
     })
     .map_err(ChildError::Failed)
+}
+
+/// The environment of a shell check or command step: the room pin, the run's directories and
+/// id, and the loop task that started the run, as a loop guard's shell had it.
+fn child_env(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    record: &RunRecord,
+) -> BTreeMap<String, String> {
+    let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
+    env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
+    env.insert(
+        "RIMZ_WORKFLOW_DEFINITION".into(),
+        record.spec_dir.display().to_string(),
+    );
+    env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
+    env.extend(loop_task_env(record));
+    env
+}
+
+/// A task-started run's checks name their task and, as a loop guard's did, their directory.
+fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
+    let Some(task) = record.task.clone() else {
+        return Vec::new();
+    };
+    vec![
+        (crate::harness::schedule::LOOP_TASK_ENV.to_owned(), task),
+        (
+            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+            record.scope.path.display().to_string(),
+        ),
+    ]
 }

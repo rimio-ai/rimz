@@ -965,7 +965,7 @@ fn loop_project_scope_skips_before_reading_an_edited_definition() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == runs[0].id.as_str()),
+            .any(|row| overlapped_by(row, runs[0].id.as_str())),
         "{history}"
     );
     success(
@@ -1157,7 +1157,7 @@ fn condition_workflow_readded_while_its_removed_run_lives_starts_fresh_afterward
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| { row["result"] == "workflow_skipped" && row["run_id"] == old.id.as_str() }),
+            .any(|row| { overlapped_by(row, old.id.as_str()) }),
         "{history}"
     );
     assert!(
@@ -1179,6 +1179,13 @@ fn condition_workflow_readded_while_its_removed_run_lives_starts_fresh_afterward
         workflow_launches(&room)["tasks"]["review"][room.env.project_root.to_str().unwrap()]["run"],
         new.id.as_str()
     );
+}
+
+/// A fire that found `run` live recorded an overlap naming it.
+fn overlapped_by(row: &Value, run: &str) -> bool {
+    row["result"] == "overlapped"
+        && row["blocking_run"] == run
+        && row["error"] == format!("run {run} still active — skipped")
 }
 
 #[test]
@@ -1206,7 +1213,7 @@ fn condition_workflow_repairs_its_own_live_run_once() {
         repaired
             && rows
                 .iter()
-                .filter(|row| row["result"] == "workflow_skipped")
+                .filter(|row| row["result"] == "overlapped")
                 .count()
                 == 1
             && workflow_task_history(&room, "review")["runs"] == json!(rows),
@@ -1234,7 +1241,7 @@ fn condition_workflow_does_not_adopt_a_foreign_run() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == foreign),
+            .any(|row| overlapped_by(row, foreign)),
         "{rows}"
     );
     success(
@@ -1516,7 +1523,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == id)
+            .any(|row| overlapped_by(row, &id))
     );
     // A visible permission prompt parks the active run, and still blocks a duplicate.
     let run = room.attempt(&id);
@@ -1572,7 +1579,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|row| row["result"] == "workflow_skipped")
+            .filter(|row| row["result"] == "overlapped")
             .count()
     };
     let before = skipped();
@@ -1701,9 +1708,11 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
     ))
     .unwrap();
     assert!(
-        history["runs"].as_array().unwrap().iter().any(
-            |row| row["result"] == "workflow_skipped" && row["run_id"] == active[0].id.as_str()
-        ),
+        history["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| overlapped_by(row, active[0].id.as_str())),
         "{history}"
     );
     success(

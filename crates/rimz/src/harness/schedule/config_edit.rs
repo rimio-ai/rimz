@@ -399,4 +399,85 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             Some(expected.as_ref())
         );
     }
+
+    /// The machine, project, instance, and edit readers of one stored row compile it alike.
+    #[test]
+    fn stored_rows_compile_alike_through_all_four_readers() {
+        let shared = [
+            "agent = 'claude'\nprompt = 'fix'\nevery = '1h'\ncheck = 'cargo test'\non = 'fail'\n\
+             judge = [{ agent = 'codex', prompt = 'worth it?' }]\noverlap = 'queue'",
+            "workflow = 'triage'\nsignal = 'ci.failed'",
+        ];
+        let machine_only = [
+            "agent = 'claude'\nprompt = 'tend'\nstay = true\neach-worktree = true\n\
+             takeover = true\nevery = '1h'\n\
+             subscribe = [{ signal = 'ci.failed', prompt = 'repair' }]",
+            "agent = 'claude'\nprompt = 'land'\nevery = '10m'\ncheck = 'test -e ready'\n\
+             deadline = '2030-01-01T00:00:00Z'",
+            "agent = 'claude'\nprompt = 'look'\nwhen = ['ci=passed']\nfor = '5m'",
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let compiled = |entry: &TaskEntry| {
+            let shape = super::super::TaskShape::compile("task", entry);
+            shape.compiled().cloned().map_err(ToString::to_string)
+        };
+        for (row, project) in shared
+            .iter()
+            .map(|row| (row, true))
+            .chain(machine_only.iter().map(|row| (row, false)))
+        {
+            let machine_text = format!("[tasks.task]\nroot = '/repo'\n{row}\n");
+            let machine =
+                MachineConfig::parse_text(Path::new("loop.toml"), &machine_text, dir.path())
+                    .unwrap()
+                    .r#loop
+                    .tasks
+                    .0
+                    .remove("task")
+                    .unwrap();
+            let expected = compiled(&machine);
+            assert!(expected.is_ok(), "{row}: {expected:?}");
+
+            if project {
+                let value = toml::from_str(&format!("[tasks.task]\n{row}\n")).unwrap();
+                let project = crate::config::effective::project_tasks_from_value(
+                    Path::new("/repo"),
+                    Path::new("/repo/.rimz/config.toml"),
+                    TrustState::Trusted,
+                    &value,
+                )
+                .unwrap()
+                .unwrap()
+                .tasks
+                .0
+                .remove("task")
+                .unwrap();
+                assert_eq!(compiled(&project), expected, "project reader: {row}");
+            }
+
+            let instances = crate::config::Tasks([("task".to_owned(), machine.clone())].into());
+            let instances_path = super::super::instances::path(dir.path());
+            std::fs::create_dir_all(instances_path.parent().unwrap()).unwrap();
+            std::fs::write(instances_path, serde_json::to_vec(&instances).unwrap()).unwrap();
+            let mut loaded = super::super::instances::load_strict_from(dir.path()).unwrap();
+            let instance = loaded.0.remove("task").unwrap();
+            assert_eq!(compiled(&instance), expected, "instance reader: {row}");
+
+            let mut doc = DocumentMut::new();
+            root_tasks_table(&mut doc).unwrap().insert(
+                "task",
+                Item::Table(task_entry_table(&machine, true).unwrap()),
+            );
+            let edited =
+                MachineConfig::parse_text(Path::new("loop.toml"), &doc.to_string(), dir.path())
+                    .unwrap()
+                    .r#loop
+                    .tasks
+                    .0
+                    .remove("task")
+                    .unwrap();
+            assert_eq!(edited, machine, "edit round trip: {row}");
+            assert_eq!(compiled(&edited), expected, "edit reader: {row}");
+        }
+    }
 }

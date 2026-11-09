@@ -93,9 +93,6 @@ fn scoped_tasks(
     ledger: &super::launch_ledger::Ledger,
     workflows: &super::launch_ledger::WorkflowLedger,
     owned: &[PathBuf],
-    declines: &super::launch_ledger::Declines,
-    when_states: &BTreeMap<String, WhenState>,
-    now: Timestamp,
 ) -> BTreeMap<String, ScopedTask> {
     let mut scoped = BTreeMap::new();
     for (name, task) in tasks {
@@ -103,17 +100,6 @@ fn scoped_tasks(
         if !entry.each_worktree {
             if super::launch_ledger::launched(entry, name, &entry.run_dir(), ledger, workflows)
                 .is_some()
-                || (entry.stay
-                    && entry.guard().shell.is_none()
-                    && super::launch_ledger::holding_decline(
-                        declines,
-                        name,
-                        entry,
-                        &entry.run_dir(),
-                        when_states.get(name).map(|state| state.since),
-                        now,
-                    )
-                    .is_some())
             {
                 continue;
             }
@@ -133,19 +119,6 @@ fn scoped_tasks(
                 continue;
             }
             let key = scope_key(name, &checkout);
-            if entry.guard().shell.is_none()
-                && super::launch_ledger::holding_decline(
-                    declines,
-                    name,
-                    entry,
-                    &checkout,
-                    when_states.get(&key).map(|state| state.since),
-                    now,
-                )
-                .is_some()
-            {
-                continue;
-            }
             scoped.insert(
                 key,
                 ScopedTask {
@@ -343,18 +316,6 @@ fn fire_tasks(
     } else {
         Default::default()
     };
-    let declines = if tasks.values().any(|task| task.entry().stay) {
-        match super::launch_ledger::load_declines_room(runtime, project_root) {
-            Ok(declines) => declines,
-            Err(error) => {
-                tracing::warn!(%error, "resident loop declines unavailable");
-                tasks.retain(|_, task| !task.entry().stay);
-                BTreeMap::new()
-            }
-        }
-    } else {
-        BTreeMap::new()
-    };
     let owned = tasks
         .values()
         .find(|task| task.entry().each_worktree)
@@ -372,46 +333,12 @@ fn fire_tasks(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
-    let capacity = (|| {
-        let paths = match project_root {
-            Some(root) => StatePaths::for_project_root(root)?,
-            None => StatePaths::for_workspace(runtime.workspace_id.clone())?,
-        };
-        super::launch_ledger::load_capacity(&paths)
-    })()
-    .unwrap_or_else(|error| {
-        tracing::warn!(%error, "loop capacity waits unavailable; planning without them");
-        BTreeMap::new()
-    });
-    let scoped = scoped_tasks(
-        &tasks,
-        &ledger,
-        &workflows,
-        &owned,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        now.timestamp(),
-    );
+    let scoped = scoped_tasks(&tasks, &ledger, &workflows, &owned);
     for (key, scope) in &scoped {
         if let Some(record) = arming.get(&scope.task.key(&scope.name)).copied() {
             arming.insert(scope.task.key(key), record);
         }
     }
-    let definitions = tasks;
-    let capacity: BTreeMap<String, super::launch_ledger::CapacityRecord> = scoped
-        .iter()
-        .filter_map(|(key, scope)| {
-            capacity
-                .get(&scope.name)?
-                .get(
-                    &scope
-                        .checkout
-                        .clone()
-                        .unwrap_or_else(|| scope.task.entry().run_dir()),
-                )
-                .map(|record| (key.clone(), record.clone()))
-        })
-        .collect();
     let tasks: BTreeMap<_, _> = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -436,7 +363,6 @@ fn fire_tasks(
                     // A task fired on a true reading cannot fire again without a retry, so
                     // fenced and true plan alike there and the fence's git reads are skipped.
                     let refire_blocked = !task.entry().dedupes_checkout()
-                        && !capacity.contains_key(name)
                         && when_states.get(name).is_some_and(|state| {
                             state.fired
                                 && state.matches_condition(expr, *hold, &task.entry().run_dir())
@@ -478,8 +404,7 @@ fn fire_tasks(
         })
         .map(|(name, _)| name.clone())
         .collect();
-    let (mut actions, mut next_state, next_when) = plan(
-        &capacity,
+    let (mut actions, next_state, next_when) = plan(
         &tasks,
         &state,
         &arming,
@@ -488,25 +413,6 @@ fn fire_tasks(
         &verdicts,
         &lost_runners,
     );
-    // Declined scopes must still fold false/true edges before suppressing helpers.
-    let eligible = scoped_tasks(
-        &definitions,
-        &ledger,
-        &workflows,
-        &owned,
-        &declines,
-        &next_when,
-        now.timestamp(),
-    );
-    actions.retain(|(key, action)| {
-        if *action != Action::Fire || eligible.contains_key(key) {
-            return true;
-        }
-        if let Some(at) = state.get(key) {
-            next_state.insert(key.clone(), *at);
-        }
-        false
-    });
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -677,12 +583,7 @@ type PlannedTasks = (
     BTreeMap<String, WhenState>,
 );
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the planner takes each durable input and reading explicitly, so tests drive them"
-)]
 fn plan(
-    capacity: &BTreeMap<String, super::launch_ledger::CapacityRecord>,
     tasks: &BTreeMap<String, LoadedTask>,
     state: &BTreeMap<String, Timestamp>,
     arming_entries: &BTreeMap<String, Arming>,
@@ -766,21 +667,9 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                let wait = capacity
-                    .get(name)
-                    .filter(|wait| wait.since == Some(state.since));
-                let retry_secs = if wait.is_some() {
-                    Some(60)
-                } else {
-                    task.entry()
-                        .dedupes_checkout()
-                        .then_some(RESIDENT_RETRY_SECS)
-                };
-                let retry_due = retry_secs.is_some_and(|seconds| {
-                    now.timestamp().duration_since(last_fire).as_secs() >= seconds
-                });
-                if !wait.is_some_and(|wait| wait.gave_up)
-                    && (!state.fired || retry_due)
+                let retry_due = task.entry().dedupes_checkout()
+                    && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
+                if (!state.fired || retry_due)
                     && elapsed >= hold.map_or(0, |duration| duration.as_millis())
                 {
                     actions.push((name.clone(), Action::Fire));

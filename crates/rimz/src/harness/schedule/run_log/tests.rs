@@ -263,6 +263,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         condition: None,
         message_id: None,
         run_id: None,
+        blocking_run: None,
         transcript_path: None,
         last_message: None,
         target: None,
@@ -1112,7 +1113,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         serde_json::json!({"agent": {"total": 1, "outcomes": []}}),
     );
     for _ in 0..2 {
-        report_run(&failed, &[attempt(0.5), attempt(0.25)]);
+        report_run(&failed, &[attempt(0.5), attempt(0.25)], true);
         assert_eq!(
             super::super::strikes::load().get(&key),
             Some(&1),
@@ -1142,7 +1143,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
             Some(60_000)
         )
     );
-    report_run(&run("done", serde_json::json!({})), &[]);
+    report_run(&run("done", serde_json::json!({})), &[], false);
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1154,11 +1155,70 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         Some(root.path()),
     );
     assert_eq!(rows.last().map(|row| row.acted), Some(Some(false)));
-    report_run(&run("canceled", serde_json::json!({})), &[]);
-    report_run(&failed, &[]);
+    report_run(&run("canceled", serde_json::json!({})), &[], false);
+    report_run(&failed, &[], true);
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
         "cancel is neutral"
+    );
+}
+
+#[test]
+fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    crate::Store::open(state.clone(), runtime)
+        .unwrap()
+        .record_workspace(&workspace)
+        .unwrap();
+    let entry = crate::config::TaskEntry {
+        agent: Some("claude".into()),
+        prompt: Some("fix it".into()),
+        every: Some("1h".into()),
+        root: root.path().into(),
+        ..crate::config::TaskEntry::default()
+    };
+    super::super::instances::insert(&state, "nightly", &entry).unwrap();
+    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
+    let key = catalog.for_run("nightly").unwrap().key("nightly");
+    let failed: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
+        "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
+        "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
+        "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"@failed",
+        "entered_at":"2026-01-01T00:59:59Z", "visits":{}, "visit_grant":0,
+        "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:59:59Z",
+        "loop_report":"owed"
+    }))
+    .unwrap();
+    // The engine's give-up: a `capacity` route out of the agent step, then the failed terminal.
+    let gave_up: crate::store::workflow::JournalEntry = serde_json::from_value(serde_json::json!({
+        "seq":1, "at":"2026-01-01T00:59:59Z", "node":"agent", "event":"route",
+        "outcome":"capacity",
+        "input":{"outcome":"capacity", "step":"agent", "reason":"2 agents open", "kinds":["claude"], "waited_ms":3600000}
+    }))
+    .unwrap();
+    report_run(&failed, &[gave_up], false);
+    let rows = task_records(
+        &crate::disk::paths::logs_dir(),
+        "nightly",
+        Some(root.path()),
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.result, row.error.as_deref()))
+            .collect::<Vec<_>>(),
+        [(
+            LoopRunResult::ThrottleSkipped,
+            Some("gave up waiting for capacity after 1h; 2 agents open")
+        )]
+    );
+    assert_eq!(
+        super::super::strikes::load().get(&key),
+        None,
+        "a capacity give-up never strikes"
     );
 }

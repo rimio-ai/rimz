@@ -17,7 +17,6 @@ type SleepHook = Box<dyn FnMut(&FakeHost) + Send>;
 pub(in crate::harness::schedule) struct FakeHost {
     dir: tempfile::TempDir,
     clock: AtomicU64,
-    throttle_config: Mutex<Option<ThrottleConfig>>,
     owner: Mutex<Owner>,
     dead: Mutex<Vec<u32>>,
     pub(in crate::harness::schedule) pressure: Mutex<Result<Pressure, String>>,
@@ -28,15 +27,11 @@ pub(in crate::harness::schedule) struct FakeHost {
     workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
-    on_lock: Mutex<Option<SleepHook>>,
     on_check: Mutex<Option<SleepHook>>,
     check_answer: Mutex<Result<(Option<i32>, bool), String>>,
     checks: Mutex<Vec<StartGroup>>,
     check_commands: Mutex<Vec<Option<String>>>,
     check_timeouts: Mutex<Vec<Duration>>,
-    /// Raised as Ctrl-C would be; only a hold that listens hears it.
-    pub(in crate::harness::schedule) interrupt: Arc<AtomicBool>,
-    listening: AtomicUsize,
 }
 
 impl FakeHost {
@@ -44,7 +39,6 @@ impl FakeHost {
         Arc::new(Self {
             dir: tempfile::tempdir().expect("tempdir"),
             clock: AtomicU64::new(1_000_000),
-            throttle_config: Mutex::new(None),
             owner: Mutex::new(Owner {
                 pid: 1,
                 start: None,
@@ -61,14 +55,11 @@ impl FakeHost {
             workflows: Mutex::new(Vec::new()),
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
-            on_lock: Mutex::new(None),
             on_check: Mutex::new(None),
             check_answer: Mutex::new(Ok((Some(0), false))),
             checks: Mutex::new(Vec::new()),
             check_commands: Mutex::new(Vec::new()),
             check_timeouts: Mutex::new(Vec::new()),
-            interrupt: Arc::new(AtomicBool::new(false)),
-            listening: AtomicUsize::new(0),
         })
     }
 
@@ -83,14 +74,6 @@ impl FakeHost {
         hook: impl FnMut(&FakeHost) + Send + 'static,
     ) {
         *self.on_sleep.lock().unwrap() = Some(Box::new(hook));
-    }
-
-    /// Run `hook` each time the queue lock is about to be taken.
-    pub(in crate::harness::schedule) fn on_lock(
-        &self,
-        hook: impl FnMut(&FakeHost) + Send + 'static,
-    ) {
-        *self.on_lock.lock().unwrap() = Some(Box::new(hook));
     }
 
     /// Milliseconds since the fake clock started.
@@ -120,6 +103,17 @@ impl FakeHost {
         self.owner.lock().unwrap().pid = pid;
     }
 
+    /// Move the clock and run the sleep hook, as time passing between fires.
+    pub(in crate::harness::schedule) fn sleep(&self, duration: Duration) {
+        self.clock
+            .fetch_add(duration_ms(duration), Ordering::SeqCst);
+        let hook = self.on_sleep.lock().unwrap().take();
+        if let Some(mut hook) = hook {
+            hook(self);
+            self.on_sleep.lock().unwrap().get_or_insert(hook);
+        }
+    }
+
     fn kill(&self, pid: u32) {
         self.dead.lock().unwrap().push(pid);
     }
@@ -137,10 +131,6 @@ impl FakeHost {
 }
 
 impl Host for FakeHost {
-    fn throttle_config(&self) -> Option<ThrottleConfig> {
-        self.throttle_config.lock().unwrap().clone()
-    }
-
     fn check_cache(&self) -> PathBuf {
         self.dir.path().join("checks.json")
     }
@@ -182,27 +172,11 @@ impl Host for FakeHost {
     fn now_ms(&self) -> u64 {
         self.clock.load(Ordering::SeqCst)
     }
-
-    fn sleep(&self, duration: Duration) {
-        self.clock
-            .fetch_add(duration_ms(duration), Ordering::SeqCst);
-        let hook = self.on_sleep.lock().unwrap().take();
-        if let Some(mut hook) = hook {
-            hook(self);
-            self.on_sleep.lock().unwrap().get_or_insert(hook);
-        }
-    }
-
     fn queue_dir(&self) -> PathBuf {
         self.dir.path().join("queue")
     }
 
     fn queue_lock(&self) -> PathBuf {
-        let hook = self.on_lock.lock().unwrap().take();
-        if let Some(mut hook) = hook {
-            hook(self);
-            self.on_lock.lock().unwrap().get_or_insert(hook);
-        }
         self.dir.path().join("queue.lock")
     }
 
@@ -212,11 +186,6 @@ impl Host for FakeHost {
 
     fn owner_is_live(&self, owner: &Owner) -> bool {
         !self.dead.lock().unwrap().contains(&owner.pid)
-    }
-
-    fn interrupts(&self) -> io::Result<Interrupts> {
-        self.listening.fetch_add(1, Ordering::SeqCst);
-        Ok(Interrupts::raised_by(Arc::clone(&self.interrupt)))
     }
 
     fn pressure(&self, _resource: Resource) -> Result<Pressure, String> {
@@ -338,9 +307,9 @@ fn launched(reference: &str) -> AgentState {
     }
 }
 
-fn admitted(admission: Admission) -> (Turn, Option<Duration>) {
-    match admission {
-        Admission::Turn { turn, waited } => (turn, waited),
+fn admitted(attempt: Attempt) -> (Turn, Option<Duration>) {
+    match attempt {
+        Attempt::Turn(turn) => (turn, None),
         other => panic!("expected a turn, got {other:?}"),
     }
 }
@@ -362,12 +331,12 @@ pub(crate) fn assert_committed_launch_counts_once(launch: impl FnOnce(Turn) -> V
     );
 }
 
-fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Admission {
+fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Attempt {
     let run = Run {
         gives_up_ms: run.gives_up_ms.or(Some(fake.now_ms() + 1_800_000)),
         ..run.clone()
     };
-    admit(&fake.host(), config, &run, None).expect("admit")
+    try_admit_in(&fake.host(), config, &run).expect("admit")
 }
 
 /// One pass for a ticket that is not this thread's, as its owner would run it.
@@ -381,7 +350,9 @@ fn step(fake: &FakeHost, config: &ThrottleConfig, run: &Run, ticket: &Path) -> O
 fn enqueue_as(fake: &FakeHost, pid: u32, run: &Run) -> PathBuf {
     fake.become_owner(pid);
     fake.clock.fetch_add(1, Ordering::SeqCst);
-    enqueue(fake, run, fake.now_ms()).expect("enqueue")
+    let path = paths::loop_throttle_ticket_in(&fake.queue_dir(), fake.now_ms());
+    write_ticket(&path, &Ticket::new(fake, run, fake.now_ms())).expect("enqueue");
+    path
 }
 
 #[test]
@@ -390,7 +361,7 @@ fn nothing_configured_writes_no_ticket() {
     let mut candidate = run("nightly");
     candidate.machine_gated = false;
     let open = admit_quiet(&fake, &config(""), &candidate);
-    assert!(matches!(open, Admission::Open), "{open:?}");
+    assert!(matches!(open, Attempt::Open), "{open:?}");
     assert_eq!(fake.tickets(), 0);
 }
 
@@ -488,7 +459,7 @@ fn off_starts_reserve_the_last_automation_slot_under_the_queue_lock() {
 }
 
 #[test]
-fn oversized_groups_refuse_both_blocking_and_one_shot_machine_admission() {
+fn oversized_groups_refuse_machine_admission() {
     for key in ["max-parallel-agents", "max-parallel-automation"] {
         for machine_gated in [true, false] {
             let fake = FakeHost::new();
@@ -503,9 +474,6 @@ fn oversized_groups_refuse_both_blocking_and_one_shot_machine_admission() {
             let one_shot = try_admit_in(&fake.host(), &configured, &candidate);
             assert!(one_shot.is_err(), "{key}: {one_shot:?}");
             assert_eq!(one_shot.unwrap_err().to_string(), expected);
-            let blocking = admit(&fake.host(), &configured, &candidate, None);
-            assert!(blocking.is_err(), "{key}: {blocking:?}");
-            assert_eq!(blocking.unwrap_err().to_string(), expected);
             assert_eq!(fake.elapsed_ms(), 0, "an impossible start never waits");
             assert_eq!(fake.tickets(), 0);
         }
@@ -566,16 +534,6 @@ fn machine_stagger_is_stamped_only_by_gated_reports_and_releases_at_the_exact_ga
         try_admit_in(&fake.host(), &configured, &run("next")).unwrap(),
         Attempt::Turn(_)
     ));
-    drop(admitted(admit_quiet(
-        &fake,
-        &config("stagger='32s'"),
-        &run("blocking"),
-    )));
-    assert_eq!(
-        fake.elapsed_ms(),
-        32_000,
-        "stagger is not sampled on the resource cadence"
-    );
 }
 
 #[test]
@@ -692,7 +650,7 @@ fn capacity_check_holds_an_admitted_turn_without_holding_the_queue_lock() {
 #[test]
 fn capacity_checks_refresh_open_counts_after_running_off_lock() {
     let configured = config("check='capacity'\nmax-parallel-agents=1");
-    for mode in ["look", "try", "blocking"] {
+    {
         let fake = FakeHost::new();
         *fake.on_check.lock().unwrap() = Some(Box::new(|fake| {
             fake.set_agents(&workspace(), vec![agent("new", AgentStatus::Idle)]);
@@ -700,26 +658,11 @@ fn capacity_checks_refresh_open_counts_after_running_off_lock() {
         let mut candidate = run("nightly");
         candidate.gives_up_ms = Some(fake.now_ms() + 1_000);
         let expected = "1 of 1 agents open (@claude)";
-        match mode {
-            "look" => {
-                let held = look_in(fake.as_ref(), &configured, &candidate).unwrap();
-                assert_eq!(held.map(|hold| hold.text).as_deref(), Some(expected));
-            }
-            "try" => {
-                let attempt = try_admit_in(&fake.host(), &configured, &candidate).unwrap();
-                assert!(
-                    matches!(&attempt, Attempt::Held(hold) if hold.text == expected),
-                    "{attempt:?}"
-                );
-            }
-            _ => {
-                let admission = admit(&fake.host(), &configured, &candidate, None).unwrap();
-                assert!(
-                    matches!(&admission, Admission::Skipped { reason } if reason.contains(expected)),
-                    "{admission:?}"
-                );
-            }
-        }
+        let attempt = try_admit_in(&fake.host(), &configured, &candidate).unwrap();
+        assert!(
+            matches!(&attempt, Attempt::Held(hold) if hold.text == expected),
+            "{attempt:?}"
+        );
         assert_eq!(fake.tickets(), 0);
     }
 }
@@ -782,47 +725,6 @@ fn capacity_answers_and_cache_distinguish_full_errors_and_success() {
 }
 
 #[test]
-fn capacity_look_never_writes_a_ticket_and_reuses_only_holds() {
-    let fake = FakeHost::new();
-    let configured = config("check = 'capacity'");
-    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
-    let full = look_in(fake.as_ref(), &configured, &run("first")).unwrap();
-    assert!(
-        matches!(
-            full,
-            Some(Hold {
-                kind: HoldKind::Capacity,
-                ..
-            })
-        ),
-        "{full:?}"
-    );
-    assert_eq!(fake.tickets(), 0);
-    *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
-    assert!(
-        look_in(fake.as_ref(), &configured, &run("first"))
-            .unwrap()
-            .is_some()
-    );
-    fake.clock.fetch_add(60_000, Ordering::SeqCst);
-    assert!(
-        look_in(fake.as_ref(), &configured, &run("first"))
-            .unwrap()
-            .is_none()
-    );
-    assert!(matches!(
-        try_admit_in(&fake.host(), &configured, &run("first")).unwrap(),
-        Attempt::Turn(_)
-    ));
-    assert_eq!(
-        fake.checks.lock().unwrap().len(),
-        3,
-        "capacity is checked again at admission"
-    );
-    assert_eq!(fake.tickets(), 0);
-}
-
-#[test]
 fn capacity_holds_are_cached_per_kind_and_account_and_diagnose_the_latest_error() {
     let fake = FakeHost::new();
     let configured = config("check = 'capacity'");
@@ -881,47 +783,6 @@ fn capacity_waiters_step_aside_only_for_disjoint_kinds_and_never_a_held_turn() {
         })
         .collect();
     assert_eq!(results, [(true, true, true); 2]);
-}
-
-#[test]
-fn capacity_queued_same_kind_waiters_do_not_block_other_kinds() {
-    let fake = FakeHost::new();
-    let configured = config("check = 'capacity'");
-    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
-    let weak = Arc::downgrade(&fake);
-    fake.on_sleep(move |fake| {
-        let host = weak.upgrade().unwrap().host();
-        let second = run("second");
-        let second_path = enqueue_as(fake, 2, &second);
-        let hold = pass(
-            fake,
-            &configured,
-            &second,
-            Some(&second_path),
-            fake.now_ms(),
-            &mut None,
-        )
-        .unwrap()
-        .hold();
-        assert!(hold.is_some(), "the second Claude start must wait");
-        let mut codex = run("codex");
-        codex.groups[0].kind = AgentKind::new_unchecked("codex");
-        let other = try_admit_in(&host, &config(""), &codex).unwrap();
-        let third = try_admit_in(&host, &config(""), &run("third")).unwrap();
-        assert!(matches!(other, Attempt::Turn(_)), "{other:?}");
-        assert!(matches!(third, Attempt::Held(_)), "{third:?}");
-        fake.interrupt.store(true, Ordering::SeqCst);
-        remove_ticket(&second_path);
-    });
-    let result = admit(
-        &fake.host(),
-        &config("check = 'capacity'"),
-        &run("first"),
-        None,
-    )
-    .unwrap();
-    assert!(matches!(result, Admission::Interrupted), "{result:?}");
-    assert_eq!(fake.tickets(), 0);
 }
 
 #[test]
@@ -1053,8 +914,6 @@ fn disjoint_starts_cannot_pass_a_propagated_needs_fix_follower() {
         let Attempt::Held(hold) = attempt else {
             panic!("a propagated mixed hold must block disjoint starts: {attempt:?}");
         };
-        let looked = look_in(fake.as_ref(), &config(""), &codex).unwrap();
-        assert_eq!(looked.as_ref(), Some(&hold));
         assert_eq!(hold.kind, kind);
         assert_eq!(hold.text, "the head's blocker");
         assert_eq!(
@@ -1071,14 +930,14 @@ fn failing_checks_lead_mixed_capacity_reasons_and_the_doctor_cache() {
     let configured = config("check='capacity'");
     let mut candidate = run("first");
     *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
-    check_groups(fake.as_ref(), &configured, &candidate, false).unwrap();
+    check_groups(fake.as_ref(), &configured, &candidate).unwrap();
     candidate.groups.push(StartGroup {
         kind: AgentKind::new_unchecked("codex"),
         account: Some("work".parse().unwrap()),
         agents: 1,
     });
     *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
-    let held = check_groups(fake.as_ref(), &configured, &candidate, false)
+    let held = check_groups(fake.as_ref(), &configured, &candidate)
         .unwrap()
         .unwrap();
     assert_eq!(held.kind, HoldKind::CheckFailed);
@@ -1107,37 +966,10 @@ fn capacity_check_stops_at_the_give_up_instant_without_caching_an_error() {
         gives_up_ms: Some(fake.now_ms() + 3_000),
         ..run("first")
     };
-    let result = admit(&fake.host(), &config("check = 'capacity'"), &run, None).unwrap();
-    assert!(matches!(result, Admission::Skipped { .. }), "{result:?}");
-    assert_eq!(fake.elapsed_ms(), 3_000);
-    assert!(read_verdicts(fake.as_ref()).is_empty());
-    assert_eq!(fake.tickets(), 0);
-    cut_at_the_bound(&fake);
-    let once = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run.clone()
-    };
-    let attempt = try_admit_in(&fake.host(), &config("check = 'capacity'"), &once).unwrap();
+    let attempt = try_admit_in(&fake.host(), &config("check = 'capacity'"), &run).unwrap();
     assert!(matches!(attempt, Attempt::Held(_)), "{attempt:?}");
     assert!(read_verdicts(fake.as_ref()).is_empty());
     assert_eq!(fake.tickets(), 0);
-}
-
-#[test]
-fn capacity_expired_admission_without_a_check_has_a_neutral_reason() {
-    let fake = FakeHost::new();
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms()),
-        ..run("first")
-    };
-    let result = admit(&fake.host(), &config(""), &run, None).unwrap();
-    let Admission::Skipped { reason } = result else {
-        panic!("expected a skip, got {result:?}");
-    };
-    assert_eq!(
-        reason,
-        "gave up waiting for capacity after 0s; wait deadline reached"
-    );
 }
 
 #[test]
@@ -1217,236 +1049,6 @@ fn capacity_check_extends_the_ceiling_but_provider_reports_still_release_it() {
 }
 
 #[test]
-fn capacity_blocking_admission_uses_the_callers_instant_or_waits_forever() {
-    let results: Vec<_> = [Some(3_000), None]
-        .into_iter()
-        .map(|bound| {
-            let fake = FakeHost::new();
-            fake.set_pressure(90.0, 90.0);
-            fake.on_sleep(|fake| {
-                if fake.elapsed_ms() >= 5_000 {
-                    fake.set_pressure(0.0, 0.0);
-                }
-            });
-            let run = Run {
-                gives_up_ms: bound.map(|ms| fake.now_ms() + ms),
-                ..run("first")
-            };
-            let admission = admit(&fake.host(), &config("cpu-pressure = 25"), &run, None).unwrap();
-            (
-                matches!(admission, Admission::Skipped { .. }),
-                fake.elapsed_ms(),
-            )
-        })
-        .collect();
-    assert_eq!(results, [(true, 3_000), (false, 5_000)]);
-}
-
-#[test]
-fn blocking_wait_reloads_the_disk_floor_before_reusing_a_hold() {
-    let fake = FakeHost::new();
-    *fake.disk.lock().unwrap() = 12_000_000_000;
-    fake.on_sleep(|fake| {
-        *fake.throttle_config.lock().unwrap() = Some(config("min-disk = '10GB'"));
-    });
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run("nightly")
-    };
-    let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
-    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
-    let (_turn, waited) = admitted(result);
-    assert_eq!(waited, Some(Duration::from_secs(1)));
-    assert_eq!(fake.disk_reads().len(), 2);
-}
-
-#[test]
-fn blocking_wait_reloads_a_raised_cap_before_reusing_a_hold() {
-    let fake = FakeHost::new();
-    fake.set_agents(&workspace(), vec![agent("otter", AgentStatus::Running)]);
-    fake.on_sleep(|fake| {
-        *fake.throttle_config.lock().unwrap() = Some(config("max-parallel-agents = 2"));
-    });
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run("nightly")
-    };
-    let result = admit(&fake.host(), &config("max-parallel-agents = 1"), &run, None).unwrap();
-    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
-    let (_turn, waited) = admitted(result);
-    assert_eq!(waited, Some(Duration::from_secs(1)));
-    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 2);
-}
-
-#[test]
-fn blocking_wait_reloads_a_repaired_check_before_reusing_its_verdict() {
-    let fake = FakeHost::new();
-    *fake.check_answer.lock().unwrap() = Ok((Some(2), false));
-    fake.on_sleep(|fake| {
-        *fake.throttle_config.lock().unwrap() = Some(config("check = 'repaired'"));
-        *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
-    });
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run("nightly")
-    };
-    let result = admit(&fake.host(), &config("check = 'broken'"), &run, None).unwrap();
-    assert!(matches!(result, Admission::Turn { .. }), "{result:?}");
-    let (_turn, waited) = admitted(result);
-    assert_eq!(waited, Some(Duration::from_secs(1)));
-    assert_eq!(
-        *fake.check_commands.lock().unwrap(),
-        [Some("broken".into()), Some("repaired".into())]
-    );
-}
-
-#[test]
-fn blocking_wait_revalidates_new_unreadable_limits_with_the_key_and_fix() {
-    for (added, key) in [
-        ("io-pressure = 40", "io-pressure"),
-        ("min-memory = '8GB'", "min-memory"),
-    ] {
-        let fake = FakeHost::new();
-        *fake.disk.lock().unwrap() = 12_000_000_000;
-        *fake.pressure.lock().unwrap() = Err("/proc/pressure/io: missing".into());
-        *fake.memory.lock().unwrap() = Err("/proc/meminfo: missing".into());
-        fake.on_sleep(move |fake| {
-            *fake.throttle_config.lock().unwrap() =
-                Some(config(&format!("min-disk = '20GB'\n{added}")));
-        });
-        let run = Run {
-            gives_up_ms: Some(fake.now_ms() + 3_000),
-            ..run("nightly")
-        };
-        let error = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None)
-            .expect_err("a newly configured unreadable limit refuses the held start");
-        let message = error.to_string();
-        assert!(matches!(error, ThrottleError::Unreadable(_)), "{message}");
-        assert!(message.contains(&format!("`throttle.{key}`")), "{message}");
-        assert!(
-            message.contains("remove the key from config.toml"),
-            "{message}"
-        );
-        assert_eq!(fake.elapsed_ms(), 1_000);
-        assert_eq!(fake.tickets(), 0);
-    }
-}
-
-#[test]
-fn blocking_wait_keeps_the_last_good_config_and_its_original_deadline() {
-    let fake = FakeHost::new();
-    *fake.disk.lock().unwrap() = 12_000_000_000;
-    fake.on_sleep(|fake| {
-        *fake.throttle_config.lock().unwrap() = if fake.elapsed_ms() == 1_000 {
-            Some(config("min-disk = '15GB'"))
-        } else {
-            None
-        };
-    });
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run("nightly")
-    };
-    let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
-    let Admission::Skipped { reason } = result else {
-        panic!("expected a skip, got {result:?}");
-    };
-    assert!(
-        reason.ends_with("free disk 12 GB < 15 GB at /repo"),
-        "{reason}"
-    );
-    assert_eq!(fake.elapsed_ms(), 3_000);
-    assert_eq!(fake.tickets(), 0);
-}
-
-#[test]
-fn blocking_wait_releases_when_limits_are_removed_but_not_after_its_deadline() {
-    for (bound, opens) in [(3_000, true), (1_000, false)] {
-        let fake = FakeHost::new();
-        *fake.disk.lock().unwrap() = 12_000_000_000;
-        fake.on_sleep(|fake| {
-            *fake.throttle_config.lock().unwrap() = Some(config(""));
-        });
-        let run = Run {
-            gives_up_ms: Some(fake.now_ms() + bound),
-            ..run("nightly")
-        };
-        let result = admit(&fake.host(), &config("min-disk = '20GB'"), &run, None).unwrap();
-        assert_eq!(
-            matches!(result, Admission::Turn { .. }),
-            opens,
-            "{result:?}"
-        );
-        assert_eq!(fake.elapsed_ms(), 1_000);
-        drop(result);
-        assert_eq!(fake.tickets(), 0);
-    }
-}
-
-#[test]
-fn capacity_blocking_checks_retry_without_holding_the_turn_between_verdicts() {
-    let fake = FakeHost::new();
-    *fake.check_answer.lock().unwrap() = Ok((Some(75), false));
-    fake.on_sleep(|fake| {
-        let paths = ticket_paths(&fake.queue_dir()).unwrap();
-        let ticket = read_ticket(&paths[0]).unwrap().unwrap();
-        assert!(matches!(
-            ticket.state,
-            TicketState::Waiting {
-                reason: Some(Hold {
-                    kind: HoldKind::Capacity,
-                    ..
-                })
-            }
-        ));
-        if fake.elapsed_ms() >= 60_000 {
-            *fake.check_answer.lock().unwrap() = Ok((Some(0), false));
-        }
-    });
-    let admission = admit(
-        &fake.host(),
-        &config("check = 'capacity'"),
-        &run("first"),
-        None,
-    )
-    .unwrap();
-    let (_turn, waited) = admitted(admission);
-    assert_eq!(waited, Some(Duration::from_secs(60)));
-    assert_eq!(fake.checked_groups().len(), 2);
-}
-
-#[test]
-fn capacity_a_slow_check_cannot_admit_after_the_callers_give_up_instant() {
-    let results: Vec<_> = [(0, 3_000), (75, 3_000), (0, 4_000), (75, 4_000)]
-        .into_iter()
-        .map(|(code, elapsed)| {
-            let fake = FakeHost::new();
-            *fake.check_answer.lock().unwrap() = Ok((Some(code), false));
-            *fake.on_check.lock().unwrap() = Some(Box::new(move |fake| {
-                fake.clock.fetch_add(elapsed, Ordering::SeqCst);
-            }));
-            let run = Run {
-                gives_up_ms: Some(fake.now_ms() + 3_000),
-                ..run("first")
-            };
-            let admission = admit(&fake.host(), &config("check = 'capacity'"), &run, None).unwrap();
-            let Admission::Skipped { reason } = &admission else {
-                panic!("expected a skip, got {admission:?}");
-            };
-            assert!(
-                reason.contains(&format!("{}s", elapsed / 1_000)),
-                "{reason}"
-            );
-            (
-                matches!(admission, Admission::Skipped { .. }),
-                fake.tickets(),
-            )
-        })
-        .collect();
-    assert_eq!(results, [(true, 0); 4]);
-}
-
-#[test]
 fn capacity_only_denied_kinds_hold_and_slow_checks_do_not_extend_cache_freshness() {
     let fake = FakeHost::new();
     let mut run = run("first");
@@ -1487,44 +1089,17 @@ fn capacity_only_denied_kinds_hold_and_slow_checks_do_not_extend_cache_freshness
 #[test]
 fn a_pressure_limit_holds_until_both_averages_are_under_it() {
     let fake = FakeHost::new();
-    fake.set_pressure(10.0, 41.0);
-    fake.on_sleep(|fake| match fake.elapsed_ms() {
-        // The short average alone over the limit still holds.
-        6_000 => fake.set_pressure(30.0, 12.0),
-        12_000 => fake.set_pressure(24.0, 12.0),
-        _ => {}
-    });
-    let admission = admit(
-        &fake.host(),
-        &config("cpu-pressure = 25\n"),
-        &run("nightly"),
-        None,
-    )
-    .expect("admit");
-    let (_turn, waited) = admitted(admission);
-    // Sampled at 0s, 5s, 10s, 15s: the reading cleared at 12s admits at 15s.
-    assert_eq!(fake.elapsed_ms(), 15_000);
-    assert_eq!(waited, Some(Duration::from_secs(15)));
-}
-
-#[test]
-fn a_run_held_past_its_give_up_instant_is_skipped_with_its_last_reason() {
-    let fake = FakeHost::new();
-    fake.set_pressure(90.0, 90.0);
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 3_000),
-        ..run("nightly")
-    };
-    let skipped = admit(&fake.host(), &config("cpu-pressure = 25"), &run, None).unwrap();
-    let Admission::Skipped { reason } = skipped else {
-        panic!("expected a skip, got {skipped:?}");
-    };
-    assert_eq!(
-        reason,
-        "gave up waiting for capacity after 3s; cpu pressure 90% ≥ 25%"
-    );
-    assert_eq!(fake.elapsed_ms(), 3_000);
-    assert_eq!(fake.tickets(), 0, "a skipped run leaves the queue");
+    let limited = config("cpu-pressure = 25\n");
+    // The long average alone, then the short average alone, over the limit still holds.
+    for (avg10, avg60, admits) in [(10.0, 41.0, false), (30.0, 12.0, false), (24.0, 12.0, true)] {
+        fake.set_pressure(avg10, avg60);
+        let attempt = try_admit_in(&fake.host(), &limited, &run("nightly")).unwrap();
+        assert_eq!(
+            matches!(attempt, Attempt::Turn(_)),
+            admits,
+            "{avg10}/{avg60}: {attempt:?}"
+        );
+    }
 }
 
 #[test]
@@ -1532,8 +1107,7 @@ fn the_next_start_waits_for_the_report_then_the_provider_or_the_ceiling() {
     for (observed_at, admitted_at) in [(Some(5_000), 5_000), (None, 13_000)] {
         let fake = FakeHost::new();
         let configured = config("");
-        let (first, waited) = admitted(admit_quiet(&fake, &configured, &run("first")));
-        assert_eq!(waited, None, "an empty queue admits at once");
+        let (first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
 
         fake.set_agents(&workspace(), Vec::new());
         fake.on_sleep(move |fake| {
@@ -1552,14 +1126,18 @@ fn the_next_start_waits_for_the_report_then_the_provider_or_the_ceiling() {
             }
         });
         fake.become_owner(2);
-        let admission = admit(&fake.host(), &configured, &run("second"), None).expect("admit");
-        let (_second, waited) = admitted(admission);
+        let _second = loop {
+            match try_admit_in(&fake.host(), &configured, &run("second")).unwrap() {
+                Attempt::Turn(turn) => break turn,
+                Attempt::Held(_) => fake.sleep(Duration::from_secs(1)),
+                Attempt::Open => panic!("the queue gates every machine start"),
+            }
+        };
         assert_eq!(
             fake.elapsed_ms(),
             admitted_at,
             "observed at {observed_at:?}"
         );
-        assert_eq!(waited, Some(Duration::from_millis(admitted_at)));
         assert_eq!(fake.tickets(), 1, "the released turn's ticket is gone");
     }
 }
@@ -1595,22 +1173,22 @@ fn cap_only_off_starts_count_the_committed_row_at_the_report() {
     let capped = config("max-parallel-agents = 1\n");
     fake.set_agents(&workspace(), Vec::new());
     let (first, _) = admitted(admit_quiet(&fake, &capped, &off_run("first")));
-    fake.on_sleep(move |fake| {
-        if fake.elapsed_ms() == 2_000 {
+    fake.become_owner(2);
+    // Before the report the admitted start reserves a slot; afterward its row does.
+    for (report, expected) in [
+        (false, "0 of 1 agents open, 1 more starting"),
+        (true, "1 of 1 agents open (@claude)"),
+    ] {
+        if report {
             fake.set_agents(&workspace(), vec![launched("launch_a")]);
             first.report_launch(&workspace(), &AgentSessionId::from("launch_a"));
         }
-    });
-    fake.become_owner(2);
-    let run = Run {
-        gives_up_ms: Some(fake.now_ms() + 20_000),
-        ..off_run("second")
-    };
-    let skipped = admit(&fake.host(), &capped, &run, None).expect("admit");
-    // Before the report the admitted start reserves a slot; afterward its row does.
-    assert!(
-        matches!(skipped, Admission::Skipped { reason } if reason.ends_with("1 of 1 agents open (@claude)"))
-    );
+        let held = try_admit_in(&fake.host(), &capped, &off_run("second")).unwrap();
+        assert!(
+            matches!(&held, Attempt::Held(hold) if hold.text == expected),
+            "reported {report}: {held:?}"
+        );
+    }
 }
 
 #[test]
@@ -1689,17 +1267,10 @@ fn the_machine_cap_counts_open_agents_and_samples_every_five_seconds() {
         .kind,
         HoldKind::AutomationCap,
     );
-    fake.on_sleep(move |fake| {
-        if fake.elapsed_ms() == 7_000 {
-            fake.set_agents(&other, Vec::new());
-        }
-    });
-    let admission = admit(&fake.host(), &capped, &run("nightly"), None).expect("admit");
-    admitted(admission);
-    assert_eq!(fake.elapsed_ms(), 10_000, "admitted on the sample after 7s");
-    // The explicit machine/automation samples plus three admission samples (0s, 5s, 10s),
-    // two workspaces each.
-    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 10);
+    fake.set_agents(&other, Vec::new());
+    admitted(try_admit_in(&fake.host(), &capped, &run("nightly")).unwrap());
+    // The explicit machine/automation samples plus one admission sample, two workspaces each.
+    assert_eq!(fake.agent_reads.load(Ordering::SeqCst), 6);
 }
 
 #[test]
@@ -1823,13 +1394,8 @@ fn a_configured_limit_this_host_cannot_read_fails_with_the_key_and_the_fix() {
     assert!(problem.contains("`throttle.io-pressure`"), "{problem}");
     assert!(problem.contains("/proc/pressure/io"), "{problem}");
     assert!(problem.contains("psi=1"), "{problem}");
-    let error = admit(
-        &fake.host(),
-        &config("io-pressure = 40\n"),
-        &run("nightly"),
-        None,
-    )
-    .expect_err("a gated fire errors");
+    let error = try_admit_in(&fake.host(), &config("io-pressure = 40\n"), &run("nightly"))
+        .expect_err("a gated fire errors");
     assert!(error.to_string().contains("`throttle.io-pressure`"));
     assert_eq!(fake.tickets(), 0);
 
@@ -1942,38 +1508,6 @@ fn memory_and_disk_floors_hold_below_the_floor_and_show_beside_the_reading() {
 }
 
 #[test]
-fn a_held_run_is_skipped_at_its_give_up_instant_even_when_its_hold_clears_then() {
-    // The holder's turn passes on exactly at the deadline, or a slow poll
-    // first wakes past it: both are a skip, never a late start.
-    for (clears_at, delay_ms, waited) in [(3_000, 0, "3s"), (1_000, 5_000, "6s")] {
-        let fake = FakeHost::new();
-        let paced = config("");
-        let mut holder = Some(admitted(admit_quiet(&fake, &paced, &run("first"))).0);
-        fake.on_sleep(move |fake| {
-            if fake.elapsed_ms() == clears_at {
-                fake.clock.fetch_add(delay_ms, Ordering::SeqCst);
-                holder.take();
-            }
-        });
-        fake.become_owner(2);
-        let run = Run {
-            gives_up_ms: Some(fake.now_ms() + 3_000),
-            ..run("second")
-        };
-        let skipped = admit(&fake.host(), &paced, &run, None).unwrap();
-        let Admission::Skipped { reason } = skipped else {
-            panic!("cleared at {clears_at}ms: expected a skip, got {skipped:?}");
-        };
-        assert_eq!(
-            reason,
-            format!("gave up waiting for capacity after {waited}; queued: 1 start ahead")
-        );
-        assert_eq!(fake.elapsed_ms(), clears_at + delay_ms);
-        assert_eq!(fake.tickets(), 0);
-    }
-}
-
-#[test]
 fn a_compacting_agent_counts_toward_both_caps_throughout_its_window() {
     for capped in ["max-parallel-agents = 1\n", "max-parallel-automation = 1\n"] {
         let fake = FakeHost::new();
@@ -2025,108 +1559,8 @@ fn an_existing_ticket_that_cannot_be_read_fails_admission() {
     std::fs::remove_file(&unreadable).unwrap();
     std::fs::create_dir(&unreadable).unwrap();
     fake.become_owner(2);
-    let error = admit(&fake.host(), &config(""), &run("second"), None)
+    let error = try_admit_in(&fake.host(), &config(""), &run("second"))
         .expect_err("an unreadable ticket may be a held turn");
     assert!(matches!(error, ThrottleError::Io { path, .. } if path == unreadable));
     assert_eq!(fake.tickets(), 1, "only the unreadable ticket is left");
-}
-
-#[test]
-fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
-    let fake = FakeHost::new();
-    let configured = config("");
-    let (_first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
-    assert_eq!(
-        fake.listening.load(Ordering::SeqCst),
-        0,
-        "a run never held never listens"
-    );
-    let raised = Arc::clone(&fake.interrupt);
-    fake.on_sleep(move |fake| {
-        if fake.elapsed_ms() == 2_000 {
-            raised.store(true, Ordering::SeqCst);
-        }
-    });
-    fake.become_owner(2);
-    let interrupted = admit(&fake.host(), &configured, &run("second"), None).expect("admit");
-    assert!(
-        matches!(interrupted, Admission::Interrupted),
-        "{interrupted:?}"
-    );
-    assert_eq!(fake.elapsed_ms(), 2_000);
-    assert_eq!(fake.listening.load(Ordering::SeqCst), 1);
-    assert_eq!(fake.tickets(), 1, "only the first run's turn is left");
-}
-
-/// A run whose caller already listens is the one held behind `first`.
-fn admit_listening(fake: &Arc<FakeHost>, raised: &Arc<AtomicBool>) -> Admission {
-    let configured = config("");
-    let (first, _) = admitted(admit_quiet(fake, &configured, &run("first")));
-    fake.become_owner(2);
-    let admission = admit(
-        &fake.host(),
-        &configured,
-        &run("second"),
-        Some(Interrupts::raised_by(Arc::clone(raised))),
-    )
-    .expect("admit");
-    drop(first);
-    admission
-}
-
-#[test]
-fn ctrl_c_heard_before_admission_ends_the_run_on_its_first_pass() {
-    let fake = FakeHost::new();
-    let interrupted = admit_listening(&fake, &Arc::new(AtomicBool::new(true)));
-    assert!(
-        matches!(interrupted, Admission::Interrupted),
-        "{interrupted:?}"
-    );
-    assert_eq!(fake.elapsed_ms(), 0, "no recheck was slept");
-    assert_eq!(fake.listening.load(Ordering::SeqCst), 0);
-    assert_eq!(fake.tickets(), 0);
-}
-
-#[test]
-fn a_held_run_keeps_the_listener_it_was_given() {
-    let fake = FakeHost::new();
-    let raised = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&raised);
-    fake.on_sleep(move |fake| {
-        if fake.elapsed_ms() == 2_000 {
-            flag.store(true, Ordering::SeqCst);
-        }
-    });
-    let interrupted = admit_listening(&fake, &raised);
-    assert!(
-        matches!(interrupted, Admission::Interrupted),
-        "{interrupted:?}"
-    );
-    assert_eq!(fake.elapsed_ms(), 2_000);
-    assert_eq!(
-        fake.listening.load(Ordering::SeqCst),
-        0,
-        "a run given a listener registers no second one"
-    );
-}
-
-#[test]
-fn ctrl_c_raised_while_taking_the_queue_lock_wins_over_an_admission() {
-    let fake = FakeHost::new();
-    let pressure = config("cpu-pressure = 50\n");
-    fake.set_pressure(80.0, 80.0);
-    fake.on_sleep(|fake| fake.set_pressure(0.0, 0.0));
-    // The cleared reading is sampled at 5s, in the pass this lock opens.
-    let raised = Arc::clone(&fake.interrupt);
-    fake.on_lock(move |fake| {
-        if fake.elapsed_ms() == 5_000 {
-            raised.store(true, Ordering::SeqCst);
-        }
-    });
-    let interrupted = admit_quiet(&fake, &pressure, &run("held"));
-    assert!(
-        matches!(interrupted, Admission::Interrupted),
-        "{interrupted:?}"
-    );
-    assert_eq!(fake.tickets(), 0);
 }

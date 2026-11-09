@@ -452,16 +452,11 @@ fn limits_without_machine_gates_do_not_serialize_unrelated_workflows() {
     let ticket = read_ticket(&first_turn.0.ticket).unwrap().unwrap();
     let mut other = first.clone();
     other.limits.as_mut().unwrap().workflow = "other".into();
-    let inspected = look_in(fake.as_ref(), &configured, &other).unwrap();
     let admitted = try_admit_in(&fake.host(), &configured, &other).unwrap();
     assert_eq!(
-        (
-            ticket.machine_gated,
-            inspected.is_none(),
-            matches!(admitted, Attempt::Turn(_)),
-        ),
-        (false, true, true),
-        "inspection: {inspected:?}; admission: {admitted:?}"
+        (ticket.machine_gated, matches!(admitted, Attempt::Turn(_))),
+        (false, true),
+        "admission: {admitted:?}"
     );
 }
 

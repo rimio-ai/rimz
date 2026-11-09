@@ -199,6 +199,7 @@ mod tests {
             condition: None,
             message_id: None,
             run_id: None,
+            blocking_run: None,
             transcript_path: None,
             last_message: None,
             target: None,

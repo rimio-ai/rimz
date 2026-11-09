@@ -103,10 +103,11 @@ fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
         text.contains("condition not met (0 of 1); running anyway, task stays armed"),
         "{text}"
     );
-    assert!(text.contains("check passed"), "{text}");
-    let value: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "condition", "--json"])).unwrap();
-    assert_eq!(value["runs"].as_array().unwrap().len(), 1);
+    assert!(text.contains("launched"), "{text}");
+    assert_eq!(
+        wait_for_loop_report(&env, "condition").result,
+        LoopRunResult::Completed
+    );
     assert!(loop_ok(&env, &["loop", "list"]).contains("condition"));
 }
 
@@ -114,16 +115,10 @@ fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
 #[test]
 fn judge_refuses_below_version_floor_before_provider_spawn() {
     let (env, _) = codex_judge_version_fixture("codex-cli 0.162.0");
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].result, LoopRunResult::Errored);
-    let error = records[0].error.as_deref().expect("version refusal");
-    assert!(
-        error.contains("0.162.0") && error.contains("0.163.0"),
-        "{error}"
+    assert_eq!(
+        wait_for_loop_report(&env, "guard").result,
+        LoopRunResult::Failed
     );
-    assert!(error.ends_with("upgrade Codex"), "{error}");
-    assert!(loop_ok(&env, &["loop", "show", "guard"]).contains(error));
     assert_eq!(
         std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap(),
         "--version\n"
@@ -531,12 +526,12 @@ fn adding_instance_removes_only_same_root_machine() {
 fn judge_with_unreadable_version_still_reads_verdict() {
     let (env, output) = codex_judge_version_fixture("{}");
     assert!(output.status.success(), "{output:?}");
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].result, LoopRunResult::CheckSkipped);
-    let judge = &records[0].judge[0];
-    assert_eq!(judge.verdict, Some(false));
-    assert_eq!(judge.reason.as_deref(), Some("No actionable work."));
+    // A decline ends the run done without acting.
+    let report = wait_for_loop_report(&env, "guard");
+    assert_eq!(
+        (report.result, report.acted),
+        (LoopRunResult::Completed, Some(false))
+    );
     let calls = std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
     let calls: Vec<_> = calls.lines().collect();
     assert_eq!(calls.len(), 2, "one probe and one provider launch");
@@ -591,18 +586,18 @@ done
 
 #[cfg(unix)]
 #[test]
-fn resident_agent_decline_is_shown_counted_and_held_without_another_check() {
-    resident_agent_decline_is_shown(None);
+fn resident_agent_decline_is_counted_and_held_until_the_guard_changes() {
+    resident_agent_decline_holds(None);
 }
 
 #[cfg(unix)]
 #[test]
-fn resident_agent_decline_shows_recheck_in_json_and_fold() {
-    resident_agent_decline_is_shown(Some("6h"));
+fn resident_agent_decline_with_a_recheck_holds_in_its_run() {
+    resident_agent_decline_holds(Some("6h"));
 }
 
 #[cfg(unix)]
-fn resident_agent_decline_is_shown(recheck: Option<&str>) {
+fn resident_agent_decline_holds(recheck: Option<&str>) {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
     env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
@@ -671,119 +666,186 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     assert_eq!(
         records.len(),
         1,
-        "a holding decline must write no second history row"
+        "a holding decline must write no second history row: {records:?}"
     );
-    assert_eq!(records[0].result, LoopRunResult::CheckSkipped);
+    assert_eq!(records[0].result, LoopRunResult::Launched);
     assert_eq!(records[0].condition.as_ref().unwrap().since, Some(since));
-    let runtime = env.runtime_paths();
-    std::fs::create_dir_all(runtime.lane_path("loop-when.json").parent().unwrap()).unwrap();
-    std::fs::write(
-        runtime.lane_path("loop-when.json"),
-        json!({
-            serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap(): {
-                "since":since, "fired":true, "fingerprint":["team.stage=Done",null,env.project_root]
-            }
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let shown = loop_ok(&env, &["loop", "show", "guard", "--json"]);
-    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
-    assert_eq!(shown["worktrees"][0]["state"], "declined", "{shown}");
-    assert_eq!(shown["worktrees"][0]["reason"], "No actionable work.");
-    assert_eq!(shown["worktrees"][0]["profile"], "codex");
-    if recheck.is_some() {
-        let at: Timestamp = shown["worktrees"][0]["since"]
-            .as_str()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert_eq!(
-            shown["worktrees"][0]["recheck_at"],
-            (at + Duration::from_secs(6 * 3600)).to_string()
+    // A condition task's decline holds inside the run until its guard changes or the judge's
+    // recheck elapses (`a_condition_tasks_held_decline_leaves_once_the_judges_recheck_elapses`).
+    let id = records[0].run_id.as_deref().unwrap().parse().unwrap();
+    let paths = env.store().paths().workflow(&id);
+    let hold = "held-judge-1";
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while !rimz::store::workflow::load(&paths)
+        .is_ok_and(|run| run.state == rimz::store::workflow::RunState::Active && run.node == hold)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "{}",
+            loop_run_journal(&env, &env.project_root, &records[0])
         );
-    } else {
-        assert!(shown["worktrees"][0].get("recheck_at").is_none());
+        std::thread::sleep(Duration::from_millis(25));
     }
-    let text = loop_ok(&env, &["loop", "show", "guard"]);
-    assert!(
-        text.contains("declined") && text.contains("No actionable work."),
-        "{text}"
-    );
-    assert!(
-        text.contains(if recheck.is_some() {
-            "next recheck in"
-        } else {
-            "re-judged when the guard changes"
-        }),
-        "{text}"
-    );
     let stats = loop_ok(&env, &["stats", "--json"]);
     let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
     assert_eq!(stats["assists"]["judge_declines"], 1);
     assert!(loop_ok(&env, &["stats", "--assists"]).contains("No actionable work."));
-    let key = serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap();
-    let fire_path = runtime.lane_path("loop-fire.json");
+}
+#[cfg(unix)]
+#[test]
+fn a_judge_decline_without_a_recheck_holds_until_a_manual_fire_or_a_redefinition() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
+    env.record(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "hold",
+    );
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let agent_bin = env.home_root.join("check-bin");
+    let asked = env.home_root.join("judge-asked");
+    write_path_shim(
+        &agent_bin,
+        "codex",
+        &format!(
+            r#"
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf 'asked\n' >> '{}'; printf '%s' '{{"outcome":"fail","reason":"No actionable work."}}' > "$1"; fi
+    shift
+done
+printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":10,"output_tokens":5}}}}'
+"#,
+            asked.display()
+        ),
+    );
+    // The judge runs through the fixture's login shell, and a system profile
+    // that assigns PATH (Debian's does) drops the shim directory before it.
     std::fs::write(
-        &fire_path,
-        json!({key.clone(): since - jiff::SignedDuration::from_secs(600)}).to_string(),
+        env.home_root.join(".profile"),
+        format!("PATH='{}':\"$PATH\"\n", agent_bin.display()),
     )
     .unwrap();
-    let tick = || {
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\nevery = \"1h\"\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
+            env.project_root
+        ),
+    );
+    let loop_run = |verb: &str| {
         let output = env
             .rimz()
-            .env("RIMZ_BIN", env.home_root.join("missing-helper"))
-            .args(["loop", "tick"])
+            .env("PATH", path_with_front(&agent_bin))
+            .args(["loop", verb, "guard"])
             .output()
             .unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "loop {verb}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     };
-    let clocks = || {
-        serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(runtime.lane_path("loop-when.json")).unwrap(),
-        )
-        .unwrap()
+    let asks = || {
+        std::fs::read_to_string(&asked)
+            .unwrap_or_default()
+            .lines()
+            .count()
     };
-    tick();
+    let runs = || {
+        let mut runs = rimz::store::workflow::list(env.store().paths()).unwrap();
+        runs.retain(|run| run.task.as_deref() == Some("guard"));
+        runs.sort_by_key(|run| run.created_at);
+        runs
+    };
+    // Waits until the task's newest run holds the decline, and returns it.
+    let held = |count: usize| {
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        loop {
+            let runs = runs();
+            if runs.len() == count
+                && runs.last().is_some_and(|run| {
+                    run.state == rimz::store::workflow::RunState::Active
+                        && run.node == "hold-judge-1"
+                })
+            {
+                return runs;
+            }
+            assert!(Instant::now() < deadline, "{runs:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    let ended = |id: &rimz::ids::WorkflowRunId| {
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while !rimz::store::workflow::load(&env.store().paths().workflow(id))
+            .is_ok_and(|run| run.state == rimz::store::workflow::RunState::Canceled)
+        {
+            assert!(Instant::now() < deadline, "run {id} was not canceled");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+
+    loop_run("run");
+    let first = held(1).remove(0);
+    loop_run("run");
+    loop_run("run");
     assert_eq!(
-        clocks()[&key]["since"],
-        serde_json::to_value(since).unwrap(),
-        "a held scope must keep its true clock"
+        (asks(), runs().len()),
+        (1, 1),
+        "two later fires on the held checkout ask no judge"
     );
     assert_eq!(
-        read_loop_run_records(&env).len(),
-        1,
-        "planner must suppress held helpers"
+        rimz::store::workflow::load(&env.store().paths().workflow(&first.id))
+            .unwrap()
+            .node,
+        "hold-judge-1"
     );
-    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
-    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Review\n").unwrap();
-    tick();
-    assert!(
-        clocks().get(&key).is_none(),
-        "false must retire even a declined clock"
-    );
-    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
-    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
-    tick();
-    assert_ne!(
-        clocks()[&key]["since"],
-        serde_json::to_value(since).unwrap()
-    );
-    let fired = last_loop_record(&env);
+
+    loop_run("fire");
+    ended(&first.id);
+    let second = held(2).pop().unwrap();
     assert_eq!(
-        fired.result,
-        LoopRunResult::StartFailed,
-        "a new true edge must try the deliberately missing helper"
+        asks(),
+        2,
+        "a manual fire supersedes the hold and asks again"
     );
+
+    loop_ok_root(
+        &env,
+        &env.project_root,
+        &[
+            "loop",
+            "add",
+            "guard",
+            "--agent",
+            "codex",
+            "--stay",
+            "--every",
+            "1h",
+            "--prompt",
+            "repair again",
+            "--judge",
+            "codex",
+            "--judge-prompt",
+            "Any work?",
+            "--on",
+            "success",
+        ],
+    );
+    ended(&second.id);
+    loop_run("run");
+    held(3);
     assert_eq!(
-        serde_json::to_value(fired.condition.unwrap().since).unwrap(),
-        clocks()[&key]["since"]
+        asks(),
+        3,
+        "a redefinition releases the hold and forgets the checkout"
     );
 }
+
 #[cfg(unix)]
 use crate::common::{
     path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
@@ -1003,7 +1065,15 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         )
         .bounded_output()
         .unwrap();
-    let trace = std::fs::read_to_string(trace).unwrap_or_default();
+    // The fire starts a workflow run; its detached advance opens the tab.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    let trace = loop {
+        let text = std::fs::read_to_string(&trace).unwrap_or_default();
+        if text.contains("layout-json\t") || Instant::now() >= deadline {
+            break text;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
     let tabs = trace
         .lines()
         .filter(|line| line.contains("action\tnew-tab"))
@@ -1015,9 +1085,12 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         String::from_utf8_lossy(&output.stderr),
         read_loop_run_records(&env),
     );
-    if action != LoopLaunch::Resident {
-        assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
-    }
+    // A check's own launch is the loop's; an agent task's agent is its run's step.
+    let automation = match action {
+        LoopLaunch::Check => json!({"by": "loop"}),
+        _ => json!({"by": "workflow", "step": "agent", "workflow": "rimzd"}),
+    };
+    assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
     assert!(tabs[0].contains("\t--no-focus"), "{trace}");
     assert!(
         trace
@@ -1044,7 +1117,7 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
     assert_eq!(
         serde_json::to_value(&request.identity.params).unwrap()["automation"],
-        json!({"by": "loop"}),
+        automation,
     );
     let mut pane_env: BTreeMap<String, String> = argv
         .iter()
@@ -1095,7 +1168,7 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     assert!(agent.launched_by.is_none(), "{agent:?}");
     assert_eq!(
         serde_json::to_value(agent).unwrap()["automation"],
-        json!({"by": "loop"})
+        automation
     );
     assert!(agent.parent_agent_id.is_none(), "{agent:?}");
     assert_eq!(agent.launch_depth, None, "{agent:?}");
@@ -1246,8 +1319,13 @@ fn condition_tick_observes_board_and_records_evidence() {
     wait_for_loop_run_records(&env, "ready record and once-instance removal", |records| {
         !records.is_empty() && !read_loop_instances(&env).0.contains_key("ready")
     });
-    let record = last_loop_record(&env);
-    assert_eq!(record.result, LoopRunResult::Completed);
+    assert_eq!(
+        wait_for_loop_report(&env, "ready").result,
+        LoopRunResult::Completed
+    );
+    // The fire's own row carries the evidence its run started on.
+    let record = read_loop_run_records(&env).remove(0);
+    assert_eq!(record.result, LoopRunResult::Launched);
     let condition = record.condition.unwrap();
     assert_eq!(condition.when, "team.stage=Done");
     assert_eq!(condition.readings["team.stage"].as_deref(), Some("Done"));
@@ -1910,7 +1988,11 @@ done
         .args(["loop", "run", "resident"])
         .output()
         .unwrap();
-    let trace_text = std::fs::read_to_string(&trace).unwrap_or_default();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let refused = matches!(
         case,
         NamedResident::Live
@@ -1919,9 +2001,48 @@ done
             | NamedResident::OtherTeamClosed
             | NamedResident::TakeoverOtherTeam
     );
+    let fired = last_loop_record(&env);
+    assert_eq!(fired.result, LoopRunResult::Launched);
+    assert_eq!(fired.checkout.as_deref(), Some(env.project_root.as_path()));
+    // The fire returns once its run exists; the launch, or its refusal, lands in the run.
+    let leader = |store: &rimz::Store| {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.loop_task.as_deref() == Some("resident"))
+            .cloned()
+    };
+    let record = if refused {
+        wait_for_loop_report(&env, "resident")
+    } else {
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while leader(&store).is_none() {
+            let rows = read_loop_run_records(&env);
+            assert!(
+                rows.len() == 1 && Instant::now() < deadline,
+                "resident never launched: {rows:?}\n{}\n{:?}",
+                loop_run_journal(&env, &env.project_root, &fired),
+                store
+                    .runtime_projection(rimz::RuntimeScope::Audit)
+                    .unwrap()
+                    .agents
+                    .iter()
+                    .map(|agent| (
+                        agent.name.clone(),
+                        agent.loop_task.clone(),
+                        agent.worktree_path.clone(),
+                        agent.ended_at
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        fired.clone()
+    };
+    let trace_text = std::fs::read_to_string(&trace).unwrap_or_default();
     let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    let record = last_loop_record(&env);
-    assert_eq!(record.checkout.as_deref(), Some(env.project_root.as_path()));
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .unwrap()
@@ -1949,8 +2070,7 @@ done
         );
     }
     if refused {
-        assert!(!output.status.success(), "{output:?}");
-        assert_eq!(record.result, LoopRunResult::Errored);
+        assert_eq!(record.result, LoopRunResult::Failed, "{record:?}");
         let error = record.error.as_deref().unwrap();
         assert!(error.contains("landing"), "{error}");
         if case == NamedResident::Live {
@@ -1982,9 +2102,13 @@ done
             usize::from(case == NamedResident::TakeoverOtherTeam),
             "{trace_text}"
         );
-        let strikes: BTreeMap<String, u32> =
-            serde_json::from_slice(&std::fs::read(loop_strikes_path(&env)).unwrap()).unwrap();
-        assert_eq!(strikes[&machine_task_key("resident")], 1);
+        // `run_log::record_transition` appends the report row before it notes the strike.
+        let key = machine_task_key("resident");
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while !read_loop_strikes(&env).contains_key(&key) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(read_loop_strikes(&env).get(&key), Some(&1));
         if case == NamedResident::Live {
             let direct = command()
                 .args(["teams", "forge", "-w", "landing", "ordinary launch prompt"])
@@ -2011,15 +2135,13 @@ done
         }
         return;
     }
+    // The run remembers the firing checkout; the resident ledger is read, never written.
+    assert!(ledger.is_empty());
+    let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        workflows.tasks["resident"].contains_key(&env.project_root),
+        "{workflows:?}"
     );
-    assert_eq!(record.result, LoopRunResult::Launched);
-    assert_eq!(ledger["resident"].len(), 1);
-    let row = serde_json::to_value(&ledger["resident"][&env.project_root]).unwrap();
-    assert_eq!(row["destination"], json!(destination));
     let marker = rimz::worktree::read_marker_for_worktree(&destination)
         .unwrap()
         .unwrap();
@@ -2029,52 +2151,13 @@ done
         absent && case != NamedResident::Solo
     );
     assert_eq!(destination.join("keep.txt").exists(), !absent);
-    let agents = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    let leader = agents
-        .iter()
-        .find(|agent| agent.loop_task.as_deref() == Some("resident"))
-        .unwrap();
+    let leader = leader(&store).unwrap();
     assert_eq!(leader.worktree_path.as_deref(), destination.to_str());
     assert_eq!(leader.channel.as_deref(), Some("landing"));
-    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
-    let assist = serde_json::to_value(
-        assists
-            .iter()
-            .find(|record| serde_json::to_value(record).unwrap()["assist"] == "resident_launch")
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(assist["checkout"], json!(destination));
     assert_eq!(
         trace_text.matches("close-pane").count(),
         usize::from(case == NamedResident::Takeover),
         "{trace_text}"
-    );
-    if case == NamedResident::Takeover {
-        assert_eq!(assist["stopped"], json!(["@coder#landing"]));
-    }
-    let shown = command()
-        .args(["loop", "show", "resident", "--json"])
-        .output()
-        .unwrap();
-    assert!(shown.status.success(), "{shown:?}");
-    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(
-        shown["launches"][env.project_root.to_str().unwrap()]["destination"],
-        json!(destination)
-    );
-    let shown = command()
-        .args(["loop", "show", "resident"])
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&shown.stdout)
-            .lines()
-            .any(|line| line.trim_start().starts_with("landing  @")),
-        "{shown:?}"
     );
     assert!(
         command()
@@ -2847,7 +2930,35 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             .ok
         );
     }
-    for _ in 0..2 {
+    let store = env.store();
+    let leaders = |store: &rimz::Store| {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .iter()
+            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let wait_for_leaders = |count: usize| {
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        loop {
+            let leaders = leaders(&store);
+            if leaders.len() == count {
+                return leaders;
+            }
+            if Instant::now() >= deadline {
+                let rows = read_loop_run_records(&env);
+                panic!(
+                    "resident never launched: {rows:?}\n{}\n{leaders:?}",
+                    loop_run_journal(&env, &env.project_root, &rows[0])
+                );
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    for fire in 0..2 {
         let mut run = command();
         run.args(["loop", "run", "resident"]);
         if each_worktree {
@@ -2866,80 +2977,60 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             !stderr.contains("did not materialize"),
             "the birth must pass the sidebar layout wait: {stderr}"
         );
+        if fire == 0 {
+            wait_for_leaders(1);
+        }
     }
-    let store = env.store();
-    let agents = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    assert_eq!(agents.len(), 1);
+    let agents = wait_for_leaders(1);
     let expected_checkout = if each_worktree {
         checkout.clone()
     } else {
         canonical(&checkout)
     };
+    // A run's scope is its checkout's physical path, so its leader launches there.
     assert_eq!(
         agents[0].worktree_path.as_deref(),
-        expected_checkout.to_str()
+        canonical(&checkout).to_str()
     );
     assert_eq!(agents[0].channel.as_deref(), Some("lane"));
-    let launch = serde_json::to_value(&agents[0].record).unwrap();
-    assert!(
-        launch["notes"].is_string(),
-        "resident fires keep memory: {launch}"
-    );
-    let folder = store.paths().notes_run(
-        rimz::disk::paths::Class::AutomationNotes,
-        Path::new(launch["notes"].as_str().unwrap()),
-    );
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(folder.join("run.json")).unwrap()).unwrap();
-    assert_eq!(manifest["kind"], "loop");
-    assert_eq!(manifest["task"], "resident");
-    assert_eq!(manifest["checkout"], json!(expected_checkout));
-    assert!(
-        launch["loop_section"]
-            .as_str()
-            .unwrap()
-            .contains("resident-notes.md")
-    );
-    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
     let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(serde_json::to_value(records[0].result).unwrap(), "launched");
-    let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    assert!(ledger["resident"].contains_key(&expected_checkout));
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].result, LoopRunResult::Launched);
+    let run = rimz::store::workflow::load(
+        &store
+            .paths()
+            .workflow(&records[0].run_id.as_deref().unwrap().parse().unwrap()),
+    )
+    .unwrap();
+    assert!(run.notes.is_some(), "resident fires keep memory: {run:?}");
+    let runs = rimz::harness::run::list(store.paths()).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].loop_task.as_deref(), Some("resident"));
+    // The run remembers the checkout; the resident ledger is read, never written.
+    assert!(
+        rimz::harness::schedule::launch_ledger::load(store.paths())
+            .unwrap()
+            .is_empty()
+    );
+    let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
+    assert!(
+        workflows.tasks["resident"].contains_key(&expected_checkout),
+        "{workflows:?}"
+    );
     if team {
         assert_eq!(agents[0].team.as_deref(), Some("forge"));
         return;
     }
-    let (_, error) = loop_fail(&env, &["loop", "rename", "resident", "renamed"]);
-    assert!(error.contains("resident leaders"), "{error}");
-    assert_eq!(
-        rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap(),
-        ledger
-    );
-    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
-    assert_eq!(assists.len(), 1);
-    let assist = serde_json::to_value(&assists[0]).unwrap();
-    assert_eq!(assist["assist"], "resident_launch");
-    assert_eq!(assist["task"], "resident");
-    assert!(loop_ok(&env, &["stats", "--assists"]).contains("loop resident opened"));
-    if each_worktree {
-        assert_eq!(assist["condition"]["readings"]["pr"], "open");
-    }
-    assert_eq!(
-        assist["checkout"],
-        expected_checkout.to_string_lossy().as_ref()
-    );
-    assert_eq!(
-        assist["handles"],
-        json!([format!("@{}", agents[0].name.as_deref().unwrap())])
-    );
-    assert_eq!(
-        serde_json::to_value(&agents[0]).unwrap()["loop_task"],
-        "resident"
-    );
+    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+        .iter()
+        .map(|record| serde_json::to_value(record).unwrap())
+        .collect::<Vec<_>>();
+    let starts = assists
+        .iter()
+        .filter(|assist| assist["assist"] == "workflow_start")
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 1, "{assists:?}");
+    assert_eq!(starts[0]["task"], "resident");
     let owner = dummy_agent_process();
     let owner_pid = owner.id();
     reap_later(owner);
@@ -2951,7 +3042,8 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             .env("RIMZ_AGENT_PID", owner_pid.to_string())
             .env("ZELLIJ", "1")
             .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-            .env("ZELLIJ_PANE_ID", "51");
+            .env("ZELLIJ_PANE_ID", "51")
+            .env("RIMZ_RUN_ID", runs[0].run_id.to_string());
         command.current_dir(&checkout).env(
             rimz::harness::launch::ENV_AGENT_NAME,
             agents[0].name.as_deref().unwrap(),
@@ -2976,68 +3068,11 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         );
     };
     hook("SessionStart");
-    let armed = read_loop_instances(&env);
-    assert_eq!(armed.0.len(), 1);
-    let (subscription, binding) = armed.0.iter().next().unwrap();
-    assert!(
-        subscription.contains("resident")
-            && subscription.contains(agents[0].name.as_deref().unwrap())
-    );
-    assert_eq!(
-        binding.matches.as_ref().unwrap()["path"],
-        expected_checkout.to_string_lossy()
-    );
-    assert_eq!(
-        binding.wait.as_ref().unwrap().session.as_str(),
-        "resident-session"
-    );
-    assert!(binding.once.is_none() && binding.team.is_none());
-    if each_worktree {
-        let output = command()
-            .args(["loop", "show", "resident", "--json"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(shown["worktrees"][0]["armed"], 1, "{shown}");
-        let output = command()
-            .args(["loop", "show", "resident"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        let shown = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            shown
-                .lines()
-                .any(|line| line.contains("wakes:") && line.contains("1 armed")),
-            "{shown}"
-        );
-    }
-    hook("SessionStart");
-    assert_eq!(read_loop_instances(&env), armed);
-    let restarted = command()
-        .args([
-            "agents",
-            "restart",
-            &format!("@{}", agents[0].name.as_deref().unwrap()),
-        ])
-        // The split names the room and resolves the replaced pane's tab there.
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
-        )
-        .output()
-        .unwrap();
-    assert!(
-        restarted.status.success(),
-        "{}",
-        String::from_utf8_lossy(&restarted.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&restarted.stdout).contains("resumed session resident-session")
-    );
     hook("UserPromptSubmit");
-    for (path, matching) in [(&env.project_root, false), (&expected_checkout, true)] {
+    // The run's step subscription reaches the leader; loop arms no row of its own. Its
+    // default `path` is the run's scope, the checkout's physical path.
+    assert!(read_loop_instances(&env).0.is_empty());
+    for (path, matching) in [(&env.project_root, false), (&canonical(&checkout), true)] {
         loop_ok(
             &env,
             &[
@@ -3054,43 +3089,26 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             assert!(store.list_pending_messages().unwrap().is_empty());
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !read_loop_run_records(&env)
-        .iter()
-        .any(|row| row.task == *subscription)
-        && Instant::now() < deadline
-    {
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while store.list_pending_messages().unwrap().is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
     let messages = store.list_pending_messages().unwrap();
     assert_eq!(messages.len(), 1, "{:?}", read_loop_run_records(&env));
     assert_eq!(messages[0].kind.as_str(), "codex");
     assert_eq!(messages[0].agent_id.as_str(), "resident-session");
-    assert_eq!(messages[0].status, MessageStatus::Queued);
-    assert!(messages[0].text.contains("ci.failed"));
-    assert_eq!(read_loop_instances(&env), armed);
-    store
-        .append_event(&rimz::EventEnvelope::agent_lifecycle(
-            env.workspace_id.clone(),
-            &workspace.session_name,
-            "codex",
-            "rimz.agent-ended",
-            &rimz::agents::AgentLifecycleObservation::new(
-                Some(AgentSessionId::from("resident-session")),
-                rimz::agents::LifecycleSignal::Ended,
-            ),
-        ))
+    assert!(
+        messages[0].text.contains("ci.failed"),
+        "{}",
+        messages[0].text
+    );
+    // Once its run ends, a manual fire bypasses the memory and relaunches.
+    let stopped = command()
+        .args(["loop", "stop", "resident"])
+        .output()
         .unwrap();
-    loop_ok(&env, &["events", "emit", "deploy.done"]);
-    assert!(read_loop_instances(&env).0.is_empty());
-    if each_worktree {
-        let refused = command()
-            .args(["loop", "fire", "resident"])
-            .output()
-            .unwrap();
-        assert!(!refused.status.success());
-        assert!(String::from_utf8_lossy(&refused.stderr).contains("owned worktree"));
-    }
+    assert!(stopped.status.success(), "{stopped:?}");
+    wait_for_loop_report(&env, "resident");
     let output = command()
         .args(["loop", "fire", "resident"])
         .current_dir(&checkout)
@@ -3101,85 +3119,21 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        read_loop_run_records(&env)
-            .iter()
-            .filter(|row| row.task == "resident")
-            .count(),
-        2
-    );
-    assert_eq!(
-        rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).len(),
-        2
-    );
-    assert_eq!(
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents
-            .len(),
-        2
-    );
-    let mux_log = std::fs::read_to_string(&trace).unwrap();
-    assert!(!mux_log.contains("close-tab"), "{mux_log}");
-    assert_eq!(mux_log.matches("close-pane").count(), 1, "{mux_log}");
+    wait_for_leaders(2);
     if each_worktree {
-        assert!(mux_log.contains("--create-background"), "{mux_log}");
+        let refused = command()
+            .args(["loop", "fire", "resident"])
+            .output()
+            .unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("owned worktree"));
     }
-    let shown = command()
-        .args(["loop", "show", "resident", "--json"])
-        .output()
-        .unwrap();
-    assert!(shown.status.success());
-    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(shown["launches"].as_object().unwrap().len(), 1);
-    assert_eq!(
-        shown["runs"][0]["checkout"],
-        expected_checkout.to_string_lossy().as_ref()
-    );
-    if each_worktree {
-        let row = &shown["worktrees"][0];
-        assert_eq!(
-            row["checkout"],
-            expected_checkout.to_string_lossy().as_ref()
-        );
-        assert_eq!(row["state"], "launched");
-        assert!(row["leader"].is_string() && row["since"].is_string());
-        assert!(row.get("leader_status").is_some(), "{row}");
-        assert_eq!(row["armed"], 0);
-        let summary = loop_ok(&env, &["loop", "show", "resident"]);
-        assert!(
-            summary.contains("WORKTREES (1 owned · 1 launched)"),
-            "{summary}"
-        );
-        assert!(!summary.contains("condition: unarmed"), "{summary}");
-    }
-    let assist_log = env.rimz_home().join("logs/assists.log.jsonl");
-    std::fs::remove_file(&assist_log).unwrap();
-    std::fs::create_dir(&assist_log).unwrap();
-    let launched = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    let unrecorded = command()
-        .args(["loop", "fire", "resident"])
-        .current_dir(&checkout)
-        .output()
-        .unwrap();
-    assert!(!unrecorded.status.success());
-    assert_eq!(
-        serde_json::to_value(read_loop_run_records(&env).last().unwrap().result).unwrap(),
-        "errored"
-    );
-    let kept = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    assert_ne!(
-        kept["resident"][&expected_checkout].leader,
-        launched["resident"][&expected_checkout].leader
-    );
     loop_ok(&env, &["loop", "remove", "resident"]);
-    hook("SessionStart");
-    assert!(read_loop_instances(&env).0.is_empty());
     assert!(
-        rimz::harness::schedule::launch_ledger::load(store.paths())
+        !rimz::harness::schedule::launch_ledger::load_workflows(store.paths())
             .unwrap()
-            .is_empty()
+            .tasks
+            .contains_key("resident")
     );
 }
 
@@ -3198,7 +3152,7 @@ enum Takeover {
 }
 
 #[test]
-fn resident_saved_untrusted_refuses_before_takeover() {
+fn resident_saved_untrusted_fails_its_run_before_takeover() {
     resident_takeover_case(Takeover::Restricted);
 }
 
@@ -3500,9 +3454,36 @@ fn resident_takeover_case(case: Takeover) {
         fire.output().unwrap()
     };
     let trace_text = || std::fs::read_to_string(&trace).unwrap_or_default();
-    let ledger = || rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    let assists = || rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
     let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
+    // Each-worktree memory keys the marker path; a single checkout keys its physical path.
+    let expected_checkout = if symlinked {
+        checkout.clone()
+    } else {
+        canonical(&checkout)
+    };
+    let remembered = || {
+        rimz::harness::schedule::launch_ledger::load_workflows(store.paths())
+            .unwrap()
+            .tasks
+            .get("resident")
+            .is_some_and(|checkouts| checkouts.contains_key(&expected_checkout))
+    };
+    let starts = || {
+        rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+            .iter()
+            .map(|record| serde_json::to_value(record).unwrap())
+            .filter(|assist| assist["assist"] == "workflow_start")
+            .count()
+    };
+    let leaders = || {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
+            .collect::<Vec<_>>()
+    };
 
     if let Some(mut owner) = closed_owner {
         owner.kill().unwrap();
@@ -3526,80 +3507,74 @@ fn resident_takeover_case(case: Takeover) {
     }
     let before_agents = serde_json::to_value(store.snapshot().unwrap().agents).unwrap();
     let output = fire();
-    if case == Takeover::OmittedTab {
-        assert_eq!(
-            last_loop_record(&env).result,
-            LoopRunResult::TakeoverBlocked
-        );
-    }
-    if case == Takeover::ClosedPane {
-        assert_eq!(last_loop_record(&env).result, LoopRunResult::Launched);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let trace = trace_text();
-        assert!(!trace.contains("close-pane"), "{trace}");
-        assert!(ledger()["resident"].contains_key(&checkout));
-        let assists = assists();
-        assert_eq!(assists.len(), 1);
-        let assist = serde_json::to_value(&assists[0]).unwrap();
-        assert!(assist.get("stopped").is_none(), "{assist}");
-        return;
-    }
-    if case == Takeover::Restricted {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("saved untrusted"), "{stderr}");
-        assert!(stderr.contains("Open restricted"), "{stderr}");
-        assert!(!output.status.success());
-        assert!(!trace_text().contains("close-pane"), "{}", trace_text());
-        assert!(!trace_text().contains("new-tab"), "{}", trace_text());
-        assert!(ledger().is_empty());
-        assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
-        assert_eq!(
-            serde_json::to_value(store.snapshot().unwrap().agents).unwrap(),
-            before_agents
-        );
-        return;
-    }
-    if case == Takeover::FailedStop || open_run_pane {
-        assert!(!output.status.success());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = if open_run_pane {
-            "terminal_51 is still open"
-        } else {
-            "no bound pane"
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let fired = last_loop_record(&env);
+    assert_eq!(fired.result, LoopRunResult::Launched, "{fired:?}");
+    let id: rimz::ids::WorkflowRunId = fired.run_id.as_deref().unwrap().parse().unwrap();
+    let run_paths = store.paths().workflow(&id);
+    let wait_for_run = |what: &str, done: &dyn Fn(&rimz::store::workflow::RunRecord) -> bool| {
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        loop {
+            if rimz::store::workflow::load(&run_paths).is_ok_and(|run| done(&run)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "resident run never {what}: {}\n{:?}",
+                loop_run_journal(&env, &env.project_root, &fired),
+                leaders()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    let wait_for_leader = || {
+        wait_for_run("launched", &|_| !leaders().is_empty());
+        leaders()
+    };
+
+    if matches!(
+        case,
+        Takeover::Restricted | Takeover::FailedStop | Takeover::OpenRunPane
+    ) {
+        let report = wait_for_loop_report(&env, "resident");
+        assert_eq!(report.result, LoopRunResult::Failed, "{report:?}");
+        let error = report.error.as_deref().unwrap_or_default();
+        let reasons: &[&str] = match case {
+            Takeover::Restricted => &["saved untrusted", "Open restricted"],
+            Takeover::OpenRunPane => &["terminal_51 is still open"],
+            _ => &["no bound pane"],
         };
-        assert!(stderr.contains(reason), "{stderr}");
-        assert!(!trace_text().contains("new-tab"), "{}", trace_text());
-        assert!(ledger().is_empty());
-        assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
-        assert!(assists().is_empty());
+        for reason in reasons {
+            assert!(error.contains(reason), "{error}");
+        }
+        let trace_text = trace_text();
+        assert!(!trace_text.contains("new-tab"), "{trace_text}");
+        assert!(leaders().is_empty());
+        if case == Takeover::Restricted {
+            // The refused launch is prepared before the takeover, so no occupant stops.
+            assert!(!trace_text.contains("close-pane"), "{trace_text}");
+            assert_eq!(
+                serde_json::to_value(store.snapshot().unwrap().agents).unwrap(),
+                before_agents
+            );
+        }
         return;
     }
-    if working {
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if working && case != Takeover::ClosedPane {
+        // A working occupant holds the takeover: the run waits, and the task keeps its strikes.
+        wait_for_run("waited on the occupant", &|run| {
+            run.wait
+                .as_ref()
+                .is_some_and(|wait| wait.outcome == "takeover")
+        });
         let trace_text = trace_text();
         assert!(!trace_text.contains("close-pane"), "{trace_text}");
         assert!(!trace_text.contains("new-tab"), "{trace_text}");
-        assert!(ledger().is_empty());
-        assert!(assists().is_empty());
-        let record = last_loop_record(&env);
-        assert_eq!(record.result, LoopRunResult::TakeoverBlocked);
-        assert_eq!(record.checkout.as_deref(), Some(checkout.as_path()));
-        let reason = record.error.as_deref().unwrap();
-        assert!(reason.contains("old-coder"), "{reason}");
-        assert!(reason.ends_with("is working"), "{reason}");
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains(&format!("{reason}; skipping")),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
+        assert!(leaders().is_empty());
         assert_eq!(
             serde_json::from_slice::<BTreeMap<String, u32>>(
                 &std::fs::read(loop_strikes_path(&env)).unwrap()
@@ -3608,24 +3583,6 @@ fn resident_takeover_case(case: Takeover) {
             strikes
         );
         assert_eq!(read_loop_instances(&env).0.len(), 2);
-        if symlinked {
-            let shown = command()
-                .args(["loop", "show", "resident", "--json"])
-                .output()
-                .unwrap();
-            assert!(
-                shown.status.success(),
-                "{}",
-                String::from_utf8_lossy(&shown.stderr)
-            );
-            let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-            let row = &shown["worktrees"][0];
-            assert_eq!(row["checkout"], checkout.to_string_lossy().as_ref());
-            assert_eq!(row["state"], "blocked");
-            assert_eq!(row["blocked"]["count"], 1);
-            assert_eq!(row["blocked"]["reason"], reason);
-            assert_eq!(row["blocked"]["since"], json!(record.at));
-        }
         assert_eq!(
             store
                 .runtime_projection(rimz::RuntimeScope::Audit)
@@ -3634,49 +3591,39 @@ fn resident_takeover_case(case: Takeover) {
                 .len(),
             seeded
         );
-
         if case == Takeover::OmittedTab {
             return;
         }
         hook("old-coder", &cwd, Some("51"), "Stop");
+        let advance = command()
+            .args(["workflow", "advance", id.as_str()])
+            .output()
+            .unwrap();
+        assert!(
+            advance.status.success(),
+            "{}",
+            String::from_utf8_lossy(&advance.stderr)
+        );
     }
-    let output = if working { fire() } else { output };
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::Launched);
-    assert!(ledger()["resident"].contains_key(&checkout));
-    let assists = assists();
-    assert_eq!(assists.len(), 1);
-    let assist = serde_json::to_value(&assists[0]).unwrap();
+    let launched = wait_for_leader();
+    // The leader's card can land before the launch opens its tab.
+    wait_for_run("opened its tab", &|_| trace_text().contains("new-tab"));
+    assert!(remembered());
+    assert_eq!(starts(), 1);
     let trace_text = trace_text();
     let stops = trace_text.matches("close-pane").count();
-    if case == Takeover::EmptyCheckout {
+    if matches!(case, Takeover::EmptyCheckout | Takeover::ClosedPane) {
         assert_eq!(stops, 0, "{trace_text}");
-        assert!(assist.get("stopped").is_none(), "{assist}");
-        assert_eq!(read_loop_instances(&env).0.len(), 1);
+        if case == Takeover::EmptyCheckout {
+            assert_eq!(read_loop_instances(&env).0.len(), 1);
+        }
         return;
     }
-    let stopped: Vec<&str> = assist["stopped"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|handle| handle.as_str().unwrap())
-        .collect();
     let expected: &[&str] = if case == Takeover::IdleOccupants {
         &["old-coder", "sweeper", "solo", "old-child"]
     } else {
         &["old-coder"]
     };
-    assert_eq!(stopped.len(), expected.len(), "{stopped:?}");
-    for name in expected {
-        assert!(
-            stopped.iter().any(|handle| handle.contains(name)),
-            "{name} missing from {stopped:?}"
-        );
-    }
     assert_eq!(stops, expected.len(), "{trace_text}");
     assert!(
         trace_text.rfind("close-pane").unwrap() < trace_text.find("new-tab").unwrap(),
@@ -3698,7 +3645,10 @@ fn resident_takeover_case(case: Takeover) {
             })
             .map(|agent| {
                 assert_eq!(agent.team.as_deref(), Some("forge"));
-                assert_eq!(agent.worktree_path.as_deref(), checkout.to_str());
+                assert_eq!(
+                    agent.worktree_path.as_deref(),
+                    canonical(&checkout).to_str()
+                );
                 (agent.role.as_deref(), agent.loop_task.as_deref())
             })
             .collect();
@@ -3709,6 +3659,7 @@ fn resident_takeover_case(case: Takeover) {
         );
         return;
     }
+    assert_eq!(launched.len(), 1);
     let subscriptions = read_loop_instances(&env);
     assert_eq!(subscriptions.0.len(), 1);
     assert_eq!(
@@ -3723,16 +3674,6 @@ fn resident_takeover_case(case: Takeover) {
             .session
             .as_str(),
         "sibling-coder"
-    );
-    assert_eq!(
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents
-            .iter()
-            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
-            .count(),
-        1
     );
     stamp_session_ended(&env, "old-coder");
     let output = command().args(["teams", "stop", "forge"]).output().unwrap();
@@ -4166,7 +4107,7 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
         &env,
         "behind Completed and merged SignalSkipped",
         |records| {
-            records.len() == 2
+            records.len() == 3
                 && records.iter().any(|record| {
                     record.task == "behind" && record.result == LoopRunResult::Completed
                 })
@@ -4176,7 +4117,8 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
         },
     );
     let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 2, "{records:?}");
+    // The behind fire's launch row, its run's report, and the merged sibling's skip.
+    assert_eq!(records.len(), 3, "{records:?}");
     assert!(
         records
             .iter()
@@ -5643,31 +5585,27 @@ fn retired_delivery_runner_preserves_replacement_session_subscription() {
         shlex::try_quote(ready.to_str().unwrap()).unwrap(),
         shlex::try_quote(release.to_str().unwrap()).unwrap(),
     );
-    loop_ok(
+    // `loop add` refuses a guarded `--wait`; a stored row of the shape still runs.
+    write_loop_instances(
         &env,
-        &[
-            "loop",
-            "add",
-            "reused",
-            "--wait",
-            "@retired-session",
-            "--every",
-            "15m",
-            "--check",
-            &check,
-            "--on",
-            "any",
-            "--prompt",
-            "old",
-        ],
+        Tasks(BTreeMap::from([(
+            "reused".to_owned(),
+            TaskEntry {
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: AgentSessionId::from("retired-session"),
+                    handle: "@claude".to_owned(),
+                }),
+                prompt: Some("old".to_owned()),
+                check: Some(check.into()),
+                on: Some(CheckOn::Any),
+                root: env.project_root.clone(),
+                every: Some("15m".to_owned()),
+                ..TaskEntry::default()
+            },
+        )])),
     );
-    let runner = env
-        .rimz()
-        .args(["loop", "run", "reused"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    loop_ok(&env, &["loop", "run", "reused"]);
     wait_for_path(&ready);
     run_hook(
         &env,
@@ -5690,11 +5628,10 @@ fn retired_delivery_runner_preserves_replacement_session_subscription() {
         ],
     );
     std::fs::write(release, "").unwrap();
-    let output = runner.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    // The run's message step finds its pinned session gone.
+    assert_eq!(
+        wait_for_loop_report(&env, "reused").result,
+        LoopRunResult::Failed
     );
     assert_eq!(
         read_loop_instances(&env).0["reused"]
@@ -6009,21 +5946,15 @@ fn external_tick_spawns_an_agent_without_a_workspace_record() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    wait_for_loop_run_records(&env, "the cold-agent run's row", |records| {
-        records.iter().any(|record| record.task == "cold-agent")
+    // The fire's workflow run starts the agent's one supervised run.
+    wait_for_loop_run_records(&env, "the cold-agent step's supervised run", |_| {
+        env.state_path_for(&env.project_root).root.exists()
+            && rimz::harness::run::list(env.store().paths()).is_ok_and(|runs| runs.len() == 1)
     });
     assert!(
         env.state_path_for(&env.project_root)
             .workspace_record
             .exists()
-    );
-    assert_eq!(
-        rimz::harness::run::list(env.store().paths())
-            .expect("supervised runs")
-            .len(),
-        1,
-        "{:?}",
-        read_loop_run_records(&env),
     );
     let record: serde_json::Value = serde_json::from_slice(
         &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
@@ -6133,33 +6064,42 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             .unwrap();
         let records = read_loop_run_records(&env);
         assert_eq!(
-            records.len(),
-            usize::from(verb != "print"),
+            !records.is_empty(),
+            verb != "print",
             "{kind}/{prior}/{verb}: {output:?}"
         );
+        // A check runs in the fire's detached run; its own agent launch births the room there.
+        if kind.starts_with("check") {
+            wait_for_loop_report(&env, "lookup");
+        }
+        // Every task's agent launches from its workflow run, whose advance writes the notes.
+        let expected_notes = match (kind, verb) {
+            ("agent" | "stay", "run" | "fire") | ("workflow", _) => vec![json!("workflow")],
+            _ => Vec::new(),
+        };
+        let archive = env.state_path_for(&env.project_root).automation_notes_dir;
+        let read_notes = || {
+            let mut notes = Vec::new();
+            for date in std::fs::read_dir(&archive).into_iter().flatten() {
+                for run in std::fs::read_dir(date.unwrap().path()).unwrap() {
+                    let Ok(manifest) = std::fs::read(run.unwrap().path().join("run.json")) else {
+                        continue;
+                    };
+                    let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+                    notes.push(manifest["kind"].clone());
+                }
+            }
+            notes
+        };
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while read_notes().len() < expected_notes.len() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(read_notes(), expected_notes, "{kind}/{prior}/{verb}");
         let record: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path).unwrap_or_else(|error| panic!("{error}: {output:?}")),
         )
         .unwrap();
-        let archive = env.state_path_for(&env.project_root).automation_notes_dir;
-        let mut notes = Vec::new();
-        if archive.exists() {
-            for date in std::fs::read_dir(archive).unwrap() {
-                for run in std::fs::read_dir(date.unwrap().path()).unwrap() {
-                    let manifest: serde_json::Value = serde_json::from_slice(
-                        &std::fs::read(run.unwrap().path().join("run.json")).unwrap(),
-                    )
-                    .unwrap();
-                    notes.push(manifest["kind"].clone());
-                }
-            }
-        }
-        let expected_notes = match (kind, verb) {
-            ("agent" | "stay", "run" | "fire") => vec![json!("loop")],
-            ("workflow", _) => vec![json!("workflow")],
-            _ => Vec::new(),
-        };
-        assert_eq!(notes, expected_notes, "{kind}/{prior}/{verb}");
         actual.push((kind, prior, verb, record.get("agent_shell").cloned()));
         expected.push((
             kind,
@@ -6201,7 +6141,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     assert!(!marker.exists());
 
     loop_ok(&env, &["loop", "run", "open-root"]);
-    assert!(marker.exists());
+    wait_for_path(&marker);
     assert_eq!(std::fs::read(&record_path).unwrap(), record);
 }
 
@@ -6429,23 +6369,17 @@ fn loop_spawn_home_cwd_refusal_names_the_loop_fix() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    let records = read_loop_run_records(&env);
-    assert_eq!(
-        records.len(),
-        1,
-        "records={records:?}; stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let error = records[0].error.as_deref().expect("loop refusal");
-    assert!(error.contains("home directory"), "{error}");
-    assert!(error.contains(env.home_root.to_str().unwrap()), "{error}");
+    assert!(output.status.success(), "{output:?}");
+    // The run's agent step refuses the home directory, so the run fails.
+    let report = wait_for_loop_report(&env, "home-spawn");
+    assert_eq!(report.result, LoopRunResult::Failed);
+    let journal = loop_run_journal(&env, &env.home_root, &report);
+    assert!(journal.contains("home directory"), "{journal}");
     assert!(
-        error.contains("re-add the loop task from a project directory"),
-        "{error}"
+        journal.contains(env.home_root.to_str().unwrap()),
+        "{journal}"
     );
     assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
-    assert!(!trace.exists(), "preflight must not invoke the mux");
 }
 
 #[cfg(unix)]
@@ -6473,23 +6407,17 @@ fn loop_judge_home_cwd_refusal_names_the_loop_fix() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    let records = read_loop_run_records(&env);
-    assert_eq!(
-        records.len(),
-        1,
-        "records={records:?}; stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let error = records[0].error.as_deref().expect("judge refusal");
-    assert!(error.contains("home directory"), "{error}");
-    assert!(error.contains(env.home_root.to_str().unwrap()), "{error}");
+    assert!(output.status.success(), "{output:?}");
+    // The run's agent step refuses the home directory, so the run fails.
+    let report = wait_for_loop_report(&env, "home-judge");
+    assert_eq!(report.result, LoopRunResult::Failed);
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert!(journal.contains("home directory"), "{journal}");
     assert!(
-        error.contains("re-add the loop task from a project directory"),
-        "{error}"
+        journal.contains(env.home_root.to_str().unwrap()),
+        "{journal}"
     );
     assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
-    assert!(!trace.exists(), "preflight must not invoke the mux");
 }
 
 #[test]
@@ -7388,7 +7316,6 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     loop_ok(&env, &["config", "init"]);
-    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
     write_loop_config(&env, "default-timeout = \"3h\"\n");
     loop_ok(
         &env,
@@ -7449,18 +7376,13 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
             .is_some_and(|error| error.contains("daily budget"))
     );
     assert!(
-        !skipped
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("fleet budget")),
-        "task daily budget must gate before the simultaneously closed fleet scope"
-    );
-    assert!(
         std::fs::read_to_string(loop_config_path(&env))
             .expect("read loop config")
             .contains("[tasks.bounded]")
     );
 
+    // The fleet budget is a scope gate, which R3's ladder reads before the daily budget.
+    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
     let marker = env.project_root.join("scope-check-ran");
     loop_ok(
         &env,
@@ -7541,11 +7463,9 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     );
 
     loop_ok(&env, &["loop", "run", "shared"]);
-    assert!(
-        last_loop_record(&env)
-            .check
-            .is_some_and(|check| check.output.contains("machine"))
-    );
+    let report = wait_for_loop_report(&env, "shared");
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert!(journal.contains("machine"), "{journal}");
     grant_project_trust(&env);
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
@@ -7557,11 +7477,9 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     assert_eq!(read_loop_run_records(&env).len(), runs_before);
     loop_ok(&env, &["loop", "enable", "shared"]);
     loop_ok(&env, &["loop", "run", "shared"]);
-    assert!(
-        last_loop_record(&env)
-            .check
-            .is_some_and(|check| check.output.contains("project"))
-    );
+    let report = wait_for_loop_report_after(&env, "shared", runs_before);
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert!(journal.contains("project"), "{journal}");
 }
 
 #[test]
@@ -8193,7 +8111,8 @@ fn loop_enable_disable_pause_workflow() {
     assert!(loop_ok(&env, &["loop", "disable", "probe"]).contains("disabled"));
     assert!(loop_ok(&env, &["loop", "list"]).contains("off"));
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
-    assert!(fired.contains("task is disabled; firing anyway") && fired.contains("check passed"));
+    assert!(fired.contains("task is disabled; firing anyway") && fired.contains("launched"));
+    wait_for_loop_report(&env, "probe");
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
 
     let timed = loop_ok(&env, &["loop", "pause", "probe", "--for", "2h"]);
@@ -8206,7 +8125,8 @@ fn loop_enable_disable_pause_workflow() {
     );
     assert!(loop_ok(&env, &["loop", "show", "probe"]).contains("· paused"));
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
-    assert!(fired.contains("task is paused; firing anyway") && fired.contains("check passed"));
+    assert!(fired.contains("task is paused; firing anyway") && fired.contains("launched"));
+    wait_for_loop_report_after(&env, "probe", 2);
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
     assert!(!loop_ok(&env, &["loop", "list"]).contains("paused, resumes"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
@@ -8284,14 +8204,13 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
         ],
     );
 
-    for _ in 0..2 {
+    // Each run's report strikes; the third strikes the task out.
+    for _ in 0..3 {
+        let before = read_loop_run_records(&env).len();
         loop_ok(&env, &["loop", "run", "watchdog"]);
+        let report = wait_for_loop_report_after(&env, "watchdog", before);
+        assert_eq!(report.result, LoopRunResult::Failed);
     }
-    let third = loop_ok(&env, &["loop", "run", "watchdog"]);
-    assert!(
-        third.contains("disabled after 3 consecutive failed fires"),
-        "{third}"
-    );
     assert_eq!(
         read_loop_arming(&env)
             .get(&machine_task_key("watchdog"))
@@ -8299,8 +8218,10 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
         Some(3)
     );
 
+    let before = read_loop_run_records(&env).len();
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
     assert!(fire.contains("task is disabled; firing anyway"), "{fire}");
+    wait_for_loop_report_after(&env, "watchdog", before);
     assert_eq!(
         read_loop_strikes(&env).get(&machine_task_key("watchdog")),
         Some(&4)
@@ -8691,27 +8612,6 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     let mut config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
             .expect("parse loop config");
-    config
-        .tasks
-        .0
-        .get_mut("qwen-bounded")
-        .expect("Qwen task")
-        .deadline = Some(Timestamp::from_second(1).expect("deadline"));
-    std::fs::write(
-        loop_config_path(&env),
-        toml::to_string_pretty(&config).expect("serialize loop config"),
-    )
-    .expect("write loop config");
-    let lock_path = loop_run_lock_path(&env, "qwen-bounded");
-    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .expect("open run lock");
-    lock_file.try_lock().expect("hold run lock");
 
     qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
     let scope_skip = last_loop_record(&env);
@@ -8755,8 +8655,18 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
             .error
             .as_deref()
             .is_some_and(|reason| reason.contains("surplus")),
-        "surplus must gate before run lock, deadline, and check"
+        "surplus must gate before run lock and check"
     );
+    let lock_path = loop_run_lock_path(&env, "qwen-bounded");
+    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open run lock");
+    lock_file.try_lock().expect("hold run lock");
 
     config
         .tasks
@@ -8772,9 +8682,27 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
     assert_eq!(last_loop_record(&env).result, LoopRunResult::Overlapped);
 
-    lock_file.unlock().expect("unlock run lock");
+    // R3's ladder reads the deadline before the lease.
+    config
+        .tasks
+        .0
+        .get_mut("qwen-bounded")
+        .expect("Qwen task")
+        .deadline = Some(Timestamp::from_second(1).expect("deadline"));
+    std::fs::write(
+        loop_config_path(&env),
+        toml::to_string_pretty(&config).expect("serialize loop config"),
+    )
+    .expect("write loop config");
     qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
     assert_eq!(last_loop_record(&env).result, LoopRunResult::Expired);
+    lock_file.unlock().expect("unlock run lock");
+    assert!(
+        !std::fs::read_to_string(loop_config_path(&env))
+            .expect("read loop config")
+            .contains("qwen-bounded"),
+        "an expired deadline retires the task"
+    );
     assert!(
         !marker.exists(),
         "ordered gates must stop before the check command"
@@ -8832,15 +8760,17 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     assert_eq!(entry.dir, None);
 
     loop_ok(&env, &["loop", "fire", "where"]);
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].result, LoopRunResult::Completed);
-    assert_eq!(records[0].root.as_deref(), Some(root.as_path()));
-    let workspace_id = WorkspaceId::from_project_root(&root);
+    let report = wait_for_loop_report(&env, "where");
+    assert_eq!(report.result, LoopRunResult::Completed);
+    assert_eq!(report.checkout.as_deref(), Some(root.as_path()));
     assert_eq!(
-        records[0].check.as_ref().unwrap().output,
-        format!("{0}\n{0}\n{0}\n{workspace_id}\n", root.display())
+        read_loop_run_records(&env)[0].root.as_deref(),
+        Some(root.as_path())
     );
+    let workspace_id = WorkspaceId::from_project_root(&root);
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    let output = format!("{0}\n{0}\n{0}\n{workspace_id}\n", root.display());
+    assert!(journal.contains(&output), "{output}: {journal}");
 
     let mut config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
     config.push_str(&format!(
@@ -8848,19 +8778,17 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     ));
     std::fs::write(loop_config_path(&env), config).unwrap();
     loop_ok(&env, &["loop", "fire", "legacy"]);
-    let records = read_loop_run_records(&env);
-    let record = records.last().unwrap();
-    assert_eq!(record.task, "legacy");
-    assert_eq!(record.result, LoopRunResult::Completed);
-    assert_eq!(record.root.as_deref(), Some(root.as_path()));
-    assert_eq!(
-        record.check.as_ref().unwrap().output,
-        format!(
-            "{0}\n{0}\n{1}\n{workspace_id}\n",
-            linked.display(),
-            root.display()
-        )
+    let report = wait_for_loop_report(&env, "legacy");
+    assert_eq!(report.result, LoopRunResult::Completed);
+    assert_eq!(report.checkout.as_deref(), Some(linked.as_path()));
+    assert_eq!(report.root.as_deref(), Some(root.as_path()));
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    let output = format!(
+        "{0}\n{0}\n{1}\n{workspace_id}\n",
+        linked.display(),
+        root.display()
     );
+    assert!(journal.contains(&output), "{output}: {journal}");
     let shown = loop_ok(&env, &["loop", "show", "legacy"]);
     assert!(
         shown
@@ -8912,14 +8840,11 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = read_loop_run_records(&env);
-    let record = records.last().unwrap();
-    assert_eq!(record.task, "project-where");
-    assert_eq!(record.root.as_deref(), Some(root.as_path()));
-    assert_eq!(
-        record.check.as_ref().unwrap().output,
-        format!("{0}\n{0}\n", root.display())
-    );
+    let report = wait_for_loop_report(&env, "project-where");
+    assert_eq!(report.root.as_deref(), Some(root.as_path()));
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    let output = format!("{0}\n{0}\n", root.display());
+    assert!(journal.contains(&output), "{output}: {journal}");
 }
 
 #[test]
@@ -9054,8 +8979,13 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
             "1h",
         ],
     );
-    loop_ok(&env, &["loop", "fire", "nightly"]);
-    loop_ok(&env, &["loop", "fire", "nightly"]);
+    let mut reports = Vec::new();
+    for _ in 0..2 {
+        let before = read_loop_run_records(&env).len();
+        loop_ok(&env, &["loop", "fire", "nightly"]);
+        reports.push(wait_for_loop_report_after(&env, "nightly", before));
+        wait_for_fire_tree_helpers(&env);
+    }
 
     let lines: Vec<String> = std::fs::read_to_string(&seen)
         .unwrap()
@@ -9063,11 +8993,18 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
         .map(str::to_owned)
         .collect();
     assert_eq!(lines.len(), 6, "{lines:?}");
-    let records = read_loop_run_records(&env);
+    let records: Vec<_> = read_loop_run_records(&env)
+        .into_iter()
+        .filter(|record| record.result == LoopRunResult::Launched)
+        .collect();
     assert_eq!(records.len(), 2);
     let worktrees = canonical(&env.home_root.join("project-worktrees"));
-    for (fire, record) in lines.chunks(3).zip(&records) {
-        assert_eq!(record.result, LoopRunResult::Completed);
+    let root = canonical(&env.project_root);
+    for ((fire, record), report) in lines.chunks(3).zip(&records).zip(&reports) {
+        assert_eq!(report.result, LoopRunResult::Completed);
+        assert_eq!(report.run_id, record.run_id);
+        // The task's history keys on the project root it fired from, not the fire's tree.
+        assert_eq!(report.checkout.as_deref(), Some(root.as_path()));
         let tree = rimz::utils::path::normalize_path_lexical(
             &record.worktree.as_ref().expect("fire worktree").path,
         );
@@ -9131,14 +9068,23 @@ fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
     );
     loop_ok(&env, &["loop", "fire", "guarded"]);
 
-    let record = last_loop_record(&env);
-    assert_eq!(record.result, LoopRunResult::CheckSkipped);
+    // A decline ends the run without acting, and its report removes the tree.
+    let report = wait_for_loop_report(&env, "guarded");
+    assert_eq!(
+        (report.result, report.acted),
+        (LoopRunResult::Completed, Some(false))
+    );
+    let record = read_loop_run_records(&env)
+        .into_iter()
+        .find(|record| record.result == LoopRunResult::Launched)
+        .expect("the fire's row");
     let tree =
         rimz::utils::path::normalize_path_lexical(&record.worktree.expect("fire worktree").path);
     assert_eq!(
         std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
         tree.display().to_string()
     );
+    wait_for_fire_tree_helpers(&env);
     assert!(!tree.exists());
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
     let signals: Vec<serde_json::Value> = env
@@ -9161,6 +9107,127 @@ fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
         "{signals:?}"
     );
     assert_eq!(signals[1]["payload"]["branch_deleted"], true, "{signals:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    if origin_ahead_of_local_main(&env).is_none() {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let release = env.home_root.join("release");
+    let check = format!(
+        "while [ ! -e {:?} ]; do sleep 0.05; done",
+        release.display().to_string()
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "nightly",
+            "--check",
+            &check,
+            "--worktree",
+            "night",
+            "--every",
+            "1h",
+        ],
+    );
+    loop_ok(&env, &["loop", "fire", "nightly"]);
+    loop_ok(&env, &["loop", "fire", "nightly"]);
+    let records = read_loop_run_records(&env);
+    let launched = records
+        .iter()
+        .find(|record| record.result == LoopRunResult::Launched)
+        .expect("the first fire's row");
+    let overlapped = records.last().unwrap();
+    assert_eq!(
+        (
+            overlapped.result,
+            overlapped.blocking_run.as_ref().map(|run| run.as_str())
+        ),
+        (LoopRunResult::Overlapped, launched.run_id.as_deref()),
+        "{records:?}"
+    );
+    assert_eq!(overlapped.worktree, None, "{overlapped:?}");
+    assert_eq!(night_leftovers(&env).len(), 2, "one tree and its branch");
+
+    std::fs::write(&release, "").unwrap();
+    let report = wait_for_loop_report(&env, "nightly");
+    assert_eq!(report.result, LoopRunResult::Completed);
+    wait_for_fire_tree_helpers(&env);
+    assert_eq!(night_leftovers(&env), Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_declined_run_the_backstop_reports_removes_its_fresh_tree() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    if origin_ahead_of_local_main(&env).is_none() {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "nightly",
+            "--check",
+            "exit 1",
+            "--worktree",
+            "night",
+            "--every",
+            "1h",
+        ],
+    );
+    // A run whose advance died after its terminal persist: its report is still owed, and the
+    // backstop's advance is the one that reports it.
+    let root = canonical(&env.project_root);
+    let created = rimz::worktree::create_for_loop_fire(
+        &root,
+        &rimz::config::WorktreeConfig::default(),
+        "night",
+        "nightly",
+        Timestamp::now(),
+    )
+    .unwrap();
+    let tree = created.marker.worktree_path.clone();
+    let id = rimz::ids::WorkflowRunId::new();
+    let paths = env.state_path_for(&root).workflow(&id);
+    std::fs::create_dir_all(paths.record.parent().unwrap()).unwrap();
+    let record = json!({
+        "version":1, "id":id, "workflow":"nightly", "origin":"inline", "task":"nightly",
+        "spec_dir":"/spec", "spec_digest":"abc", "fire_tree":true,
+        "scope":{"kind":"worktree","path":tree}, "project_root":root,
+        "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"check",
+        "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+        "deadline_fired":false, "next_seq":1, "terminal_at":"2026-01-01T00:00:01Z",
+        "loop_report":"owed"
+    });
+    std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    let output = env
+        .rimz()
+        .arg("--root")
+        .arg(&root)
+        .args(["workflow", "advance", id.as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let report = wait_for_loop_report(&env, "nightly");
+    assert_eq!(
+        (report.result, report.acted, report.checkout.as_deref()),
+        (LoopRunResult::Failed, Some(false), Some(root.as_path()))
+    );
+    wait_for_fire_tree_helpers(&env);
+    assert!(!tree.exists());
+    assert_eq!(night_leftovers(&env), Vec::<String>::new());
 }
 
 /// A codex stand-in that runs a whole hook-firing turn in a tmux pane. Each
@@ -9230,13 +9297,15 @@ impl LaunchedTurn {
         }
     }
 
-    /// Fire `task` and wait for its pane's wrapper and cleanup helper to exit.
-    fn fire(&self, env: &Env, task: &str, commit: bool) -> std::process::Output {
+    /// Fire `task`, wait for its run's report, then for its pane's wrapper and cleanup
+    /// helper to exit.
+    fn fire(&self, env: &Env, task: &str, commit: bool) -> (std::process::Output, LoopRunRecord) {
         if commit {
             std::fs::write(&self.commit, "").unwrap();
         } else {
             let _ = std::fs::remove_file(&self.commit);
         }
+        let before = read_loop_run_records(env).len();
         let output = env
             .rimz()
             .args(["--mux", "tmux", "loop", "fire", task])
@@ -9244,6 +9313,8 @@ impl LaunchedTurn {
             .env("SHELL", &self.shell)
             .output()
             .expect("fire the launched turn");
+        assert!(output.status.success(), "{output:?}");
+        let report = wait_for_loop_report_after(env, task, before);
         let spec = rimz::testkit::sandbox::SandboxSpec {
             home_root: env.home_root.clone(),
             runtime_root: env.runtime_root.clone(),
@@ -9252,15 +9323,23 @@ impl LaunchedTurn {
         while rimz::testkit::sandbox::sandbox_processes(&spec)
             .into_iter()
             .filter_map(rimz::proc::argv)
-            .any(|argv| {
-                argv.iter().any(|arg| arg == "--supervise")
-                    || argv.iter().any(|arg| arg == "cleanup")
-            })
+            .any(|argv| argv.iter().any(|arg| arg == "--supervise"))
         {
             assert!(Instant::now() < deadline, "the turn's wrapper did not exit");
             std::thread::sleep(Duration::from_millis(50));
         }
-        output
+        wait_for_fire_tree_helpers(env);
+        (output, report)
+    }
+
+    /// The row the fire wrote when its run started, which names the fire's tree.
+    fn launched(env: &Env, report: &LoopRunRecord) -> LoopRunRecord {
+        read_loop_run_records(env)
+            .into_iter()
+            .find(|record| {
+                record.result == LoopRunResult::Launched && record.run_id == report.run_id
+            })
+            .expect("the fire's row")
     }
 
     fn turn_dirs(&self) -> Vec<String> {
@@ -9319,18 +9398,21 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
         ("unverified", false),
         ("unverified", true),
     ] {
-        let output = turn.fire(&env, task, commit);
-        let record = last_loop_record(&env);
+        let (output, report) = turn.fire(&env, task, commit);
         let verified = task == "turn";
         assert_eq!(
-            record.result,
-            if verified {
-                LoopRunResult::Completed
-            } else {
-                LoopRunResult::Errored
-            },
-            "{record:?}"
+            (report.result, report.acted),
+            (
+                if verified {
+                    LoopRunResult::Completed
+                } else {
+                    LoopRunResult::Failed
+                },
+                Some(true)
+            ),
+            "{report:?}"
         );
+        let record = LaunchedTurn::launched(&env, &report);
         let tree = rimz::utils::path::normalize_path_lexical(
             &record.worktree.expect("fire worktree").path,
         );
@@ -9417,8 +9499,7 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
         ],
     );
     let turns = turn.turn_dirs().len();
-    let output = turn.fire(&env, "refused", false);
-    let refused = last_loop_record(&env);
+    let (output, refused) = turn.fire(&env, "refused", false);
     assert_eq!(refused.result, LoopRunResult::BudgetSkipped, "{refused:?}");
     assert!(
         refused
@@ -9427,6 +9508,7 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
             .is_some_and(|error| error.contains("fleet budget")),
         "{refused:?}"
     );
+    let refused = LaunchedTurn::launched(&env, &refused);
     let tree =
         rimz::utils::path::normalize_path_lexical(&refused.worktree.expect("fire worktree").path);
     let guarded = std::fs::read_to_string(&guards).unwrap();
@@ -9498,7 +9580,11 @@ fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
     }
 
     loop_ok(&env, &["loop", "fire", "guarded"]);
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::CheckSkipped);
+    let report = wait_for_loop_report(&env, "guarded");
+    assert_eq!(
+        (report.result, report.acted),
+        (LoopRunResult::Completed, Some(false))
+    );
     assert_eq!(
         std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
         root.display().to_string()
@@ -9518,17 +9604,13 @@ fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
         .output()
         .expect("add a launching task from linked worktree");
     assert!(output.status.success(), "{output:?}");
-    let output = turn.fire(&env, "launched", false);
-    assert_eq!(
-        last_loop_record(&env).result,
-        LoopRunResult::Completed,
-        "{output:?}"
-    );
+    let (output, report) = turn.fire(&env, "launched", false);
+    assert_eq!(report.result, LoopRunResult::Completed, "{output:?}");
     assert_eq!(turn.turn_dirs(), [root.display().to_string()]);
 }
 
 #[test]
-fn loop_check_failure_records_and_renders_history() {
+fn loop_check_outcomes_report_once_per_run() {
     let env = Env::new();
     env.record(&env.project_root);
     loop_ok(
@@ -9543,11 +9625,11 @@ fn loop_check_failure_records_and_renders_history() {
             "15m",
         ],
     );
-    let output = loop_ok(&env, &["loop", "fire", "history"]);
-    assert!(
-        output.find("  check: printf healthy").unwrap() < output.find("  │ healthy").unwrap(),
-        "{output}"
-    );
+    loop_ok(&env, &["loop", "fire", "history"]);
+    let healthy = wait_for_loop_report(&env, "history");
+    assert_eq!(healthy.result, LoopRunResult::Completed);
+    let journal = loop_run_journal(&env, &env.project_root, &healthy);
+    assert!(journal.contains("healthy"), "{journal}");
     loop_ok(
         &env,
         &[
@@ -9560,45 +9642,13 @@ fn loop_check_failure_records_and_renders_history() {
             "15m",
         ],
     );
+    let before = read_loop_run_records(&env).len();
     loop_ok(&env, &["loop", "fire", "history"]);
-
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].result, LoopRunResult::Completed);
-    assert_eq!(
-        records[0].check.as_ref().and_then(|check| check.code),
-        Some(0)
-    );
-    assert!(
-        records[0]
-            .check
-            .as_ref()
-            .unwrap()
-            .output
-            .contains("healthy")
-    );
-    assert_eq!(records[1].result, LoopRunResult::Failed);
-    assert_eq!(
-        records[1].check.as_ref().and_then(|check| check.code),
-        Some(127)
-    );
-    assert!(records[1].check.as_ref().unwrap().output.contains("broken"));
-
-    let show = loop_ok(&env, &["loop", "show", "history"]);
-    assert!(
-        show.contains("LAST RUN — ✗ failed (exit 127)") && show.contains("broken"),
-        "{show}"
-    );
-    let logs = loop_ok(&env, &["loop", "logs", "history"]);
-    assert!(
-        logs.find("healthy").unwrap() < logs.find("broken").unwrap(),
-        "{logs}"
-    );
-    let failed = loop_ok(&env, &["loop", "logs", "history", "--failed"]);
-    assert!(
-        failed.contains("broken") && !failed.contains("healthy"),
-        "{failed}"
-    );
+    let broken = wait_for_loop_report_after(&env, "history", before);
+    assert_eq!(broken.result, LoopRunResult::Failed);
+    let journal = loop_run_journal(&env, &env.project_root, &broken);
+    assert!(journal.contains("broken"), "{journal}");
+    assert_eq!(read_loop_run_records(&env).len(), 4);
 }
 
 #[test]
@@ -9607,68 +9657,47 @@ fn loop_guard_skips_or_delivers_with_evidence() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-check", "feature-loop");
-    loop_ok(
+    // `loop add` refuses a guarded `--wait`; stored rows of the shape still run.
+    let task = |name: &str, check: &str| {
+        format!(
+            "[tasks.{name}]\n\
+             wait = {{ kind = \"claude\", session = \"sess-loop-check\", handle = \"@claude\" }}\n\
+             prompt = \"fix it\"\ncheck = {check:?}\non = \"fail\"\nroot = {:?}\nevery = \"15m\"\n",
+            env.project_root
+        )
+    };
+    write_loop_config(
         &env,
-        &[
-            "loop",
-            "add",
-            "healthy",
-            "--wait",
-            "@claude",
-            "--every",
-            "15m",
-            "--check",
-            "printf probe-line",
-            "--on",
-            "fail",
-            "--prompt",
-            "fix it",
-        ],
+        &format!(
+            "{}{}",
+            task("healthy", "printf probe-line"),
+            task("broken", "printf boom; exit 1")
+        ),
     );
     loop_ok(&env, &["loop", "run", "healthy"]);
+    let skipped = wait_for_loop_report(&env, "healthy");
+    assert_eq!(
+        (skipped.result, skipped.acted),
+        (LoopRunResult::Completed, Some(false))
+    );
     assert!(
         env.store()
             .list_pending_messages()
             .expect("messages")
             .is_empty()
     );
-    let skipped = last_loop_record(&env);
-    assert_eq!(skipped.result, LoopRunResult::CheckSkipped);
-    assert_eq!(skipped.check.and_then(|check| check.code), Some(0));
 
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "broken",
-            "--wait",
-            "@claude",
-            "--every",
-            "15m",
-            "--check",
-            "printf boom; exit 1",
-            "--on",
-            "fail",
-            "--prompt",
-            "fix it",
-        ],
-    );
     loop_ok(&env, &["loop", "run", "broken"]);
-    assert_pending_message(
-        &env,
-        "sess-loop-check",
-        "check `printf boom; exit 1` exited 1",
+    let delivered = wait_for_loop_report(&env, "broken");
+    assert_eq!(
+        (delivered.result, delivered.acted),
+        (LoopRunResult::Completed, Some(true))
     );
-    let delivered = last_loop_record(&env);
-    assert_eq!(delivered.result, LoopRunResult::Delivered);
-    let check = delivered.check.expect("guard check detail");
-    assert_eq!(check.code, Some(1));
-    assert!(check.output.contains("boom"));
+    assert_pending_message(&env, "sess-loop-check", "fix it");
 }
 
 #[test]
-fn loop_trip_then_preparation_error_records_and_renders() {
+fn loop_preparation_error_records_and_renders() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -9683,8 +9712,8 @@ fn loop_trip_then_preparation_error_records_and_renders() {
         ),
     );
 
-    let (stdout, error) = loop_fail(&env, &["loop", "fire", "trip_error"]);
-    assert!(stdout.contains("✗ check failed (exit 1)") && stdout.contains("→ waking @claude"));
+    // The prompt file is read where the run's definition compiles, before any check runs.
+    let (_stdout, error) = loop_fail(&env, &["loop", "fire", "trip_error"]);
     assert!(
         error.contains("reading prompt-file") && error.contains("missing-prompt.txt"),
         "{error}"
@@ -9758,6 +9787,15 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
     let empty_path = dispatch.home_root.join("empty-path");
     std::fs::create_dir_all(&empty_path).expect("empty PATH");
     let shell = write_fake_login_shell(&dispatch, "loop-preflight-test-sh", &[]);
+    // A live room: the fire births none, so nothing before the run needs a multiplexer.
+    crate::common::room::seed_sidebar_heartbeat(
+        &dispatch.runtime_paths(),
+        MuxName::Zellij,
+        &dispatch
+            .resolve_workspace(&dispatch.project_root)
+            .session_name,
+        "dispatch",
+    );
     let output = dispatch
         .rimz()
         .env("SHELL", shell)
@@ -9765,17 +9803,19 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
         .args(["loop", "run", "dispatch-fails"])
         .output()
         .expect("run scheduled spawn");
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success() && error.contains("finding `claude` on PATH"),
-        "{error}"
-    );
+    // The run started, so the one-shot is spent, whatever its step then meets.
+    assert!(output.status.success(), "{output:?}");
     assert!(
         !read_loop_instances(&dispatch)
             .0
             .contains_key("dispatch-fails")
     );
-    assert_eq!(last_loop_record(&dispatch).task, "dispatch-fails");
+    let launched = last_loop_record(&dispatch);
+    assert_eq!(
+        (launched.task.as_str(), launched.result),
+        ("dispatch-fails", LoopRunResult::Launched)
+    );
+    assert!(launched.run_id.is_some(), "{launched:?}");
 
     let preflight = Env::new();
     write_loop_instances(
@@ -9853,30 +9893,35 @@ fn loop_poll_until_delivers_once_or_expires() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-until", "feature-loop");
-    loop_ok(
+    // `loop add --until` refuses; a stored `--until` row still runs, one run per fire.
+    write_loop_instances(
         &env,
-        &[
-            "loop",
-            "add",
-            "green",
-            "--wait",
-            "@claude",
-            "--every",
-            "2m",
-            "--check",
-            "true",
-            "--on",
-            "success",
-            "--until",
-            "30m",
-            "--prompt",
-            "merge now",
-        ],
+        Tasks(BTreeMap::from([(
+            "green".to_owned(),
+            TaskEntry {
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: AgentSessionId::from("sess-loop-until"),
+                    handle: "@claude".to_owned(),
+                }),
+                prompt: Some("merge now".to_owned()),
+                check: Some("true".into()),
+                on: Some(CheckOn::Success),
+                root: env.project_root.clone(),
+                every: Some("2m".to_owned()),
+                deadline: Some(Timestamp::now() + SignedDuration::from_mins(30)),
+                ..TaskEntry::default()
+            },
+        )])),
     );
-    assert!(read_loop_instances(&env).0.contains_key("green"));
     loop_ok(&env, &["loop", "run", "green"]);
+    // The acted run's report consumes the row.
+    let report = wait_for_loop_report(&env, "green");
+    assert_eq!(report.acted, Some(true));
     assert_pending_message(&env, "sess-loop-until", "merge now");
-    assert!(!read_loop_instances(&env).0.contains_key("green"));
+    wait_for_loop_run_records(&env, "the acted --until row's removal", |_| {
+        !read_loop_instances(&env).0.contains_key("green")
+    });
 
     let expired = Env::new();
     expired.record(&expired.project_root);
@@ -9967,7 +10012,7 @@ fn loop_worktree_target_delivery_preserves_session() {
 }
 
 #[test]
-fn loop_dead_target_run_removes_but_fire_keeps_task() {
+fn loop_guarded_wait_to_a_dead_target_fails_its_run() {
     let env = Env::new();
     env.record(&env.project_root);
     let config = format!(
@@ -9976,24 +10021,22 @@ fn loop_dead_target_run_removes_but_fire_keeps_task() {
         env.project_root.display()
     );
     write_loop_config(&env, &config);
-    let run = loop_ok(&env, &["loop", "run", "dead"]);
-    assert!(run.contains("not alive; removing schedule"), "{run}");
-    assert!(
-        !std::fs::read_to_string(loop_config_path(&env))
-            .unwrap()
-            .contains("[tasks.dead]")
-    );
-
-    write_loop_config(&env, &config);
-    let fire = loop_ok(&env, &["loop", "fire", "dead"]);
-    assert!(
-        fire.contains("@claude not alive — schedule left in place")
-            && std::fs::read_to_string(loop_config_path(&env))
+    // A guarded wait runs its guard and message step in a run; an undelivered message fails it.
+    // A scheduled run spends the one-shot; a manual fire keeps it.
+    for (verb, kept) in [("fire", true), ("run", false)] {
+        let before = read_loop_run_records(&env).len();
+        let text = loop_ok(&env, &["loop", verb, "dead"]);
+        assert!(text.contains("launched"), "{text}");
+        let report = wait_for_loop_report_after(&env, "dead", before);
+        assert_eq!(report.result, LoopRunResult::Failed, "{verb}");
+        assert_eq!(
+            std::fs::read_to_string(loop_config_path(&env))
                 .unwrap()
                 .contains("[tasks.dead]"),
-        "{fire}"
-    );
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::TargetGone);
+            kept,
+            "{verb}"
+        );
+    }
 }
 
 #[test]
@@ -10051,9 +10094,10 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
         list.lines()
             .any(|line| { line.trim_start().starts_with("invalid") && line.contains("invalid:") })
             && show.contains("invalid · routine · invalid:")
-            && fire.contains("check passed"),
+            && fire.contains("launched"),
         "{list}\n{show}\n{fire}"
     );
+    wait_for_loop_report(&env, "invalid");
 
     env.install_agent_hooks("claude");
     register_running_agent(&env, "manual-invalid-session", "feature-manual");
@@ -10325,33 +10369,6 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
         json!(holder.started_at)
     );
     lock_file.unlock().expect("unlock loop run lock");
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_list_shows_a_consumed_one_shot_until_its_run_ends() {
-    let env = Env::new();
-    let (_fixture, mut runner, _run) = start_consumed_spawn(&env, "later");
-
-    let list = loop_ok(&env, &["loop", "list"]);
-    let lines = list.lines().collect::<Vec<_>>();
-    assert!(
-        lines.len() == 5
-            && lines[0].contains("room")
-            && lines[2].starts_with("DONE")
-            && lines[3].trim_start().starts_with("NAME")
-            && lines[4].trim_start().starts_with("later")
-            && lines[4].contains("▸ running"),
-        "{list}"
-    );
-
-    runner.kill().unwrap();
-    runner.wait().unwrap();
-    let list = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        list.contains("no loop tasks") && !list.contains("later"),
-        "{list}"
-    );
 }
 
 #[test]
@@ -10733,9 +10750,68 @@ fn terminal_check_runs_interactive_shell_to_completion() {
     child.wait().unwrap();
     drop(pair.master);
     output.join().unwrap();
-    let check = last_loop_record(&env).check.unwrap();
-    assert!(!check.timed_out, "{}", check.output);
-    assert!(check.output.contains("shell-ready"), "{}", check.output);
+    let report = wait_for_loop_report(&env, "shell-probe");
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert_eq!(report.result, LoopRunResult::Completed, "{journal}");
+    assert!(journal.contains("shell-ready"), "{journal}");
+}
+
+/// The fire returns at run start while the terminal's session leader lives on, as a user's
+/// shell does, so the check's terminal job control must not reach it.
+#[cfg(unix)]
+#[test]
+fn terminal_check_outlived_by_its_session_leader_runs_to_completion() {
+    if which::which("bash").is_err() {
+        crate::common::skip("bash not on PATH");
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "shell-probe",
+            "--every",
+            "15m",
+            "--timeout",
+            "20s",
+            "--check",
+            "bash -i -c 'printf shell-ready'",
+        ],
+    );
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new("sh");
+    env.pin_pty_command(&mut command);
+    command.args(["-c", "\"$1\" loop fire shell-probe; sleep 90", "leader"]);
+    command.arg(env.rimz_bin());
+    command.cwd(&env.project_root);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+    let report = wait_for_loop_report(&env, "shell-probe");
+    let leader_alive = child.try_wait().unwrap().is_none();
+    let _ = child.kill();
+    child.wait().unwrap();
+    drop(pair.master);
+    output.join().unwrap();
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert!(leader_alive, "the session leader outlives the run");
+    assert_eq!(report.result, LoopRunResult::Completed, "{journal}");
+    assert!(journal.contains("shell-ready"), "{journal}");
 }
 
 #[cfg(unix)]
@@ -10777,73 +10853,10 @@ fn manual_check_clears_the_agent_identity_overlay() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let record = last_loop_record(&env);
-    assert_eq!(record.result, LoopRunResult::Completed);
-    assert_eq!(record.check.unwrap().output, "clean unset");
-}
-
-#[cfg(unix)]
-#[test]
-fn manual_fire_forwards_interrupt_to_the_check_group() {
-    for (on, ignores_interrupt) in [
-        (None, false),
-        (Some("fail"), false),
-        (Some("success"), false),
-        (Some("any"), false),
-        (Some("fail"), true),
-    ] {
-        let env = Env::new();
-        env.record(&env.project_root);
-        let check = if ignores_interrupt {
-            "trap '' INT; printf ready > check-ready; sleep 30"
-        } else {
-            "trap 'exit 130' INT; sh -c 'trap \"printf stopped > interrupted; kill \\$!; exit 130\" INT; sleep 30 & printf ready > check-ready; wait'"
-        };
-        let mut args = vec![
-            "loop",
-            "add",
-            "interruptible",
-            "--every",
-            "15m",
-            "--check",
-            check,
-        ];
-        if let Some(on) = on {
-            env.install_agent_hooks("claude");
-            args.extend([
-                "--agent",
-                "claude",
-                "--prompt",
-                "must not launch",
-                "--on",
-                on,
-            ]);
-        }
-        loop_ok(&env, &args);
-        let mut runner = env
-            .rimz()
-            .args(["loop", "fire", "interruptible"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        wait_for_path(&env.project_root.join("check-ready"));
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(runner.id() as i32),
-            nix::sys::signal::Signal::SIGINT,
-        )
-        .unwrap();
-        if !ignores_interrupt {
-            wait_for_path(&env.project_root.join("interrupted"));
-        }
-        assert_eq!(runner.wait().unwrap().code(), Some(130));
-        let record = last_loop_record(&env);
-        assert_eq!(record.result, LoopRunResult::Canceled);
-        assert!(record.run_id.is_none());
-        let check = record.check.unwrap();
-        assert_eq!(check.code, (!ignores_interrupt).then_some(130));
-        assert!(!check.timed_out);
-    }
+    let report = wait_for_loop_report(&env, "identity");
+    let journal = loop_run_journal(&env, &env.project_root, &report);
+    assert_eq!(report.result, LoopRunResult::Completed, "{journal}");
+    assert!(journal.contains("clean unset"), "{journal}");
 }
 
 #[cfg(unix)]
@@ -10905,18 +10918,12 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
     );
     let paths = env.state_path_for(&env.project_root);
     assert!(!paths.workspace_record.exists());
-    let mut runner = command()
-        .args(["loop", "run", "spawn"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn loop runner");
-    let lock_path = loop_run_lock_path(&env, "spawn");
-    let info = wait_for_held_loop_lock(&mut runner, &lock_path);
-    assert_eq!(info.pid, runner.id());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let fired = command().args(["loop", "run", "spawn"]).output().unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    // The fire's workflow run launches the agent step's supervised run.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     let run = loop {
-        let records = rimz::harness::run::list(&paths).expect("list runs");
+        let records = rimz::harness::run::list(&paths).unwrap_or_default();
         if let Some(record) = records.first() {
             if record.status == RunStatus::Running {
                 break record.clone();
@@ -10949,53 +10956,13 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
                 );
             }
         }
-        if let Some(status) = runner.try_wait().expect("poll loop runner") {
-            let output = runner.wait_with_output().unwrap();
-            panic!(
-                "loop runner exited {status}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for Running run"
         );
         std::thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(run.loop_task.as_deref(), Some("spawn"));
-    let trace = std::fs::read_to_string(env.project_root.join("spawn.log")).unwrap();
-    // The run's pane opens in a `new-tab --layout`, which spells its argv as JSON strings.
-    let payload = trace
-        .split("\"--request-file\" ")
-        .nth(1)
-        .and_then(|rest| {
-            serde_json::Deserializer::from_str(rest)
-                .into_iter::<String>()
-                .next()?
-                .ok()
-        })
-        .unwrap_or_else(|| panic!("pane request in {trace}"));
-    let payload = std::fs::read_to_string(payload).unwrap();
-    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
-    let notes = paths.notes_run(
-        rimz::disk::paths::Class::AutomationNotes,
-        request
-            .identity
-            .params
-            .record
-            .as_ref()
-            .unwrap()
-            .notes
-            .as_ref()
-            .unwrap(),
-    );
-    assert_eq!(
-        request.reminder_section,
-        Some(rimz::harness::launch::ReminderSection::Loop(format!(
-            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h.\n\n`{}/spawn-notes.md` is this run's working memory. Only this run's agent writes it, across restarts and its subagents. Write it for someone arriving cold. Note any change you made outside this repository: pushes, PR or issue comments, databases, remote services.",
-            notes.display()
-        )))
-    );
+    assert!(run.workflow.is_some(), "{run:?}");
     assert!(paths.workspace_record.is_file());
     assert!(
         rimz::StatePaths::history_paths(&paths.root)
@@ -11018,60 +10985,33 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
     }
     let stopped = stop.args(["loop", "stop", "spawn"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&stopped.stderr);
-    assert_eq!(stopped.status.success(), !pane_open, "{stderr}");
     if pane_open {
+        // The workflow's cancel cannot stop an attempt whose pane stays open.
+        assert!(!stopped.status.success(), "{stopped:?}");
         assert!(
-            String::from_utf8_lossy(&stopped.stdout).contains("loop `spawn`: stopped"),
-            "{stopped:?}"
-        );
-        let retry = format!("run `rimz agents stop {}` to close it", run.run_id);
-        assert!(
-            stderr.contains("is still open")
-                && stderr.contains(&retry)
-                && !stderr.contains("rerun the stop"),
+            stderr.contains(&format!(
+                "loop `spawn`: workflow run {}",
+                run.workflow.as_ref().unwrap().run
+            )) && stderr.contains("not canceled: error: stopping workflow attempt"),
             "{stderr}"
         );
+        return;
     }
+    assert!(
+        String::from_utf8_lossy(&stopped.stdout).contains("loop `spawn`: stopped · run"),
+        "{stopped:?}"
+    );
+    assert!(stopped.status.success(), "{stderr}");
     assert_eq!(
         rimz::harness::run::load(&paths, &run.run_id)
             .unwrap()
             .status,
         RunStatus::Canceled
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while runner.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "stopped runner did not exit");
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let released = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(lock_path)
-        .unwrap();
-    released.try_lock().expect("loop lock released");
-    drop(released);
-    if pane_open {
-        let closes = || {
-            std::fs::read_to_string(env.project_root.join("spawn.log"))
-                .unwrap()
-                .matches("close-pane")
-                .count()
-        };
-        assert_eq!(closes(), 1);
-        let again = command().args(["loop", "stop", "spawn"]).output().unwrap();
-        assert!(again.status.success(), "{again:?}");
-        assert_eq!(closes(), 1, "a second loop stop never reaches the pane");
-        let retried = command()
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-            )
-            .args(["agents", "stop", run.run_id.as_str()])
-            .output()
-            .unwrap();
-        assert!(retried.status.success(), "{retried:?}");
-        assert_eq!(closes(), 2, "the named stop closes the run's pane");
-    }
+    assert_eq!(
+        wait_for_loop_report(&env, "spawn").result,
+        LoopRunResult::Canceled
+    );
     for entry in std::fs::read_dir(env.rimz_home().join("ws")).unwrap() {
         let name = entry.unwrap().file_name();
         let name = name.to_string_lossy();
@@ -11117,372 +11057,17 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
             "23:59",
         ],
     );
-    let mut runner = env
-        .rimz()
-        .args(["loop", "run", "stuck"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn stuck loop runner");
-    let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
-    assert_eq!(info.pid, runner.id());
+    loop_ok(&env, &["loop", "run", "stuck"]);
     wait_for_path(&env.project_root.join("check-ready"));
     loop_ok(&env, &["loop", "remove", "stuck"]);
     let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
-    assert!(
-        stopped.contains("stopped") && stopped.contains("SIGTERM"),
-        "{stopped}"
-    );
-    let released = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(loop_run_lock_path(&env, "stuck"))
-        .expect("open released loop lock");
-    released.try_lock().expect("loop lock released");
-    drop(released);
-    assert!(!runner.wait().expect("wait for stopped runner").success());
-    let record = last_loop_record(&env);
+    assert!(stopped.contains("stopped · run"), "{stopped}");
+    let record = wait_for_loop_report(&env, "stuck");
     assert_eq!(record.result, LoopRunResult::Canceled);
-    assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
-    assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
-    assert_eq!(record.run_lock, Some(info));
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
         list.contains("DONE") && list.contains("stuck") && list.contains("canceled"),
         "{list}"
-    );
-}
-
-/// A fire that would start an agent waits behind another start's turn: it
-/// gives up at its `capacity-wait`, shows as held while it waits, and a stop leaves
-/// one `canceled` row and nothing of its own in the queue.
-#[cfg(unix)]
-#[test]
-fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "queued",
-            "--agent",
-            "claude",
-            "--prompt",
-            "work",
-            "--stay",
-            "--every",
-            "1h",
-            "--capacity-wait",
-            "2s",
-        ],
-    );
-    // Another start holds the turn for as long as this test process lives.
-    let queue = env.rimz_home().join("loops/throttle");
-    std::fs::create_dir_all(&queue).expect("mkdir throttle queue");
-    std::fs::write(
-        queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)),
-        json!({
-            "owner": { "pid": std::process::id(), "start": null },
-            "task": "other", "root": "/elsewhere", "checkout": "/elsewhere",
-            "enqueued_ms": 1, "state": "admitted",
-        })
-        .to_string(),
-    )
-    .expect("write the held turn");
-    let queued = || std::fs::read_dir(&queue).expect("read queue").count();
-
-    let output = env
-        .rimz()
-        .args(["loop", "run", "queued"])
-        .output()
-        .expect("run held loop");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let record = last_loop_record(&env);
-    assert_eq!(record.result, LoopRunResult::ThrottleSkipped);
-    let reason = record.error.as_deref().unwrap();
-    assert!(
-        reason.starts_with("gave up waiting for capacity after ")
-            && reason.ends_with("; queued: 1 start ahead"),
-        "{record:?}"
-    );
-    // The deadline clock truncates to milliseconds.
-    assert!(record.duration_ms.is_some_and(|duration| duration >= 1_999));
-    assert_eq!(queued(), 1, "a skipped run leaves the queue");
-    let show = loop_ok(&env, &["loop", "show", "queued"]);
-    assert!(
-        show.contains("throttle skipped") && show.contains(reason),
-        "{show}"
-    );
-    assert!(
-        !show.contains("throttle:") && !show.contains("load:") && !show.contains("THROTTLE"),
-        "{show}"
-    );
-
-    loop_ok(
-        &env,
-        &["config", "set", "loop.tasks.queued.capacity-wait", "30m"],
-    );
-    let mut runner = env
-        .rimz()
-        .args(["loop", "run", "queued"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn held loop runner");
-    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "queued"));
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let show = loop {
-        let show = loop_ok(&env, &["loop", "show", "queued"]);
-        if show.contains("held ") && show.contains("queued: 1 start ahead") {
-            break show;
-        }
-        assert!(Instant::now() < deadline, "never shown as held: {show}");
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert!(
-        show.contains(&format!("pid {}", runner.id())) && !show.contains("▸ running"),
-        "{show}"
-    );
-    let list = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        list.contains("HELD  starts waiting for capacity")
-            && list.contains("○ 1 held")
-            && !list.contains("▸ running")
-            && !list.contains("NEEDS YOU"),
-        "{list}"
-    );
-    let document: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
-    assert_eq!(document["held"]["reason"], "queued: 1 start ahead");
-    assert_eq!(document["held"]["position"], 2);
-    assert_eq!(document["held"]["hold"], "queue");
-    assert_eq!(document["held"]["pid"], runner.id());
-    assert!(document["held"]["since"].is_string(), "{document}");
-    assert_eq!(document["running"]["pid"], runner.id());
-    assert_eq!(document["waiting"], json!([]));
-    assert_eq!(queued(), 2);
-
-    // Another checkout of the task waits in another process: the runner
-    // keeps its own reason, and the other shows beside it, never paired
-    // with the runner's pid.
-    let own_ticket = std::fs::read_dir(&queue)
-        .expect("read queue")
-        .map(|entry| entry.expect("queue entry").path())
-        .find(|path| {
-            std::fs::read_to_string(path).is_ok_and(|ticket| ticket.contains("\"queued\""))
-        })
-        .expect("the runner's ticket");
-    let mut other: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&own_ticket).unwrap()).unwrap();
-    other["owner"] = json!({ "pid": std::process::id(), "start": null });
-    other["checkout"] = json!("/elsewhere/checkout-b");
-    other["reason"] = serde_json::Value::Null;
-    let other_ticket = queue.join(format!(
-        "{:020}-01890000-0000-7000-8000-000000000001",
-        u64::MAX / 2
-    ));
-    std::fs::write(&other_ticket, other.to_string()).expect("write the other checkout's ticket");
-    let show = loop_ok(&env, &["loop", "show", "queued"]);
-    assert!(
-        show.contains(&format!(
-            "pid {} · 1 held: waiting for its turn",
-            runner.id()
-        )) && show.contains("held "),
-        "{show}"
-    );
-    let list = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        list.contains("○ 2 held") && list.contains("waiting for its turn"),
-        "{list}"
-    );
-    let document: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
-    assert_eq!(document["held"]["pid"], runner.id());
-    assert_eq!(document["waiting"][0]["pid"], std::process::id());
-    assert_eq!(document["waiting"][0]["checkout"], "/elsewhere/checkout-b");
-    assert!(document["waiting"][0].get("hold").is_none());
-    // Another checkout's run of the task is active: it is not the held
-    // runner's, which has no run yet.
-    let paths = env.state_path_for(&env.project_root);
-    paths.ensure_dirs().unwrap();
-    let mut active = RunRecord::new(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        PermissionMode::Auto,
-        "work".to_owned(),
-        std::path::PathBuf::from("/elsewhere/checkout-c"),
-    );
-    active.status = RunStatus::Running;
-    active.loop_task = Some("queued".to_owned());
-    rimz::harness::run::create(&paths, &active).unwrap();
-    let show = loop_ok(&env, &["loop", "show", "queued"]);
-    assert!(
-        show.contains("held ") && !show.contains(&active.run_id.to_string()),
-        "{show}"
-    );
-    let document: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
-    assert_eq!(document["running"]["pid"], runner.id());
-    assert!(document["running"]["run_id"].is_null(), "{document}");
-    rimz::harness::run::cancel(&paths, &active.run_id).unwrap();
-    std::fs::remove_file(&other_ticket).expect("remove the other checkout's ticket");
-
-    let stopped = loop_ok(&env, &["loop", "stop", "queued"]);
-    assert!(stopped.contains("stopped"), "{stopped}");
-    assert!(!runner.wait().expect("wait for stopped runner").success());
-    let rows: Vec<_> = read_loop_run_records(&env)
-        .into_iter()
-        .map(|row| row.result)
-        .collect();
-    assert_eq!(
-        rows,
-        [LoopRunResult::ThrottleSkipped, LoopRunResult::Canceled],
-        "a stop before any run record leaves exactly one row"
-    );
-    assert_eq!(queued(), 1, "the stopped run's ticket is reaped");
-    let document: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
-    assert!(document["held"].is_null() && document["running"].is_null());
-}
-
-/// Ctrl-C ends a hidden scheduled run held by the start throttle after its check
-/// passed: the check's own interrupt handling is gone by then, so the hold
-/// listens for itself. The fire records `canceled` with the check it ran,
-/// leaves no ticket, and launches nothing.
-#[cfg(unix)]
-#[test]
-fn ctrl_c_ends_a_hidden_run_held_after_its_check_passed() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "checked",
-            "--every",
-            "15m",
-            "--check",
-            "printf ok > check-done",
-            "--timeout",
-            "5s",
-            "--on",
-            "success",
-            "--agent",
-            "claude",
-            "--prompt",
-            "must not launch",
-        ],
-    );
-    let queue = env.rimz_home().join("loops/throttle");
-    std::fs::create_dir_all(&queue).expect("mkdir throttle queue");
-    std::fs::write(
-        queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)),
-        json!({
-            "owner": { "pid": std::process::id(), "start": null },
-            "task": "other", "root": "/elsewhere", "checkout": "/elsewhere",
-            "enqueued_ms": 1, "state": "admitted",
-        })
-        .to_string(),
-    )
-    .expect("write the held turn");
-    let held_tickets = || {
-        std::fs::read_dir(&queue)
-            .expect("read queue")
-            .filter_map(|entry| std::fs::read_to_string(entry.ok()?.path()).ok())
-            .filter(|ticket| ticket.contains("queued: 1 start ahead"))
-            .count()
-    };
-
-    let mut runner = env
-        .rimz()
-        .args(["loop", "run", "checked"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn held fire");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while held_tickets() == 0 {
-        if Instant::now() >= deadline || runner.try_wait().unwrap().is_some() {
-            let _ = runner.kill();
-            let output = runner.wait_with_output().unwrap();
-            panic!(
-                "the fire was never held: {}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(env.project_root.join("check-done").exists());
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(runner.id() as i32),
-        nix::sys::signal::Signal::SIGINT,
-    )
-    .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = runner.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = runner.kill();
-            let _ = runner.wait();
-            panic!("Ctrl-C did not end the held fire");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert_eq!(status.code(), Some(130));
-    let record = last_loop_record(&env);
-    assert_eq!(record.result, LoopRunResult::Canceled);
-    assert_eq!(record.error.as_deref(), Some("interrupted while held"));
-    assert!(record.run_id.is_none(), "nothing launched");
-    assert_eq!(record.check.expect("the check that ran").code, Some(0));
-    assert_eq!(
-        std::fs::read_dir(&queue).expect("read queue").count(),
-        1,
-        "only the other start's turn is left"
-    );
-
-    // Fired again and released mid-wait, the fire records how long it held.
-    let mut runner = env
-        .rimz()
-        .args(["loop", "run", "checked"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn held fire");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while held_tickets() == 0 {
-        assert!(Instant::now() < deadline, "the second fire was never held");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    std::thread::sleep(Duration::from_millis(1_500));
-    std::fs::remove_file(queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)))
-        .expect("release the turn");
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while runner.try_wait().unwrap().is_none() {
-        if Instant::now() >= deadline {
-            let _ = runner.kill();
-            panic!("the released fire never finished");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let record = last_loop_record(&env);
-    assert_ne!(record.result, LoopRunResult::ThrottleSkipped);
-    assert_ne!(record.result, LoopRunResult::Canceled);
-    assert!(
-        record
-            .throttle_wait_ms
-            .is_some_and(|waited| waited >= 1_000),
-        "{record:?}"
     );
 }
 
@@ -11521,7 +11106,7 @@ impl ConsumedSpawn {
 }
 
 #[cfg(unix)]
-fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::Child, RunRecord) {
+fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, RunRecord) {
     env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(env);
@@ -11548,17 +11133,15 @@ fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::
     );
     assert!(read_loop_instances(env).0.contains_key(name));
     let paths = env.state_path_for(&env.project_root);
-    let mut runner = fixture
+    let fired = fixture
         .command(env)
         .args(["loop", "run", name])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn loop runner");
-    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(env, name));
-    let deadline = Instant::now() + Duration::from_secs(10);
+        .output()
+        .unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     let run = loop {
-        let records = rimz::harness::run::list(&paths).expect("list runs");
+        let records = rimz::harness::run::list(&paths).unwrap_or_default();
         if let Some(record) = records.first() {
             if record.status == RunStatus::Running {
                 break record.clone();
@@ -11591,59 +11174,22 @@ fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::
                 );
             }
         }
-        if let Some(status) = runner.try_wait().expect("poll loop runner") {
-            let output = runner.wait_with_output().unwrap();
-            panic!(
-                "loop runner exited {status}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for Running run"
         );
         std::thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(run.loop_task.as_deref(), Some(name));
+    assert!(run.workflow.is_some(), "{run:?}");
     assert!(!read_loop_instances(env).0.contains_key(name));
-    (fixture, runner, run)
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_show_and_logs_find_a_consumed_one_shot_while_its_run_is_in_flight() {
-    let env = Env::new();
-    let (_fixture, mut runner, run) = start_consumed_spawn(&env, "later");
-    let run_id = run.run_id.to_string();
-
-    let show = loop_ok(&env, &["loop", "show", "later"]);
-    assert!(
-        show.contains("▸ running")
-            && show.contains(&run_id)
-            && show.contains("stop with `rimz loop stop later`")
-            && !show.contains("no loop task")
-            && !show.contains("rimz loop fire"),
-        "{show}"
-    );
-    let logs = loop_ok(&env, &["loop", "logs", "later"]);
-    assert!(
-        logs.contains("▸ running") && logs.contains(&run_id) && !logs.contains("no loop task"),
-        "{logs}"
-    );
-    let failed = loop_ok(&env, &["loop", "logs", "later", "--failed"]);
-    assert!(
-        failed.contains("no failed runs recorded") && !failed.contains("▸ running"),
-        "{failed}"
-    );
-    runner.kill().unwrap();
-    runner.wait().unwrap();
+    (fixture, run)
 }
 
 #[cfg(unix)]
 #[test]
 fn loop_stop_reaches_a_consumed_one_shot_run() {
     let env = Env::new();
-    let (fixture, mut runner, run) = start_consumed_spawn(&env, "later");
+    let (fixture, run) = start_consumed_spawn(&env, "later");
     let paths = env.state_path_for(&env.project_root);
 
     let stopped = fixture
@@ -11657,30 +11203,14 @@ fn loop_stop_reaches_a_consumed_one_shot_run() {
         "{}",
         String::from_utf8_lossy(&stopped.stderr)
     );
-    assert!(
-        stdout.contains("loop `later`: stopped") && stdout.contains(run.run_id.as_str()),
-        "{stdout}"
-    );
+    assert!(stdout.contains("loop `later`: stopped · run"), "{stdout}");
     assert_eq!(
         rimz::harness::run::load(&paths, &run.run_id)
             .unwrap()
             .status,
         RunStatus::Canceled
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while runner.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "stopped runner did not exit");
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let released = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(loop_run_lock_path(&env, "later"))
-        .unwrap();
-    released.try_lock().expect("loop lock released");
-    drop(released);
-    let record = last_loop_record(&env);
-    assert_eq!(record.task, "later");
+    let record = wait_for_loop_report(&env, "later");
     assert_eq!(record.result, LoopRunResult::Canceled);
     assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
     assert!(!read_loop_instances(&env).0.contains_key("later"));
@@ -11692,65 +11222,6 @@ fn loop_stop_reaches_a_consumed_one_shot_run() {
     let show = loop_ok(&env, &["loop", "show", "later"]);
     assert!(
         show.contains("canceled") && !show.contains("▸ running"),
-        "{show}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "stuck",
-            "--check",
-            "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
-            "--in",
-            "30m",
-        ],
-    );
-    let mut runner = env
-        .rimz()
-        .args(["loop", "run", "stuck"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn stuck loop runner");
-    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
-    wait_for_path(&env.project_root.join("check-ready"));
-    let mut instances = read_loop_instances(&env);
-    assert!(instances.0.remove("stuck").is_some());
-    write_loop_instances(&env, instances);
-
-    let show = loop_ok(&env, &["loop", "show", "stuck"]);
-    assert!(
-        show.contains("▸ running")
-            && !show.contains("run run_")
-            && show.contains("stop with `rimz loop stop stuck`"),
-        "{show}"
-    );
-    let logs = loop_ok(&env, &["loop", "logs", "stuck"]);
-    assert!(
-        logs.contains("▸ running") && !logs.contains("run run_"),
-        "{logs}"
-    );
-    let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
-    assert!(
-        stopped.contains("stopped") && stopped.contains("SIGTERM"),
-        "{stopped}"
-    );
-    assert!(!runner.wait().expect("wait for stopped runner").success());
-    let record = last_loop_record(&env);
-    assert_eq!(record.task, "stuck");
-    assert_eq!(record.result, LoopRunResult::Canceled);
-    assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
-    let show = loop_ok(&env, &["loop", "show", "stuck"]);
-    assert!(
-        show.contains("stopped by rimz loop stop") && !show.contains("▸ running"),
         "{show}"
     );
 }
@@ -11789,7 +11260,10 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
         &env,
         &["loop", "add", "probe", "--check", "true", "--every", "1h"],
     );
+    let before = read_loop_run_records(&env).len();
     loop_ok(&env, &["loop", "fire", "probe"]);
+    // The fire returns once its run starts; the views below read the run's report.
+    wait_for_loop_report_after(&env, "probe", before);
     // A directory where the run lock file belongs makes opening the lock fail.
     for name in ["probe", "ghost"] {
         let lock = loop_run_lock_path(&env, name);
@@ -12452,13 +11926,10 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
                 "15m",
             ],
         );
-        let mut runner = command()
-            .args(["loop", "run", "spawn"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn loop runner");
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let fired = command().args(["loop", "run", "spawn"]).output().unwrap();
+        assert!(fired.status.success(), "{fired:?}");
+        // The fire's run launches the agent step from its detached advance.
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
         let launched = loop {
             let agents = store
                 .runtime_projection(rimz::RuntimeScope::Audit)
@@ -12466,13 +11937,6 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
                 .agents;
             if let Some(agent) = agents.into_iter().next() {
                 break agent;
-            }
-            if let Some(status) = runner.try_wait().expect("poll loop runner") {
-                let output = runner.wait_with_output().unwrap();
-                panic!(
-                    "loop runner exited {status}: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
             }
             assert!(
                 Instant::now() < deadline,
@@ -12491,7 +11955,6 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
             "{}",
             String::from_utf8_lossy(&stopped.stderr)
         );
-        runner.wait().expect("stopped runner exits");
     }
 }
 
@@ -12972,49 +12435,14 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "claude",
                 "--until",
                 "1h",
+                "--check",
+                "true",
                 "--every",
                 "15m",
                 "--prompt",
                 "x",
             ],
-            "--until requires --check",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "until-every",
-                "--agent",
-                "claude",
-                "--until",
-                "1h",
-                "--check",
-                "true",
-                "--prompt",
-                "x",
-            ],
-            "--until requires --every",
-        ),
-        (
-            vec![
-                "loop", "add", "until-in", "--agent", "claude", "--until", "1h", "--check", "true",
-                "--in", "15m", "--prompt", "x",
-            ],
-            "--until requires --every",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "until-action",
-                "--until",
-                "1h",
-                "--check",
-                "true",
-                "--every",
-                "15m",
-            ],
-            "--until requires --agent or --wait",
+            "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check",
         ),
         (
             vec![
@@ -13030,25 +12458,6 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "x",
             ],
             "--project tasks cannot use --wait; project config cannot pin a machine-local session",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "project-deadline",
-                "--project",
-                "--agent",
-                "claude",
-                "--check",
-                "true",
-                "--until",
-                "1h",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
-            ],
-            "--project tasks cannot use --until; poll-until deadlines are machine state",
         ),
         (
             vec![
@@ -13152,6 +12561,77 @@ fn loop_fail(env: &Env, args: &[&str]) -> (String, String) {
         String::from_utf8(output.stdout).expect("stdout"),
         String::from_utf8(output.stderr).expect("stderr"),
     )
+}
+
+/// Wait for the terminal report of `task`'s latest started run, and return it.
+fn wait_for_loop_report(env: &Env, task: &str) -> LoopRunRecord {
+    wait_for_loop_report_after(env, task, 0)
+}
+
+/// Wait for a terminal run report of `task` among the history rows past the first `before`.
+fn wait_for_loop_report_after(env: &Env, task: &str, before: usize) -> LoopRunRecord {
+    let report = |record: &LoopRunRecord| {
+        record.task == task && record.run_id.is_some() && record.result != LoopRunResult::Launched
+    };
+    wait_for_loop_run_records(env, &format!("{task}'s run report"), |records| {
+        records.iter().skip(before).any(report)
+    });
+    read_loop_run_records(env)
+        .into_iter()
+        .skip(before)
+        .rfind(report)
+        .expect("run report")
+}
+
+/// Wait for the detached `rimz worktree` helpers a fire tree's report spawned to exit.
+fn wait_for_fire_tree_helpers(env: &Env) {
+    let spec = rimz::testkit::sandbox::SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while rimz::testkit::sandbox::sandbox_processes(&spec)
+        .into_iter()
+        .filter_map(rimz::proc::argv)
+        .any(|argv| {
+            argv.iter().any(|arg| arg == "worktree")
+                && argv.iter().any(|arg| arg == "remove" || arg == "cleanup")
+        })
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the fire tree's helper did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The journal of the run a loop row names, rendered for substring checks.
+fn loop_run_journal(env: &Env, root: &Path, record: &LoopRunRecord) -> String {
+    let id = record.run_id.as_deref().expect("run id").parse().unwrap();
+    let paths = env.state_path_for(root).workflow(&id);
+    let journal = rimz::store::workflow::journal(&paths).unwrap();
+    // A check's output lives in the log its evaluation names.
+    let logs = journal
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            rimz::store::workflow::JournalEvent::Evaluation { object, .. } => object
+                .get("log")
+                .and_then(|log| log.as_str())
+                .map(std::path::PathBuf::from),
+            _ => None,
+        })
+        .map(|log| std::fs::read_to_string(log).unwrap_or_default())
+        .collect::<String>();
+    let run = rimz::store::workflow::load(&paths)
+        .map(|run| {
+            format!(
+                "{:?} node={} input={:?} wait={:?} attempt={:?}",
+                run.state, run.node, run.input, run.wait, run.attempt
+            )
+        })
+        .unwrap_or_else(|error| format!("{error:#}"));
+    format!("{run}\n{journal:?}\n{logs}")
 }
 
 fn last_loop_record(env: &Env) -> LoopRunRecord {
@@ -13546,38 +13026,6 @@ fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
         .expect("open lock");
     lock_file.try_lock().expect("hold loop run lock");
     lock_file
-}
-
-#[cfg(unix)]
-fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunLockInfo {
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    loop {
-        // The runner writes its pid under the lock; probing the lock could steal it.
-        if let Ok(bytes) = std::fs::read(path)
-            && let Ok(info) = serde_json::from_slice::<RunLockInfo>(&bytes)
-            && info.pid == child.id()
-        {
-            return info;
-        }
-        assert!(
-            child.try_wait().expect("poll loop runner").is_none(),
-            "loop runner exited before holding its lock"
-        );
-        if Instant::now() >= deadline {
-            child.kill().expect("kill timed-out loop runner");
-            child.wait().expect("reap timed-out loop runner");
-            let mut stderr = String::new();
-            if let Some(mut pipe) = child.stderr.take() {
-                pipe.read_to_string(&mut stderr)
-                    .expect("read loop runner stderr");
-            }
-            panic!(
-                "timed out waiting for loop run lock {}: {stderr}",
-                path.display()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {

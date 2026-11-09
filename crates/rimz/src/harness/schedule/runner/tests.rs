@@ -26,7 +26,6 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .unwrap()
@@ -48,12 +47,12 @@ fn terminal_records_name_the_lock_that_refused_other_fires() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut fire = backlog_fire(root.path(), &catalog);
-        assert!(fire.prepare_run_lock(false).unwrap().is_none());
+        assert!(fire.prepare_run_lock().unwrap().is_none());
         let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
             panic!("holder is recorded")
         };
         let mut refused = backlog_fire(root.path(), &catalog);
-        let refused = refused.prepare_run_lock(false).unwrap().unwrap();
+        let refused = refused.prepare_run_lock().unwrap().unwrap();
         assert_eq!(refused.record.result, LoopRunResult::Deferred);
         assert_eq!(refused.record.holder, Some(info));
         assert_eq!(refused.record.run_lock, None);
@@ -120,11 +119,10 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                     Timestamp::now(),
                     Arc::new(MachineConfig::default()),
                     None,
-                    CheckEcho::Capture,
                     Instant::now(),
                 )
                 .unwrap();
-                fire.prepare_run_lock(false).unwrap();
+                fire.prepare_run_lock().unwrap();
                 let path = backlog::path(&paths);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, contents).unwrap();
@@ -180,7 +178,7 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
             .unwrap(),
         );
         if after_admission {
-            fire.prepare_run_lock(false).unwrap();
+            fire.prepare_run_lock().unwrap();
         }
         let mut locked = LockedBacklog::acquire(&paths).unwrap();
         locked.record.tasks.insert("pending".into(), serde_json::from_value(serde_json::json!({
@@ -193,7 +191,7 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
         if after_admission {
             assert!(fire.reconcile_backlog().unwrap().is_none());
         } else {
-            assert!(fire.prepare_run_lock(false).unwrap().is_none());
+            assert!(fire.prepare_run_lock().unwrap().is_none());
         }
         assert_eq!(
             fire.signal.as_ref().unwrap().payload,
@@ -243,7 +241,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         for strike in 1..=3 {
             let mut fire = backlog_fire(root.path(), &catalog);
-            fire.prepare_run_lock(false).unwrap();
+            fire.prepare_run_lock().unwrap();
             let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
                 panic!("holder is recorded")
             };
@@ -267,14 +265,7 @@ fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
                 None,
                 |_| {},
             );
-            assert_eq!(
-                done.record.result,
-                if cause == backlog::StopCause::Replace {
-                    LoopRunResult::Replaced
-                } else {
-                    LoopRunResult::Canceled
-                }
-            );
+            assert_eq!(done.record.result, LoopRunResult::Canceled);
             assert_eq!(
                 done.record.error.as_deref(),
                 Some(if cause == backlog::StopCause::Replace {
@@ -302,7 +293,7 @@ fn arrival_reprobes_a_released_lock_and_absorbs_the_waiting_slot() {
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
     seed_backlog(root.path());
     let mut fire = backlog_fire(root.path(), &catalog);
-    assert!(fire.prepare_run_lock(false).unwrap().is_none());
+    assert!(fire.prepare_run_lock().unwrap().is_none());
     assert!(
         fire.run_lock.is_some(),
         "an arrival that finds the lock free runs"
@@ -322,7 +313,7 @@ fn release_unlocks_under_the_backlog_lock_and_spawns_only_when_triggers_wait() {
         let catalog = TaskCatalog::load(Some(root.path())).unwrap();
         let mut fire = backlog_fire(root.path(), &catalog);
         fire.mode = LoopRunMode::Manual;
-        fire.prepare_run_lock(false).unwrap();
+        fire.prepare_run_lock().unwrap();
         if pending {
             seed_backlog(root.path());
         }
@@ -409,55 +400,6 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
     assert!(!fire.finished);
 }
 
-#[test]
-fn a_coalescing_fire_reconciles_after_an_earlier_throttle_admission() {
-    let root = tempfile::tempdir().unwrap();
-    record_room(root.path()).unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let mut fire = backlog_fire(root.path(), &catalog);
-    fire.throttle_host = throttle::tests::FakeHost::new().host();
-    fire.config = Arc::new(toml::from_str("[throttle]\nstagger='1s'\n").unwrap());
-    fire.prepare_run_lock(false).unwrap();
-    assert!(fire.prepare_throttle().unwrap().is_none());
-    assert!(fire.throttle_turn.is_some());
-    seed_backlog(root.path());
-    fire.context = Some(FireContext {
-        action: TaskAction::Spawn("claude".into()),
-        root: root.path().to_owned(),
-        scope: None,
-    });
-    // Reconciliation must precede prompt/preflight work, even if it later fails.
-    assert!(fire.prepare_effect().is_err());
-    assert_eq!(
-        fire.absorbed, 1,
-        "arrivals during room birth after admission must reach the effect"
-    );
-}
-
-#[test]
-fn guard_usage_sums_every_judge() {
-    let mut wire = serde_json::to_value(LoopRunRecord::new(
-        "guard",
-        LoopRunResult::Completed,
-        LoopRunMode::Manual,
-        1,
-    ))
-    .unwrap();
-    wire["cost_usd"] = serde_json::json!(1.0);
-    wire["input_tokens"] = serde_json::json!(100);
-    wire["output_tokens"] = serde_json::json!(50);
-    wire["judge"] = serde_json::json!([
-        {"profile": "haiku", "kind": "claude", "cost_usd": 0.25, "input_tokens": 10, "output_tokens": 5},
-        {"profile": "sonnet", "kind": "claude", "cost_usd": 0.5, "input_tokens": 20, "output_tokens": 10}
-    ]);
-    let mut row: LoopRunRecord = serde_json::from_value(wire).unwrap();
-    add_check_usage(&mut row);
-    assert_eq!(
-        (row.cost_usd, row.input_tokens, row.output_tokens),
-        (Some(1.75), Some(130), Some(65))
-    );
-}
-
 fn record_room(root: &Path) -> Result<()> {
     let workspace = crate::workspace::WorkspaceResolver::resolve(root, None)?;
     let paths = StatePaths::for_project_root(root)?;
@@ -505,7 +447,6 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
             Timestamp::now(),
             Arc::new(MachineConfig::default()),
             None,
-            CheckEcho::Capture,
             Instant::now(),
         )
         .unwrap();
@@ -525,7 +466,8 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
             fire.run_lock.is_some(),
         ));
     }
-    assert_eq!(outcomes, vec![(true, 0, true), (true, 1, true)]);
+    // Launch memory is read before the lease, then again under it after the room is born.
+    assert_eq!(outcomes, vec![(true, 0, false), (true, 1, true)]);
 }
 
 #[test]
@@ -578,7 +520,6 @@ fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
             now,
             Arc::new(config),
             None,
-            CheckEcho::Capture,
             Instant::now(),
         )
         .unwrap();
@@ -587,254 +528,6 @@ fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
             .unwrap();
         assert!(matches!(plan, TaskFirePlan::Done(done) if done.record.result == expected));
     }
-}
-
-#[test]
-fn resident_plan_carries_the_fire_reminder() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        agent: Some("claude".into()),
-        prompt: Some("repair".into()),
-        stay: true,
-        every: Some("1h".into()),
-        throttle: Some(ThrottleSwitch::Off),
-        ..Default::default()
-    };
-    let mut fire = TaskFire::new(
-        "resident",
-        LoadedTask::new("resident", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Manual,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap();
-    let TaskFirePlan::Resident { reminder_body, .. } = fire.prepare(&mut record_room).unwrap()
-    else {
-        panic!("resident plan")
-    };
-    assert_eq!(
-        reminder_body,
-        "The user fired the rule `resident` by hand. You run once here and stay on afterwards. The user is watching this run."
-    );
-}
-
-#[test]
-fn resident_named_destination_keeps_the_guard_history_and_ledger_at_scope() {
-    let root = tempfile::tempdir().unwrap();
-    let destination = root.path().join("destination");
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        worktree: Some("lane".into()),
-        check: Some("pwd > guard-cwd; printf '%s' \"$RIMZ_WORKTREE_PATH\" > guard-env".into()),
-        on: Some(crate::config::CheckOn::Success),
-        throttle: Some(ThrottleSwitch::Off),
-        every: Some("1h".into()),
-        ..resident_entry(root.path())
-    };
-    let mut fire = TaskFire::new(
-        "named",
-        LoadedTask::new("named", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap();
-    let plan = fire.prepare(&mut record_room).unwrap();
-    let TaskFirePlan::Resident { cwd, worktree, .. } = plan else {
-        panic!("resident plan")
-    };
-    assert_eq!(cwd, root.path());
-    assert_eq!(worktree.as_deref(), Some("lane"));
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("guard-cwd"))
-            .unwrap()
-            .trim(),
-        root.path().to_str().unwrap()
-    );
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("guard-env")).unwrap(),
-        root.path().to_str().unwrap()
-    );
-    let done = fire
-        .finish(TaskFireEffect::Resident {
-            leader: "otter".into(),
-            handles: vec!["@otter".into()],
-            stopped: Vec::new(),
-            checkout: destination.clone(),
-        })
-        .unwrap();
-    assert_eq!(done.record.checkout.as_deref(), Some(root.path()));
-    let paths = StatePaths::for_project_root(root.path()).unwrap();
-    let ledger = super::super::launch_ledger::load(&paths).unwrap();
-    assert_eq!(
-        serde_json::to_value(&ledger["named"][root.path()]).unwrap()["destination"],
-        serde_json::json!(destination)
-    );
-}
-
-#[test]
-fn a_cold_resident_fire_overlaps_a_launch_completed_during_room_birth() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let make_fire = || {
-        TaskFire::new(
-            "resident",
-            LoadedTask::new(
-                "resident",
-                TaskEntry {
-                    every: Some("1h".into()),
-                    throttle: Some(ThrottleSwitch::Off),
-                    ..resident_entry(root.path())
-                },
-                catalog::TaskSource::Config,
-            ),
-            &catalog,
-            LoopRunMode::Scheduled,
-            false,
-            Timestamp::now(),
-            Arc::new(MachineConfig::default()),
-            None,
-            CheckEcho::Capture,
-            Instant::now(),
-        )
-        .unwrap()
-    };
-    let mut second = make_fire();
-    let plan = second
-        .prepare(&mut |_| {
-            let mut first = make_fire();
-            assert!(matches!(
-                first.prepare(&mut record_room)?,
-                TaskFirePlan::Resident { .. }
-            ));
-            let done = first.finish(TaskFireEffect::Resident {
-                checkout: root.path().to_owned(),
-                leader: "coder".into(),
-                handles: vec!["@coder".into()],
-                stopped: Vec::new(),
-            })?;
-            assert_eq!(done.record.result, LoopRunResult::Launched);
-            Ok(())
-        })
-        .unwrap();
-    assert!(
-        matches!(plan, TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
-    );
-    assert_eq!(
-        run_log::task_records(&logs_dir(), "resident", Some(root.path()))
-            .iter()
-            .map(|record| record.result)
-            .collect::<Vec<_>>(),
-        [LoopRunResult::Launched, LoopRunResult::Overlapped]
-    );
-}
-
-#[test]
-fn worktree_run_locks_do_not_overlap_other_checkouts() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let make = |checkout: &str| {
-        let entry = TaskEntry {
-            root: root.path().to_owned(),
-            agent: Some("claude".into()),
-            prompt: Some("repair".into()),
-            stay: true,
-            each_worktree: true,
-            ..Default::default()
-        };
-        let mut fire = TaskFire::new(
-            "fixer",
-            LoadedTask::new("fixer", entry, catalog::TaskSource::Config),
-            &catalog,
-            LoopRunMode::Scheduled,
-            false,
-            Timestamp::now(),
-            Arc::new(MachineConfig::default()),
-            None,
-            CheckEcho::Capture,
-            Instant::now(),
-        )
-        .unwrap()
-        .with_checkout(Some(root.path().join(checkout)));
-        fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
-        // Each fire is its own start here: none launches, so none would pass
-        // the turn on to the next.
-        fire.throttle_host = throttle::tests::FakeHost::new().host();
-        fire
-    };
-    let mut first = make("a");
-    assert!(matches!(
-        first.prepare(&mut |_| Ok(())).unwrap(),
-        TaskFirePlan::Resident { .. }
-    ));
-    let mut second = make("b");
-    assert!(matches!(
-        second.prepare(&mut |_| Ok(())).unwrap(),
-        TaskFirePlan::Resident { .. }
-    ));
-    let mut same = make("a");
-    assert!(
-        matches!(same.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
-    );
-}
-
-#[test]
-fn worktree_fire_lock_is_found_by_the_task_lookups() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        agent: Some("claude".into()),
-        prompt: Some("repair".into()),
-        stay: true,
-        each_worktree: true,
-        ..Default::default()
-    };
-    let mut fire = TaskFire::new(
-        "fixer",
-        LoadedTask::new("fixer", entry.clone(), catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap()
-    .with_checkout(Some(root.path().join("a")));
-    assert!(matches!(
-        fire.prepare(&mut record_room).unwrap(),
-        TaskFirePlan::Resident { .. }
-    ));
-
-    let pid = std::process::id();
-    assert!(matches!(
-        RunLocks::list(root.path()).unwrap().state("fixer").unwrap(),
-        RunLockState::Held(Some(info)) if info.pid == pid
-    ));
-    let in_flight = in_flight_run("fixer", root.path())
-        .unwrap()
-        .expect("the per-checkout lock is the task's run in flight");
-    assert_eq!(in_flight.holder.map(|info| info.pid), Some(pid));
-    drop(fire);
-    assert!(matches!(
-        RunLocks::list(root.path()).unwrap().state("fixer").unwrap(),
-        RunLockState::Available
-    ));
 }
 
 #[test]
@@ -857,7 +550,7 @@ fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
             let mut fire = backlog_fire(root.path(), &catalog);
             fire.mode = mode;
             fire.entry.overlap = Some(policy);
-            let path = fire.fire_run_lock_path(false).unwrap().unwrap();
+            let path = fire.fire_run_lock_path().unwrap();
             std::fs::write(
                 &path,
                 if named {
@@ -869,7 +562,7 @@ fn at_lock_refusals_store_the_holder_without_freezing_its_age() {
             .unwrap();
             let lock = File::open(&path).unwrap();
             lock.try_lock().unwrap();
-            let finished = fire.prepare_run_lock(false).unwrap().unwrap();
+            let finished = fire.prepare_run_lock().unwrap().unwrap();
             let value = serde_json::to_value(&finished.record).unwrap();
             let TaskFireNotice::Overlap { detail } = finished.notice else {
                 panic!("expected overlap notice");
@@ -1054,149 +747,6 @@ fn loop_check_identity_excludes_agent_and_room_environments() {
 }
 
 #[test]
-fn spawn_requests_share_loop_cleanup_and_force_a_tab_only_when_scheduled() {
-    let dir = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
-        for keep in [false, true] {
-            let entry = TaskEntry {
-                agent: Some("claude".to_owned()),
-                prompt: Some("check".to_owned()),
-                root: dir.path().to_owned(),
-                ..TaskEntry::default()
-            };
-            let at = Timestamp::now();
-            let fire = TaskFire::new(
-                "nightly",
-                LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
-                &catalog,
-                mode,
-                keep,
-                at,
-                Arc::new(MachineConfig::default()),
-                None,
-                CheckEcho::Capture,
-                Instant::now(),
-            )
-            .unwrap();
-            let request = fire
-                .compile_spawn_request(
-                    "claude".to_owned(),
-                    "check".to_owned(),
-                    ManagedLaunchState::Unsupported,
-                )
-                .unwrap();
-            assert_eq!(request.loop_task.as_deref(), Some("nightly"));
-            assert_eq!(request.loop_notes_at, Some(at), "keep the fire's instant");
-            assert_eq!(request.self_cleanup_on_completion, !keep);
-            // A scheduled fire inherits the firing pane's identity; only the flag keeps it off that tab.
-            assert_eq!(request.force_new_tab, mode == LoopRunMode::Scheduled);
-            assert_eq!(
-                request.timeout,
-                (mode == LoopRunMode::Scheduled).then_some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
-            );
-            let Some(crate::harness::launch::ReminderSection::Loop(reminder)) =
-                request.reminder_section
-            else {
-                panic!("loop single run reminder")
-            };
-            assert_eq!(
-                reminder.ends_with(" The run is stopped after 2h."),
-                mode == LoopRunMode::Scheduled,
-                "{reminder}"
-            );
-        }
-    }
-}
-
-#[test]
-fn spawn_reminder_names_the_configured_default_timeout() {
-    let dir = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let mut config = MachineConfig::default();
-    config.r#loop.default_timeout = Some("45m".to_owned());
-    let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("check".to_owned()),
-        every: Some("1h".to_owned()),
-        root: dir.path().to_owned(),
-        ..TaskEntry::default()
-    };
-    let fire = TaskFire::new(
-        "hourly",
-        LoadedTask::new("hourly", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(config),
-        None,
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap();
-    let request = fire
-        .compile_spawn_request(
-            "claude".to_owned(),
-            "check".to_owned(),
-            ManagedLaunchState::Unsupported,
-        )
-        .unwrap();
-    let Some(crate::harness::launch::ReminderSection::Loop(reminder)) = request.reminder_section
-    else {
-        panic!("loop single run reminder")
-    };
-    assert!(
-        reminder.starts_with(
-            "RimZ started you from the rule `hourly`, which launches an agent every 1h."
-        ),
-        "{reminder}"
-    );
-    assert!(
-        reminder.ends_with(" The run is stopped after 45m."),
-        "{reminder}"
-    );
-}
-
-#[test]
-fn a_hand_written_named_worktree_row_reuses_that_tree_on_every_fire() {
-    let dir = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("repair".to_owned()),
-        every: Some("1h".to_owned()),
-        root: dir.path().to_owned(),
-        worktree: Some("x".to_owned()),
-        ..TaskEntry::default()
-    };
-    for _ in 0..2 {
-        let fire = TaskFire::new(
-            "legacy",
-            LoadedTask::new("legacy", entry.clone(), catalog::TaskSource::Config),
-            &catalog,
-            LoopRunMode::Scheduled,
-            false,
-            Timestamp::now(),
-            Arc::new(MachineConfig::default()),
-            None,
-            CheckEcho::Capture,
-            Instant::now(),
-        )
-        .unwrap();
-        let request = fire
-            .compile_spawn_request(
-                "claude".to_owned(),
-                "repair".to_owned(),
-                ManagedLaunchState::Unsupported,
-            )
-            .unwrap();
-        assert_eq!(request.worktree.as_deref(), Some("x"));
-        assert_eq!(fire.launch_checkout(), dir.path());
-    }
-}
-
-#[test]
 fn spawn_timeout_prefers_task_then_config_then_builtin() {
     use LoopRunMode::{Manual, Scheduled};
     let task = Duration::from_secs(30);
@@ -1227,46 +777,6 @@ fn spawn_timeout_prefers_task_then_config_then_builtin() {
         None,
         "manual runs stay untimed even with a configured default"
     );
-}
-
-#[test]
-fn budget_refusal_finishes_as_a_recorded_gate() {
-    let check = CheckRecord {
-        duration_ms: None,
-        agent: None,
-        code: Some(1),
-        timed_out: false,
-        output: "guard failed".to_owned(),
-        output_path: None,
-    };
-    let mut record = LoopRunRecord::new(
-        "nightly",
-        LoopRunResult::Completed,
-        LoopRunMode::Scheduled,
-        12,
-    );
-
-    record.check = Some(check.clone());
-    let (presentation, notice) = finish_spawn_effect(
-        &mut record,
-        SupervisedRunOutcome::BudgetExceeded {
-            reason: "room budget reached".to_owned(),
-        },
-        true,
-    );
-
-    assert_eq!(record.result, LoopRunResult::BudgetSkipped);
-    assert_eq!(
-        record.check.as_ref(),
-        Some(&check),
-        "the guard record survives the refusal"
-    );
-    assert_eq!(record.error.as_deref(), Some("room budget reached"));
-    assert_eq!(presentation, LoopRunPresentation::default());
-    assert!(matches!(
-        notice,
-        TaskFireNotice::Gate { reason } if reason == "room budget reached"
-    ));
 }
 
 #[test]
@@ -1367,7 +877,6 @@ fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .unwrap();
@@ -1385,6 +894,49 @@ fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
         "{:?}",
         plan.err()
     );
+}
+
+#[test]
+fn an_over_cap_workflow_fire_records_its_skip_before_birthing_a_room() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = format!("over-cap-{}", crate::ids::WorkflowRunId::new());
+    let dir = crate::disk::paths::workflows_dir().join(&workflow);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        crate::disk::paths::workflow_spec_file(&dir),
+        "[workflow]\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude'\nprompt='fix'\nbudget='$6'\nthen='@done'\n",
+    )
+    .unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        workflow: Some(workflow),
+        budget_per_day: Some("$5".into()),
+        ..Default::default()
+    };
+    let mut fire = TaskFire::new(
+        "over-cap",
+        LoadedTask::new("over-cap", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        Instant::now(),
+    )
+    .unwrap();
+    let mut births = 0;
+    let plan = fire.prepare(&mut |_| {
+        births += 1;
+        Ok(())
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    let skipped = matches!(
+        &plan,
+        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::BudgetSkipped
+    );
+    assert_eq!((skipped, births), (true, 0), "{:?}", plan.err());
 }
 
 #[test]
@@ -1543,213 +1095,6 @@ fn check_polarity_truth_table() {
 }
 
 #[test]
-fn signal_carried_watch_result_is_not_the_subscribers_guard() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let paths = StatePaths::for_project_root(dir.path()).unwrap();
-    crate::testkit::fleet::seed_fleet_store(&paths, 1, 1).unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let entry = TaskEntry {
-        root: dir.path().to_owned(),
-        signal: Some("wait.*".into()),
-        on: Some(CheckOn::Fail),
-        wait: Some(TaskTarget {
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            session: "agent-0".into(),
-            handle: "@subscriber".into(),
-        }),
-        ..TaskEntry::default()
-    };
-    let signal = TriggerSignal {
-        name: "wait.completed".parse().unwrap(),
-        payload: serde_json::Map::new(),
-        source: crate::store::event::SignalSource::Watch,
-        watch: Some(WatchOutcome {
-            verdict: WatchVerdict::Exited {
-                code: Some(0),
-                elapsed_ms: 1234,
-            },
-            output: String::new(),
-            output_path: None,
-            summary: crate::disk::summary::FileSummary::default(),
-        }),
-    };
-    let mut fire = TaskFire::new(
-        "subscriber",
-        LoadedTask::new("subscriber", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        Some(signal),
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap();
-    let plan = fire
-        .prepare(&mut |_| panic!("subscriber runs no shell"))
-        .unwrap();
-    assert!(matches!(plan, TaskFirePlan::Deliver(_)), "{plan:?}");
-    assert!(fire.fired_guard.is_empty());
-}
-
-#[test]
-fn skipped_check_preserves_poll_until_and_consumes_watch() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    record_room(dir.path()).unwrap();
-    let poll_name = "runner-skipped-poll-until";
-    let watch_name = "runner-skipped-watch";
-    let poll = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("poll".to_owned()),
-        check: Some("false".into()),
-        on: Some(CheckOn::Success),
-        root: dir.path().to_path_buf(),
-        every: Some("1m".to_owned()),
-        deadline: Some(
-            Timestamp::now()
-                .checked_add(jiff::SignedDuration::from_hours(1))
-                .expect("future deadline"),
-        ),
-        ..TaskEntry::default()
-    };
-    let watch = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("watch".to_owned()),
-        on: Some(CheckOn::Success),
-        root: dir.path().to_path_buf(),
-        watch: Some(crate::config::WatchSpec::Command("false".to_owned())),
-        ..TaskEntry::default()
-    };
-    let state = StatePaths::for_project_root(dir.path()).expect("state paths");
-    crate::harness::schedule::instances::insert(&state, poll_name, &poll).expect("insert poll");
-    crate::harness::schedule::instances::insert(&state, watch_name, &watch).expect("insert watch");
-    let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
-
-    let mut poll_fire = skipped_fire(poll_name, &catalog, None);
-    let poll_check = poll_fire
-        .prepare_check(&mut |_| Ok(()))
-        .expect("run poll check");
-    assert_eq!(
-        poll_check
-            .break_value()
-            .expect("skipped poll result")
-            .record
-            .result,
-        LoopRunResult::CheckSkipped
-    );
-
-    let signal = TriggerSignal {
-        name: "wait.runner-skipped-watch".parse().expect("signal name"),
-        payload: serde_json::Map::new(),
-        source: crate::store::event::SignalSource::Watch,
-        watch: Some(crate::harness::schedule::signal::WatchOutcome {
-            verdict: WatchVerdict::Exited {
-                code: Some(1),
-                elapsed_ms: 1234,
-            },
-            output: String::new(),
-            output_path: Some(dir.path().join("watch.log")),
-            summary: crate::disk::summary::FileSummary::default(),
-        }),
-    };
-    for on in [CheckOn::Success, CheckOn::Fail, CheckOn::Any] {
-        let mut running = signal.clone();
-        running.watch.as_mut().unwrap().verdict = WatchVerdict::Running { elapsed_ms: 1_000 };
-        running.watch.as_mut().unwrap().output = "still running".to_owned();
-        let mut fire = skipped_fire(watch_name, &catalog, Some(running));
-        fire.entry.on = Some(on);
-        fire.mode = LoopRunMode::Manual;
-        let check = fire
-            .prepare_check(&mut |_| panic!("supplied watch runs no check"))
-            .expect("running watch always delivers");
-        assert!(check.is_continue());
-        let record = fire
-            .terminal_record(LoopRunResult::Completed)
-            .check
-            .unwrap();
-        assert_eq!(record.code, None);
-        assert!(!record.timed_out);
-        assert_eq!(record.output, "still running");
-        assert_eq!(record.output_path, Some(dir.path().join("watch.log")));
-        assert!(fire.check_trip.is_none());
-        fire.mode = LoopRunMode::Scheduled;
-        fire.consume_ephemeral().expect("retain running watch");
-        assert!(
-            crate::harness::schedule::instances::load_from(&state.root)
-                .0
-                .contains_key(watch_name)
-        );
-    }
-    let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
-    let watch_check = watch_fire
-        .prepare_check(&mut |_| panic!("supplied watch runs no check"))
-        .expect("read watch check");
-    let finished = watch_check.break_value().expect("skipped watch result");
-    assert_eq!(finished.record.result, LoopRunResult::CheckSkipped);
-    assert_eq!(
-        finished.record.watch,
-        Some(WatchVerdict::Exited {
-            code: Some(1),
-            elapsed_ms: 1234
-        })
-    );
-    assert_eq!(
-        finished.record.check.unwrap().output_path,
-        Some(dir.path().join("watch.log"))
-    );
-    assert_eq!(finished.presentation.check_duration_ms, Some(1234));
-
-    let instances = crate::harness::schedule::instances::load_from(&state.root);
-    assert!(instances.0.contains_key(poll_name));
-    assert!(!instances.0.contains_key(watch_name));
-    crate::harness::schedule::instances::remove(&state, poll_name, None)
-        .expect("remove poll fixture");
-}
-
-#[test]
-fn check_only_terminals_consume_only_one_shots() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    for (name, once, command, result) in [
-        ("once-pass", true, "true", LoopRunResult::Completed),
-        ("standing-pass", false, "true", LoopRunResult::Completed),
-        ("once-fail", true, "false", LoopRunResult::Failed),
-    ] {
-        let entry = TaskEntry {
-            check: Some(command.into()),
-            root: dir.path().to_path_buf(),
-            at: once.then(|| "07:00".to_owned()),
-            every: (!once).then(|| "1m".to_owned()),
-            ..TaskEntry::default()
-        };
-        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
-        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-        let mut fire = skipped_fire(name, &catalog, None);
-        let finished = fire
-            .prepare_check(&mut |_| Ok(()))
-            .unwrap()
-            .break_value()
-            .unwrap();
-        assert_eq!(finished.record.result, result);
-        assert_eq!(finished.presentation.exit_code, None);
-        assert_eq!(finished.record.error, None);
-        assert!(finished.presentation.check_duration_ms.is_some());
-        assert_eq!(
-            crate::harness::schedule::instances::load_from(&state.root)
-                .0
-                .contains_key(name),
-            !once
-        );
-        if !once {
-            crate::harness::schedule::instances::remove(&state, name, None).unwrap();
-        }
-    }
-}
-
-#[test]
 fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     record_room(dir.path()).unwrap();
@@ -1812,117 +1157,12 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
     }
 }
 
-#[test]
-fn a_scheduled_fire_at_fire_records_how_late_it_started() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let at = Timestamp::from_second(1_800_000_000).unwrap();
-    let days_late = 2 * 86_400 + 3 * 3_600;
-    for (name, fire_at, mode, late_by, expected) in [
-        (
-            "days-late",
-            true,
-            LoopRunMode::Scheduled,
-            days_late,
-            Some(days_late as u64 * 1_000),
-        ),
-        (
-            "two-minutes",
-            true,
-            LoopRunMode::Scheduled,
-            120,
-            Some(120_000),
-        ),
-        ("on-time", true, LoopRunMode::Scheduled, 30, None),
-        ("manual-run", true, LoopRunMode::Manual, days_late, None),
-        ("bare-at", false, LoopRunMode::Scheduled, days_late, None),
-    ] {
-        let entry = TaskEntry {
-            check: Some("true".into()),
-            root: dir.path().to_path_buf(),
-            at: (!fire_at).then(|| "07:00".to_owned()),
-            fire_at: fire_at.then_some(at),
-            ..TaskEntry::default()
-        };
-        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
-        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-        let started = at
-            .checked_add(jiff::SignedDuration::from_secs(late_by))
-            .unwrap();
-        let mut fire = TaskFire::new(
-            name,
-            catalog.for_run(name).cloned().expect("loaded fixture"),
-            &catalog,
-            mode,
-            false,
-            started,
-            Arc::new(MachineConfig::default()),
-            None,
-            CheckEcho::Capture,
-            Instant::now(),
-        )
-        .unwrap();
-        fire.context = Some(FireContext {
-            action: TaskAction::CheckOnly,
-            root: dir.path().to_path_buf(),
-            scope: None,
-        });
-        // A backlog serve moves the fire's clock; lateness keeps the construction instant.
-        fire.now = started
-            .checked_add(jiff::SignedDuration::from_secs(3_600))
-            .unwrap();
-        let finished = fire.record_gate(LoopRunResult::SurplusSkipped, "no surplus".to_owned());
-        assert_eq!(finished.record.late_ms, expected, "{name}");
-    }
-}
-
-#[test]
-fn a_late_fire_that_waited_in_the_throttle_keeps_the_two_figures_apart() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(41.0, 12.0);
-    host.on_sleep(|host| {
-        if host.elapsed_ms() == 2_000 {
-            host.set_pressure(3.0, 3.0);
-        }
-    });
-    let fire_at = Timestamp::now()
-        .checked_sub(jiff::SignedDuration::from_secs(180))
-        .unwrap();
-    let mut fire = throttled_fire(
-        "fixer",
-        TaskEntry {
-            fire_at: Some(fire_at),
-            ..resident_entry(root.path())
-        },
-        &catalog,
-        "cpu-pressure = 25\n",
-        &host,
-    );
-    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
-    assert!(matches!(plan, TaskFirePlan::Resident { .. }));
-    let done = fire
-        .finish(TaskFireEffect::Resident {
-            checkout: root.path().to_owned(),
-            leader: "fixer".to_owned(),
-            handles: vec!["@fixer".to_owned()],
-            stopped: Vec::new(),
-        })
-        .unwrap();
-    assert_eq!(done.record.throttle_wait_ms, Some(5_000));
-    let late = done.record.late_ms.expect("three minutes late");
-    assert!((180_000..181_000).contains(&late), "{late}");
-}
-
 fn skipped_fire<'a>(
     name: &str,
     catalog: &'a TaskCatalog,
     signal: Option<TriggerSignal>,
 ) -> TaskFire<'a> {
     let task = catalog.for_run(name).cloned().expect("loaded fixture");
-    let action = task.action().cloned().expect("valid fixture action");
     let root = task.entry().resolved_root();
     let mut fire = TaskFire::new(
         name,
@@ -1933,20 +1173,15 @@ fn skipped_fire<'a>(
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         signal,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .expect("construct task fire");
-    fire.context = Some(FireContext {
-        action,
-        root,
-        scope: None,
-    });
+    fire.context = Some(FireContext { root, scope: None });
     fire
 }
 
 #[test]
-fn check_room_hook_precedes_execution_and_pins_loop_identity() {
+fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
     let dir = tempfile::tempdir().unwrap();
     let project_root = dir.path().canonicalize().unwrap();
     record_room(&project_root).unwrap();
@@ -1954,7 +1189,7 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let worktree = tempfile::tempdir().unwrap();
     let worktree_root = worktree.path().canonicalize().unwrap();
     let entry = TaskEntry {
-        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd -P".into()),
+        check: Some("true".into()),
         root: project_root.clone(),
         dir: Some(worktree_root.clone()),
         every: Some("1m".to_owned()),
@@ -1969,7 +1204,6 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .unwrap();
@@ -1978,24 +1212,24 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
         .prepare(&mut |root| {
             calls += 1;
             assert_eq!(root, &project_root);
-            std::fs::write(root.join("room-ready"), "")?;
             Ok(())
         })
         .unwrap()
     else {
-        panic!("check finishes without an effect")
+        panic!("a check row starts a workflow run")
     };
     assert_eq!(calls, 1);
-    assert_eq!(done.record.result, LoopRunResult::Completed);
+    assert_eq!(done.record.result, LoopRunResult::Launched);
+    let state = StatePaths::for_project_root(&project_root).unwrap();
+    let run = crate::store::workflow::list(&state)
+        .unwrap()
+        .into_iter()
+        .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
+        .expect("the launched run is recorded");
+    assert_eq!(run.task.as_deref(), Some("room-check"));
     assert_eq!(
-        done.record.check.unwrap().output,
-        format!(
-            "room-check|{}|{}|unset|{}|{}\n",
-            project_root.display(),
-            WorkspaceId::from_project_root(&project_root),
-            worktree_root.display(),
-            worktree_root.display()
-        )
+        run.scope.path, worktree_root,
+        "the row's dir is the run's checkout"
     );
 }
 
@@ -2019,7 +1253,6 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
             Timestamp::now(),
             Arc::new(MachineConfig::default()),
             None,
-            CheckEcho::Capture,
             Instant::now(),
         )
         .unwrap();
@@ -2063,9 +1296,8 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     std::fs::remove_dir(&vanished).unwrap();
     let error = fire.prepare(&mut |_| Ok(())).unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains(&vanished.to_string_lossy().to_string())
+        format!("{error:#}").contains(&vanished.to_string_lossy().to_string()),
+        "{error:#}"
     );
     assert_eq!(
         fire.finish_error(&error).record.result,
@@ -2475,70 +1707,6 @@ fn pipe_forward_buffers_partial_lines_and_terminates_the_tail() {
 }
 
 #[test]
-fn loop_signal_prompts_keep_braces_and_check_evidence() {
-    let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        signal: Some("deploy.failed".to_owned()),
-        prompt: Some("Inspect {{branch}}".to_owned()),
-        ..TaskEntry::default()
-    };
-    let catalog = TaskCatalog::load(None).unwrap();
-    let signal = TriggerSignal {
-        name: "deploy.failed".parse().unwrap(),
-        payload: serde_json::from_value(serde_json::json!({"branch":"feature"})).unwrap(),
-        source: crate::store::event::SignalSource::Cli,
-        watch: None,
-    };
-    let mut fire = TaskFire::new(
-        "deployment",
-        LoadedTask::new("deployment", entry, catalog::TaskSource::Instance),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        Some(signal),
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap();
-    let outcome = CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
-    fire.fired_guard.push(FiredCheck::Shell {
-        command: "false".to_owned(),
-        record: check_record(&outcome),
-    });
-    let body = fire.resolve_effect_prompt().unwrap();
-    assert!(
-        body.starts_with(
-            "Rule `deployment` fired here. deploy.failed · branch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
-        ),
-        "{body}"
-    );
-    fire.signal.as_mut().unwrap().name = "ci.failed".parse().unwrap();
-    fire.fired_guard.clear();
-    assert_eq!(
-        fire.resolve_effect_prompt().unwrap(),
-        "Rule `deployment` fired here. ci.failed on feature\n\nInspect {{branch}}"
-    );
-    let launched = fire.entry.clone();
-    fire.entry.agent = None;
-    fire.entry.wait = Some(TaskTarget {
-        kind: crate::ids::AgentKind::new_unchecked("claude"),
-        session: "session".into(),
-        handle: "@coder".to_owned(),
-    });
-    assert_eq!(
-        fire.resolve_effect_prompt().unwrap(),
-        "waited on ci.failed on feature\nfired [deployment]\n\nInspect {{branch}}"
-    );
-    fire.entry = launched;
-    fire.signal = None;
-    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
-    fire.entry.signal = None;
-    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
-}
-
-#[test]
 fn wait_prompt_is_optional_but_spawn_prompt_is_required() {
     let mut entry = TaskEntry {
         wait: Some(TaskTarget {
@@ -2588,7 +1756,6 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .unwrap()
@@ -2763,7 +1930,7 @@ fn window_triggers_refuse_at_add_in_order() {
         let login =
             crate::agents::session_login(&claude, Some(&name.parse().unwrap()), &accounts).unwrap();
         let state = StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap();
-        FireScope::new(claude.clone(), runtime.clone(), state, None, Some(login))
+        FireScope::new(claude.clone(), runtime.clone(), state, Some(login))
             .surplus_gate(&surplus_entry(Some("1.5x"), None), now)
     };
     let no_reading = "no claude budget-window reading; surplus gate stays closed";
@@ -3046,14 +2213,8 @@ fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
             &config.accounts,
         )
         .unwrap();
-        let scope = FireScope::new(
-            claude.clone(),
-            runtime.clone(),
-            state.clone(),
-            None,
-            Some(login),
-        );
-        fire.scope_refusal(&scope).map(|(result, _)| result)
+        let scope = FireScope::new(claude.clone(), runtime.clone(), state.clone(), Some(login));
+        fire.scope_refusal(&scope, true).map(|(result, _)| result)
     };
     fire.config = Arc::new(config.clone());
     for (solo_usd, room_usd, solo, room) in [
@@ -3154,15 +2315,7 @@ fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
     }
 }
 
-fn throttled_fire<'a>(
-    name: &str,
-    entry: TaskEntry,
-    catalog: &'a TaskCatalog,
-    throttle_config: &str,
-    host: &Arc<throttle::tests::FakeHost>,
-) -> TaskFire<'a> {
-    let config: MachineConfig =
-        toml::from_str(&format!("[throttle]\n{throttle_config}")).expect("machine config");
+fn scheduled_fire<'a>(name: &str, entry: TaskEntry, catalog: &'a TaskCatalog) -> TaskFire<'a> {
     let mut fire = TaskFire::new(
         name,
         LoadedTask::new(name, entry, catalog::TaskSource::Config),
@@ -3170,14 +2323,12 @@ fn throttled_fire<'a>(
         LoopRunMode::Scheduled,
         false,
         Timestamp::now(),
-        Arc::new(config),
+        Arc::new(MachineConfig::default()),
         None,
-        CheckEcho::Capture,
         Instant::now(),
     )
     .expect("construct task fire");
     fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
-    fire.throttle_host = host.host();
     fire
 }
 
@@ -3203,12 +2354,11 @@ fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strik
             record_room(root.path()).unwrap();
             let paths = StatePaths::for_project_root(root.path()).unwrap();
             let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-            let host = throttle::tests::FakeHost::new();
             let entry = TaskEntry {
                 mode: Some(raw.to_owned()),
                 ..resident_entry(root.path())
             };
-            let mut fire = throttled_fire("bad-mode", entry, &catalog, "", &host);
+            let mut fire = scheduled_fire("bad-mode", entry, &catalog);
             fire.mode = mode;
             let error = fire
                 .prepare(&mut |_| panic!("invalid saved mode must not birth a room"))
@@ -3235,937 +2385,6 @@ fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strik
     assert_eq!(actual, expected);
 }
 
-#[test]
-fn resident_saved_modes_prepare_typed_permission_overrides() {
-    let cases = [
-        (None, None),
-        (Some(""), None),
-        (Some(" \t "), None),
-        (Some("auto"), None),
-        (Some(" auto "), None),
-        (Some("ask"), Some(PermissionMode::Ask)),
-        (Some("yolo"), Some(PermissionMode::Yolo)),
-        (Some(" ask "), Some(PermissionMode::Ask)),
-        (Some(" yolo "), Some(PermissionMode::Yolo)),
-    ];
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
-        for (raw, permission) in cases {
-            let root = tempfile::tempdir().unwrap();
-            record_room(root.path()).unwrap();
-            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-            let host = throttle::tests::FakeHost::new();
-            let entry = TaskEntry {
-                mode: raw.map(str::to_owned),
-                ..resident_entry(root.path())
-            };
-            let mut fire = throttled_fire("mode", entry, &catalog, "", &host);
-            fire.mode = mode;
-            let plan = fire.prepare(&mut record_room).unwrap();
-            let TaskFirePlan::Resident {
-                permission_override,
-                ..
-            } = plan
-            else {
-                panic!("expected resident plan: {plan:?}");
-            };
-            actual.push(permission_override);
-            expected.push(permission);
-        }
-    }
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn resident_saved_modes_leave_supervised_request_semantics_unchanged() {
-    let cases = [
-        (None, Ok(None)),
-        (Some(""), Ok(None)),
-        (Some(" \t "), Ok(None)),
-        (Some("auto"), Ok(Some(PermissionMode::Auto))),
-        (Some(" auto "), Ok(Some(PermissionMode::Auto))),
-        (Some("ask"), Ok(Some(PermissionMode::Ask))),
-        (Some("yolo"), Ok(Some(PermissionMode::Yolo))),
-        (Some(" ask "), Ok(Some(PermissionMode::Ask))),
-        (Some(" yolo "), Ok(Some(PermissionMode::Yolo))),
-        (
-            Some("plan"),
-            Err("unknown loop mode `plan`; use auto, ask, or yolo"),
-        ),
-        (
-            Some("yollo"),
-            Err("unknown loop mode `yollo`; use auto, ask, or yolo"),
-        ),
-        (
-            Some("ASK"),
-            Err("unknown loop mode `ASK`; use auto, ask, or yolo"),
-        ),
-        (
-            Some(" plan "),
-            Err("unknown loop mode `plan`; use auto, ask, or yolo"),
-        ),
-    ];
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let actual: Vec<_> = cases
-        .iter()
-        .map(|(raw, _)| {
-            let entry = TaskEntry {
-                mode: raw.map(str::to_owned),
-                stay: false,
-                ..resident_entry(root.path())
-            };
-            throttled_fire("mode", entry, &catalog, "", &host)
-                .compile_spawn_request(
-                    "claude".to_owned(),
-                    "repair".to_owned(),
-                    ManagedLaunchState::Unsupported,
-                )
-                .map(|request| request.permission_mode)
-                .map_err(|error| error.to_string())
-        })
-        .collect();
-    assert_eq!(actual, cases.map(|(_, mode)| mode.map_err(str::to_owned)));
-}
-
-#[test]
-fn capacity_manual_fires_bypass_even_a_closed_door() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    host.on_sleep(|host| {
-        host.interrupt
-            .store(true, std::sync::atomic::Ordering::SeqCst)
-    });
-    let mut fire = throttled_fire(
-        "manual",
-        resident_entry(root.path()),
-        &catalog,
-        "cpu-pressure = 25",
-        &host,
-    );
-    fire.mode = LoopRunMode::Manual;
-    Arc::make_mut(&mut fire.config).throttle.max_parallel_agents = Some(0);
-    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
-    assert!(matches!(plan, TaskFirePlan::Resident { .. }), "{plan:?}");
-    assert_eq!(host.tickets(), 0);
-    assert_eq!(host.elapsed_ms(), 0);
-}
-
-#[test]
-fn capacity_off_tasks_still_hold_at_the_machine_cap() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let state = StatePaths::for_project_root(root.path()).unwrap();
-    host.set_agents(
-        &state.workspace_id,
-        vec![crate::testkit::agent_state(
-            "claude",
-            "existing",
-            Timestamp::now(),
-        )],
-    );
-    host.on_sleep(|host| {
-        host.interrupt
-            .store(true, std::sync::atomic::Ordering::SeqCst)
-    });
-    let mut entry = resident_entry(root.path());
-    entry.throttle = Some(ThrottleSwitch::Off);
-    let mut fire = throttled_fire("off", entry, &catalog, "max-parallel-agents=1", &host);
-    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
-    assert!(matches!(plan, TaskFirePlan::Done(_)), "{plan:?}");
-    assert_eq!(host.elapsed_ms(), 1_000);
-    assert_eq!(host.tickets(), 0);
-}
-
-#[test]
-fn capacity_corrupt_memory_does_not_fail_manual_or_exempt_or_admitted_fires() {
-    let mut actual = Vec::new();
-    for mode in ["manual", "off", "admitted"] {
-        let root = tempfile::tempdir().unwrap();
-        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-        let host = throttle::tests::FakeHost::new();
-        let paths = StatePaths::for_project_root(root.path()).unwrap();
-        let path = super::super::launch_ledger::capacity_path(&paths);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "not json").unwrap();
-        let mut entry = resident_entry(root.path());
-        if mode == "off" {
-            entry.throttle = Some(ThrottleSwitch::Off);
-        }
-        let mut fire = throttled_fire(mode, entry, &catalog, "", &host);
-        if mode == "manual" {
-            fire.mode = LoopRunMode::Manual;
-        }
-        let plan = fire.prepare(&mut |_| Ok(()));
-        actual.push(matches!(plan, Ok(TaskFirePlan::Resident { .. })));
-    }
-    assert_eq!(actual, [true; 3]);
-}
-
-#[test]
-fn capacity_blocking_wait_ends_as_expired_at_the_tasks_deadline() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    let now = Timestamp::from_millisecond(host.host().now_ms() as i64).unwrap();
-    let mut entry = resident_entry(root.path());
-    entry.deadline = Some(now + Duration::from_secs(3));
-    let mut fire = throttled_fire("expires-held", entry, &catalog, "cpu-pressure=25", &host);
-    fire.now = now;
-    let TaskFirePlan::Done(done) = fire.prepare(&mut |_| panic!("expired")).unwrap() else {
-        panic!("an expired task must not launch");
-    };
-    assert_eq!(done.record.result, LoopRunResult::Expired);
-    assert_eq!(host.elapsed_ms(), 3_000);
-    assert_eq!(host.tickets(), 0);
-}
-
-#[test]
-fn capacity_condition_holds_are_try_once_and_history_is_once_per_stretch() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    host.on_sleep(|host| {
-        host.interrupt
-            .store(true, std::sync::atomic::Ordering::SeqCst)
-    });
-    let mut entry = resident_entry(root.path());
-    entry.when = Some(vec!["team.stage=Done".into()]);
-    let first = Timestamp::from_millisecond(host.host().now_ms() as i64).unwrap();
-    for attempt in 0..2 {
-        let elapsed = host.elapsed_ms();
-        let mut fire = throttled_fire("owed", entry.clone(), &catalog, "cpu-pressure = 25", &host);
-        fire.prepare(&mut |_| panic!("a held condition fire births no room"))
-            .unwrap();
-        assert_eq!(host.elapsed_ms(), elapsed);
-        if attempt == 0 {
-            host.host().sleep(Duration::from_secs(60));
-        }
-    }
-    let rows = run_log::task_records(&logs_dir(), "owed", Some(root.path()));
-    assert_eq!(
-        rows.iter()
-            .map(|row| serde_json::to_value(row.result).unwrap())
-            .collect::<Vec<_>>(),
-        [serde_json::json!("capacity_held")]
-    );
-    let paths = StatePaths::for_project_root(root.path()).unwrap();
-    let waits: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(StatePaths::class_path(
-            &paths.root,
-            crate::disk::paths::Class::Records,
-            "loop-capacity-waits.json",
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    let wait = &waits["owed"][root.path().to_str().unwrap()];
-    assert_eq!(wait["count"], 2);
-    assert_eq!(wait["hold"], "pressure");
-    assert_eq!(wait["first"], serde_json::to_value(first).unwrap());
-    assert_ne!(wait["first"], wait["last"]);
-    assert_eq!(host.tickets(), 0);
-}
-
-#[test]
-fn capacity_look_holds_before_running_a_guard() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    host.on_sleep(|host| {
-        host.interrupt
-            .store(true, std::sync::atomic::Ordering::SeqCst)
-    });
-    let mut entry = resident_entry(root.path());
-    entry.when = Some(vec!["team.stage=Done".into()]);
-    entry.check = Some("true".into());
-    entry.judge = vec![toml::from_str("agent='claude'\nprompt='Should this start?'").unwrap()];
-    entry.on = Some(CheckOn::Success);
-    let mut fire = throttled_fire("guarded-owed", entry, &catalog, "cpu-pressure = 25", &host);
-    fire.check_process = |_, _, _, _, _, _| panic!("a capacity-held guard must spawn no judge");
-    let plan = fire.prepare(&mut |_| Ok(())).unwrap();
-    assert!(fire.fired_guard.is_empty(), "{plan:?}");
-    assert_eq!(host.elapsed_ms(), 0);
-}
-
-#[test]
-fn capacity_admission_rechecks_a_deadline_after_guard_work() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let mut entry = resident_entry(root.path());
-    entry.deadline =
-        Some(Timestamp::from_millisecond(host.host().now_ms() as i64 + 1_000).unwrap());
-    let mut fire = throttled_fire("late-guard", entry, &catalog, "", &host);
-    host.host().sleep(Duration::from_secs(2));
-    let plan = fire.prepare_throttle().unwrap();
-    assert!(
-        matches!(plan, Some(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::Expired)
-    );
-    assert_eq!(host.tickets(), 0);
-}
-
-#[test]
-fn capacity_memory_clears_on_admission_and_other_fire_endings() {
-    for ending in ["admitted", "guard-miss", "gate", "error", "expiry"] {
-        let root = tempfile::tempdir().unwrap();
-        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-        let host = throttle::tests::FakeHost::new();
-        host.set_pressure(80.0, 80.0);
-        let mut entry = resident_entry(root.path());
-        entry.when = Some(vec!["team.stage=Done".into()]);
-        let mut held = throttled_fire(ending, entry.clone(), &catalog, "cpu-pressure=25", &host);
-        assert!(matches!(
-            held.prepare(&mut |_| panic!("held")).unwrap(),
-            TaskFirePlan::CapacityHeld
-        ));
-        drop(held);
-        let paths = StatePaths::for_project_root(root.path()).unwrap();
-        assert!(
-            super::super::launch_ledger::load_capacity(&paths)
-                .unwrap()
-                .contains_key(ending)
-        );
-        host.set_pressure(0.0, 0.0);
-        if ending == "guard-miss" {
-            entry.check = Some("false".into());
-            entry.on = Some(CheckOn::Success);
-        }
-        if ending == "expiry" {
-            entry.deadline = Some(Timestamp::UNIX_EPOCH);
-        }
-        let mut next = throttled_fire(ending, entry, &catalog, "cpu-pressure=25", &host);
-        match ending {
-            "gate" => {
-                next.record_gate(LoopRunResult::BudgetSkipped, "no budget".into());
-            }
-            "error" => {
-                next.finish_error(&anyhow::anyhow!("launch failed"));
-            }
-            _ => {
-                next.prepare(&mut |_| Ok(())).unwrap();
-            }
-        }
-        assert!(
-            !super::super::launch_ledger::load_capacity(&paths)
-                .unwrap()
-                .contains_key(ending),
-            "{ending}"
-        );
-    }
-}
-
-#[test]
-fn capacity_give_up_is_silent_until_a_new_condition_stretch() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    host.on_sleep(|host| {
-        host.interrupt
-            .store(true, std::sync::atomic::Ordering::SeqCst)
-    });
-    let mut entry: TaskEntry = toml::from_str("capacity-wait='2s'").unwrap();
-    entry.root = root.path().to_owned();
-    entry.agent = Some("claude".into());
-    entry.prompt = Some("repair".into());
-    entry.when = Some(vec!["team.stage=Done".into()]);
-    let mut first = None;
-    for (delay, since) in [(0, 0), (2, 0), (0, 0), (0, 1)] {
-        host.host().sleep(Duration::from_secs(delay));
-        let mut fire = throttled_fire(
-            "bounded-owed",
-            entry.clone(),
-            &catalog,
-            "cpu-pressure=25",
-            &host,
-        );
-        fire.now =
-            Timestamp::from_millisecond(i64::try_from(host.host().now_ms()).unwrap()).unwrap();
-        fire.condition = Some(
-            serde_json::from_value(serde_json::json!({
-                "since": Timestamp::from_second(since).unwrap(), "when": "team.stage=Done",
-                "held_ms": 0, "readings": {}
-            }))
-            .unwrap(),
-        );
-        fire.prepare(&mut |_| panic!("held")).unwrap();
-        let rows = run_log::task_records(&logs_dir(), "bounded-owed", Some(root.path()));
-        if first.is_none() {
-            assert_eq!(
-                serde_json::to_value(rows[0].result).unwrap(),
-                "capacity_held"
-            );
-            first = Some(rows[0].at);
-        }
-    }
-    let rows = run_log::task_records(&logs_dir(), "bounded-owed", Some(root.path()));
-    assert_eq!(
-        rows.iter()
-            .map(|row| serde_json::to_value(row.result).unwrap())
-            .collect::<Vec<_>>(),
-        [
-            serde_json::json!("capacity_held"),
-            serde_json::json!("throttle_skipped"),
-            serde_json::json!("capacity_held")
-        ]
-    );
-    assert!(
-        rows[1]
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("gave up waiting for capacity after 2s")
-    );
-}
-
-#[test]
-fn capacity_one_off_clock_defaults_to_forever() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let mut entry = resident_entry(root.path());
-    entry.stay = false;
-    entry.at = Some("12:00".into());
-    let fire = throttled_fire("once-owed", entry, &catalog, "", &host);
-    assert_eq!(fire.throttle_run().unwrap().gives_up_ms, None);
-}
-
-#[test]
-fn capacity_periodic_default_gives_up_before_the_next_occurrence() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(80.0, 80.0);
-    let mut entry = resident_entry(root.path());
-    entry.every = Some("1h".into());
-    let mut fire = throttled_fire("hourly-owed", entry, &catalog, "cpu-pressure=25", &host);
-    fire.now = Timestamp::from_millisecond(i64::try_from(host.host().now_ms()).unwrap()).unwrap();
-    let TaskFirePlan::Done(done) = fire.prepare(&mut |_| panic!("held")).unwrap() else {
-        panic!("held")
-    };
-    assert_eq!(host.elapsed_ms(), 3_599_000);
-    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
-    assert!(
-        done.record
-            .error
-            .as_deref()
-            .unwrap()
-            .starts_with("gave up waiting for capacity after 3599s")
-    );
-}
-
-#[test]
-fn a_held_resident_fire_is_skipped_at_capacity_wait_before_room_birth() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(41.0, 12.0);
-    let mut entry = resident_entry(root.path());
-    entry.capacity_wait = Some("3s".parse().unwrap());
-    let mut fire = throttled_fire("throttle-held", entry, &catalog, "cpu-pressure = 25", &host);
-    let TaskFirePlan::Done(done) = fire
-        .prepare(&mut |_| panic!("a held fire births no room"))
-        .unwrap()
-    else {
-        panic!("a fire held past capacity-wait is done")
-    };
-    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
-    assert_eq!(
-        done.record.error.as_deref(),
-        Some("gave up waiting for capacity after 3s; cpu pressure 41% ≥ 25%")
-    );
-    assert!(matches!(done.notice, TaskFireNotice::Gate { .. }));
-    assert_eq!(host.tickets(), 0);
-    assert_eq!(
-        run_log::task_records(&logs_dir(), "throttle-held", Some(root.path()))
-            .iter()
-            .map(|record| record.result)
-            .collect::<Vec<_>>(),
-        [LoopRunResult::ThrottleSkipped],
-        "one row per fire"
-    );
-}
-
-#[test]
-fn a_resident_fire_released_mid_wait_launches_and_records_its_wait() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    host.set_pressure(41.0, 12.0);
-    host.on_sleep(|host| {
-        if host.elapsed_ms() == 2_000 {
-            host.set_pressure(3.0, 3.0);
-        }
-    });
-    let mut fire = throttled_fire(
-        "fixer",
-        resident_entry(root.path()),
-        &catalog,
-        "cpu-pressure = 25\n",
-        &host,
-    );
-    let mut births = 0;
-    let plan = fire
-        .prepare(&mut |_| {
-            // The room is born only once the fire holds the turn.
-            assert_eq!(host.elapsed_ms(), 5_000);
-            births += 1;
-            Ok(())
-        })
-        .unwrap();
-    assert!(matches!(plan, TaskFirePlan::Resident { .. }));
-    assert_eq!(births, 1);
-    assert_eq!(host.tickets(), 1, "the turn is held until the launch");
-
-    // A second fire of the task overlaps on the run lock, never on the queue.
-    let mut again = throttled_fire(
-        "fixer",
-        resident_entry(root.path()),
-        &catalog,
-        "cpu-pressure = 25\n",
-        &host,
-    );
-    assert!(
-        matches!(again.prepare(&mut |_| panic!("overlapped")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
-    );
-    assert_eq!(host.tickets(), 1);
-
-    let done = fire
-        .finish(TaskFireEffect::Resident {
-            checkout: root.path().to_owned(),
-            leader: "fixer".to_owned(),
-            handles: vec!["@fixer".to_owned()],
-            stopped: Vec::new(),
-        })
-        .unwrap();
-    assert_eq!(done.record.result, LoopRunResult::Launched);
-    assert_eq!(done.record.throttle_wait_ms, Some(5_000));
-    assert_eq!(host.tickets(), 0, "an unreported turn ends with its row");
-}
-
-#[test]
-fn a_fire_that_cannot_read_a_configured_limit_errors() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    *host.pressure.lock().unwrap() = Err("/proc/pressure/cpu: No such file".to_owned());
-    let mut fire = throttled_fire(
-        "fixer",
-        resident_entry(root.path()),
-        &catalog,
-        "cpu-pressure = 25\n",
-        &host,
-    );
-    let error = fire
-        .prepare(&mut |_| panic!("an unreadable limit births no room"))
-        .unwrap_err();
-    assert!(error.to_string().contains("`throttle.cpu-pressure`"));
-    assert_eq!(
-        fire.finish_error(&error).record.result,
-        LoopRunResult::Errored
-    );
-}
-
-#[test]
-fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let mount = dir.path().join("mount");
-    std::fs::create_dir(&mount).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let fresh = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("repair".to_owned()),
-        root: dir.path().to_path_buf(),
-        fire_at: Some(Timestamp::UNIX_EPOCH),
-        worktree: Some("feat".to_owned()),
-        ..TaskEntry::default()
-    };
-    let plain = TaskEntry {
-        worktree: None,
-        ..fresh.clone()
-    };
-    for (name, entry) in [("fresh", &fresh), ("plain", &plain)] {
-        crate::harness::schedule::instances::insert(&state, name, entry).unwrap();
-    }
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let config: MachineConfig = toml::from_str(&format!(
-        "[agents.worktree]\ndir = \"{}/worktrees/{{repo}}\"\n[throttle]\nmin-disk = \"1GB\"\n",
-        mount.display()
-    ))
-    .unwrap();
-    let config = Arc::new(config);
-    let measured = |name: &str| {
-        let mut fire = skipped_fire(name, &catalog, None);
-        fire.config = Arc::clone(&config);
-        fire.throttle_host = host.host();
-        let _ = fire.prepare_effect();
-        host.disk_reads().last().cloned()
-    };
-
-    // The worktree's directory does not exist yet: its nearest existing
-    // ancestor is the filesystem the launch will write to.
-    assert_eq!(measured("fresh"), Some(mount.clone()));
-    assert_eq!(measured("plain"), Some(dir.path().to_path_buf()));
-}
-
-#[test]
-fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let spawn = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("repair".to_owned()),
-        root: dir.path().to_path_buf(),
-        fire_at: Some(Timestamp::UNIX_EPOCH),
-        capacity_wait: Some("3s".parse().unwrap()),
-        ..TaskEntry::default()
-    };
-    let exempt = TaskEntry {
-        throttle: Some(ThrottleSwitch::Off),
-        ..spawn.clone()
-    };
-    let deliver = TaskEntry {
-        agent: None,
-        wait: Some(TaskTarget {
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            session: crate::ids::AgentSessionId::from("gone-session"),
-            handle: "@gone".to_owned(),
-        }),
-        ..spawn.clone()
-    };
-    let check_only = TaskEntry {
-        agent: None,
-        check: Some("true".into()),
-        ..spawn.clone()
-    };
-    for (name, entry) in [
-        ("held", &spawn),
-        ("exempt", &exempt),
-        ("deliver", &deliver),
-        ("check-only", &check_only),
-    ] {
-        crate::harness::schedule::instances::insert(&state, name, entry).unwrap();
-    }
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let throttle_config = crate::config::ThrottleConfig::default();
-    // Another start holds the turn: the queue itself holds every gated fire.
-    host.become_owner(9);
-    let throttle::Admission::Turn { turn: holder, .. } = throttle::admit(
-        &host.host(),
-        &throttle_config,
-        &throttle::Run {
-            machine_gated: true,
-            limits: None,
-            groups: Vec::new(),
-            gives_up_ms: None,
-            task: "other".to_owned(),
-            root: PathBuf::from("/elsewhere"),
-            checkout: PathBuf::from("/elsewhere"),
-            disk: PathBuf::from("/elsewhere"),
-            workspace: state.workspace_id.clone(),
-        },
-        None,
-    )
-    .unwrap() else {
-        panic!("an empty queue admits")
-    };
-    host.become_owner(1);
-    let gated = |name: &str| {
-        let mut fire = skipped_fire(name, &catalog, None);
-        fire.config = Arc::new(MachineConfig::default());
-        fire.throttle_host = host.host();
-        fire
-    };
-    let row = |name: &str| {
-        crate::harness::schedule::instances::load_from(&state.root)
-            .0
-            .contains_key(name)
-    };
-    let fired_check = || {
-        let outcome = CheckOutcome::new(true, false, "ok".to_owned(), Some(0));
-        FiredCheck::Shell {
-            command: "true".to_owned(),
-            record: check_record(&outcome),
-        }
-    };
-
-    // A held spawn waits with its one-shot row still armed, and the skip
-    // consumes the row as every other scheduled gate skip does. The check it
-    // fired on stays on the row.
-    let rows = state.root.clone();
-    host.on_sleep(move |_| {
-        assert!(
-            crate::harness::schedule::instances::load_from(&rows)
-                .0
-                .contains_key("held"),
-            "the row is consumed only by the launch or the skip"
-        );
-    });
-    let mut held = gated("held");
-    held.fired_guard.push(fired_check());
-    let TaskFirePlan::Done(done) = held.prepare_effect().unwrap() else {
-        panic!("a held spawn is done")
-    };
-    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
-    assert_eq!(
-        done.record.error.as_deref(),
-        Some("gave up waiting for capacity after 3s; queued: 1 start ahead")
-    );
-    assert_eq!(done.record.check.expect("the fired check").code, Some(0));
-    assert_eq!(host.elapsed_ms(), 3_000);
-    assert!(!row("held"));
-
-    // An exempt spawn, a delivery, and a check-only fire go straight to their
-    // effect: no wait and no ticket, though the queue is held.
-    let mut exempt = gated("exempt");
-    let error = exempt.prepare_effect().unwrap_err();
-    assert!(
-        error.to_string().contains("provider scope"),
-        "an exempt spawn reaches its launch: {error:#}"
-    );
-    assert!(exempt.throttle_turn.is_none());
-    let mut deliver = gated("deliver");
-    let plan = deliver.prepare_effect();
-    assert!(
-        !matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::ThrottleSkipped),
-        "{plan:?}"
-    );
-    let mut checked = gated("check-only");
-    let finished = checked
-        .prepare_check(&mut |_| Ok(()))
-        .unwrap()
-        .break_value()
-        .expect("a check-only fire ends at its check");
-    assert_eq!(finished.record.result, LoopRunResult::Completed);
-    assert_eq!(host.elapsed_ms(), 3_000, "none waited");
-    assert_eq!(host.tickets(), 1, "only the holder's turn is queued");
-    assert!(
-        row("exempt"),
-        "the exempt spawn was not consumed before launch"
-    );
-
-    // Once the turn passes on, the same spawn holds it when it reaches its
-    // launch, and a launch error keeps the check it fired on.
-    drop(holder);
-    crate::harness::schedule::instances::insert(&state, "held", &spawn).unwrap();
-    let mut admitted = gated("held");
-    admitted.fired_guard.push(fired_check());
-    let error = admitted.prepare_effect().unwrap_err();
-    assert!(error.to_string().contains("provider scope"), "{error:#}");
-    assert!(admitted.throttle_turn.is_some());
-    assert_eq!(host.tickets(), 1);
-    let errored = admitted.finish_error(&error);
-    assert_eq!(errored.record.result, LoopRunResult::Errored);
-    assert!(
-        errored.record.check.is_some(),
-        "an errored fire keeps its check"
-    );
-    assert_eq!(
-        host.tickets(),
-        0,
-        "a fire that never launched frees the turn"
-    );
-}
-
-#[test]
-fn capacity_runner_checks_the_resolved_groups_once_per_kind_and_account() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let results: Vec<_> = [(false, "claude", 1), (true, "claude,claude", 2)]
-        .into_iter()
-        .map(|(stay, agent, count)| {
-            let entry = TaskEntry {
-                agent: Some(agent.into()),
-                prompt: Some("repair".into()),
-                stay,
-                root: dir.path().to_owned(),
-                ..Default::default()
-            };
-            let config: MachineConfig = toml::from_str("[throttle]\ncheck = 'capacity'").unwrap();
-            let host = throttle::tests::FakeHost::new();
-            let mut fire = TaskFire::new(
-                "nightly",
-                LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
-                &catalog,
-                LoopRunMode::Scheduled,
-                false,
-                Timestamp::now(),
-                Arc::new(config),
-                None,
-                CheckEcho::Capture,
-                Instant::now(),
-            )
-            .unwrap();
-            fire.throttle_host = host.host();
-            if stay {
-                assert!(
-                    fire.prepare_resident_scope_gates(dir.path())
-                        .unwrap()
-                        .is_none()
-                );
-            } else {
-                assert!(fire.prepare_scope_gates().unwrap().is_none());
-            }
-            assert!(fire.prepare_throttle().unwrap().is_none());
-            let groups = host.checked_groups();
-            (
-                groups.len(),
-                groups
-                    .first()
-                    .map(|group| (group.kind.as_str().to_owned(), group.agents)),
-                count,
-            )
-        })
-        .collect();
-    assert_eq!(
-        results,
-        [
-            (1, Some(("claude".into(), 1)), 1),
-            (1, Some(("claude".into(), 2)), 2)
-        ]
-    );
-}
-
-#[test]
-fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let checked = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("repair".to_owned()),
-        check: Some("true".into()),
-        on: Some(CheckOn::Success),
-        root: dir.path().to_path_buf(),
-        fire_at: Some(Timestamp::UNIX_EPOCH),
-        ..TaskEntry::default()
-    };
-    crate::harness::schedule::instances::insert(&state, "checked", &checked).unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let host = throttle::tests::FakeHost::new();
-    let config = MachineConfig::default();
-    // Another start holds the turn, so this fire would be held.
-    host.become_owner(9);
-    let throttle::Admission::Turn { turn: _holder, .. } = throttle::admit(
-        &host.host(),
-        &config.throttle,
-        &throttle::Run {
-            machine_gated: true,
-            limits: None,
-            groups: Vec::new(),
-            gives_up_ms: None,
-            task: "other".to_owned(),
-            root: PathBuf::from("/elsewhere"),
-            checkout: PathBuf::from("/elsewhere"),
-            disk: PathBuf::from("/elsewhere"),
-            workspace: state.workspace_id.clone(),
-        },
-        None,
-    )
-    .unwrap() else {
-        panic!("an empty queue admits")
-    };
-    host.become_owner(1);
-    let mut fire = skipped_fire("checked", &catalog, None);
-    fire.config = Arc::new(config);
-    fire.throttle_host = host.host();
-
-    fire.prepare_run_lock(false).unwrap();
-    fire.prepare_check(&mut |_| Ok(()))
-        .unwrap()
-        .continue_value()
-        .expect("a passing check fires the spawn");
-    host.interrupt
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let TaskFirePlan::Done(done) = fire.prepare_effect().unwrap() else {
-        panic!("an interrupted fire is done")
-    };
-    assert_eq!(done.record.result, LoopRunResult::Canceled);
-    assert_eq!(done.record.error.as_deref(), Some("interrupted while held"));
-    assert_eq!(done.presentation.exit_code, Some(130));
-    assert_eq!(done.record.check.expect("the fired check").code, Some(0));
-    assert_eq!(done.record.run_id, None);
-    assert_eq!(host.elapsed_ms(), 0, "the Ctrl-C was heard before any hold");
-    assert_eq!(host.tickets(), 1, "only the holder's turn is queued");
-}
-
-#[test]
-fn spawn_request_carries_the_task_fast_mode_beside_effort() {
-    let dir = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    for fast in [None, Some(true), Some(false)] {
-        let entry = TaskEntry {
-            agent: Some("codex".to_owned()),
-            prompt: Some("check".to_owned()),
-            every: Some("1h".to_owned()),
-            effort: Some("high".to_owned()),
-            fast,
-            root: dir.path().to_owned(),
-            ..TaskEntry::default()
-        };
-        let fire = TaskFire::new(
-            "hourly",
-            LoadedTask::new("hourly", entry, catalog::TaskSource::Config),
-            &catalog,
-            LoopRunMode::Scheduled,
-            false,
-            Timestamp::now(),
-            Arc::new(MachineConfig::default()),
-            None,
-            CheckEcho::Capture,
-            Instant::now(),
-        )
-        .unwrap();
-        let request = fire
-            .compile_spawn_request(
-                "codex".to_owned(),
-                "check".to_owned(),
-                ManagedLaunchState::Unsupported,
-            )
-            .unwrap();
-        assert_eq!(request.effort.as_deref(), Some("high"));
-        assert_eq!(request.fast, fast);
-    }
-}
-
-fn fresh_worktree_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
-    let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("repair".to_owned()),
-        every: Some("1h".to_owned()),
-        root: root.to_owned(),
-        fresh_worktree: Some("night".to_owned()),
-        ..TaskEntry::default()
-    };
-    TaskFire::new(
-        "nightly",
-        LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
-        catalog,
-        LoopRunMode::Scheduled,
-        false,
-        "2026-01-02T03:04:05Z".parse().unwrap(),
-        Arc::new(MachineConfig::default()),
-        None,
-        CheckEcho::Capture,
-        Instant::now(),
-    )
-    .unwrap()
-}
-
 fn git_in(dir: &Path, args: &[&str]) {
     assert!(
         std::process::Command::new("git")
@@ -4180,35 +2399,41 @@ fn git_in(dir: &Path, args: &[&str]) {
     );
 }
 
-fn fresh_worktree_repo(dir: &Path) -> PathBuf {
-    let root = dir.join("repo");
+/// A fresh task's fire cuts its tree just before `create`, and a tree no run took over goes with
+/// the fire: every return before `hand_over_fire_tree`, a refused `create` among them.
+#[test]
+fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
     std::fs::create_dir(&root).unwrap();
     git_in(&root, &["init", "-q", "-b", "main"]);
     git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    root
-}
-
-#[test]
-fn a_fresh_worktree_fire_runs_in_its_tree_and_removes_it_unless_an_agent_opened_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = fresh_worktree_repo(dir.path());
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let entry = TaskEntry {
+        check: Some("true".into()),
+        every: Some("1h".to_owned()),
+        root: root.clone(),
+        fresh_worktree: Some("night".to_owned()),
+        ..TaskEntry::default()
+    };
     let mut kept = None;
     for launched in [false, true] {
-        let mut fire = fresh_worktree_fire(&root, &catalog);
+        let mut fire = TaskFire::new(
+            "nightly",
+            LoadedTask::new("nightly", entry.clone(), catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            "2026-01-02T03:04:05Z".parse().unwrap(),
+            Arc::new(MachineConfig::default()),
+            None,
+            Instant::now(),
+        )
+        .unwrap();
         fire.prepare_fire_tree().unwrap();
         let tree = fire.fire_dir();
-        assert_ne!(tree, root);
-        assert_eq!(fire.launch_checkout(), root, "scope keys stay at the root");
-        let request = fire
-            .compile_spawn_request(
-                "claude".to_owned(),
-                "repair".to_owned(),
-                ManagedLaunchState::Unsupported,
-            )
-            .unwrap();
+        assert_eq!(fire.launch_checkout(), root, "loop's keys stay at the root");
         let name = tree.file_name().unwrap().to_str().unwrap().to_owned();
-        assert_eq!(request.worktree.as_deref(), Some(name.as_str()));
         assert!(name.starts_with("night-20260102-030405"), "{name}");
         if launched {
             fire.hand_over_fire_tree();
@@ -4219,47 +2444,10 @@ fn a_fresh_worktree_fire_runs_in_its_tree_and_removes_it_unless_an_agent_opened_
             kept = Some(tree);
         }
     }
-    let kept = kept.unwrap();
-    let marker = crate::worktree::read_marker_for_worktree(&kept)
+    let marker = crate::worktree::read_marker_for_worktree(&kept.unwrap())
         .unwrap()
         .unwrap();
     assert_eq!(marker.loop_task.as_deref(), Some("nightly"));
-}
-
-#[test]
-fn a_fresh_worktree_handed_to_a_launch_outlives_an_errored_or_budget_refused_effect() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = fresh_worktree_repo(dir.path());
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    for (committed, refused) in [(false, false), (true, false), (true, true)] {
-        let mut fire = fresh_worktree_fire(&root, &catalog);
-        fire.prepare_fire_tree().unwrap();
-        fire.hand_over_fire_tree();
-        let tree = fire.fire_dir();
-        std::fs::write(tree.join("work.txt"), "agent output").unwrap();
-        if committed {
-            git_in(&tree, &["add", "work.txt"]);
-            git_in(&tree, &["commit", "-q", "-m", "agent work"]);
-        }
-        if refused {
-            // A retry the budget refuses comes after an attempt that worked in the tree.
-            fire.pending = Some(PendingEffect::Spawn { stream: false });
-            fire.finish(TaskFireEffect::Spawn(
-                SupervisedRunOutcome::BudgetExceeded {
-                    reason: "over the daily cap".to_owned(),
-                },
-            ))
-            .unwrap();
-        } else {
-            let finished = fire.finish_error(&anyhow::anyhow!("verify command failed"));
-            assert_eq!(finished.record.result, LoopRunResult::Errored);
-        }
-        drop(fire);
-        assert!(
-            tree.join("work.txt").exists(),
-            "the launch keeps the agent's work (committed: {committed}, refused: {refused})"
-        );
-    }
 }
 
 #[test]
@@ -4298,5 +2486,81 @@ fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
     assert!(
         format!("{error:#}").contains(&format!("reading run {}'s sealed definition", record.id)),
         "{error:#}"
+    );
+}
+
+const SIX_DOLLAR_STEP: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude'\nprompt='fix'\nbudget='$6'\nthen='@done'\n";
+
+#[test]
+fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run() {
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let held = super::super::launch_ledger_store::hold_budget(&state, "capped").unwrap();
+    let (root_path, publisher_state) = (root.path().to_owned(), state.clone());
+    // The concurrent fire: it read the budget under the lock, and publishes its $6 run before
+    // it lets go.
+    let publisher = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"capped",
+            "task":"capped", "spec_dir":root_path, "spec_digest":"abc",
+            "scope":{"kind":"worktree","path":root_path}, "project_root":root_path,
+            "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
+            "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":1, "spec_version":1
+        }))
+        .unwrap();
+        let guard =
+            crate::disk::lock::WorkspaceLock::acquire(&publisher_state.workspace_lock).unwrap();
+        crate::store::workflow::initialize(
+            &publisher_state,
+            &record,
+            SIX_DOLLAR_STEP.as_bytes(),
+            &guard,
+        )
+        .unwrap();
+        drop(guard);
+        drop(held);
+    });
+    let workflow = format!("capped-{}", crate::ids::WorkflowRunId::new());
+    let dir = crate::disk::paths::workflows_dir().join(&workflow);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        crate::disk::paths::workflow_spec_file(&dir),
+        SIX_DOLLAR_STEP,
+    )
+    .unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        workflow: Some(workflow),
+        budget_per_day: Some("$10".into()),
+        ..Default::default()
+    };
+    let mut fire = TaskFire::new(
+        "capped",
+        LoadedTask::new("capped", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Manual,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        Instant::now(),
+    )
+    .unwrap();
+    let plan = fire.prepare(&mut |_| Ok(()));
+    publisher.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    // An admitted fire goes on to `create`, which refuses this stub definition.
+    let skipped = matches!(
+        &plan,
+        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::BudgetSkipped
+    );
+    assert!(
+        skipped,
+        "the second fire must count the first fire's $6 run against the $10 cap: {:?}",
+        plan.err()
     );
 }

@@ -517,16 +517,3 @@ fn a_symlinked_checkout_counts_both_path_forms_and_keeps_nested_worktrees_out() 
         Err(vec![("physical".to_owned(), OpenTurn::Working)])
     );
 }
-
-#[test]
-fn blocked_reason_names_each_blocker_in_the_users_words() {
-    assert_eq!(
-        blocked_reason(&[
-            ("@coder".to_owned(), OpenTurn::Working),
-            ("@fox".to_owned(), OpenTurn::WaitingOnUser),
-            ("@owl".to_owned(), OpenTurn::Paused),
-            ("@elk".to_owned(), OpenTurn::Compacting),
-        ]),
-        "@coder is working, @fox is waiting on you, @owl is paused on a limit, @elk is compacting"
-    );
-}

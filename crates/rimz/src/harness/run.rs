@@ -193,9 +193,6 @@ pub struct SupervisedRunRequest {
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
     pub loop_task: Option<String>,
-    /// The loop fire's creation instant when it requests kept notes. The launcher
-    /// allocates after settling the checkout.
-    pub loop_notes_at: Option<jiff::Timestamp>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     /// The composed or replayed reminder section every attempt's pane request carries.
     pub reminder_section: Option<crate::harness::launch::ReminderSection>,
@@ -255,7 +252,6 @@ impl SupervisedRunRequest {
             verify: None,
             max_attempts: None,
             loop_task: None,
-            loop_notes_at: None,
             workflow: None,
             reminder_section: None,
             passthrough: Vec::new(),

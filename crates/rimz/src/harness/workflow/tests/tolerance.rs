@@ -593,6 +593,34 @@ fn syntax_errors_keep_line_column_and_excerpt() {
 }
 
 #[test]
+fn a_check_wake_binding_ignores_its_prompt_with_a_warning() {
+    let spec = loaded(&VALID.replace(
+        "[checks.pick]",
+        "[checks.pick]\nwake=[{signal='review.ready',prompt='look'}]",
+    ))
+    .unwrap();
+    assert_eq!(
+        spec.ignored
+            .iter()
+            .map(|i| (
+                i.path.as_str(),
+                i.message.contains("only on a step's subscribe")
+            ))
+            .collect::<Vec<_>>(),
+        [("checks.pick.wake.0.prompt", true)]
+    );
+    assert_eq!(
+        spec.checks["pick"]
+            .wake
+            .iter()
+            .flatten()
+            .map(crate::harness::workflow::spec::Wake::prompt)
+            .collect::<Vec<_>>(),
+        [None]
+    );
+}
+
+#[test]
 fn unknown_keys_warn_at_every_table_including_wake_bindings() {
     let text = format!(
         "future=true\n{}",
@@ -1203,6 +1231,9 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
         "{signal='review.ready',match={env=42}}",
     ] {
         cases.push((format!("{SIMPLE}wake=[{wake}]\n"), "checks.pick.wake.0"));
+        if wake.starts_with("'team.") {
+            continue;
+        }
         cases.push((
             acyclic
                 .replace("lifecycle = \"turn\"", "lifecycle='stay'")

@@ -670,13 +670,6 @@ impl MachineConfig {
             .map(|loop_| loop_.unwrap_or_default())
     }
 
-    /// Strictly reread the machine's core file without the lenient loader's memo.
-    pub(crate) fn load_throttle() -> Result<ThrottleConfig> {
-        let files = MachineConfigFiles::machine();
-        load_optional(files.core_path(), parse_core_text)
-            .map(|core| core.unwrap_or_default().throttle)
-    }
-
     /// Load memoized per-machine config for a runtime entry point. Unlike [`Self::load`],
     /// broken core and loop TOML also degrade to built-in defaults with a warning. Both
     /// loaders recover an unreadable or malformed theme the same way and retain Markdown
