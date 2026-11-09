@@ -13,28 +13,26 @@ impl TmuxBackend {
             .batch_spec(&[
                 words(&["show-options", "-s"]),
                 words(&["show-options", "-gw", "mode-keys"]),
+                words(&["show-options", "-g", "prefix"]),
+                words(&["show-options", "-g", "prefix2"]),
             ])
             .run()?;
         let options: Vec<_> = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(shlex::split)
             .collect();
-        let value = |key: &str| {
-            options
-                .iter()
-                .find(|row| row.first().is_some_and(|name| name == key))
-                .and_then(|row| row.get(1))
-                .map(String::as_str)
-        };
-        self.run_script(&keymap_commands(
-            keymap,
-            rimz_bin,
-            value("@rimz_keys").unwrap_or_default(),
-            value("@rimz_mode_keys"),
-            value("mode-keys").unwrap_or_default(),
-        ))?;
+        self.run_script(&keymap_commands(keymap, rimz_bin, &options))?;
         Ok(())
     }
+}
+
+/// The value of one `show-options` row, `<name> <value>`.
+fn option<'a>(options: &'a [Vec<String>], key: &str) -> Option<&'a str> {
+    options
+        .iter()
+        .find(|row| row.first().is_some_and(|name| name == key))
+        .and_then(|row| row.get(1))
+        .map(String::as_str)
 }
 
 fn words(args: &[&str]) -> Vec<String> {
@@ -83,12 +81,15 @@ fn arrow_key(direction: KeyDirection) -> &'static str {
 fn keymap_commands(
     keymap: &RoomKeymap,
     rimz_bin: &Path,
-    root_keys: &str,
-    prior_mode_keys: Option<&str>,
-    global_mode_keys: &str,
+    options: &[Vec<String>],
 ) -> Vec<Vec<Vec<String>>> {
+    let prior_mode_keys = option(options, "@rimz_mode_keys");
+    let global_mode_keys = option(options, "mode-keys").unwrap_or_default();
     let mut commands = Vec::new();
-    for key in root_keys.split_whitespace() {
+    for key in option(options, "@rimz_keys")
+        .unwrap_or_default()
+        .split_whitespace()
+    {
         commands.push(words(&["unbind-key", "-T", "root", key]));
     }
     for mode in [
@@ -146,7 +147,44 @@ fn keymap_commands(
         "@rimz_keys",
         &root_keys.join(" "),
     ]));
+    for (name, marker) in [("prefix", "@rimz_prefix"), ("prefix2", "@rimz_prefix2")] {
+        commands.extend(prefix_option_commands(
+            name,
+            marker,
+            option(options, name),
+            option(options, marker),
+            &root_keys,
+        ));
+    }
     commands.into_iter().map(|command| vec![command]).collect()
+}
+
+/// tmux checks `prefix` and `prefix2` before any key table, so a root key RimZ
+/// binds that equals one would never fire. Turn that option off, recording its
+/// value once behind `marker`, and restore it once no root key collides.
+fn prefix_option_commands(
+    name: &str,
+    marker: &str,
+    current: Option<&str>,
+    recorded: Option<&str>,
+    root_keys: &[String],
+) -> Vec<Vec<String>> {
+    let bound = |key: &str| root_keys.iter().any(|root| root == key);
+    if let Some(current) = current.filter(|current| bound(current)) {
+        let mut commands = Vec::new();
+        if recorded.is_none() {
+            commands.push(words(&["set-option", "-s", marker, current]));
+        }
+        commands.push(words(&["set-option", "-g", name, "None"]));
+        return commands;
+    }
+    match recorded {
+        Some(recorded) if !bound(recorded) => vec![
+            words(&["set-option", "-g", name, recorded]),
+            words(&["set-option", "-su", marker]),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 /// `bind-key` reparses its body words as a command list, where a word ending in `;` ends the
@@ -262,17 +300,72 @@ mod tests {
     }
 
     fn commands(config: &str, roots: &str, prior: Option<&str>) -> Vec<Vec<String>> {
+        let mut options = vec![("@rimz_keys", roots), ("mode-keys", "emacs")];
+        options.extend(prior.map(|prior| ("@rimz_mode_keys", prior)));
+        commands_with(config, &options)
+    }
+
+    fn commands_with(config: &str, options: &[(&str, &str)]) -> Vec<Vec<String>> {
         let config: MachineConfig = toml::from_str(config).unwrap();
-        keymap_commands(
-            &config.room_keymap(),
-            Path::new("/bin/rimz"),
-            roots,
-            prior,
-            "emacs",
-        )
-        .into_iter()
-        .flatten()
-        .collect()
+        let options: Vec<_> = options
+            .iter()
+            .map(|(name, value)| words(&[name, value]))
+            .collect();
+        keymap_commands(&config.room_keymap(), Path::new("/bin/rimz"), &options)
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    fn prefix_commands(commands: &[Vec<String>]) -> Vec<Vec<String>> {
+        commands
+            .iter()
+            .filter(|cmd| cmd[0] == "set-option" && cmd.iter().any(|arg| arg.contains("prefix")))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_colliding_tmux_prefix_is_recorded_once_turned_off_and_restored() {
+        let ctrl_b = "[room]\nstyle='rimz'\n[keys]\nprefix='Ctrl+b'\n";
+        let first = commands_with(ctrl_b, &[("prefix", "C-b"), ("prefix2", "None")]);
+        assert_eq!(
+            prefix_commands(&first),
+            [
+                words(&["set-option", "-s", "@rimz_prefix", "C-b"]),
+                words(&["set-option", "-g", "prefix", "None"]),
+            ]
+        );
+        let second = commands_with(
+            ctrl_b,
+            &[
+                ("prefix", "None"),
+                ("prefix2", "None"),
+                ("@rimz_prefix", "C-b"),
+            ],
+        );
+        assert_eq!(prefix_commands(&second), [] as [Vec<String>; 0]);
+        let native = commands_with("", &[("prefix", "None"), ("@rimz_prefix", "C-b")]);
+        assert_eq!(
+            prefix_commands(&native),
+            [
+                words(&["set-option", "-g", "prefix", "C-b"]),
+                words(&["set-option", "-su", "@rimz_prefix"]),
+            ]
+        );
+        let rimz = commands_with(
+            "[room]\nstyle='rimz'",
+            &[("prefix", "C-b"), ("prefix2", "M-x")],
+        );
+        assert_eq!(prefix_commands(&rimz), [] as [Vec<String>; 0]);
+        let second_prefix = commands_with(ctrl_b, &[("prefix", "C-a"), ("prefix2", "C-b")]);
+        assert_eq!(
+            prefix_commands(&second_prefix),
+            [
+                words(&["set-option", "-s", "@rimz_prefix2", "C-b"]),
+                words(&["set-option", "-g", "prefix2", "None"]),
+            ]
+        );
     }
 
     #[test]

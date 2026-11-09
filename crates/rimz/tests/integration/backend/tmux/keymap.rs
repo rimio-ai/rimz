@@ -190,3 +190,45 @@ fn pty_commands_resolve_the_pressing_room_and_preserve_literal_arguments() {
     }
     assert!(!first.join("pressed").exists());
 }
+
+#[test]
+fn pty_a_colliding_tmux_prefix_reaches_rimz_and_is_restored() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let received = server._tempdir.path().join("received");
+    let reader = format!(
+        "stty raw -echo; dd bs=1 count=1 2>/dev/null | od -An -tx1 > '{}'; sleep 600",
+        received.display()
+    );
+    server.output(&["new-session", "-d", "-s", "keys", "sh", "-c", &reader]);
+    server.output(&["set-option", "-g", "prefix", "C-b"]);
+    let bin = Path::new("/bin/rimz");
+    apply(
+        &server,
+        "[room]\nstyle='rimz'\n[keys]\nprefix='Ctrl+b'\n[keys.bind.prefix]\nb='pane.send_prefix'",
+        bin,
+    );
+    assert_eq!(server.show_option(&["-g"], "prefix"), "None");
+    assert_eq!(server.show_option(&["-s"], "@rimz_prefix"), "C-b");
+    let mut client = AttachedTmuxClient::attach(&server.socket, "keys", 120, 40);
+    wait_for(&server, "#{client_key_table}", "root");
+    client.send(b"\x02");
+    wait_for(&server, "#{client_key_table}", "rimz-prefix");
+    client.send(b"b");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let bytes = std::fs::read_to_string(&received).unwrap_or_default();
+        if bytes.trim() == "02" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the pane read {bytes:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    apply(&server, "", bin);
+    assert_eq!(server.show_option(&["-g"], "prefix"), "C-b");
+    assert!(
+        !server
+            .stdout(&["show-options", "-s"])
+            .contains("@rimz_prefix")
+    );
+}
