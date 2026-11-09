@@ -110,7 +110,7 @@ fn lsp_columnless_position_always_reports_a_target_error() {
         .assert()
         .code(1)
         .stderr(predicates::str::contains(
-            "src/lib.rs:12 has no column; use path:line:col with 1-based line and column",
+            "src/lib.rs:12 has no column; use path:line:col with 1-based line and column, or path:line:name",
         ));
 }
 
@@ -135,7 +135,7 @@ fn lsp_columnless_position_names_the_item_from_its_outline() {
         .assert()
         .code(1)
         .stderr(predicates::str::contains(
-            "show.rs:3 has no column; use path:line:col with 1-based line and column",
+            "show.rs:3 has no column; use path:line:col with 1-based line and column, or path:line:name",
         ));
     assert_eq!(
         editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
@@ -1553,6 +1553,11 @@ fn lsp_editors_receive_negotiated_shapes_and_agents_keep_links() {
     );
     env.rimz()
         .args(["lsp", "def", "lib.rs:1:4"])
+        .assert()
+        .success()
+        .stdout("lib.rs:1:1 (1-3)  fn example() {}\n");
+    env.rimz()
+        .args(["lsp", "def", "lib.rs:1:example"])
         .assert()
         .success()
         .stdout("lib.rs:1:1 (1-3)  fn example() {}\n");

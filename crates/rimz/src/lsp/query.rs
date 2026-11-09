@@ -51,7 +51,8 @@ impl Target {
                     });
                 }
                 return Err(LspErr::Protocol(format!(
-                    "invalid position {raw}; use path:line:col with 1-based line and column"
+                    "invalid position {raw}; use path:line:col with 1-based line and column, \
+                     or path:line:name"
                 )));
             }
             return Ok(Target::Symbol(raw.to_owned()));
@@ -67,7 +68,8 @@ impl Target {
                 .and_then(|value| value.checked_sub(1))
                 .ok_or_else(|| {
                     LspErr::Protocol(format!(
-                        "invalid position {raw}; use path:line:col with 1-based line and column"
+                        "invalid position {raw}; use path:line:col with 1-based line and \
+                         column, or path:line:name"
                     ))
                 })
         };
@@ -91,8 +93,24 @@ impl Target {
         }
     }
 
+    /// Parse a typed target and resolve its path before server selection. A position-taking
+    /// verb also reads `path:line:name`, the one whole-identifier `name` on that saved line.
+    pub fn locate(verb: Verb, raw: &str, root: &Path, folder: &Path) -> Result<Self> {
+        if !matches!(verb, Verb::Symbols | Verb::Find)
+            && let Some((path, line, name)) = line_name(raw)
+        {
+            return locate_line_name(
+                root,
+                &typed_path(root, folder, Path::new(path))?,
+                line,
+                name,
+            );
+        }
+        Self::parse(verb, raw)?.resolve_path(root, folder)
+    }
+
     /// Resolve typed paths before server selection, retaining symbol suffix fallbacks.
-    pub fn resolve_path(self, root: &Path, folder: &Path) -> Result<Self> {
+    fn resolve_path(self, root: &Path, folder: &Path) -> Result<Self> {
         match self {
             Self::Position { path, position } => Ok(Self::Position {
                 path: typed_path(root, folder, &path)?,
@@ -110,6 +128,91 @@ impl Target {
             }
             target => Ok(target),
         }
+    }
+}
+
+fn identifier_char(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+fn is_identifier(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|first| first.is_alphabetic() || first == '_')
+        && text.chars().all(identifier_char)
+}
+
+/// Split `path:line:name`, or a qualified `path:line:A::B`, at its first `:line:` separator.
+fn line_name(raw: &str) -> Option<(&str, u32, &str)> {
+    raw.match_indices(':').find_map(|(at, _)| {
+        let rest = &raw[at + 1..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let name = rest.get(digits..)?.strip_prefix(':')?;
+        let named = is_identifier(name) || name.split("::").all(is_identifier);
+        (at > 0 && digits > 0 && named).then_some((&raw[..at], rest[..digits].parse().ok()?, name))
+    })
+}
+
+fn locate_line_name(root: &Path, path: &Path, line: u32, name: &str) -> Result<Target> {
+    if let Some((_, last)) = name.rsplit_once("::") {
+        return Err(LspErr::QualifiedLineName {
+            path: path.to_owned(),
+            line,
+            name: name.to_owned(),
+            last: last.to_owned(),
+        });
+    }
+    let source = std::fs::read_to_string(root.join(path))?;
+    let lines = source.lines().count();
+    let Some(text) = line
+        .checked_sub(1)
+        .and_then(|index| source.lines().nth(index as usize))
+    else {
+        return Err(LspErr::LineOutside {
+            path: path.to_owned(),
+            line,
+            lines,
+        });
+    };
+    let columns: Vec<u32> = text
+        .match_indices(name)
+        .filter(|(at, _)| {
+            let before = &text[..*at];
+            let raw_identifier = before
+                .strip_suffix("r#")
+                .is_some_and(|rest| !rest.chars().next_back().is_some_and(identifier_char));
+            !raw_identifier
+                && !before.chars().next_back().is_some_and(identifier_char)
+                && !text[at + name.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(identifier_char)
+        })
+        .map(|(at, _)| text[..at].encode_utf16().count() as u32)
+        .collect();
+    match columns[..] {
+        [character] => Ok(Target::Position {
+            path: path.to_owned(),
+            position: Position {
+                line: line - 1,
+                character,
+            },
+        }),
+        [] => Err(LspErr::NameNotOnLine {
+            path: path.to_owned(),
+            line,
+            name: name.to_owned(),
+            text: snippet(text),
+        }),
+        _ => Err(LspErr::NameRepeatsOnLine {
+            path: path.to_owned(),
+            line,
+            name: name.to_owned(),
+            columns: columns
+                .iter()
+                .map(|column| u64::from(*column) + 1)
+                .collect(),
+        }),
     }
 }
 
@@ -231,6 +334,8 @@ impl QueryErr {
             | Self::Unanswered { .. }
             | Self::MemoryShort { .. }
             | Self::MemoryPressure { .. } => 4,
+            Self::Failed(LspErr::NameNotOnLine { .. }) => 5,
+            Self::Failed(LspErr::NameRepeatsOnLine { .. }) => 6,
             Self::UncoveredExtension { .. } | Self::MultipleServers { .. } | Self::Failed(_) => 1,
         }
     }

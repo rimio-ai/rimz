@@ -164,7 +164,7 @@ fn visible_lsp_arguments_explain_their_input() {
                     "symbols" => "File paths to outline",
                     "find" => "Symbol-name search strings",
                     _ => {
-                        "Targets: path:line:col (1-based, column required), path::Symbol, or a name"
+                        "Targets: path:line:col (1-based, column required), path:line:name, path::Symbol, or a name"
                     }
                 };
                 assert_eq!(

@@ -68,12 +68,64 @@ pub enum LspErr {
         hint = item.as_ref().map(|item| format!(
             "line {line} names {} {} at {}:{line}:{}",
             item.kind, item.name, path.display(), item.column
-        )).unwrap_or_else(|| "use path:line:col with 1-based line and column".into())
+        )).unwrap_or_else(|| {
+            "use path:line:col with 1-based line and column, or path:line:name".into()
+        })
     )]
     MissingColumn {
         path: std::path::PathBuf,
         line: u32,
         item: Option<NamedItem>,
+    },
+    #[error(
+        "{path}:{line}:{name} names a qualified symbol; path:line:name takes one identifier: \
+         use {path}:{line}:{last}",
+        path = path.display()
+    )]
+    QualifiedLineName {
+        path: std::path::PathBuf,
+        line: u32,
+        name: String,
+        last: String,
+    },
+    #[error(
+        "{path}:{line} {}",
+        if *line == 0 {
+            format!("is not a line; lines count from 1 and {} has {lines}", path.display())
+        } else {
+            format!(
+                "is past the end of {}, which has {lines} line{}",
+                path.display(),
+                if *lines == 1 { "" } else { "s" }
+            )
+        },
+        path = path.display()
+    )]
+    LineOutside {
+        path: std::path::PathBuf,
+        line: u32,
+        lines: usize,
+    },
+    #[error("not found: {name} on {path}:{line}, which reads: {text}", path = path.display())]
+    NameNotOnLine {
+        path: std::path::PathBuf,
+        line: u32,
+        name: String,
+        text: String,
+    },
+    #[error(
+        "ambiguous: {name} appears {count} times on {path}:{line}; \
+         rerun with one of these targets:{targets}",
+        count = columns.len(),
+        path = path.display(),
+        targets = columns.iter().map(|column| format!("\n{}:{line}:{column}", path.display()))
+            .collect::<String>()
+    )]
+    NameRepeatsOnLine {
+        path: std::path::PathBuf,
+        line: u32,
+        name: String,
+        columns: Vec<u64>,
     },
     #[error("language server error {code}: {message}")]
     Server { code: i64, message: String },
