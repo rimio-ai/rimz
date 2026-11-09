@@ -16,9 +16,9 @@ A login never changes a process-wide variable. It is an override on an ambient e
 | stamp | the login recorded on an agent row (`AgentState::login`). `None` is `default` | `AgentState::login_key` |
 | room default | the login the room launches a kind under now | `RoomLoginSet::default_login` |
 
-Named accounts exist for Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), and Pi (`PI_CODING_AGENT_DIR`) only ([`AccountsConfig::named`](../../../crates/rimz/src/config/accounts.rs)). Every other kind has only `default`. An account without a configured `home` lives at `~/.rimz/accounts/<kind>/<name>` (`crates/rimz/src/agents/login.rs::default_named_home`), and nothing in RimZ removes it.
+Named accounts exist for Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), and Pi (`PI_CODING_AGENT_DIR`) only ([`AccountsConfig::named`](../../../crates/rimz/src/config/accounts.rs) lists them, and `ProviderLogin::named` also requires the adapter's `supports_named_logins` and exactly one `config_home_env_keys` entry). Every other kind has only `default`. An account without a configured `home` lives at `<RimZ home>/accounts/<kind>/<name>` (`crates/rimz/src/agents/login.rs::default_named_home`), and nothing in RimZ removes it.
 
-`LoginCatalog::from_config` refuses a declaration named `default`, a relative home, a home containing `,` or ending in `projects`, a home two accounts share, and the provider's own home (`LoginConfigErr`). The read-side catalog (`LoginCatalog::room_view`) drops only the kind whose declaration fails, so the other kinds keep their pools.
+`LoginCatalog::from_config` refuses a declaration named `default`, a relative home, a home containing `,` or ending in `projects`, a home two accounts share, and the provider's own home (`LoginConfigErr`). It compares homes after tilde expansion and lexical normalization, with the native home resolved from the process `HOME`. The reconciler adds a canonical check: a home that resolves to the native one refuses there (`crates/rimz/src/agents/account_links.rs::check_distinct_homes`, `ShareErr::SameHome`). `from_config` fails the whole catalog on the first bad declaration. The read-side catalog (`LoginCatalog::room_view`) builds each kind on its own and drops only the kind whose declaration fails, so the other kinds keep their pools.
 
 ## Which login a room uses
 
@@ -31,17 +31,17 @@ Named accounts exist for Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), and
 | 3 | the machine's live `[accounts.use]` | `machine default` |
 | 4 | none | `provider default` (`default`) |
 
-A resolution failure stays with the kinds it touches. Only an unreadable `workspace.json` fails the whole resolution. Blocked project trust refuses every kind that would inherit, and an undeclared name or an unreadable machine core refuses only the kinds that need it. A pin to `default` reads neither project nor machine config. `RoomAccounts::account`, `name`, `source`, and `login` answer per kind, and a failed kind never becomes `default`: display readers omit its account and keep its healthy siblings, and `RoomAccounts::names` lists successful kinds only.
+A resolution failure stays with the kinds it touches. Only an unreadable `workspace.json` fails the whole resolution. Blocked or unreadable project trust refuses every unpinned kind. An unreadable machine core refuses every kind except one pinned to `default`, and an undeclared name refuses only the kind that names it. A pin to `default` reads neither project nor machine config, and the project layer is not read at all when every kind is pinned. `RoomAccounts::account`, `name`, `source`, and `login` answer per kind, and a failed kind never becomes `default`: display readers omit its account and keep its healthy siblings, and `RoomAccounts::names` lists successful kinds only.
 
-The room records explicit pins and nothing else. Birth writes only the pins a launch requested, `rimz accounts use` pins, `--reset` unpins, and `--global` preflights the account before it changes the machine's `[accounts.use]`. An unpinned kind follows the project and machine defaults live, and a change leaves running agents on their stamps. A `workspace.json` that carries the older `logins` map reads its named entries as pins and its `default` entries as inherited ([workspace record](../store.md#the-workspace-record)).
+The room records explicit pins and nothing else. Birth adds only the pins `--account` requested and preflights those accounts (`crates/rimz/src/room/mod.rs::resolve_birth_logins`). A requested account that differs from the room's existing pin refuses (`StoreErr::RoomLoginsFrozen`). `rimz accounts use` pins, `rimz accounts use --reset` unpins, and `rimz reset` clears every pin. `rimz accounts use` and its `--global` form both preflight a named account (`ProviderLogin::preflight`) before they write the pin or the machine's `[accounts.use]`. An unpinned kind follows the project and machine defaults live, and a change leaves running agents on their stamps. A `workspace.json` that carries the older `logins` map reads its named entries as pins and its `default` entries as inherited ([workspace record](../store.md#the-workspace-record)).
 
 ## The default login and exported homes
 
 A pane born on a named account exports that account's home, so a provider child started from it would read the named home as `default`. A catalog-built `default` login (`LoginCatalog::select`, `session_login`, `RoomLoginSet::default_login`, and `in_use`) carries every declared home of its kind, and `ProviderLogin::env` drops an exported home variable that names one of them. Every caller in a named-account pane therefore reads the native home as `default` without opting in. `crates/rimz/src/agents/login.rs::RoomLoginSet::env` applies the same drop to a `default` login built outside the catalog, through the private `LoginCatalog::native_ambient`, which is idempotent on a catalog-built one.
 
-The drop holds at launch too. A default launch pins a dropped home key unset for the provider process (`launch_plan::compile`), and the Claude remote-control host starts under `env -u CLAUDE_CONFIG_DIR` when the login env lacks the key (`crates/rimz/src/agents/adapters/claude/remote_control.rs::host_argv_with_login`). Only exports naming a declared home are dropped: an undeclared export and a named login keep their home selection. A broken declaration leaves the bare `default` on the raw ambient environment. `rimz accounts add` and `rimz doctor` refuse a named account whose home the ambient environment already exports (`ProviderLogin::check_exported_home`), since that export makes every pane read the account as `default`.
+The drop holds at launch too. A default launch pins a dropped home key unset for the provider process (`launch_plan::compile`), and the Claude remote-control host starts under `env -u CLAUDE_CONFIG_DIR` when the login env lacks the key (`crates/rimz/src/agents/adapters/claude/remote_control.rs::host_argv_with_login`). Only exports naming a declared home are dropped: an undeclared export and a named login keep their home selection. A broken declaration leaves the bare `default` on the raw ambient environment. `rimz accounts add` refuses, and `rimz doctor` reports, a named account whose home the ambient environment already exports (`ProviderLogin::check_exported_home`), since that export makes every pane read the account as `default`.
 
-A shared account whose adapter names a database-home key (`shared_database_home_env_key`, Codex's `CODEX_SQLITE_HOME`) launches with that key set to the native home, unless the ambient environment sets it (`ProviderLogin::overrides`). A symlink would leave the database's sidecar files in the account home. The Codex app-server, daemon-control, and login-status children receive the key with `CODEX_HOME` (`crates/rimz/src/agents/adapters/codex/mod.rs::forward_login_env`).
+A shared account whose adapter names a database-home key (`shared_database_home_env_key`, Codex's `CODEX_SQLITE_HOME`) sets that key to the native home in its login env, unless the ambient environment sets it to a non-empty value (`ProviderLogin::overrides`). A symlink would leave the database's sidecar files in the account home. A standalone account sets no such key. The Codex app-server, daemon-control, and login-status children receive the key with `CODEX_HOME` (`crates/rimz/src/agents/adapters/codex/mod.rs::forward_login_env`).
 
 ## Login sets
 
@@ -52,8 +52,8 @@ A shared account whose adapter names a database-home key (`shared_database_home_
 | `default_login`, `default_key` | the room default per kind | new launches |
 | `current_keys` | `default_key` over every kind | the dashboard ([`PanelScope::Current`](./providers.md#producer-aggregation)) |
 | `with_agents`, `in_use`, `keys_in_use` | the room defaults plus the stamps of live root agents (no `ended_at`, provider-native subagents excluded) | producer state, rate-limit fusion, usage reads, auto-redeem |
-| `declared` | every login the machine catalog holds, `default` included. None when the account config did not load | [idle accounts](./providers.md#idle-accounts) |
-| `pool` | the history pool of a login | spend and the account budget |
+| `declared` | every login the machine catalog holds, `default` included. Empty when the set has no catalog (`RoomLoginSet::native`, or a runtime whose state paths do not resolve) | [idle accounts](./providers.md#idle-accounts) |
+| `pool` | the history pool of a login. The login's own key when the set has no catalog | spend and the account budget |
 | `env` | the environment a login's provider state is read under | every reader of a login |
 
 An unresolvable named stamp is left out of `in_use`, and never becomes a native-home read. A reader that serves one session uses that agent's own stamp, never the room default.
@@ -71,12 +71,12 @@ The durable stamp is the login of the agent's latest process. Each launch path s
 | a fresh launch: peer, team member, loop, interactive | `LaunchLogin::RoomDefault`, resolved as pin-or-live under the launch batch's workspace lock, unless `LaunchOverrides::login` (`rimz agents --account`) or `SupervisedRunRequest::login` pins one |
 | a `rimz subagents` child of its parent's kind | `Pinned` on the parent's stamp. An unstamped parent counts as `default` |
 | a `rimz subagents` child of another kind | the room default for its own kind |
-| restart, resume, fork, subagent follow-up, lane, team, and crash recovery | the room default, when it shares a history pool with the session's stamp ([`harness::resume::relaunch_login`](../../../crates/rimz/src/harness/resume.rs)) |
+| restart, resume, fork, subagent follow-up, lane, team, a workflow restart that continues its session, and crash recovery | the room default, when it shares a history pool with the session's stamp ([`harness::resume::relaunch_login`](../../../crates/rimz/src/harness/resume.rs)) |
 | a supervised retry | the preflighted login |
 | a provider-native child | its known parent's, for the same provider, at ingress |
 | a late hook adopting a provisional launch | the batch stamp |
 
-`session_login` resolves the allocated stamp at exec, so a switch between allocation and exec cannot change the process home. Every relaunch path builds its launch from `relaunch_login`'s answer. On a mismatch, an explicit reopen refuses with the `rimz accounts use` fix (a lane or team resume refuses the whole command), and rebirth skips the session as `different account`. Every relaunch path but crash recovery, and every fresh interactive launch, then runs `ProviderLogin::health` on the login before any write ([fleet.md](../harness/fleet.md#every-path-that-builds-a-launch-layout)).
+`session_login` resolves the allocated stamp at exec, so a switch between allocation and exec cannot change the process home. Every relaunch path checks the session against `relaunch_login` before it launches. Most build the launch from its answer. A supervised layout resume (`crates/rimz/src/launcher/supervised.rs`) and a workflow restart (`crates/rimz/src/cli/workflow/receipt.rs::continue_session`) use it as a gate only and launch on the room default it agreed with. On a mismatch, an explicit reopen refuses with the `rimz accounts use` fix (a lane or team resume refuses the whole command), and rebirth skips the session as `different account`. The relaunch paths and every fresh interactive launch then run `ProviderLogin::health` on the login before any write ([fleet.md](../harness/fleet.md#every-path-that-builds-a-launch-layout)). Rebirth runs it once per kind and skips that kind's sessions when it fails (`crates/rimz/src/harness/rebirth.rs`). A supervised launch runs `ProviderLogin::preflight`, which checks named accounts only.
 
 The wrapper's `agent.attached` carries the process login and moves the stamp to it. A session resumed under another account of its pool is then billed, parked, and preflighted as that account.
 
@@ -89,17 +89,19 @@ A session discovered in a provider home has no durable row until a hook or an at
 | Caller | When |
 | --- | --- |
 | `crates/rimz/src/cli/accounts.rs::add` | `rimz accounts add` |
-| `crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise` | the exec wrapper, between login resolution and compile (`launch_plan::prepare_exec`) |
-| `crates/rimz/src/harness/headless.rs::prepare` | a headless launch |
+| `crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise` | the exec wrapper, through the `link_account` callback of `launch_plan::prepare_exec`, after `session_login` and before compile |
+| `crates/rimz/src/harness/headless.rs::prepare` | a headless launch, through the same callback |
 
-`launch_plan::compile` and `rimz agents explain` never write. `accounts add` prints the full report. A launch uses `ShareReport::launch_warnings`: set-asides of declared settings entries (`shared_home_entries`) and history directories (`history_home_entries`), plus entries left local across filesystems. Other set-asides and removed links at unshared names go through `ShareReport::maintenance` into one `account_links_maintained` diagnostic per reconcile. `launch_plan::prepare_exec` builds that record alongside the launch lines; the exec wrapper and headless profile emit it before reading the compilation outcome. Quiet maintenance never reaches stderr or the card's `launch_warnings`.
+A launch reconciles before it compiles because the plan resolves the skill root through these links. `launch_plan::compile` and `rimz agents explain` never write. `accounts add` prints the full report (`ShareReport`'s `Display`). A launch uses `ShareReport::launch_warnings`: set-asides of declared settings entries (`shared_home_entries`) and history directories (`history_home_entries`), plus entries left local across filesystems. Other set-asides and removed links at unshared names go through `ShareReport::maintenance` into one `account_links_maintained` diagnostic per reconcile. `launch_plan::prepare_exec` builds that record alongside the launch lines, and the exec wrapper and headless launch emit it before they read the compilation outcome, so a launch that then fails still records it. Quiet maintenance never reaches stderr or the card's `launch_warnings`. Moved entries and links unlinked for a standalone account appear only in the `accounts add` report.
 
 ### The link set
 
 | Mode | Links |
 | --- | --- |
-| `shared` | every top-level entry of either home that is not unshared, plus the adapter's `history_home_entries`, created in the native home first when neither home holds them, so a first session never writes history into the account home |
+| `shared` | the adapter's `shared_home_entries` and `history_home_entries`, plus every other top-level name of either home that is not unshared |
 | `standalone` | the adapter's `shared_home_entries` alone |
+
+Every declared entry is planned whether or not either home holds it. A declared directory (a `SharedHomeKind::Dir` entry, and in shared mode each history entry) is created in the native home first unless it moves there, so a first session never writes history into the account home. A declared file that neither home holds is linked anyway, and the link dangles until the provider writes the native file.
 
 A name is unshared when it equals an adapter's `private_home_entries` entry or starts with one followed by `.`, when it is `.rimz-aside`, or when it carries `.lock` or `.tmp` as a dotted component past its start (`crates/rimz/src/agents/account_links.rs::is_transient`). No adapter restates the lock and temp rule.
 
@@ -109,11 +111,11 @@ A name is unshared when it equals an adapter's `private_home_entries` entry or s
 | Codex | `config.toml`, `AGENTS.md`, `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json`, `mention_usage.json` | `sessions/`, `archived_sessions/` |
 | Pi | `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `trust.json`, `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `extensions/`, `skills/`, `prompts/`, `themes/`, `npm/`, `git/` | `auth.json`, `models-store.json`, `mcp-auth.json`, `oauth.json`, `mcp.log`, `crashes.json`, `pi-debug.log`, `pi-tui-debug.log`, `pi-tui-crash.log` | `sessions/` |
 
+Codex keeps `models_cache.json` private because its local context refresh reads the catalog from the account's own home ([adapter_codex.md](./adapter_codex.md#local-refresh)).
+
 ### What happens to each entry
 
-Codex's local context refresh reads the account-private `models_cache.json` from its resolved account home for model capacity and compaction facts. It does not read a catalog beside a `RIMZ_CODEX_CONFIG` override; that override selects only `config.toml`. The [catalog gate](./adapter_codex.md#local-refresh) is independent of the rollout gate.
-
-`crates/rimz/src/agents/account_links.rs::classify` decides per planned name, by link text alone:
+`crates/rimz/src/agents/account_links.rs::classify` decides per planned name. A link is current by its text alone, and a link with other text is kept only when it reaches the target's `(dev, ino)`:
 
 | Account home holds | Action |
 | --- | --- |
@@ -127,13 +129,13 @@ Any failed identity lookup takes the set-aside path, including a dangling absolu
 
 A link left in the account home at a name the mode no longer shares is stale and removed. A stale link at an unshared name is a defect in either mode: the provider must own that name per home. RimZ removes it without consulting the live-writer gate and reports a `ShareReport::warnings` line, printed by `accounts add` and recorded as diagnostic maintenance at launch. The reconciler removes nothing but links.
 
-The reconciler holds one machine-wide lock per kind (`disk::paths::account_lock`), because every shared account of a kind moves entries into the same native home.
+The reconciler holds one machine-wide lock per kind, `<RimZ home>/accounts/.locks/<kind>.lock` (`disk::paths::account_lock`), because every shared account of a kind moves entries into the same native home.
 
 ### The live-writer gate
 
-A provider appends by path, so moving a directory out from under a running provider loses its writes. Before RimZ sets aside a directory or a link to one, or removes a stale link to one, it asks two questions in order. A converged home, and a change that sets aside only files, ask neither.
+A provider appends by path, so moving a directory out from under a running provider loses its writes. Before RimZ sets aside a directory or a link to one, or removes a stale link to one, it asks two questions in order. A converged home, a move into the native home, a replaced link, and a change that sets aside only files ask neither. The gate is asked once per reconcile, for the first such entry, and its refusal names that entry.
 
-1. Does another agent stamped with the account have a pane attached and a recorded process that is not dead (`crates/rimz/src/room/standing.rs::other_live_agents_on`)? A seat of the same batch that has not started and a row a rebirth recovered have no pane. A launch that failed or was killed after its pane was bound stops counting once its process is gone, before the room records its end. A count, or live rooms that cannot be read, refuses (`ShareErr::LiveAgents`, `ShareErr::LiveAgentsUnlink`).
+1. Does another agent stamped with the account, in any live room, have a pane attached and a recorded process that is not dead (`crates/rimz/src/room/standing.rs::other_live_agents_on`)? Ended rows and provider-native subagents do not count, and the exec wrapper excludes the row it is launching and the session it attaches to. A seat of the same batch that has not started and a row a rebirth recovered have no pane. A launch that failed or was killed after its pane was bound stops counting once its process is gone, before the room records its end. A count, or live rooms that cannot be read, refuses (`ShareErr::LiveAgents`, `ShareErr::LiveAgentsUnlink`).
 2. With the count at zero, does a provider daemon hold live sessions under the account home (`RuntimeControlCapability::runtime_control_writes_history`)? The answer is a `DaemonSessions`: `Clear` proceeds, and a session count or `Unknown` refuses before any entry changes (`ShareErr::LiveDaemon`, `ShareErr::LiveDaemonUnlink`). A running daemon that holds no session does not block and keeps running. Every kind but Codex answers `Clear`.
 
 Codex answers from its daemon's own records and control socket, and ignores `RIMZ_CODEX_APP_SERVER_SOCK`, which could name another account's daemon ([adapter_codex.md](./adapter_codex.md#remote-control)). A pending restart handoff (`app-server-daemon/loaded-threads.json`) answers `Unknown` even with no daemon running. Both directories it reads are private entries, so the record and the socket belong to the account in both history modes. The loaded-thread set is the evidence, not the room's session rows: a daemon-served row has no pane, a closed remote conversation's row can outlive it, and a row's stamp is the room's default at creation, not the home of the daemon that served it. A thread stays loaded for the unload delay after its last subscriber leaves ([upstream](../../externals/agent-adapter/codex-reference.md#read-methods)), so the gate keeps refusing for that long after a conversation closes. The refusal names two remedies: close the sessions and rerun once the daemon unloads them, or turn `remote_control.codex` off, rerun, and turn it back on, which restarts the daemon under the new mode (`crates/rimz/src/agents/account_links.rs::daemon_writers`).
@@ -147,7 +149,7 @@ The gate has four known gaps:
 
 A failure after a set-aside carries the set-aside lines on the error (`ShareErr::AfterSetAside`), since a rerun would no longer report them.
 
-Successful launch-time maintenance records name the login, configured account home, removed names, quiet set-aside names and their stamp directory, and repeated quiet names ([diagnostic taxonomy](../diagnostics.md#event-taxonomy)). Repetition is decided under the account lock, before the move, by looking for that name in earlier directories under the same account's `.rimz-aside/`; dangling preserved links count, read errors count as no copy, and there is no time window. Copies left by `accounts add` count too. No diagnostic is read back. The record is Info and doctor Contained unless a quiet name repeats, then Warn and Investigate. Repeated maintenance stays off the console; declared-name set-asides never enter the quiet list.
+A reconcile that succeeds at launch records its maintenance (`DiagEvent::AccountLinksMaintained`): the login, the configured account home, the removed names, the quiet set-aside names and their stamp directory, and the quiet names that repeat ([diagnostic taxonomy](../diagnostics.md#event-taxonomy)). A quiet name repeats when an earlier stamp directory under the same account's `.rimz-aside/` already holds that name (`has_prior_aside`). The check runs under the account lock, before the move. A dangling preserved link counts, a read error counts as no copy, and there is no time window. Copies that `accounts add` left count too. No diagnostic is read back. The record is Info, and doctor classes it Contained, unless a quiet name repeats: then it is Warn and Investigate. A repeat stays off the console as well. Set-asides of declared names never enter the quiet list.
 
 ### Link text
 
