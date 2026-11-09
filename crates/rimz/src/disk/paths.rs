@@ -1197,6 +1197,11 @@ impl RuntimePaths {
         self.lane_path("closed-cards.json")
     }
 
+    /// Runtime record of the room's last palette launch, which `rimz palette --repeat` runs.
+    pub fn palette_last_launch_path(&self) -> PathBuf {
+        self.lane_path("last-launch.json")
+    }
+
     /// The workspace-wide set of open unread episodes. Three writers replace it,
     /// each under `unread.lock`: the room host's fetch worker
     /// (status-derived opens and pruning, on every final fold), manual unread

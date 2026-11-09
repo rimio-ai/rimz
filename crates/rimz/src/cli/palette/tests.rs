@@ -1152,12 +1152,14 @@ fn tmux_client_refusals_describe_zero_and_multiple_attached_clients() {
 
 #[test]
 fn launcher_preserves_mode_room_mux_and_opener_without_popup_flag() {
-    let args = PaletteArgs {
+    let mut args = PaletteArgs {
         mode: Mode::Commands,
         session_name: Some("room".to_owned()),
         from_pane: Some(pane(1)),
         popup: true,
         client: Some("a".to_owned()),
+        new_worktree: false,
+        repeat: false,
     };
     assert_eq!(
         popup_args(&args, "room", rimz::MuxName::Tmux, Some(&pane(1))),
@@ -1173,6 +1175,109 @@ fn launcher_preserves_mode_room_mux_and_opener_without_popup_flag() {
             "tmux:%1",
         ]
     );
+    args.mode = Mode::New;
+    args.new_worktree = true;
+    assert_eq!(
+        popup_args(&args, "room", rimz::MuxName::Tmux, None),
+        [
+            "palette",
+            "--mode",
+            "new",
+            "--new-worktree",
+            "--session-name",
+            "room",
+            "--mux",
+            "tmux"
+        ]
+    );
+    args.mode = Mode::Cards;
+    args.new_worktree = false;
+    args.repeat = true;
+    assert_eq!(
+        popup_args(&args, "room", rimz::MuxName::Zellij, None),
+        [
+            "palette",
+            "--repeat",
+            "--session-name",
+            "room",
+            "--mux",
+            "zellij"
+        ]
+    );
+}
+
+#[derive(Parser)]
+struct PaletteCli {
+    #[command(flatten)]
+    args: PaletteArgs,
+}
+
+#[test]
+fn repeat_and_new_worktree_refuse_the_modes_they_cannot_run_with() {
+    let parse = |args: &[&str]| {
+        PaletteCli::try_parse_from(std::iter::once("palette").chain(args.iter().copied()))
+            .map(|cli| cli.args)
+    };
+    for refused in [
+        &["--repeat", "--mode", "new"][..],
+        &["--repeat", "--new-worktree"],
+    ] {
+        let error = parse(refused).err().unwrap();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{refused:?}"
+        );
+    }
+    assert!(parse(&["--repeat", "--popup"]).unwrap().repeat);
+    let args = parse(&["--mode", "new", "--new-worktree"]).unwrap();
+    assert!(check_new_worktree(args.mode, args.new_worktree).is_ok());
+    assert!(check_new_worktree(Mode::Cards, false).is_ok());
+    for mode in [Mode::Cards, Mode::Commands, Mode::Worktrees] {
+        let error = check_new_worktree(mode, true).unwrap_err();
+        assert_eq!(error.to_string(), "--new-worktree needs --mode new");
+        assert!(
+            error
+                .downcast_ref::<crate::cli::usage::UsageError>()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn last_launch_is_recorded_only_after_a_launch_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("last-launch.json");
+    let refusal = |path: &Path| read_last_launch(path).unwrap_err().to_string();
+    assert_eq!(refusal(&path), NO_LAST_LAUNCH);
+    std::fs::write(&path, "{\"args\": [\"agents\"").unwrap();
+    assert_eq!(refusal(&path), NO_LAST_LAUNCH);
+    let first = [
+        "agents",
+        "launch",
+        "coder",
+        "-w",
+        "--from-trunk",
+        "two words",
+    ]
+    .map(str::to_owned);
+    let mut ran = Vec::new();
+    let outcome = launch_and_record(&path, &first, |args| {
+        ran.push(args.to_vec());
+        ChildOutcome::Success
+    });
+    assert!(matches!(outcome, ChildOutcome::Success));
+    assert_eq!(read_last_launch(&path).unwrap(), first);
+    let record: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(record["launched_at"].as_u64().unwrap() > 0, "{record}");
+    let second = ["agents", "launch", "reviewer"].map(str::to_owned);
+    let outcome = launch_and_record(&path, &second, |args| {
+        ran.push(args.to_vec());
+        ChildOutcome::Failure("exit status: 1".to_owned())
+    });
+    assert!(matches!(outcome, ChildOutcome::Failure(_)));
+    assert_eq!(read_last_launch(&path).unwrap(), first);
+    assert_eq!(ran, [first.to_vec(), second.to_vec()]);
 }
 
 #[test]
