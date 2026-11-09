@@ -653,3 +653,49 @@ fn coviewer_backwards_sample_holds_money_and_fade() {
         });
     }
 }
+
+#[test]
+fn the_mode_row_reads_the_distinct_modes_of_this_panes_viewers_in_room_mode_order() {
+    use crate::pane::{ClientRoomMode, RoomMode};
+    let views = views();
+    let mut rig = shared_rig(views.clone(), 0, 2);
+    let _other = shared_rig(views.clone(), 1, 2);
+    let sidebar = |index: usize| PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
+    views.lock().reconcile(
+        &[(0, 0), (1, 0), (3, 0), (2, 1)].map(|(client, index)| ClientPaneView {
+            client_id: MuxClientId::Zellij(client),
+            pane_id: sidebar(index),
+        }),
+        true,
+        rig.state.pane.clock.now(),
+        Duration::from_secs(60),
+    );
+    let mut snapshot = rig.state.views.mirror().clone();
+    snapshot.client_modes = [
+        (0, RoomMode::Scrollback),
+        (1, RoomMode::Resize),
+        (3, RoomMode::Resize),
+        (2, RoomMode::Prefix),
+    ]
+    .map(|(client, mode)| ClientRoomMode {
+        client_id: MuxClientId::Zellij(client),
+        mode,
+    })
+    .to_vec();
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    rig.state
+        .draw_frame(&mut rig.terminal, Instant::now(), false)
+        .unwrap();
+    assert_eq!(
+        rig.state.pane.ui.room_modes,
+        [RoomMode::Resize, RoomMode::Scrollback],
+        "the client viewing another sidebar does not count"
+    );
+
+    snapshot.client_modes.clear();
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .draw_frame(&mut rig.terminal, Instant::now(), false)
+        .unwrap();
+    assert!(rig.state.pane.ui.room_modes.is_empty());
+}

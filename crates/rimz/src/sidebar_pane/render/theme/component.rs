@@ -135,6 +135,9 @@ pub(crate) enum Component {
     HelpKey,
     /// The pending prefix and continuation keys on the bottom which-key row.
     KeyHint,
+    /// A room-mode mark (`PREFIX`, `RESIZE`, `SCROLL`, `MOVE`) on the left of
+    /// the bottom key row.
+    RoomModeMark,
     /// The pane notice: the last in-pane key's refusal, above the key row.
     PaneNotice,
     /// The capability-line window token, by size class: a neutral→cool→accent
@@ -233,6 +236,7 @@ impl Component {
         Component::RemoteControlOff,
         Component::HelpKey,
         Component::KeyHint,
+        Component::RoomModeMark,
         Component::PaneNotice,
         Component::WindowSmall,
         Component::WindowMedium,
@@ -266,7 +270,7 @@ impl Component {
                 palette.body
             }
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator => palette.faint,
-            WorktreePrConflict | StallLeadActive | StallFigure => palette.caution,
+            WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }

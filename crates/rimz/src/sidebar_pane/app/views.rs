@@ -451,11 +451,16 @@ impl Views {
 
     /// The one live client viewing the sidebar `pane`, if exactly one does.
     pub(super) fn sole_viewer(&self, pane: &PaneId) -> Option<&MuxClientId> {
-        let mut viewers = self
-            .live_clients()
-            .filter(|(_, client)| client.pane.as_ref() == Some(pane));
-        let (id, _) = viewers.next()?;
+        let mut viewers = self.viewers(pane);
+        let id = viewers.next()?;
         viewers.next().is_none().then_some(id)
+    }
+
+    /// The live clients viewing the sidebar `pane`.
+    pub(super) fn viewers(&self, pane: &PaneId) -> impl Iterator<Item = &MuxClientId> {
+        self.live_clients()
+            .filter(move |(_, client)| client.pane.as_ref() == Some(pane))
+            .map(|(id, _)| id)
     }
 
     fn live_clients(&self) -> impl Iterator<Item = (&MuxClientId, &Client)> {

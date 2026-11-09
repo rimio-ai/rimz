@@ -40,6 +40,9 @@ pub(super) struct ViewBorrow<'a> {
     pub(super) latest: bool,
     pub(super) focused: Option<Option<PaneId>>,
     pub(super) held_panes: Option<Vec<PaneId>>,
+    /// The live clients viewing this pane, read under the views lock; empty
+    /// for a scratch borrow.
+    pub(super) viewers: Vec<MuxClientId>,
     pub(super) focus_event: Option<u64>,
     pub(super) parked: Option<bool>,
     pub(super) resolved: bool,
@@ -181,6 +184,7 @@ impl ViewAccess {
             latest: false,
             focused: None,
             held_panes: None,
+            viewers: Vec::new(),
             focus_event: None,
             parked: None,
             resolved,
@@ -267,6 +271,7 @@ impl ViewAccess {
             // Unresolved copies never follow an unrelated client's session focus.
             let focused = views.has_sample().then(|| views.focused(&own_pane));
             let held_panes = views.has_sample().then(|| views.focused_panes(&own_pane));
+            let viewers = views.viewers(&own_pane).cloned().collect();
             let parked = views.has_sample().then(|| views.parked(&own_pane));
             let focus_event = views.attributed_focus_event(&own_pane);
             let revision = views.revision;
@@ -343,6 +348,7 @@ impl ViewAccess {
                 latest: has_latest,
                 focused,
                 held_panes,
+                viewers,
                 focus_event,
                 parked,
                 resolved,

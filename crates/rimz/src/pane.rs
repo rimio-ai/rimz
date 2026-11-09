@@ -42,7 +42,8 @@ pub(crate) fn attended_until(
 }
 
 /// A non-normal room mode; normal is represented by an absent client entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The declaration order is the order the sidebar draws the modes in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomMode {
     Prefix,
