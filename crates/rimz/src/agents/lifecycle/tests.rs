@@ -1316,6 +1316,234 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
 }
 
 #[test]
+fn flag_bearing_signals_keep_their_wire_bytes() {
+    let tool =
+        |mutates, edits, name: Option<&str>, native_key: Option<&str>, turn_id: Option<&str>| {
+            LifecycleSignal::ToolUsed {
+                mutates,
+                edits,
+                name: name.map(ToOwned::to_owned),
+                native_key: native_key.map(ToOwned::to_owned),
+                turn_id: turn_id.map(ToOwned::to_owned),
+            }
+        };
+    let compaction = |auto, failed| LifecycleSignal::CompactionEnded { auto, failed };
+    let goldens = [
+        (
+            turn_end(false, false),
+            r#"{"signal":"turn_ended","errored":false,"parked_on_background":false}"#,
+        ),
+        (
+            turn_end(false, true),
+            r#"{"signal":"turn_ended","errored":false,"parked_on_background":true}"#,
+        ),
+        (
+            turn_end(true, false),
+            r#"{"signal":"turn_ended","errored":true,"parked_on_background":false}"#,
+        ),
+        (
+            turn_end(true, true),
+            r#"{"signal":"turn_ended","errored":true,"parked_on_background":true}"#,
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: true,
+                turn_id: Some("t".to_owned()),
+            },
+            r#"{"signal":"turn_ended","errored":true,"parked_on_background":true,"turn_id":"t"}"#,
+        ),
+        (
+            tool(false, false, None, None, None),
+            r#"{"signal":"tool_used","mutates":false,"edits":false}"#,
+        ),
+        (
+            tool(true, false, None, None, None),
+            r#"{"signal":"tool_used","mutates":true,"edits":false}"#,
+        ),
+        (
+            tool(true, true, None, None, None),
+            r#"{"signal":"tool_used","mutates":true,"edits":true}"#,
+        ),
+        (
+            tool(true, false, Some("Bash"), None, None),
+            r#"{"signal":"tool_used","mutates":true,"edits":false,"name":"Bash"}"#,
+        ),
+        (
+            tool(true, false, None, Some("k"), None),
+            r#"{"signal":"tool_used","mutates":true,"edits":false,"native_key":"k"}"#,
+        ),
+        (
+            tool(true, false, None, None, Some("t")),
+            r#"{"signal":"tool_used","mutates":true,"edits":false,"turn_id":"t"}"#,
+        ),
+        (
+            tool(true, true, Some("Bash"), Some("k"), Some("t")),
+            r#"{"signal":"tool_used","mutates":true,"edits":true,"name":"Bash","native_key":"k","turn_id":"t"}"#,
+        ),
+        (
+            LifecycleSignal::SubagentStopped { errored: false },
+            r#"{"signal":"subagent_stopped","errored":false}"#,
+        ),
+        (
+            LifecycleSignal::SubagentStopped { errored: true },
+            r#"{"signal":"subagent_stopped","errored":true}"#,
+        ),
+        (compaction(None, false), r#"{"signal":"compaction_ended"}"#),
+        (
+            compaction(None, true),
+            r#"{"signal":"compaction_ended","failed":true}"#,
+        ),
+        (
+            compaction(Some(false), false),
+            r#"{"signal":"compaction_ended","auto":false}"#,
+        ),
+        (
+            compaction(Some(false), true),
+            r#"{"signal":"compaction_ended","auto":false,"failed":true}"#,
+        ),
+        (
+            compaction(Some(true), false),
+            r#"{"signal":"compaction_ended","auto":true}"#,
+        ),
+        (
+            compaction(Some(true), true),
+            r#"{"signal":"compaction_ended","auto":true,"failed":true}"#,
+        ),
+    ];
+    for (signal, golden) in goldens {
+        assert_eq!(serde_json::to_string(&signal).unwrap(), golden);
+    }
+
+    for (input, emitted) in [
+        (
+            r#"{"signal":"tool_used","mutates":true}"#,
+            r#"{"signal":"tool_used","mutates":true,"edits":false}"#,
+        ),
+        (
+            r#"{"signal":"tool_used","mutates":false}"#,
+            r#"{"signal":"tool_used","mutates":false,"edits":false}"#,
+        ),
+        (
+            r#"{"signal":"tool_used","edits":true,"mutates":true,"name":"x"}"#,
+            r#"{"signal":"tool_used","mutates":true,"edits":true,"name":"x"}"#,
+        ),
+        (
+            r#"{"signal":"tool_used","mutates":false,"edits":true}"#,
+            r#"{"signal":"tool_used","mutates":false,"edits":true}"#,
+        ),
+        (
+            r#"{"signal":"subagent_stopped"}"#,
+            r#"{"signal":"subagent_stopped","errored":false}"#,
+        ),
+        (
+            r#"{"signal":"compaction_ended","auto":null,"failed":false}"#,
+            r#"{"signal":"compaction_ended"}"#,
+        ),
+    ] {
+        let decoded: LifecycleSignal = serde_json::from_str(input).unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), emitted, "{input}");
+    }
+
+    for rejected in [
+        r#"{"signal":"tool_used"}"#,
+        r#"{"signal":"tool_used","edits":true}"#,
+        r#"{"signal":"turn_ended","errored":false}"#,
+        r#"{"signal":"turn_ended","parked_on_background":false}"#,
+        r#"{"signal":"subagent_stopped","errored":null}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<LifecycleSignal>(rejected).is_err(),
+            "{rejected}"
+        );
+    }
+}
+
+#[test]
+fn a_terminal_childs_late_start_still_closes_an_open_bracket() {
+    for terminal in [AgentStatus::Success, AgentStatus::Failed] {
+        let transition = step(
+            Some(&state(terminal, TurnPhase::Idle, true)),
+            None,
+            PriorTurnIds::default(),
+            &LifecycleSignal::SubagentStarted,
+        );
+        assert_eq!(
+            (
+                transition.kind,
+                transition.next,
+                transition.compaction_closed
+            ),
+            (
+                TransitionKind::Ignored {
+                    reason: "subagent start after a terminal stop",
+                },
+                state(terminal, TurnPhase::Idle, false),
+                true,
+            ),
+            "{terminal:?}"
+        );
+    }
+}
+
+/// Every compaction signal against every prior status, from an open bracket.
+/// Waiting releases to running; only a successful manual close rests a running
+/// row; every other cell preserves the prior (a missing prior reads idle).
+#[test]
+fn compaction_status_table_covers_every_trigger_outcome_and_prior() {
+    use AgentStatus::{Failed, Idle, Paused, Running, Success, Waiting};
+    let priors = [
+        None,
+        Some(Idle),
+        Some(Running),
+        Some(Waiting),
+        Some(Success),
+        Some(Failed),
+        Some(Paused),
+    ];
+    let preserved = [Idle, Idle, Running, Running, Success, Failed, Paused];
+    let compaction = |auto, failed| LifecycleSignal::CompactionEnded { auto, failed };
+    let table = [
+        (LifecycleSignal::Compacting, preserved),
+        (compaction(None, false), preserved),
+        (compaction(None, true), preserved),
+        (
+            compaction(Some(false), false),
+            [Idle, Idle, Idle, Running, Success, Failed, Paused],
+        ),
+        (compaction(Some(false), true), preserved),
+        (compaction(Some(true), false), preserved),
+        (compaction(Some(true), true), preserved),
+    ];
+    for (signal, expected) in table {
+        for (prior, status) in priors.into_iter().zip(expected) {
+            let prev = prior.map(|status| {
+                let phase = if status == Running {
+                    TurnPhase::Acting
+                } else {
+                    TurnPhase::Idle
+                };
+                state(status, phase, true)
+            });
+            let transition = step(prev.as_ref(), None, PriorTurnIds::default(), &signal);
+            let kind = if matches!(signal, LifecycleSignal::Compacting) && prior == Some(Waiting) {
+                TransitionKind::Reconciled {
+                    from: Waiting,
+                    reason: "compaction began while an ask was open",
+                }
+            } else {
+                TransitionKind::Normal
+            };
+            assert_eq!(
+                (transition.next.status, transition.kind),
+                (status, kind),
+                "{prior:?} + {signal:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn only_a_start_with_a_new_id_supersedes_the_started_turn() {
     let start = |turn_id: Option<&str>| LifecycleSignal::TurnStarted {
         turn_id: turn_id.map(ToOwned::to_owned),
