@@ -40,6 +40,23 @@ pub enum KeyChord {
     Ctrl(char),
     Esc,
     Enter,
+    Arrow(KeyDirection),
+    AltArrow(KeyDirection),
+    CtrlArrow(KeyDirection),
+}
+
+const ARROW_KEYS: [(&str, KeyDirection); 4] = [
+    ("Left", KeyDirection::Left),
+    ("Right", KeyDirection::Right),
+    ("Up", KeyDirection::Up),
+    ("Down", KeyDirection::Down),
+];
+
+fn arrow(raw: &str) -> Option<KeyDirection> {
+    ARROW_KEYS
+        .iter()
+        .find(|(name, _)| *name == raw)
+        .map(|&(_, direction)| direction)
 }
 
 impl KeyChord {
@@ -53,20 +70,36 @@ impl KeyChord {
         if let Some(key) = graphic(raw) {
             return Some(Self::Character(key));
         }
+        if let Some(direction) = arrow(raw) {
+            return Some(Self::Arrow(direction));
+        }
         let (modifier, key) = raw.split_once(['+', '-'])?;
-        let key = graphic(key.trim())?;
-        match Modifier::parse(modifier)? {
+        let modifier = Modifier::parse(modifier)?;
+        let key = key.trim();
+        if let Some(direction) = arrow(key) {
+            return Some(match modifier {
+                Modifier::Alt => Self::AltArrow(direction),
+                Modifier::Ctrl => Self::CtrlArrow(direction),
+            });
+        }
+        let key = graphic(key)?;
+        match modifier {
             Modifier::Alt => Some(Self::Alt(key)),
             Modifier::Ctrl => Some(Self::Ctrl(key)),
         }
     }
 
     pub(crate) fn is_modified(self) -> bool {
-        matches!(self, Self::Alt(_) | Self::Ctrl(_))
+        matches!(
+            self,
+            Self::Alt(_) | Self::Ctrl(_) | Self::AltArrow(_) | Self::CtrlArrow(_)
+        )
     }
 
+    /// A room prefix is `Alt` or `Ctrl` with one ASCII graphic character.
     pub(super) fn parse_prefix(raw: &str) -> Option<Self> {
-        Self::parse(raw).filter(|key| key.is_modified() && !key.is_terminal_control())
+        Self::parse(raw)
+            .filter(|key| matches!(key, Self::Alt(_) | Self::Ctrl(_)) && !key.is_terminal_control())
     }
 
     fn is_terminal_control(self) -> bool {
@@ -117,8 +150,18 @@ impl fmt::Display for KeyChord {
             Self::Ctrl(key) => write!(formatter, "Ctrl+{key}"),
             Self::Esc => formatter.write_str("Esc"),
             Self::Enter => formatter.write_str("Enter"),
+            Self::Arrow(direction) => formatter.write_str(arrow_name(*direction)),
+            Self::AltArrow(direction) => write!(formatter, "Alt+{}", arrow_name(*direction)),
+            Self::CtrlArrow(direction) => write!(formatter, "Ctrl+{}", arrow_name(*direction)),
         }
     }
+}
+
+fn arrow_name(direction: KeyDirection) -> &'static str {
+    ARROW_KEYS
+        .iter()
+        .find(|(_, candidate)| *candidate == direction)
+        .map_or("?", |(name, _)| name)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -126,19 +169,24 @@ impl fmt::Display for KeyChord {
 pub enum KeyMode {
     Normal,
     Prefix,
+    Pane,
+    Tab,
     Resize,
     Move,
 }
 
 impl KeyMode {
+    const ALL: [Self; 6] = [
+        Self::Normal,
+        Self::Prefix,
+        Self::Pane,
+        Self::Tab,
+        Self::Resize,
+        Self::Move,
+    ];
+
     fn parse(name: &str) -> Option<Self> {
-        match name {
-            "normal" => Some(Self::Normal),
-            "prefix" => Some(Self::Prefix),
-            "resize" => Some(Self::Resize),
-            "move" => Some(Self::Move),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|mode| mode.to_string() == name)
     }
 }
 
@@ -147,13 +195,15 @@ impl fmt::Display for KeyMode {
         formatter.write_str(match self {
             Self::Normal => "normal",
             Self::Prefix => "prefix",
+            Self::Pane => "pane",
+            Self::Tab => "tab",
             Self::Resize => "resize",
             Self::Move => "move",
         })
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KeyDirection {
     Left,
     Right,
@@ -191,10 +241,12 @@ impl KeyPaletteMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyActionName {
     PaneFocus(KeyDirection),
+    PaneFocusNext,
     PaneSwap(KeyDirection),
     PaneSplit(KeySplitDirection),
     PaneResize(KeyDirection),
     PaneClose,
+    PaneSendPrefix,
     TabNew,
     TabNext,
     TabPrev,
@@ -210,8 +262,8 @@ pub enum KeyActionName {
 }
 
 use KeyActionName::{
-    KeysHelp, Mode, Palette, PaneClose, PaneFocus, PaneResize, PaneSplit, PaneSwap, Scrollback,
-    SessionDetach, TabNew, TabNext, TabPrev,
+    KeysHelp, Mode, Palette, PaneClose, PaneFocus, PaneFocusNext, PaneResize, PaneSendPrefix,
+    PaneSplit, PaneSwap, Scrollback, SessionDetach, TabNew, TabNext, TabPrev,
 };
 use KeyDirection::{Down, Left, Right, Up};
 
@@ -220,6 +272,7 @@ const TYPED_ACTIONS: &[(&str, KeyActionName)] = &[
     ("pane.focus.right", PaneFocus(Right)),
     ("pane.focus.up", PaneFocus(Up)),
     ("pane.focus.down", PaneFocus(Down)),
+    ("pane.focus.next", PaneFocusNext),
     ("pane.swap.left", PaneSwap(Left)),
     ("pane.swap.right", PaneSwap(Right)),
     ("pane.swap.up", PaneSwap(Up)),
@@ -231,10 +284,13 @@ const TYPED_ACTIONS: &[(&str, KeyActionName)] = &[
     ("pane.resize.up", PaneResize(Up)),
     ("pane.resize.down", PaneResize(Down)),
     ("pane.close", PaneClose),
+    ("pane.send_prefix", PaneSendPrefix),
     ("tab.new", TabNew),
     ("tab.next", TabNext),
     ("tab.prev", TabPrev),
     ("mode.prefix", Mode(KeyMode::Prefix)),
+    ("mode.pane", Mode(KeyMode::Pane)),
+    ("mode.tab", Mode(KeyMode::Tab)),
     ("mode.resize", Mode(KeyMode::Resize)),
     ("mode.move", Mode(KeyMode::Move)),
     ("mode.scrollback", Scrollback),
@@ -296,6 +352,23 @@ impl KeyActionName {
     pub fn changes_mode(self) -> bool {
         matches!(self, Self::Mode(_) | Self::Scrollback)
     }
+
+    /// Whether a pane, tab, resize, or move mode stays entered after this action.
+    pub fn is_motion(self) -> bool {
+        match self {
+            Self::PaneFocus(_)
+            | Self::PaneFocusNext
+            | Self::PaneSwap(_)
+            | Self::PaneResize(_)
+            | Self::TabNext
+            | Self::TabPrev => true,
+            Self::Command { name, .. } => matches!(
+                name,
+                "card.next" | "card.prev" | "worktree.next" | "worktree.prev"
+            ),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for KeyDirection {
@@ -313,6 +386,8 @@ impl fmt::Display for KeyActionName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PaneFocus(direction) => write!(formatter, "pane.focus.{direction}"),
+            Self::PaneFocusNext => formatter.write_str("pane.focus.next"),
+            Self::PaneSendPrefix => formatter.write_str("pane.send_prefix"),
             Self::PaneSwap(direction) => write!(formatter, "pane.swap.{direction}"),
             Self::PaneResize(direction) => write!(formatter, "pane.resize.{direction}"),
             Self::PaneSplit(KeySplitDirection::Right) => formatter.write_str("pane.split.right"),
@@ -469,6 +544,9 @@ impl MachineConfig {
                 }
             }
         }
+        for mode in KeyMode::ALL {
+            map.modes.entry(mode).or_default();
+        }
         overlay(&mut map, &self.keys.bind, notices);
         for (&mode, bindings) in &keymap.modes {
             if let Some(action) = bindings.get("<prefix>") {
@@ -545,7 +623,8 @@ fn overlay(map: &mut RoomKeymap, user: &Value, notices: &mut BTreeMap<String, St
     let Some(modes) = user.as_object() else {
         notices.insert(
             "keys.bind".into(),
-            "keys.bind: expected normal, prefix, resize, or move tables; bindings ignored".into(),
+            "keys.bind: expected normal, prefix, pane, tab, resize, or move tables; bindings ignored"
+                .into(),
         );
         return;
     };
@@ -554,7 +633,9 @@ fn overlay(map: &mut RoomKeymap, user: &Value, notices: &mut BTreeMap<String, St
         let Some(mode) = KeyMode::parse(name) else {
             notices.insert(
                 path.clone(),
-                format!("{path}: expected normal, prefix, resize, or move; bindings ignored"),
+                format!(
+                    "{path}: expected normal, prefix, pane, tab, resize, or move; bindings ignored"
+                ),
             );
             continue;
         };
@@ -588,7 +669,7 @@ fn binding(
     value: &Value,
 ) -> Result<(KeyChord, Option<KeyAction>), &'static str> {
     let key = KeyChord::parse(raw)
-        .ok_or("expected an ASCII key such as x, Alt+x, Ctrl+x, Esc, or Enter")?;
+        .ok_or("expected an ASCII key such as x, Alt+x, Ctrl+x, Esc, Enter, or Left")?;
     if mode == KeyMode::Normal && !key.is_modified() {
         return Err("normal-mode keys need an Alt or Ctrl modifier, such as Alt+x");
     }

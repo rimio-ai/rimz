@@ -38,7 +38,11 @@ pub(super) fn run(args: KeysArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 fn write_keymap(out: &mut impl Write, map: &RoomKeymap) -> std::io::Result<()> {
-    for (index, (mode, bindings)) in map.modes.iter().enumerate() {
+    let listed = map
+        .modes
+        .iter()
+        .filter(|(_, bindings)| !bindings.is_empty());
+    for (index, (mode, bindings)) in listed.enumerate() {
         if index > 0 {
             writeln!(out)?;
         }
@@ -69,12 +73,15 @@ mod tests {
         let mut bytes = Vec::new();
         write_keymap(&mut bytes, &machine.room_keymap()).unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        for mode in ["normal", "prefix", "resize", "move"] {
-            assert!(
-                text.lines().any(|line| line == mode),
-                "mode {mode} must be listed: {text}"
-            );
-        }
+        let modes: Vec<_> = text
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with(' '))
+            .collect();
+        assert_eq!(
+            modes,
+            ["normal", "prefix", "resize", "move"],
+            "modes list in order and an empty mode is left out: {text}"
+        );
         assert!(text.contains("rimz message @coder 'two words'"), "{text}");
         assert_eq!(text.matches("Ctrl+a").count(), 2, "{text}");
         assert!(!text.contains("Alt+p"), "{text}");

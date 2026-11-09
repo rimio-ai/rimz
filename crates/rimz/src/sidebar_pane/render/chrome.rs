@@ -195,6 +195,8 @@ fn key_hint_spans(
 fn room_mode_label(mode: RoomMode) -> &'static str {
     match mode {
         RoomMode::Prefix => "PREFIX",
+        RoomMode::Pane => "PANE",
+        RoomMode::Tab => "TAB",
         RoomMode::Resize => "RESIZE",
         RoomMode::Scrollback => "SCROLL",
         RoomMode::Move => "MOVE",
@@ -1298,6 +1300,10 @@ mod tests {
         assert_eq!(text(&[RoomMode::Prefix], &[], 20).trim_end(), "PREFIX");
         let modes = [RoomMode::Resize, RoomMode::Scrollback, RoomMode::Move];
         assert_eq!(text(&modes, &[], 30).trim_end(), "RESIZE SCROLL MOVE");
+        assert_eq!(
+            text(&[RoomMode::Pane, RoomMode::Tab], &[], 20).trim_end(),
+            "PANE TAB"
+        );
 
         let wide = text(&[RoomMode::Prefix], &f, 200);
         assert!(wide.starts_with("PREFIX "), "{wide:?}");
