@@ -581,7 +581,12 @@ fn deserialize_prefix<'de, D: serde::Deserializer<'de>>(raw: D) -> Result<KeyCho
         .ok_or_else(|| serde::de::Error::custom(format!("invalid keymap prefix {raw:?}")))
 }
 
-const BUNDLED_KEYMAP_FILES: &[(&str, &str)] = &[("rimz", include_str!("../../keymaps/rimz.toml"))];
+const BUNDLED_KEYMAP_FILES: &[(&str, &str)] = &[
+    ("rimz", include_str!("../../keymaps/rimz.toml")),
+    ("tmux", include_str!("../../keymaps/tmux.toml")),
+    ("zellij", include_str!("../../keymaps/zellij.toml")),
+    ("vim", include_str!("../../keymaps/vim.toml")),
+];
 
 static BUNDLED_KEYMAPS: LazyLock<Vec<(&str, BundledKeymap)>> = LazyLock::new(|| {
     BUNDLED_KEYMAP_FILES

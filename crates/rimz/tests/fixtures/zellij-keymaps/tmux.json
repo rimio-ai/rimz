@@ -1,0 +1,1718 @@
+{
+  "commands": [
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "1",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "2",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "3",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "4",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "5",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "6",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "7",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "8",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "9",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "last",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "filter",
+      "needs-you",
+      "--toggle",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "next",
+      "--worktree",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "prev",
+      "--worktree",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "next",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "prev",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "1",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "2",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "3",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "4",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "5",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "6",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "7",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "8",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "slot",
+      "9",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "last",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "keys",
+      "--wait"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "next",
+      "--worktree",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "prev",
+      "--worktree",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "next",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "walk",
+      "prev",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "last",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "reopen",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "close",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "pane",
+      "zoom",
+      "--session-name",
+      "room"
+    ]
+  ],
+  "modes": [
+    {
+      "binds": [
+        {
+          "key": "Alt 1",
+          "steps": [
+            {
+              "run": 0
+            }
+          ]
+        },
+        {
+          "key": "Alt 2",
+          "steps": [
+            {
+              "run": 1
+            }
+          ]
+        },
+        {
+          "key": "Alt 3",
+          "steps": [
+            {
+              "run": 2
+            }
+          ]
+        },
+        {
+          "key": "Alt 4",
+          "steps": [
+            {
+              "run": 3
+            }
+          ]
+        },
+        {
+          "key": "Alt 5",
+          "steps": [
+            {
+              "run": 4
+            }
+          ]
+        },
+        {
+          "key": "Alt 6",
+          "steps": [
+            {
+              "run": 5
+            }
+          ]
+        },
+        {
+          "key": "Alt 7",
+          "steps": [
+            {
+              "run": 6
+            }
+          ]
+        },
+        {
+          "key": "Alt 8",
+          "steps": [
+            {
+              "run": 7
+            }
+          ]
+        },
+        {
+          "key": "Alt 9",
+          "steps": [
+            {
+              "run": 8
+            }
+          ]
+        },
+        {
+          "key": "Alt ;",
+          "steps": [
+            {
+              "run": 9
+            }
+          ]
+        },
+        {
+          "key": "Alt ?",
+          "steps": [
+            {
+              "run": 10
+            }
+          ]
+        },
+        {
+          "key": "Alt J",
+          "steps": [
+            {
+              "run": 11
+            }
+          ]
+        },
+        {
+          "key": "Alt K",
+          "steps": [
+            {
+              "run": 12
+            }
+          ]
+        },
+        {
+          "key": "Alt j",
+          "steps": [
+            {
+              "run": 13
+            }
+          ]
+        },
+        {
+          "key": "Alt k",
+          "steps": [
+            {
+              "run": 14
+            }
+          ]
+        },
+        {
+          "key": "Alt n",
+          "steps": [
+            {
+              "palette": "new"
+            }
+          ]
+        },
+        {
+          "key": "Ctrl b",
+          "steps": [
+            {
+              "mode": "tmux"
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "locked"
+    },
+    {
+      "binds": [
+        {
+          "key": "\"",
+          "steps": [
+            {
+              "action": [
+                "NewPane",
+                "Down"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "%",
+          "steps": [
+            {
+              "action": [
+                "NewPane",
+                "Right"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "1",
+          "steps": [
+            {
+              "run": 15
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "2",
+          "steps": [
+            {
+              "run": 16
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "3",
+          "steps": [
+            {
+              "run": 17
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "4",
+          "steps": [
+            {
+              "run": 18
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "5",
+          "steps": [
+            {
+              "run": 19
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "6",
+          "steps": [
+            {
+              "run": 20
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "7",
+          "steps": [
+            {
+              "run": 21
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "8",
+          "steps": [
+            {
+              "run": 22
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "9",
+          "steps": [
+            {
+              "run": 23
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": ":",
+          "steps": [
+            {
+              "palette": "commands"
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": ";",
+          "steps": [
+            {
+              "run": 24
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "?",
+          "steps": [
+            {
+              "float": 25
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "J",
+          "steps": [
+            {
+              "run": 26
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "K",
+          "steps": [
+            {
+              "run": 27
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "N",
+          "steps": [
+            {
+              "palette": "new"
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "X",
+          "steps": [
+            {
+              "action": [
+                "CloseFocus"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "[",
+          "steps": [
+            {
+              "mode": "scroll"
+            }
+          ]
+        },
+        {
+          "key": "c",
+          "steps": [
+            {
+              "action": [
+                "NewTab"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "d",
+          "steps": [
+            {
+              "action": [
+                "Detach"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "f",
+          "steps": [
+            {
+              "palette": "cards"
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "j",
+          "steps": [
+            {
+              "run": 28
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "k",
+          "steps": [
+            {
+              "run": 29
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "l",
+          "steps": [
+            {
+              "run": 30
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "n",
+          "steps": [
+            {
+              "action": [
+                "GoToNextTab"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "o",
+          "steps": [
+            {
+              "action": [
+                "FocusNextPane"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "p",
+          "steps": [
+            {
+              "action": [
+                "GoToPreviousTab"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "r",
+          "steps": [
+            {
+              "mode": "resize"
+            }
+          ]
+        },
+        {
+          "key": "u",
+          "steps": [
+            {
+              "run": 31
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "w",
+          "steps": [
+            {
+              "palette": "cards"
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "x",
+          "steps": [
+            {
+              "run": 32
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "z",
+          "steps": [
+            {
+              "run": 33
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "{",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Left"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "}",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Right"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Ctrl b",
+          "steps": [
+            {
+              "action": [
+                "Write",
+                "2"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Left",
+          "steps": [
+            {
+              "action": [
+                "MoveFocus",
+                "Left"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Right",
+          "steps": [
+            {
+              "action": [
+                "MoveFocus",
+                "Right"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Up",
+          "steps": [
+            {
+              "action": [
+                "MoveFocus",
+                "Up"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Down",
+          "steps": [
+            {
+              "action": [
+                "MoveFocus",
+                "Down"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "tmux"
+    },
+    {
+      "binds": [],
+      "clear": true,
+      "mode": "pane"
+    },
+    {
+      "binds": [],
+      "clear": true,
+      "mode": "tab"
+    },
+    {
+      "binds": [
+        {
+          "key": "h",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Left"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "j",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Down"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "k",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Up"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "l",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Right"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Enter",
+          "steps": [
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Left",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Left"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Right",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Right"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Up",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Up"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Down",
+          "steps": [
+            {
+              "action": [
+                "Resize",
+                "Increase Down"
+              ]
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "resize"
+    },
+    {
+      "binds": [
+        {
+          "key": "h",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Left"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "j",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Down"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "k",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Up"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "l",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Right"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Enter",
+          "steps": [
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Left",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Left"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Right",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Right"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Up",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Up"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Down",
+          "steps": [
+            {
+              "action": [
+                "MovePane",
+                "Down"
+              ]
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "move"
+    },
+    {
+      "binds": [
+        {
+          "key": "j",
+          "steps": [
+            {
+              "action": [
+                "ScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Down",
+          "steps": [
+            {
+              "action": [
+                "ScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "k",
+          "steps": [
+            {
+              "action": [
+                "ScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Up",
+          "steps": [
+            {
+              "action": [
+                "ScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Ctrl f",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "PageDown",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Right",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "l",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Ctrl b",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "PageUp",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Left",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "h",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "d",
+          "steps": [
+            {
+              "action": [
+                "HalfPageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "u",
+          "steps": [
+            {
+              "action": [
+                "HalfPageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "e",
+          "steps": [
+            {
+              "action": [
+                "EditScrollback"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "s",
+          "steps": [
+            {
+              "action": [
+                "SearchInput",
+                "0"
+              ]
+            },
+            {
+              "mode": "entersearch"
+            }
+          ]
+        },
+        {
+          "key": "Ctrl c",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Enter",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "scroll"
+    },
+    {
+      "binds": [
+        {
+          "key": "Enter",
+          "steps": [
+            {
+              "mode": "search"
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "mode": "scroll"
+            }
+          ]
+        },
+        {
+          "key": "Ctrl c",
+          "steps": [
+            {
+              "mode": "scroll"
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "entersearch"
+    },
+    {
+      "binds": [
+        {
+          "key": "j",
+          "steps": [
+            {
+              "action": [
+                "ScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Down",
+          "steps": [
+            {
+              "action": [
+                "ScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "k",
+          "steps": [
+            {
+              "action": [
+                "ScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Up",
+          "steps": [
+            {
+              "action": [
+                "ScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Ctrl f",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "PageDown",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Right",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "l",
+          "steps": [
+            {
+              "action": [
+                "PageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Ctrl b",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "PageUp",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Left",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "h",
+          "steps": [
+            {
+              "action": [
+                "PageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "d",
+          "steps": [
+            {
+              "action": [
+                "HalfPageScrollDown"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "u",
+          "steps": [
+            {
+              "action": [
+                "HalfPageScrollUp"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "n",
+          "steps": [
+            {
+              "action": [
+                "Search",
+                "Down"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "p",
+          "steps": [
+            {
+              "action": [
+                "Search",
+                "Up"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "c",
+          "steps": [
+            {
+              "action": [
+                "SearchToggleOption",
+                "CaseSensitivity"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "w",
+          "steps": [
+            {
+              "action": [
+                "SearchToggleOption",
+                "Wrap"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "o",
+          "steps": [
+            {
+              "action": [
+                "SearchToggleOption",
+                "WholeWord"
+              ]
+            }
+          ]
+        },
+        {
+          "key": "Ctrl c",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Esc",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        },
+        {
+          "key": "Enter",
+          "steps": [
+            {
+              "action": [
+                "ScrollToBottom"
+              ]
+            },
+            {
+              "mode": "locked"
+            }
+          ]
+        }
+      ],
+      "clear": true,
+      "mode": "search"
+    }
+  ],
+  "report_modes": true
+}

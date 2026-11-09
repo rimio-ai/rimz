@@ -491,6 +491,33 @@ mod tests {
         );
     }
 
+    /// Each bundled keymap's wire is checked in, so the presence plugin's own
+    /// tests can prove its renderer keeps every bind. After a deliberate change,
+    /// rewrite them with `RIMZ_KEYMAP_FIXTURES=update cargo nextest run -p rimz
+    /// --lib --all-features -E 'test(=<this test>)'`; `cargo xtask test` strips
+    /// the variable.
+    #[test]
+    fn bundled_keymap_wires_match_their_plugin_fixtures() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zellij-keymaps");
+        for keymap in ["rimz", "tmux", "zellij", "vim"] {
+            let wire = wire(&format!(
+                "[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\n"
+            ));
+            let path = dir.join(format!("{keymap}.json"));
+            if std::env::var("RIMZ_KEYMAP_FIXTURES").as_deref() == Ok("update") {
+                std::fs::write(&path, serde_json::to_string_pretty(&wire).unwrap() + "\n").unwrap();
+            }
+            let fixture = std::fs::read_to_string(&path).unwrap_or_default();
+            let fixture: Value = serde_json::from_str(&fixture).unwrap_or_default();
+            assert_eq!(
+                wire,
+                fixture,
+                "{} is stale; rerun with RIMZ_KEYMAP_FIXTURES=update",
+                path.display()
+            );
+        }
+    }
+
     #[test]
     fn rimz_wire_clears_every_enterable_mode_exits_prefix_and_keeps_literal_run_arguments() {
         let wire = wire(

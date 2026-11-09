@@ -111,7 +111,13 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
         ),
         "an unset prefix takes the keymap's own default"
     );
-    for (key, value) in [("keys.keymap", "rimz"), ("keys.prefix", "Ctrl+a")] {
+    for (key, value) in [
+        ("keys.keymap", "tmux"),
+        ("keys.keymap", "zellij"),
+        ("keys.keymap", "vim"),
+        ("keys.keymap", "rimz"),
+        ("keys.prefix", "Ctrl+a"),
+    ] {
         editor.set(key, value).unwrap();
         assert_eq!(editor.get(Some(key)).unwrap().as_str(), Some(value));
     }
@@ -127,6 +133,14 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
     ] {
         assert!(editor.set(key, value).is_err(), "{key} accepted {value}");
     }
+    let refusal = editor
+        .set("keys.keymap", "unknown")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("keys.keymap must be rimz, tmux, zellij, or vim"),
+        "{refusal}"
+    );
     for key in [
         "keys.bind",
         "keys.bind.normal",

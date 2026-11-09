@@ -370,6 +370,52 @@ mod tests {
         );
     }
 
+    /// The host checks in each bundled keymap's wire; the allowlists must render
+    /// every bind of every mode, since a dropped bind is otherwise silent.
+    #[test]
+    fn every_bundled_keymap_wire_renders_every_bind() {
+        for (name, fixture) in [
+            (
+                "rimz",
+                include_str!("../../../rimz/tests/fixtures/zellij-keymaps/rimz.json"),
+            ),
+            (
+                "tmux",
+                include_str!("../../../rimz/tests/fixtures/zellij-keymaps/tmux.json"),
+            ),
+            (
+                "zellij",
+                include_str!("../../../rimz/tests/fixtures/zellij-keymaps/zellij.json"),
+            ),
+            (
+                "vim",
+                include_str!("../../../rimz/tests/fixtures/zellij-keymaps/vim.json"),
+            ),
+        ] {
+            let map: Keymap = serde_json::from_str(fixture).unwrap();
+            let kdl = map.kdl(42, "/bin/rimz");
+            let mut rendered = Vec::new();
+            for line in kdl.lines() {
+                if line.starts_with("    ") && !line.starts_with("     ") && line.ends_with('{') {
+                    rendered.push((line.split_whitespace().next().unwrap().to_owned(), 0));
+                } else if line.starts_with("        bind ") {
+                    rendered.last_mut().unwrap().1 += 1;
+                }
+            }
+            let expected: Vec<_> = map
+                .modes
+                .iter()
+                .map(|mode| {
+                    (
+                        mode["mode"].as_str().unwrap().to_owned(),
+                        mode["binds"].as_array().unwrap().len(),
+                    )
+                })
+                .collect();
+            assert_eq!(rendered, expected, "{name}: {kdl}");
+        }
+    }
+
     #[test]
     fn command_payload_selects_only_an_index_into_complete_argv() {
         let map = map(json!([]));

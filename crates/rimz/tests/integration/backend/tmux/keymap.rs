@@ -46,6 +46,9 @@ fn apply_removes_owned_keys_restores_mode_keys_and_preserves_foreign_bindings() 
     }
     assert_eq!(server.show_option(&["-gw"], "mode-keys"), "vi");
     assert!(has_key(&server.list_keys("rimz-prefix"), "r"));
+    apply(&server, "[room]\nstyle='rimz'\n[keys]\nkeymap='tmux'", bin);
+    assert_eq!(server.show_option(&["-gw"], "mode-keys"), "emacs");
+    assert!(has_key(&server.list_keys("rimz-prefix"), "%"));
     apply(&server, "[sidebar]\nfocus_key='Alt+y'", bin);
     let root = server.list_keys("root");
     for key in ["M-x", "M-j", "M-;", "M-?", "M-S-J"] {
@@ -203,18 +206,14 @@ fn pty_a_colliding_tmux_prefix_reaches_rimz_and_is_restored() {
     server.output(&["new-session", "-d", "-s", "keys", "sh", "-c", &reader]);
     server.output(&["set-option", "-g", "prefix", "C-b"]);
     let bin = Path::new("/bin/rimz");
-    apply(
-        &server,
-        "[room]\nstyle='rimz'\n[keys]\nprefix='Ctrl+b'\n[keys.bind.prefix]\nb='pane.send_prefix'",
-        bin,
-    );
+    apply(&server, "[room]\nstyle='rimz'\n[keys]\nkeymap='tmux'", bin);
     assert_eq!(server.show_option(&["-g"], "prefix"), "None");
     assert_eq!(server.show_option(&["-s"], "@rimz_prefix"), "C-b");
     let mut client = AttachedTmuxClient::attach(&server.socket, "keys", 120, 40);
     wait_for(&server, "#{client_key_table}", "root");
     client.send(b"\x02");
     wait_for(&server, "#{client_key_table}", "rimz-prefix");
-    client.send(b"b");
+    client.send(b"\x02");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let bytes = std::fs::read_to_string(&received).unwrap_or_default();
