@@ -10,6 +10,68 @@ use super::render;
 pub(super) mod history;
 pub(super) mod resolve;
 
+pub(super) fn definitions() -> rimz::config::definitions::LoadedDefinitions {
+    let machine = super::machine_config();
+    rimz::config::definitions::load(
+        &rimz::disk::paths::agents_home(),
+        rimz::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &rimz::config::MachineConfig::config_path(),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    )
+}
+
+/// A workflow name resolves under `~/.rimz/workflows/`; any other path stays as given.
+pub(super) fn definition_dir(name: &std::path::Path) -> std::path::PathBuf {
+    let mut components = name.components();
+    if matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+    {
+        rimz::disk::paths::workflows_dir().join(name)
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The deployed definition a run starts from, refused with every validation error; warnings
+/// print to stderr. `workflow run` and `loop add --workflow` share this check.
+pub(super) fn deployed_definition(
+    name: &std::path::Path,
+    project_root: Option<&std::path::Path>,
+) -> anyhow::Result<std::path::PathBuf> {
+    use std::io::Write;
+    let dir = definition_dir(name);
+    let home = rimz::disk::paths::workflows_dir();
+    let deployed = dir.canonicalize().is_ok_and(|dir| {
+        home.canonicalize()
+            .is_ok_and(|home| dir != home && dir.starts_with(home))
+    });
+    if !deployed {
+        anyhow::bail!(
+            "{}: directory must exist inside {}",
+            name.display(),
+            home.display()
+        );
+    }
+    let report = rimz::harness::workflow::validate(&dir, &definitions(), project_root);
+    if !report.errors.is_empty() {
+        anyhow::bail!(
+            "{}",
+            report
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    for warning in &report.warnings {
+        writeln!(render::err(), "warning: {}", warning.message)?;
+    }
+    Ok(dir)
+}
+
 pub(super) fn sealed_specs(
     state: &rimz::StatePaths,
     records: &[RunRecord],

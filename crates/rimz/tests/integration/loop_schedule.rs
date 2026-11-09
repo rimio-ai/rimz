@@ -12116,7 +12116,7 @@ fn loop_add_rejects_invalid_action_shapes() {
     let cases = [
         (
             vec!["loop", "add", "missing", "--every", "15m", "--prompt", "x"],
-            "needs --agent, --wait, or --check",
+            "needs --agent, --wait, --check, or --workflow",
         ),
         (
             vec![

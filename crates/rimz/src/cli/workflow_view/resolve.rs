@@ -86,20 +86,6 @@ pub(in crate::cli) fn command(
     extend: &[String],
     flags: &[&str],
 ) -> String {
-    let prefix = root.map_or_else(
-        || "rimz".into(),
-        |root| {
-            let root = render::home_relative_path(root);
-            if let Some(tail) = root.strip_prefix("~/") {
-                // Keep tilde expansion outside the quoted path tail.
-                format!("rimz --root ~/{}", shell_command([tail]))
-            } else if root == "~" {
-                "rimz --root ~".into()
-            } else {
-                shell_command(["rimz", "--root", &root])
-            }
-        },
-    );
     let at_args = match at {
         Some(node) if node.starts_with('-') => vec![format!("--at={node}")],
         Some(node) => vec!["--at".into(), node.into()],
@@ -120,7 +106,25 @@ pub(in crate::cli) fn command(
     } else {
         shell_command(args.chain(targets.iter().copied()).chain(flags))
     };
-    format!("{prefix} {command}")
+    format!("{} {command}", rimz_prefix(root))
+}
+
+/// `rimz`, with `--root` when the command must reach another room.
+pub(in crate::cli) fn rimz_prefix(root: Option<&Path>) -> String {
+    root.map_or_else(
+        || "rimz".into(),
+        |root| {
+            let root = render::home_relative_path(root);
+            if let Some(tail) = root.strip_prefix("~/") {
+                // Keep tilde expansion outside the quoted path tail.
+                format!("rimz --root ~/{}", shell_command([tail]))
+            } else if root == "~" {
+                "rimz --root ~".into()
+            } else {
+                shell_command(["rimz", "--root", &root])
+            }
+        },
+    )
 }
 
 pub(in crate::cli) fn run_command(

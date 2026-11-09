@@ -26,6 +26,7 @@ enum AddTaskAction {
         matches: BTreeMap<String, String>,
     },
     CheckOnly,
+    Workflow(String),
 }
 
 impl AddTaskAction {
@@ -34,7 +35,7 @@ impl AddTaskAction {
             Self::Spawn { resolved, .. } => Some(resolved.kind()),
             Self::Stay { kind } => Some(kind),
             Self::Deliver { target, .. } => Some(target.kind.as_str()),
-            Self::CheckOnly => None,
+            Self::CheckOnly | Self::Workflow(_) => None,
         }
     }
 }
@@ -307,6 +308,24 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
+    if args.workflow.is_some() {
+        reject_workflow_flags(args)?;
+    }
+    for (used, flag) in [
+        (args.verify.is_some(), "--verify"),
+        (args.throttle.is_some(), "--throttle"),
+        (args.capacity_wait.is_some(), "--capacity-wait"),
+    ] {
+        if used && args.agent.is_none() {
+            bail!("{flag} requires --agent");
+        }
+    }
+    if args.max_attempts.is_some() && args.verify.is_none() {
+        bail!("--max-attempts requires --verify");
+    }
+    if args.budget_per_day.is_some() && args.budget.is_none() {
+        bail!("--budget-per-day requires --budget");
+    }
     if let Some(limit) = args.overlap_limit {
         anyhow::ensure!(
             args.overlap.as_deref() == Some("queue"),
@@ -396,7 +415,10 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         bail!("--stay requires --agent with a layout to launch");
     }
     for (used, flag) in [
-        (args.each_worktree, "--each-worktree"),
+        (
+            args.each_worktree && args.workflow.is_none(),
+            "--each-worktree",
+        ),
         (args.takeover, "--takeover"),
         (!args.subscribe.is_empty(), "--subscribe"),
     ] {
@@ -404,7 +426,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
             bail!("{flag} requires --stay; it applies to resident layouts");
         }
     }
-    if args.each_worktree && args.when.is_empty() {
+    if args.each_worktree && args.workflow.is_none() && args.when.is_empty() {
         bail!("--each-worktree requires --when; fan-out supports conditions only");
     }
     if args.stay {
@@ -537,14 +559,15 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         bail!(message);
     }
     let action_kind = args
-        .agent
+        .workflow
         .as_ref()
-        .map(|_| TaskActionKind::Spawn)
+        .map(|_| TaskActionKind::Workflow)
+        .or(args.agent.as_ref().map(|_| TaskActionKind::Spawn))
         .or(args.wait.as_ref().map(|_| TaskActionKind::Deliver))
         .or(args.check.as_ref().map(|_| TaskActionKind::CheckOnly))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "loop task `{}` needs --agent, --wait, or --check",
+                "loop task `{}` needs --agent, --wait, --check, or --workflow",
                 args.name
             )
         })?;
@@ -597,6 +620,123 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         bail!(message);
     }
     Ok(action_kind)
+}
+
+/// Refuses every flag whose field a workflow fire ignores or the stored row refuses, naming
+/// where that concept lives in a workflow.
+fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
+    let window = schedule::when::WhenExpr::parse(&args.when)
+        .is_ok_and(|expr| expr.terms().any(|term| term.key.starts_with("window.")));
+    let fan_out = args.each_worktree;
+    let checks = "checks and waits are the workflow's `[checks.<name>]` nodes";
+    let profile = "choose it through the `agent` profile of the workflow's `[steps.<name>]`";
+    let spend =
+        "a workflow fire is not gated on spend; room and account caps still apply to its agents";
+    let overlap = "a live run holds its scope, and a fire that finds it records `workflow skipped`";
+    let no_window =
+        "a workflow task has no provider window to read; use a clock trigger or another condition";
+    let groups: [(&[(bool, &str)], &str); 13] = [
+        (
+            &[(args.stay, "--stay")],
+            "a workflow's agent steps launch and stop agents",
+        ),
+        (
+            &[(args.takeover, "--takeover")],
+            "takeover is the workflow's `[steps.<name>] takeover`",
+        ),
+        (
+            &[(!args.subscribe.is_empty(), "--subscribe")],
+            "signals wake the run's checks; a check names the signals it waits for",
+        ),
+        (
+            &[
+                (args.check.is_some(), "--check"),
+                (args.check_timeout.is_some(), "--check-timeout"),
+                (args.judge.is_some(), "--judge"),
+                (args.judge_prompt.is_some(), "--judge-prompt"),
+                (args.judge_prompt_file.is_some(), "--judge-prompt-file"),
+                (args.judge_recheck.is_some(), "--judge-recheck"),
+                (args.judge_timeout.is_some(), "--judge-timeout"),
+                (args.on.is_some(), "--on"),
+                (args.verify.is_some(), "--verify"),
+                (args.max_attempts.is_some(), "--max-attempts"),
+                (args.until.is_some(), "--until"),
+            ],
+            checks,
+        ),
+        (
+            &[(args.throttle.is_some(), "--throttle")],
+            "set `throttle` on the workflow's `[steps.<name>]`",
+        ),
+        (
+            &[(args.capacity_wait.is_some(), "--capacity-wait")],
+            "set `capacity-wait` on the workflow's `[steps.<name>]`",
+        ),
+        (
+            &[(args.timeout.is_some(), "--timeout")],
+            "set `timeout` on the workflow's `[steps.<name>]` or `[checks.<name>]`",
+        ),
+        (
+            &[
+                (args.mode.is_some(), "--mode"),
+                (args.effort.is_some(), "--effort"),
+                (args.fast, "--fast"),
+                (args.no_fast, "--no-fast"),
+                (args.account.is_some(), "--account"),
+                (args.system_prompt_file.is_some(), "--system-prompt-file"),
+            ],
+            profile,
+        ),
+        (
+            &[
+                (args.budget.is_some(), "--budget"),
+                (args.budget_per_day.is_some(), "--budget-per-day"),
+                (args.surplus.is_some(), "--surplus"),
+                (args.surplus_after.is_some(), "--surplus-after"),
+            ],
+            spend,
+        ),
+        (
+            &[
+                (args.overlap.is_some(), "--overlap"),
+                (args.overlap_limit.is_some(), "--overlap-limit"),
+            ],
+            overlap,
+        ),
+        (
+            &[(args.worktree.is_some(), "--worktree")],
+            "a run scopes to the task's checkout; pass --root <worktree> or --each-worktree",
+        ),
+        (
+            &[
+                (args.after_reset.is_some(), "--after-reset"),
+                (window, "--when window.*"),
+            ],
+            no_window,
+        ),
+        (
+            &[
+                (fan_out && args.signal.is_some(), "--signal"),
+                (fan_out && args.in_after.is_some(), "--in"),
+                (
+                    fan_out && args.at.is_some() && args.every.is_none(),
+                    "--at without --every",
+                ),
+                (fan_out && args.once, "--once"),
+            ],
+            "--each-worktree fan-out needs --when, --every, or --cron",
+        ),
+    ];
+    for (flags, fix) in groups {
+        let used = flags
+            .iter()
+            .filter_map(|(used, flag)| used.then_some(*flag))
+            .collect::<Vec<_>>();
+        if !used.is_empty() {
+            bail!("--workflow cannot use {}; {fix}", used.join(", "));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_add_check(
@@ -687,7 +827,20 @@ fn resolve_add_action(
             resolve_delivery_target(workspace, args, address, mux)?
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
-        TaskActionKind::Workflow => unreachable!("loop add has no workflow flag"),
+        TaskActionKind::Workflow => {
+            let name = args.workflow.as_deref().unwrap_or_default();
+            crate::cli::workflow_view::deployed_definition(
+                Path::new(name),
+                Some(&workspace.project_root),
+            )?;
+            if schedule::validate_name(name).is_err() {
+                bail!(
+                    "--workflow {name}: a loop task starts a workflow by its name under {}; letters, digits, `-`, `_`",
+                    rimz::disk::paths::workflows_dir().display()
+                );
+            }
+            AddTaskAction::Workflow(name.to_owned())
+        }
     };
     reject_unsupported_action_flags(args, kind)?;
     if let AddTaskAction::Spawn { mode, .. } = &mut action {
@@ -928,6 +1081,7 @@ fn build_task_entry(
         }
         AddTaskAction::Deliver { .. } => unreachable!("deliveries use the shared domain builder"),
         AddTaskAction::CheckOnly => {}
+        AddTaskAction::Workflow(name) => entry.workflow = Some(name),
     }
     Ok((entry, resolved_for_preflight))
 }
@@ -1161,7 +1315,8 @@ fn fast_switch(args: &AddArgs) -> Option<bool> {
 }
 
 fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
-    if kind.is_spawn() {
+    // `reject_workflow_flags` refuses these for a workflow task, each with its own fix.
+    if kind.is_spawn() || kind == TaskActionKind::Workflow {
         return Ok(());
     }
     let mut flags = Vec::new();

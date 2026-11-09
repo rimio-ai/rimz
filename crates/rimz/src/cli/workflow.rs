@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::config::definitions::{self, SkillCheck};
 use rimz::disk::paths;
 use rimz::harness::schedule::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
@@ -273,53 +272,13 @@ fn write_history_copy(state: &rimz::StatePaths, record: &records::RunRecord) -> 
     Ok(())
 }
 
-fn definitions() -> rimz::config::definitions::LoadedDefinitions {
-    let machine = super::machine_config();
-    definitions::load(
-        &paths::agents_home(),
-        SkillCheck::Skip,
-        &machine.agents.commands,
-        &rimz::config::MachineConfig::config_path(),
-        &machine.tiers,
-        machine.harness.auto_compact,
-    )
-}
-
 fn start(
     name: PathBuf,
     worktree: Option<String>,
     prompt: Option<String>,
     globals: &super::GlobalFlags,
 ) -> Result<()> {
-    let dir = definition_dir(&name);
-    let home = paths::workflows_dir();
-    let deployed = dir.canonicalize().is_ok_and(|dir| {
-        home.canonicalize()
-            .is_ok_and(|home| dir != home && dir.starts_with(home))
-    });
-    if !deployed {
-        bail!(
-            "{}: directory must exist inside {}",
-            name.display(),
-            home.display()
-        );
-    }
-    let project_root = validation_root(globals);
-    let report = workflow::validate(&dir, &definitions(), project_root.as_deref());
-    if !report.errors.is_empty() {
-        bail!(
-            "{}",
-            report
-                .errors
-                .iter()
-                .map(|e| e.message.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-    for warning in &report.warnings {
-        writeln!(render::err(), "warning: {}", warning.message)?;
-    }
+    let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
     let scope = if let Some(name) = &worktree {
         rimz::worktree::resolve_owned(
@@ -393,17 +352,6 @@ fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Located> {
     Err(outside())
 }
 
-fn definition_dir(name: &std::path::Path) -> PathBuf {
-    let mut components = name.components();
-    if matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-    {
-        paths::workflows_dir().join(name)
-    } else {
-        name.to_owned()
-    }
-}
-
 fn show(
     target: Option<&str>,
     node: Option<&str>,
@@ -451,7 +399,7 @@ fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
 fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
     let home = paths::workflows_dir();
     let dirs = if let Some(dir) = dir {
-        vec![definition_dir(&dir)]
+        vec![workflow_view::definition_dir(&dir)]
     } else {
         let mut dirs = Vec::new();
         match std::fs::read_dir(&home) {
@@ -471,7 +419,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         dirs.sort();
         dirs
     };
-    let loaded = definitions();
+    let loaded = workflow_view::definitions();
     let project_root = validation_root(globals);
     let mut report = Validation::default();
     for dir in dirs {

@@ -255,7 +255,7 @@ Turn and `until` steps warn when the leader adapter has no background reporting:
 
 ## Loop tasks
 
-A [loop task](./loop.md) starts a workflow with `workflow = "<name>"` in place of `agent` or `wait`:
+A [loop task](./loop.md) starts a workflow with `workflow = "<name>"` in place of `agent` or `wait`. `rimz loop add <task> --workflow <name>` writes it, after validating the definition as `workflow run` does; [its flag list](./loop.md#actions) names what it refuses. This task comes from `rimz loop add babysit-pr --workflow babysit-pr --each-worktree --when pr=open --for 3m`:
 
 ```toml
 [tasks.babysit-pr]
@@ -271,7 +271,7 @@ for           = "3m"
 | `prompt`, `prompt-file` | The run's prompt. |
 | `each-worktree` | Expand each fire over RimZ-owned checkouts. With `when`, launch once per checkout. A worktree-scoped run without it scopes to the task's `dir`, else its root; a project-scoped condition launch covers all checkouts permanently, while other triggers skip only a live held run. |
 | `when`, `for`, schedules, `root` | As on any task. |
-| `budget`, `budget-per-day` | Ignored: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
+| `budget`, `budget-per-day` | Ignored on a hand-written row, and refused by `loop add --workflow`: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
 
 Loop-started runs do not print validation warnings; ignored fields remain visible in `workflow show` and `workflow list`. `loop show` joins each checkout to its recorded run, finished runs included. `loop list` keeps only active and parked runs; its launched-worktree count includes finished entries.
 

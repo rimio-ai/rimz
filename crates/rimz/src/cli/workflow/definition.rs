@@ -6,7 +6,7 @@ use rimz::harness::workflow::{EdgeSource, ScopeKind, WorkflowSpec};
 use super::*;
 
 pub(super) fn render(name: &str, globals: &super::super::GlobalFlags) -> Result<()> {
-    let dir = definition_dir(Path::new(name));
+    let dir = workflow_view::definition_dir(Path::new(name));
     let mut out = render::out();
     let spec = match load(name) {
         Ok(spec) => spec,
@@ -46,7 +46,7 @@ pub(super) fn render(name: &str, globals: &super::super::GlobalFlags) -> Result<
 }
 
 pub(super) fn load(name: &str) -> Result<WorkflowSpec> {
-    workflow::load(&definition_dir(Path::new(name))).map_err(|error| {
+    workflow::load(&workflow_view::definition_dir(Path::new(name))).map_err(|error| {
         anyhow::anyhow!(
             "{name}: definition unavailable: {}; check with {}",
             render::one_line(&error.to_string()),
@@ -81,15 +81,19 @@ fn header(
         })
         .collect::<Vec<_>>();
     if tasks.is_empty() {
-        let flags: &[&str] = if spec.workflow.scope == ScopeKind::Worktree {
-            &["-w", "<worktree>"]
-        } else {
-            &[]
-        };
-        let command = resolve::command("run", &[name], globals.root.as_deref(), None, &[], flags);
+        let worktree = spec.workflow.scope == ScopeKind::Worktree;
+        let flags: &[&str] = if worktree { &["-w", "<worktree>"] } else { &[] };
+        let root = globals.root.as_deref();
+        let command = resolve::command("run", &[name], root, None, &[], flags);
+        let task = format!(
+            "{} loop add '<task>' --workflow={}{} --every '<duration>'",
+            resolve::rimz_prefix(root),
+            crate::cli::usage::shell_command([name]),
+            if worktree { " --each-worktree" } else { "" },
+        );
         writeln!(
             out,
-            "one run per {scope} · no loop task starts it; by hand: {command}"
+            "one run per {scope} · no loop task starts it; from a loop: {task} · by hand: {command}"
         )?;
     } else {
         writeln!(out, "one run per {scope} · {}", tasks.join(" · "))?;
