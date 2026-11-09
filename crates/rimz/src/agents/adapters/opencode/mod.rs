@@ -1101,6 +1101,24 @@ impl crate::agents::capabilities::TranscriptCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
+    // OpenCode v2.2.5's default ceiling (`calculateCeiling` with no buffer configured).
+    fn native_compaction(
+        &self,
+        _configured: Option<u64>,
+        window: u64,
+        capacity: Option<u64>,
+        _limits: Option<&crate::agents::context::ModelContextLimits>,
+    ) -> Option<crate::agents::registry::NativeCompaction> {
+        let buffer = (u128::from(window) * 15 / 100) as u64;
+        let reserve = if window >= 32_000 { 16_000 } else { 0 };
+        Some(crate::agents::registry::NativeCompaction {
+            point: window - buffer.max(reserve),
+            capacity: capacity.unwrap_or(window),
+            raw_window: window,
+            lowered: None,
+        })
+    }
+
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         let parsed = payloads::parse_payload(payload);
         if parsed.session_name.is_none()

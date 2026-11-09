@@ -154,6 +154,21 @@ fn native_compaction_preserves_claude_and_unsupported_kinds() {
 }
 
 #[test]
+fn native_compaction_answers_nothing_for_a_zero_window() {
+    for (kind, configured) in [
+        ("claude", Some(100_000)),
+        ("codex", None),
+        ("opencode", None),
+    ] {
+        assert_eq!(
+            native_compaction(kind, configured, 0, None, None),
+            None,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
 fn opencode_compaction_predicts_the_default_ceiling_and_published_capacity() {
     for configured in [None, Some(1), Some(2_000_000)] {
         let cases = [

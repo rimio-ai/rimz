@@ -1419,6 +1419,35 @@ impl crate::agents::capabilities::TranscriptCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for CodexAdapter {
+    fn native_compaction(
+        &self,
+        configured: Option<u64>,
+        window: u64,
+        _capacity: Option<u64>,
+        limits: Option<&crate::agents::context::ModelContextLimits>,
+    ) -> Option<crate::agents::registry::NativeCompaction> {
+        let percent = limits
+            .and_then(|limits| limits.usable_percent)
+            .filter(|percent| (1..=100).contains(percent))
+            .unwrap_or(95);
+        let raw = u128::from(window) * 100 / u128::from(percent);
+        let cap = raw * 9 / 10;
+        let target = configured
+            .or_else(|| limits.and_then(|limits| limits.own_compact_limit))
+            .map(u128::from)
+            .unwrap_or(cap);
+        let point = target.min(cap).min(u128::from(window)) as u64;
+        let raw_window = u64::try_from(raw).unwrap_or(u64::MAX);
+        Some(crate::agents::registry::NativeCompaction {
+            point,
+            capacity: limits
+                .and_then(|limits| limits.max_window)
+                .unwrap_or(raw_window),
+            raw_window,
+            lowered: configured.filter(|configured| point < *configured),
+        })
+    }
+
     fn prompt_cache_ttl(
         &self,
         sign_in: Option<crate::agents::context::SignIn>,

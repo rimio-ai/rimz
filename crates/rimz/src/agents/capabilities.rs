@@ -995,6 +995,20 @@ pub trait ContextCapability: CoreCapability {
         None
     }
 
+    /// The provider's native compaction trigger and model capacity for a nonzero
+    /// usable `window`; `None` when the provider has no native compaction point
+    /// RimZ can predict. The registry answers a zero window itself, so an
+    /// adapter may assume `window > 0`.
+    fn native_compaction(
+        &self,
+        _configured: Option<u64>,
+        _window: u64,
+        _capacity: Option<u64>,
+        _limits: Option<&super::context::ModelContextLimits>,
+    ) -> Option<crate::agents::registry::NativeCompaction> {
+        None
+    }
+
     /// Translate a raw out-of-band context payload into the normalized
     /// [`AgentContext`]. The transport is the adapter's business: Claude parses
     /// the statusline JSON it is handed on stdin. Returns `None` when the
