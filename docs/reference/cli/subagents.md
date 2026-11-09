@@ -41,7 +41,7 @@ rimz subagents wait "$first" "$second"
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
+| `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. Trailing newlines in the file are dropped. A blank `PROMPT` or an empty file is refused. |
 | `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
 | `--add-dir <DIR>` | none | Repeatable additional working directory with file access, without loading its configuration. Resolved like `--cwd`, canonicalized and deduplicated in flag order. Claude and Codex support it; other kinds warn and launch without the grant. A Codex directory saved untrusted refuses. |
 | `--empty-dir` | off | Require a private empty working directory, whatever the profile says. With `--cwd X`, records X as the checkout and keeps its lane; X is not added unless `--add-dir X` is also passed. |
@@ -85,10 +85,11 @@ A launch refuses before it writes a run record or opens a pane when:
 | --- | --- |
 | `0` | The child launched. With `--wait`, the child completed. |
 | `1` | The launch was refused or failed. With `--wait`, the child failed. |
+| `2` | Usage error: a flag clap rejects, bare `rimz subagents`, or the retired `--detach`. |
 | `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
 | `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
 
-`rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
+`rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. `--detach` on `launch` or `fanout` is refused with exit 2, because a subagent ends with its parent; for a run that outlives the caller, launch a peer with `rimz agents <spec> "<prompt>" -p --bg --detach`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 
 ## Fan out a task list
 
@@ -138,8 +139,6 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
-Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
-
 A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
@@ -167,6 +166,8 @@ The report lists status and where each answer is, and asks for nothing: reading 
 
 Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. Every path is the host path, in every isolation; the host state path is reachable from a scoped pane. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. Closing the room keeps the files; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` removes them all. Opening one does not count as reading the result.
 
+Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
+
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
 
 A supervised parent can end its turn while children run without ending its own run. It stays parked while children are live or their results remain unjoined and unreported, and while the report is on its way; the report opens its next turn.
@@ -190,13 +191,13 @@ rimz subagents wait calm-fox --stream
 rimz subagents wait calm-fox bright-owl --json --timeout 10m
 ```
 
-`subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
+`subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. `--any` and `--stream` conflict, `--stream` takes exactly one name (`--stream --json` emits NDJSON run events), and there is no `--from-start`. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
 
 Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. `--json` prints the same compact keyed map for one target or several, settled or timed out. For the full run record, use `rimz agents show <ref> --json` and read `run`. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
 
 `wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume. Bound the join with `--timeout`, then read `subagents list`.
 
-At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
+At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident; with no children it fails with `this agent has no supervised subagents to wait for`. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
 
 ## List children
 
@@ -229,7 +230,7 @@ A plain shell in the project directory has no current channel even when a team r
 | `kind` | Agent kind |
 | `status` | Agent status, as `rimz agents list --json` spells it |
 | `description` | Current one-line description; omitted when empty |
-| `turn_error` | The provider error that explains `status`, with the fields `rimz agents list --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
+| `turn_error` | The provider error that explains `status`, with the fields `rimz agents list --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `not_entitled`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
 | `run_id`, `run_status` | Newest supervised run and its status; omitted when there is no run |
 | `started_at` | RFC 3339 start of the run's current answer, the instant `ELAPSED` counts from; omitted when there is no run |
 
@@ -324,7 +325,7 @@ rimz subagents profiles --json --path
 
 A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under its kind's name, since a child can launch from it. An agent kind with no kind base is launchable directly but is not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
-`--json` prints an array of objects with `name`, `source` (`profile` or `command`), and `origin` (`mine`, `pack`, or `project`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`. `pack` is present only for a pack origin; `inherits` is present only for a definition's own qualified `agent:` parent. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
+`--json` prints an array of objects with `name`, `source` (`profile` or `command`), and `origin` (`mine`, `pack`, or `project`), plus `agent`, `model`, `effort`, `description`, and `allowed_tools` (an array of permission rules) when set, `fast: true` only when the profile sets fast mode, and the absolute `path` only with `--path`. A card with a nonempty permission-rule list adds an `allowed-tools:` line after the description. `pack` is present only for a pack origin; `inherits` is present only for a definition's own qualified `agent:` parent. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
@@ -367,7 +368,7 @@ warn = ["6m", "3m"]
 grace = "3m"
 ```
 
-`[agents.subagents]` in `config.toml` sets the three defaults above. Durations use `s`, `m`, `h`, or `d`; bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the timeout are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline as before. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.
+`[agents.subagents]` in `config.toml` sets the three defaults above. A duration is one whole number and one unit, `s`, `m`, `h`, or `d` (`90m`, not `1h30m`); bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the timeout are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.
 
 Claude, Codex, Copilot, Cursor, Droid, Grok, and Qwen receive warning and stop context through post-tool hooks. Qwen's async hook delivers context on the next turn. Other providers receive only the stop instruction through pane steering. A hook-channel child making no tool calls receives no stop context before the kill bound. A late hook gets only the latest crossed warning, with actual remaining time, rounded down to minutes or to seconds below a minute. The last warning asks the child to wrap up; the deadline asks it to stop and report.
 
