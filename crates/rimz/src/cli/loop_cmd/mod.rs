@@ -171,6 +171,9 @@ struct AddArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     agent: Option<String>,
+    /// Workflow under `~/.rimz/workflows/` that each fire starts as a run; validated now.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["agent", "wait"])]
+    workflow: Option<String>,
     /// Leave the agent layout running as ordinary room agents.
     #[arg(long)]
     stay: bool,
@@ -221,10 +224,10 @@ struct AddArgs {
     #[arg(long, value_name = "DUR")]
     judge_timeout: Option<String>,
     /// Shell command that must pass before a spawned agent task is complete.
-    #[arg(long, value_name = "CMD", requires = "agent")]
+    #[arg(long, value_name = "CMD")]
     verify: Option<String>,
     /// Total agent turns allowed while making --verify pass.
-    #[arg(long, value_name = "N", requires = "verify")]
+    #[arg(long, value_name = "N")]
     max_attempts: Option<u32>,
     /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
@@ -302,10 +305,10 @@ struct AddArgs {
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
     /// Off skips machine stagger, resource limits and capacity check, not caps; unset is on.
-    #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
+    #[arg(long, value_name = "on|off", value_parser = ["on", "off"])]
     throttle: Option<String>,
     /// How long to wait for capacity: a positive s/m/h/d duration, or forever.
-    #[arg(long, value_name = "DURATION|forever", requires = "agent")]
+    #[arg(long, value_name = "DURATION|forever")]
     capacity_wait: Option<rimz::config::CapacityWait>,
     /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (stop for newest).
     #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
@@ -317,7 +320,7 @@ struct AddArgs {
     #[arg(long, value_name = "AMOUNT[/day]")]
     budget: Option<String>,
     /// Skip a fire once this task's local-day run spend reaches the amount.
-    #[arg(long = "budget-per-day", value_name = "AMOUNT", requires = "budget")]
+    #[arg(long = "budget-per-day", value_name = "AMOUNT")]
     budget_per_day: Option<String>,
     /// Fire only while the provider's longest budget window holds this forward headroom, e.g. 1.5x.
     #[arg(long, value_name = "RATIO")]

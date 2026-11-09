@@ -13,6 +13,7 @@ struct Room {
     bin: PathBuf,
 }
 
+mod add;
 mod capacity;
 mod keep;
 mod message;

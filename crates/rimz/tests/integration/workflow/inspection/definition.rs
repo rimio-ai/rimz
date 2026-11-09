@@ -49,7 +49,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     let text = success(command(&env, &["workflow", "show", "review"]));
     for fragment in [
         "review · carry the change to green",
-        "one run per worktree · no loop task starts it; by hand: rimz workflow run review -w '<worktree>'",
+        "one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow=review --each-worktree --every '<duration>' · by hand: rimz workflow run review -w '<worktree>'",
         "◇ begin",
         "○ sweep",
         "◇ watch",

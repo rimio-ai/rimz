@@ -351,7 +351,30 @@ fn throttle_flag_takes_on_or_off_and_needs_an_agent() {
     );
     assert_eq!(throttle_switch(&args(&["--agent", "claude"])), None);
     parse(&["--agent", "claude", "--throttle", "maybe"]).expect_err("only on and off");
-    parse(&["--check", "true", "--throttle", "off"]).expect_err("needs an agent task");
+    for flags in [
+        ["--throttle", "off"],
+        ["--capacity-wait", "1h"],
+        ["--verify", "true"],
+    ] {
+        let argv = [&["--check", "true"][..], &flags].concat();
+        let error = validate_add_args(&args(&argv)).expect_err("needs an agent task");
+        assert_eq!(error.to_string(), format!("{} requires --agent", flags[0]));
+    }
+}
+
+#[test]
+fn attempts_and_daily_budget_need_the_flag_they_bound() {
+    for (flags, error) in [
+        (["--max-attempts", "2"], "--max-attempts requires --verify"),
+        (
+            ["--budget-per-day", "$4"],
+            "--budget-per-day requires --budget",
+        ),
+    ] {
+        let argv = [&["--agent", "claude", "--prompt", "x"][..], &flags].concat();
+        let refusal = validate_add_args(&args(&argv)).expect_err(error);
+        assert_eq!(refusal.to_string(), error);
+    }
 }
 
 #[test]

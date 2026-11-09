@@ -113,7 +113,7 @@ Before starting a larger workflow, read its routes without jumping between TOML 
 ```console
 $ rimz workflow show fix-tests
 fix-tests
-one run per worktree · no loop task starts it; by hand: rimz workflow run fix-tests -w '<worktree>'
+one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow=fix-tests --each-worktree --every '<duration>' · by hand: rimz workflow run fix-tests -w '<worktree>'
 
 ○ tests  check  sh: cargo test
 │   fail → fix · pass @done
@@ -508,7 +508,13 @@ A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A
 
 ## Start runs from a loop
 
-A loop task can start the runs for you. This one, in `~/.rimz/loop.toml`, starts a `babysit-pr` run in every RimZ worktree of one project that has an open PR:
+A loop task can start the runs for you. This one starts a `babysit-pr` run in every RimZ worktree of one project that has an open PR:
+
+```console
+$ rimz loop add babysit-pr --workflow babysit-pr --each-worktree --when pr=open --for 3m
+```
+
+`loop add` checks the definition the way `rimz workflow run` does and writes this row to `~/.rimz/loop.toml`:
 
 ```toml
 [tasks.babysit-pr]
@@ -519,7 +525,7 @@ when          = ["pr=open"]
 for           = "3m"
 ```
 
-This condition task starts its workflow once per checkout. An active, parked, or finished run prevents another automatic launch there, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. Use `rimz loop fire babysit-pr` from the worktree to start another run after it ends, or `rimz workflow run babysit-pr` for an independent run. A workflow with project scope covers every checkout of the task, including new ones. Schedule, signal, and watch workflow tasks instead admit a new run on each fire unless a live run holds the scope. Write this task by hand, since `rimz loop add` has no flag for it. The task's own `budget` does not apply; agent steps run under the room's budgets, and command steps use no provider. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
+This condition task starts its workflow once per checkout. An active, parked, or finished run prevents another automatic launch there, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. Use `rimz loop fire babysit-pr` from the worktree to start another run after it ends, or `rimz workflow run babysit-pr` for an independent run. A workflow with project scope covers every checkout of the task, including new ones. Schedule, signal, and watch workflow tasks instead admit a new run on each fire unless a live run holds the scope. `--each-worktree` fans out a `--when`, `--every`, or `--cron` trigger; `loop add` refuses it with a signal or a one-shot. `loop add` also refuses the flags a workflow fire would ignore, such as `--budget` or `--timeout`, and names where each lives in the workflow instead. A workflow fire is not gated on spend: agent steps run under the room's budgets, and command steps use no provider. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
 
 ## One run per project
 
