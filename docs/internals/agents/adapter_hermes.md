@@ -97,7 +97,7 @@ Hermes sends each hook one JSON object on stdin and runs the command with `shell
 | `on_session_start` | `Registered` | `SessionSource::Startup` |
 | `on_session_reset` | `Registered` | `SessionSource::Clear`, with the new `session_id` |
 | `pre_llm_call` | `TurnStarted` | `extra.user_message` becomes the sanitized task and prompt |
-| `post_tool_call` | `ToolUsed { mutates, edits }` | `write_file` and `patch` edit, and `terminal` mutates. Carries the constant native key `hermes:post_tool_call` |
+| `post_tool_call` | `ToolUsed { effect }` | `write_file` and `patch` carry `Editing`, and `terminal` carries `Mutating`. Carries the constant native key `hermes:post_tool_call` |
 | `on_session_end` | `TurnEnded` | a turn end despite its name. `extra.failed` marks it errored, so an interrupted turn ends as a success |
 | `post_api_request` | none | the context gauge ([Context](#context)) |
 | `on_human_input_request` | `AwaitingInput` | keyed on `extra.request_id`. `approval` and `sudo` are permissions, and `clarify` and any other kind are questions |

@@ -25,7 +25,7 @@ Factory Droid reports its lifecycle through native command hooks in `~/.factory/
 | `SessionStart` (`resume`) | `Registered` | Registers the hook's `session_id`, which need not echo the resume argument ([session identity](../../externals/agent-adapter/droid-reference.md#session-identity-and-resume)). |
 | `SessionStart` (`compact`) | `CompactionEnded { auto: None }` | Fires only for a `/handoff` successor. See [Compaction](#compaction). |
 | `UserPromptSubmit` | `TurnStarted` | The sanitized prompt becomes the task and the prompt. |
-| `PostToolUse` | `ToolUsed { mutates, edits }` | `Create`, `Edit`, and `ApplyPatch` edit. `Execute` mutates without editing. |
+| `PostToolUse` | `ToolUsed { effect }` | `Create`, `Edit`, and `ApplyPatch` carry `Editing`. `Execute` carries `Mutating`. |
 | `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | Droid sends no failure or background-work field. The stall window and the displayed-status ladder surface a failed turn. |
 | `PreCompact` | `Compacting` | Opens the bracket. The decoder ignores the payload's `trigger`. |
 | `SessionEnd` | `Ended` | Stamps `ended_at` at once. The retained resumable row is hidden. |

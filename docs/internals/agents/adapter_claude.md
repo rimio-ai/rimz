@@ -33,8 +33,8 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | `StopFailure` | lifecycle | `TurnEnded { errored: true }` for non-pausing errors; otherwise none | writes `AgentContext.turn_error`, never a final assistant message ([turn endings](#turn-endings)) |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
 | `Notification` | lifecycle | none | |
-| `PreToolUse` | lifecycle | `ToolUsed { mutates: false, edits: false, name: None }` | proof of work only, keyed by `tool_use_id` |
-| `PostToolUse` | lifecycle | `ToolUsed { mutates, edits, name }` | every tool, named, keyed by `tool_use_id`; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
+| `PreToolUse` | lifecycle | `ToolUsed { effect: Observed, name: None }` | proof of work only, keyed by `tool_use_id` |
+| `PostToolUse` | lifecycle | `ToolUsed { effect, name }` | every tool, named, keyed by `tool_use_id`; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
 | `PreCompact` | lifecycle | `Compacting` | opens the [compaction bracket](./model.md#the-compaction-bracket) |
 | `PostCompact` | lifecycle | `CompactionEnded { auto }` | carries the manual or auto trigger |
 | `SubagentStart` | lifecycle | `SubagentStarted` | see [Subagents](#subagents) |
@@ -61,7 +61,7 @@ Every signal derived from a `PreToolUse` or a `PostToolUse` carries that payload
 
 ### Tool events
 
-The spec's `ToolClassification` decides both bits: `mutates` for `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, and `Bash`, and `edits` for the same list without `Bash`. `edits` moves the turn's [phase](./model.md#turn-phase) from reasoning to acting.
+The spec's `ToolClassification` decides the effect: `Editing` for `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, `Mutating` for `Bash`, and `Observed` for every other tool. `Editing` moves the turn's [phase](./model.md#turn-phase) from reasoning to acting.
 
 A broad `PreToolUse` is unnamed proof of work. Store appends it only under the rule in [model.md](./model.md#the-state-machine): when a subagent owns it, or when it clears a wait, closes a compaction bracket, or reconciles a resting row. Every `PostToolUse` carries its tool name, so Store always appends it, read-only tools and answered asks included, and the named completions feed the live session tool map.
 

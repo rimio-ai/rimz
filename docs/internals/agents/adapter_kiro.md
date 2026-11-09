@@ -77,7 +77,7 @@ Every hook runs `rimz hooks feed --source kiro || true`, because a `Stop` hook t
 | --- | --- | --- |
 | `SessionStart` | `Registered` | The payload carries no start source, so the decoder passes `SessionSource::Startup`. |
 | `UserPromptSubmit` | `TurnStarted` | The sanitized `prompt` becomes the task and the prompt metadata. |
-| `PostToolUse` | `ToolUsed { mutates, edits }` | `fs_write` is the one mutating and editing tool in the spec. |
+| `PostToolUse` | `ToolUsed { effect }` | `fs_write` is the one mutating and editing tool in the spec, so it carries `Editing`. |
 | `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | The final message is `session::last_reply`: the last transcript message in the bounded tail, when it is an assistant `Say`. |
 | `SessionEnd` | `Ended` | Teardown of a loaded session, never a turn boundary. |
 
