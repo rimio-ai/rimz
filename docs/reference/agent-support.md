@@ -2,23 +2,19 @@
 
 RimZ has a built-in adapter for eighteen coding agents. Each adapter reads the agent's verified hooks, transcripts, or local files, and turns the available signals into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
-Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
+Each agent sits in a support tier. The tier is how much the author runs it day to day. Every agent in every tier is wired against its documented surface and covered by tests, and an experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
 | Tier | Agents | What to expect |
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Qoder, Kimi Code, Grok Build, Hermes Agent, OMP, Muse Code, MiniMax Code | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Qoder, Kimi Code, Grok Build, Hermes Agent, OMP, Muse Code, MiniMax Code | Mostly works. Expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
-OpenCode 2.1.4 plain full-TUI shared-service clients show one card for the conversation on screen, including its title and usage. A background tab's permission or form ask takes the card until answered. The home route keeps the last conversation's card unless it is deleted; explicit `--server` clients stay silent. Messaging and advanced controls require a RimZ-launched agent. See [OpenCode's mapping and limits](../internals/agents/adapter_opencode.md#known-gaps).
-
-Plain `opencode mini` on the shared service is untracked and shows a process row rather than an idle agent card. For mini started by hand, use `opencode mini --standalone`. Alternatively, disable OpenCode's service machine-wide with `opencode service set disabled true`; undo with `opencode service unset disabled`. RimZ never changes that setting. Mini's native footer keys differ from the full TUI; answer in its pane. `rimz answer` remains unsupported for all OpenCode frontends.
-
 ## Check coverage on your machine
 
-`rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
+`rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and the command renders those declarations. A test holds the [compatibility matrix](#the-compatibility-matrix) on this page to them. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
 The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes, qoder, omp, muse, minimax) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
@@ -32,7 +28,7 @@ A mark says what you see on the card and when you see it. Two tests settle every
 | ◐ partial | A working version with a stated limit: part of the detail, or all of it late. `rimz coverage` names the limit. |
 | ✗ unsupported | The agent exposes nothing RimZ can show for this capability. |
 
-How RimZ gets a figure does not change its mark. A value read from a wrapped statusline and one read from a transcript tail both count as full when the card shows the same complete, live result; a native hook that carries half the story counts as partial. The mechanism is the [wiring matrix](#the-wiring-matrix).
+How RimZ gets a figure does not change its mark. A value read from a wrapped statusline and one read from a transcript tail both count as full when the card shows the same complete, live result. A native hook that carries half the story counts as partial. The mechanism is the [wiring matrix](#the-wiring-matrix).
 
 ## The six capabilities
 
@@ -40,21 +36,21 @@ Each capability is one thing a card or command shows you. State is the base the 
 
 | Capability | What it covers | ● full | ◐ partial | ✗ unsupported |
 | --- | --- | --- | --- | --- |
-| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | The card can drift: local-store updates can lag, a cancel or failure can read as an ordinary stop, or background work can outlive a reported turn end. | No live state; the pane shows as a plain process row. |
-| Live | While a turn runs: context-window fill, the token breakdown (input, output, cache), and a dollar figure. | All three, moving during the turn. | Some of it: a fill percentage without token counts, totals without the breakdown, an estimated price instead of a billed one, or figures that update only at the turn boundary. | No numbers; the card carries state only. |
+| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | The card can drift: local-store updates can lag, a cancel or failure can read as an ordinary stop, or background work can outlive a reported turn end. | No live state. The pane shows as a plain process row. |
+| Live | While a turn runs: context-window fill, the token breakdown (input, output, cache), and a dollar figure. | All three, moving during the turn. | Some of it: a fill percentage without token counts, totals without the breakdown, an estimated price instead of a billed one, or figures that update only at the turn boundary. | No numbers. The card carries state only. |
 | History | Past sessions readable end to end, with per-turn tokens and dollars feeding [`rimz stats`](./cli/stats.md), the provider dashboard, and the heatmap. | Transcripts, tokens, and dollars, complete across sessions. | Sessions read back, but dollars are estimated locally, incomplete, or missing. | No archive RimZ can read. |
 | Account | Your login, plan, and usage windows (a 5-hour and weekly pair, monthly credits, a prepaid balance) with fill and reset time. | Plan and windows, with usage counted against them. | Identity and plan with no usage, windows with no plan, or a quota the provider publishes as display-only. | No readable account surface. |
 | Ask | An agent stops and needs you: the card raises Waiting and the cockpit counts it. | The question's text and options reach [`rimz asks`](./cli/asks.md) and the card, so you can read it without opening the pane. | Only some prompts are tracked, or Waiting routes you to the pane without question detail in `rimz asks`. | A blocked agent looks like a working one. |
-| Subagents | Child agents nested under the parent card. | Children appear as they start and update as they work, with name, task, and model. | Children arrive late (often when the parent's turn ends) or without part of that detail. | Children stay invisible; the parent shows a long turn. |
+| Subagents | Child agents nested under the parent card. | Children appear as they start and update as they work, with name, task, and model. | Children arrive late (often when the parent's turn ends) or without part of that detail. | Children stay invisible. The parent shows a long turn. |
 
 A few cells need more than the table says:
 
 - State stays full for agents that publish no session-end event. Their card clears on the next sidebar refresh after the pane is gone, the same tick every card refreshes on.
-- A History partial splits reading from accounting. `rimz agents logs` and `rimz agents history` still replay the session; the provider dashboard may show tokens and dollars blank or incomplete. OMP counts main-session usage but excludes task-child files.
+- A History partial splits reading from accounting. `rimz agents logs` and `rimz agents history` still replay the session, while the provider dashboard may show tokens and dollars blank or incomplete. OMP counts main-session usage but excludes task-child files.
 - Answering is separate from Ask. Every agent takes its answer in its own UI, and `rimz answer` adds an out-of-band path for Claude, Codex, and Pi ([what each agent accepts](./cli/asks.md#what-each-agent-accepts)).
 - Claude Code children also carry a running token count and an elapsed clock. The child row shows both for any agent that reports them.
 
-Claude Code and Codex history also times responses for the Models `tok/s` figure in [`rimz stats`](./cli/stats.md) and [`rimz agents attribution`](./cli/agents.md#attribution). Stats scopes timing to its selected window; attribution scopes it to the report's agents. Other adapters retain their history coverage but supply no response timing.
+Claude Code and Codex history also times responses for the Models `tok/s` figure in [`rimz stats`](./cli/stats.md) and [`rimz agents attribution`](./cli/agents.md#attribution). Stats scopes timing to its selected window, and attribution scopes it to the report's agents. Other adapters keep their history coverage but supply no response timing.
 
 ## The compatibility matrix
 
@@ -87,33 +83,34 @@ A ✗ is a declared absence with a stated reason in `rimz coverage`, so a missin
 
 ## Notes on the alpha and experimental set
 
-These are the gaps you will notice, per agent, beyond what the matrix and `rimz coverage` state. The files `rimz hooks install` writes for each agent, and what uninstall restores, are in [what install writes](./cli/hooks-trust.md#what-install-writes). Each agent's [mapping doc](#per-agent-mappings) has the full rationale.
+These are the gaps you will notice, per agent in matrix order, beyond what the matrix and `rimz coverage` state. Amp has no notes. The files `rimz hooks install` writes for each agent, and what uninstall restores, are in [what install writes](./cli/hooks-trust.md#what-install-writes). Each agent's [mapping doc](#per-agent-mappings) has the full rationale.
+
+### OpenCode
+
+- OpenCode 2.1.4 plain full-TUI shared-service clients show one card for the conversation on screen, including its title and usage. A background tab's permission or form ask takes the card until answered. The home route keeps the last conversation's card unless it is deleted. Explicit `--server` clients stay silent.
+- Messaging and advanced controls require a RimZ-launched agent. See [OpenCode's mapping and limits](../internals/agents/adapter_opencode.md#known-gaps).
+- Plain `opencode mini` on the shared service is untracked and shows a process row instead of an idle agent card. For mini started by hand, use `opencode mini --standalone`, or disable OpenCode's service machine-wide with `opencode service set disabled true` (undo with `opencode service unset disabled`). RimZ never changes that setting.
+- Mini's native footer keys differ from the full TUI, so answer in its pane. `rimz answer` is unsupported for every OpenCode frontend.
 
 ### Antigravity
 
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
 - Context and tokens are live from the wrapped statusline. The dollar figure prices the current turn only, so it does not count toward room spend or [budget caps](./cli/budget.md).
 - History replays every past session and adds no dollars to `rimz stats`.
+- Tool activity comes from the `PostToolUse` hook on file-edit tools only.
 - Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
-- Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review; RimZ does not change it.
+- Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review, and RimZ does not change it.
 
 ### Copilot
 
-- With RimZ's hooks installed, launches refuse when effective `disableAllHooks` is true. Explicit ask launches also refuse a local non-manual `defaultPermissionMode`; the error names the settings file and fix. RimZ takes each key from the first file that sets it: `.github/copilot/settings.local.json`, then `.github/copilot/settings.json`, then your user `settings.json`.
-- The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure comes from the session's AI credits at $0.01 per credit, or is an estimate at that model when credits are absent; when the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
+- With RimZ's hooks installed, launches refuse when effective `disableAllHooks` is true. Explicit ask launches also refuse a local non-manual `defaultPermissionMode`, and the error names the settings file and fix. RimZ takes each key from the first file that sets it: `.github/copilot/settings.local.json`, then `.github/copilot/settings.json`, then your user `settings.json`.
+- The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure comes from the session's AI credits at $0.01 per credit, or is an estimate at that model when credits are absent. When the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
 - That fallback needs a local telemetry file. An OTLP exporter configured in the environment sends the telemetry elsewhere, so RimZ warns `Copilot direct-launch enrichment is unavailable because an OTLP exporter is configured; set COPILOT_OTEL_FILE_EXPORTER_PATH to retain a file source` and the card keeps lifecycle alone. Point `COPILOT_OTEL_FILE_EXPORTER_PATH` at a file to keep both.
 - History adds per-model tokens and credit-metered dollars (local estimates where credits are absent) to `rimz stats` and the provider dashboard. These are not an account billing ledger.
-- Tool questions and elicitation dialogs raise Waiting. Tool questions clear when the tool completes; elicitation waits clear on subsequent lifecycle activity.
-- Children appear with their model when they start, show their tool activity, and report their exact token total when they finish. A child's permission prompt arrives on the parent session, so the parent card waits. An approved shell command clears it when the child's command finishes; a denied or non-shell request clears at the parent's next hook.
+- Tool questions and elicitation dialogs raise Waiting. Tool questions clear when the tool completes. Elicitation waits clear on later lifecycle activity.
+- Children appear with their model when they start, show their tool activity, and report their exact token total when they finish. A child's permission prompt arrives on the parent session, so the parent card waits. An approved shell command clears the wait when the child's command finishes. A denied or non-shell request clears at the parent's next hook.
 - The account shows the plan and the monthly `cr`, `cht`, and `prm` windows. There are no 5-hour or weekly windows, and IDE completions, extra credits, account dollars, and remote control are unsupported.
-
-### Cursor
-
-- Cursor's `AskQuestion` and plan-approval ("Ready to build?") prompts have no hooks. RimZ detects an open one from Cursor's local state, raises Waiting, and routes you to the pane; `rimz asks` stays empty and `rimz answer` is unsupported.
-- A later message clears a plan wait. Dismissing the plan prompt with Esc or `p` leaves the card waiting until the next turn, because Cursor records no change.
-- The installed CLI accepts `subagentStart` and `subagentStop` hooks but never fires them. RimZ reads children from the chats store when the parent's next hook fires, often at turn end.
-- RimZ prices each generation locally. The running session total counts toward agent and room [budgets](./cli/budget.md); provider billing, account spend, and `rimz stats` dollars are unavailable.
 
 ### Droid
 
@@ -122,48 +119,46 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - The locally priced session total reaches the card and live budgets. Provider dollars, historical spend, and quota are unavailable.
 - After a compaction the card can read compacting, and messages queued for it wait, for up to 90 seconds, because Droid sends no compaction-finished hook.
 
+### Cursor
+
+- Cursor's `AskQuestion` and plan-approval ("Ready to build?") prompts have no hooks. RimZ detects an open one from Cursor's local state, raises Waiting, and routes you to the pane. `rimz asks` stays empty and `rimz answer` is unsupported.
+- A later message clears a plan wait. Dismissing the plan prompt with Esc or `p` leaves the card waiting until the next turn, because Cursor records no change.
+- The installed CLI accepts `subagentStart` and `subagentStop` hooks but never fires them. RimZ reads children from the chats store when the parent's next hook fires, often at turn end.
+- RimZ prices each generation locally. The running session total counts toward agent and room [budgets](./cli/budget.md). Provider billing, account spend, and `rimz stats` dollars are unavailable.
+
 ### Kiro
 
 - Turns, tool calls, and session exits arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
 - Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
 - Cancelled and errored turns release `message --wait` and `agents wait` while a sidebar runs. Supervised `-p` runs still wait out the deadline on both cancel and error.
-- A pending tool approval or native question raises Waiting; answer it in Kiro's pane, not through `rimz asks` or `rimz answer`.
-- Live details show the model, effort, and session title; context usage is a percentage only.
-
-### Hermes
-
-- Hermes Agent 0.22.2 or later is required. RimZ merges its shell hooks into the top-level `hooks` key of `$HERMES_HOME/config.yaml` and launches the classic UI (`hermes chat --cli`); a `hermes --tui` session is not covered.
-- Hermes asks once per hook at the first interactive launch (`Allow this hook to run? [y/N]`). Answer `y` to each RimZ hook. Until you do, `rimz doctor` lists the unconsented events, and supervised runs, loops, and message replies refuse.
-- `hermes hooks doctor` reports `script missing or not executable` for `rimz hooks feed --source hermes`, as for any hook named by a bare command. Hermes still finds `rimz` on `PATH` when the hook runs.
-- Approvals, `sudo` prompts, and clarify questions raise Waiting; answer them in Hermes's pane. Memory-write approvals and the secret, vault, and confirmation panels raise nothing.
-- The card shows the model and the context fill of the latest model request. Cost, history, account, and launch reminders are unsupported, and `hermes-plan` launches plain Hermes.
-- Named logins are refused: a separate `HERMES_HOME` does not isolate Hermes credentials.
-
-### Kimi
-
-- Kimi Code 2.1.1 or later is required. Installation refuses a detected older version with `kimi upgrade -y`; an unknown version does not block installation.
-- Invalid hook entries block installation and preview without changing the config. Fix or remove the named entry: Kimi Code ignores every hook while one entry is invalid.
-- `TurnStarted` opens main-agent background turns; user turns still open through `UserPromptSubmit` alone.
-- Children appear at the next recorded root hook after their durable spawn record lands. Failed children settle as failed; cancelled and timed-out children show as finished. Finished children stay closed on resume.
-- The main wire distinguishes child-fired turn ends from parent boundaries. A child's compaction still shows on the parent card; cancellation can leave it compacting until the next root signal.
-- Parent live dollars, lifetime spend, and fleet spend include child wires; parent context tokens remain main-only.
-
-### Qoder
-
-- Launches `qodercli` 1.1.72 or newer, with an initial task passed through `-i`. Upgrade with `qodercli update` if RimZ refuses an older release.
-- Permission prompts, plan approvals, and questions reach `rimz asks`; answer them in Qoder's pane. Children nest by agent type, without child tokens or transcript replay.
-- Live context, tokens, dollars, history, and account quota are unavailable. Qoder's local token figures are normally hidden, and Credits have no established dollar conversion.
-- A fresh worktree needs folder trust before hooks can report, and launch warns until it has it. Run `rimz trust grant --agents qoder` there before launching: answering Qoder's trust prompt in the pane saves the decision, but that launch has already lost its session-start hook, so the card stays a launch placeholder.
-- Disabled hooks refuse launch, naming the settings file and fix. Use `QODER_CONFIG_DIR` for a custom home; `--config-dir`, `QODER_CLI_HOME`, and `QODER_CONFIG_DIR_NAME` refuse because the installed hooks would be in a different home.
+- A pending tool approval or native question raises Waiting. Answer it in Kiro's pane, since `rimz asks` and `rimz answer` do not carry it.
+- Live details show the model, effort, and session title. Context usage is a percentage only.
 
 ### Qwen
 
 - Qwen's quota is scoped to the exact provider account (region and API key), not to the CLI. A fresh supervised or loop launch reads only that account's cached Coding Plan windows: a spent window stops the launch before any pane or run record exists, and another account's window cannot stop it.
 - Interactive launches, resume, fork, wait, and auto-continue ignore the quota. See [budgets: one model, five scopes](../guide/budget.md#one-model-five-scopes).
 
+### Qoder
+
+- Launches `qodercli` 1.1.72 or newer, with an initial task passed through `-i`. Upgrade with `qodercli update` if RimZ refuses an older release.
+- Permission prompts, plan approvals, and questions reach `rimz asks`. Answer them in Qoder's pane. Children nest by agent type, without child tokens or transcript replay.
+- Live context, tokens, dollars, history, and account quota are unavailable. Qoder's local token figures are normally hidden, and Credits have no established dollar conversion.
+- A fresh worktree needs folder trust before hooks can report, and launch warns until it has it. Run `rimz trust grant --agents qoder` there before launching: answering Qoder's trust prompt in the pane saves the decision, but that launch has already lost its session-start hook, so the card stays a launch placeholder.
+- Disabled hooks refuse launch, naming the settings file and fix. Use `QODER_CONFIG_DIR` for a custom home. `--config-dir`, `QODER_CLI_HOME`, and `QODER_CONFIG_DIR_NAME` refuse, because the installed hooks would be in a different home.
+
+### Kimi
+
+- Kimi Code 2.1.1 or later is required. Installation refuses a detected older version with `kimi upgrade -y`. An unknown version does not block installation.
+- Invalid hook entries block installation and preview without changing the config. Fix or remove the named entry: Kimi Code ignores every hook while one entry is invalid.
+- `TurnStarted` opens main-agent background turns. User turns still open through `UserPromptSubmit` alone.
+- Children appear at the next recorded root hook after their durable spawn record lands. Failed children settle as failed, and cancelled and timed-out children show as finished. Finished children stay closed on resume.
+- The main wire distinguishes child-fired turn ends from parent boundaries. A child's compaction still shows on the parent card, and cancellation can leave it compacting until the next root signal.
+- Parent live dollars, lifetime spend, and fleet spend include child wires. Parent context tokens remain main-only.
+
 ### Grok
 
-- RimZ installs passive global hooks only; every permission decision stays in Grok's TUI.
+- RimZ installs passive global hooks only. Every permission decision stays in Grok's TUI.
 - A running Grok session reads its hook registry as a snapshot taken at start, so `rimz hooks install` leaves that session calling whatever was registered before. Press `r` in Grok's Hooks tab, or start a new session, to pick up the installed hooks.
 - Permission, plan, diff-review, and question prompts reach `rimz asks` through Grok's `Notification` hook.
 - Errored and cancelled turns end through Grok's `StopFailure` and `StopCancelled` hooks, and child agents resolve from their own session hooks.
@@ -171,31 +166,41 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Idle notifications rest the card only when their timestamp is newer than its last activity.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
 
+### Hermes
+
+- Hermes Agent 0.22.2 or later is required. RimZ merges its shell hooks into the top-level `hooks` key of `$HERMES_HOME/config.yaml` and launches the classic UI (`hermes chat --cli`). A `hermes --tui` session is not covered.
+- Hermes asks once per hook at the first interactive launch (`Allow this hook to run? [y/N]`). Answer `y` to each RimZ hook. Until you do, `rimz doctor` lists the unconsented events, and supervised runs, loops, and message replies refuse.
+- `hermes hooks doctor` reports `script missing or not executable` for `rimz hooks feed --source hermes`, as for any hook named by a bare command. Hermes still finds `rimz` on `PATH` when the hook runs.
+- Approvals, `sudo` prompts, and clarify questions raise Waiting. Answer them in Hermes's pane. Memory-write approvals and the secret, vault, and confirmation panels raise nothing.
+- The card shows the model and the context fill of the latest model request. Cost, history, account, and launch reminders are unsupported, and `hermes-plan` launches plain Hermes.
+- Named logins are refused: a separate `HERMES_HOME` does not isolate Hermes credentials.
+
 ### OMP
 
 - OMP (Oh My Pi) is experimental, verified against the 18.11.1 prebuilt. Pi's adapter is independent.
-- Tool approvals and native `ask` questions raise Waiting; question text/options reach `rimz asks`. Answer in the OMP pane, not through `rimz answer`. Plan reviews are not tracked.
+- Tool approvals and native `ask` questions raise Waiting, and their text and options reach `rimz asks`. Answer in the OMP pane, since `rimz answer` does not support OMP. Plan reviews are not tracked.
 - The card follows turn ends, but background work can continue afterwards. Failed manual compaction has no closing event, so the card can remain compacting until later activity.
-- Context, token split, model, and thinking level update live. Dollars reconcile at turn end from main-session assistant and standalone model-usage records; task-child files and rows are excluded.
+- Context, token split, model, and thinking level update live. Dollars reconcile at turn end from main-session assistant and standalone model-usage records. Task-child files and rows are excluded.
 - Provider rate-limit windows appear when reported. Login identity and plan are not read, and named RimZ accounts are unsupported.
-- Only the default `~/.omp/agent` home is wired. Launch preflight refuses non-default `OMP_PROFILE` (or `PI_PROFILE` when `OMP_PROFILE` is unset), nonempty `PI_CONFIG_DIR`, and nonempty `PI_CODING_AGENT_DIR`, with an unset fix. Empty, whitespace, and `default` profiles select default; an empty `OMP_PROFILE` still overrides `PI_PROFILE`.
-- Raw `--no-extensions`, `--trusted-extension`, and `--profile` arguments can bypass reporting. Bun-run package installs are not detected; the prebuilt `omp` is.
+- Only the default `~/.omp/agent` home is wired. Launch preflight refuses non-default `OMP_PROFILE` (or `PI_PROFILE` when `OMP_PROFILE` is unset), nonempty `PI_CONFIG_DIR`, and nonempty `PI_CODING_AGENT_DIR`, with an unset fix. Empty, whitespace, and `default` profiles select default, and an empty `OMP_PROFILE` still overrides `PI_PROFILE`.
+- Raw `--no-extensions`, `--trusted-extension`, and `--profile` arguments can bypass reporting. Bun-run package installs are not detected, and the prebuilt `omp` is.
 
 ### Muse
 
-- Muse Code 1.4.9 or later is required. Install refuses an older or unreadable version and asks you to update Muse. It writes a separate managed hook file and two settings, preserving your hooks; [what install writes](./cli/hooks-trust.md#what-install-writes) names the paths and uninstall behavior.
-- Turns, model tool activity, and session exits update the card. Cancellation rests the card at Idle; explicit user `!` shell actions do not start model activity. Tool approvals raise Waiting and route you to Muse's pane; questions and options stay there, and `rimz answer` is unsupported. Clarifying questions do not raise Waiting.
-- Native approval timing and the empty reply's preservation of the approval UI are not live-verified. An automatically approved call may briefly raise Waiting. The failure-stop mapping is also documented-only, not captured against a real provider.
-- Live context, tokens, dollars, history, account details, and child cards are unsupported. Only internal reminder children have been observed, and RimZ ignores their hooks.
-- Plan selects Muse's read-only profile, but real tool-call enforcement is unverified. `/compact` was unavailable under echo; compaction lifecycle is unsupported.
+- Muse Code 1.4.9 or later is required. Install refuses an older or unreadable version and asks you to update Muse. It writes a separate managed hook file and two settings and keeps your own hooks. [What install writes](./cli/hooks-trust.md#what-install-writes) names the paths and uninstall behavior.
+- Turns, model tool activity, and session exits update the card. Cancellation rests the card at Idle, and explicit user `!` shell actions do not start model activity.
+- Tool approvals raise Waiting and route you to Muse's pane. Questions and options stay there, and `rimz answer` is unsupported. Clarifying questions do not raise Waiting.
+- Native approval timing, and the empty reply's preservation of the approval UI, are not live-verified. An automatically approved call may briefly raise Waiting. The failure-stop mapping is documented-only, not captured against a real provider.
+- Live context, tokens, dollars, history, account details, compaction, and child cards are unsupported. Only internal reminder children have been observed, and RimZ ignores their hooks.
+- Plan selects Muse's read-only profile, but real tool-call enforcement is unverified.
 - Initial prompts submit after `--`, but a prompt exactly equal to a Muse subcommand, such as `resume`, can open that command instead. Resume binds the card at the first prompt. Enterprise policy can override user managed-hook settings without the installer detecting it.
 
 ### MiniMax Code
 
-- Launch with `minimax` or its alias `mcode`; RimZ runs the stock `mcode` CLI. Normal turns, root tool activity, and the selected model reach the card. Failed or cancelled turns leave it working until another prompt or session end.
-- Root tool approvals raise Waiting and route you to MiniMax's pane. Answer there; child approvals, native questions, and plan approvals are not reported, and `rimz answer` is unsupported.
+- Launch with `minimax` or its alias `mcode`. RimZ runs the stock `mcode` CLI. Normal turns, root tool activity, and the selected model reach the card. Failed or cancelled turns leave it working until another prompt or session end.
+- Root tool approvals raise Waiting and route you to MiniMax's pane. Answer there. Child approvals, native questions, and plan approvals are not reported, and `rimz answer` is unsupported.
 - Context gauges, token counts, dollars, conversation history, account usage, and separate native child cards are unavailable.
-- RimZ adds no permission-mode flags. MiniMax keeps the mode in its `config.yaml` (default `auto`); change it with `/permission` or Alt+M. Plan Mode has no verified launch switch.
+- RimZ adds no permission-mode flags. MiniMax keeps the mode in its `config.yaml` (default `auto`). Change it with `/permission` or Alt+M. Plan Mode has no verified launch switch.
 - If the plugin was disabled in MiniMax, run `mcode plugin enable rimz@local` in the same data-directory environment. RimZ checks installed files, not MiniMax's private disabled-plugin setting.
 - Launch prompts starting with `-` use a separator. Prompts equal to MiniMax subcommands, such as `exec`, still dispatch those commands instead of submitting text.
 
@@ -220,35 +225,39 @@ Each built-in agent resolves a config home. RimZ reads provider settings from it
 | Qoder | `~/.qoder` | `QODER_CONFIG_DIR` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
-| OMP | `~/.omp/agent` | none; relocated homes refused | `<home>/skills` | refused | none |
+| OMP | `~/.omp/agent` | none, and relocated homes are refused | `<home>/skills` | accepted | none |
 | Muse | `~/.config/muse` | `XDG_CONFIG_HOME` + `/muse` | `<home>/skills` | refused | none |
 | MiniMax Code | `~/.minimax` | nonempty `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR` | none | refused | none |
 | Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library and pack skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries. Discovery prefers the provider root (RimZ-owned links skipped), then the library, then packs. Pack conflicts have no winner unless a higher tier supplies the name or an exclusion removes a claimant.
 
-A named provider account sets the adapter's home override to a separate directory when a room launches it. MiniMax uses `MINIMAX_DATA_DIR`, relocating configuration, credentials, sessions, and plugins together; an explicit data-directory variable also disables MiniMax's Git auto-configuration. See [provider accounts](../guide/accounts.md).
+A named provider account sets the adapter's home override to a separate directory when a room launches it. MiniMax uses `MINIMAX_DATA_DIR`, which relocates configuration, credentials, sessions, and plugins together. An explicit data-directory variable also disables MiniMax's Git auto-configuration. See [provider accounts](../guide/accounts.md).
 
-Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home from the launch environment and merges the same library and pack skill chain into the agent's skill root. The scoped view does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host Claude makes unlisted skills user-only; host Codex hides them, including explicit invocation. Other host providers warn and run unrestricted. Invalid names are parse errors. Markdown lists deduplicate names; project TOML lists reject duplicates. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
+Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home from the launch environment and merges the same library and pack skill chain into the agent's skill root. The scoped view does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view.
+
+A profile `skills` list keeps the listed skills model-callable and makes the rest user-only. Under scoped isolation, an agent marked refused in the table fails the launch when a list is set. On host isolation, Claude makes unlisted skills user-only, Codex hides them (explicit invocation included), and other providers warn and run unrestricted. Invalid names are parse errors. Markdown lists deduplicate names, and project TOML lists reject duplicates. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting; Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model` or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `effort`, `auto-compact`, and `fast` warn and launch without that setting. Three refusals remain: Hermes refuses effort outside its supported level list, OpenCode refuses effort outside the chosen model's live variants, and an invalid auto-compact count refuses. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`.
 
-OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. From 2.0.13, RimZ-launched sessions start with the native session tab strip off: RimZ sets `tabs.mode = "off"` over whatever `cli.json` or an exported `OPENCODE_CLI_CONFIG_CONTENT` sets and keeps every other setting. Older releases keep their tabs, and OpenCode started by hand is unchanged. Fork is unsupported. Model and effort selection uses a checked [session step](../internals/agents/adapter_opencode.md#model-selection), verified on OpenCode 2.2.0. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
+Codex rejects `--remote X` or `--remote=X` from either source, because managed panes run embedded with `--no-daemon`. Remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume, and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning. An unreadable version passes without a verdict.
 
-Select OpenCode 2.2.5's mini interface with `agent: opencode-mini`, `rimz agents opencode-mini`, `rimz subagents opencode-mini`, or `--agent opencode-mini` ([example](../guide/configuration.md#profiles)). It stays kind `opencode`, shares `agents/opencode.md`, and survives restart and resume. RimZ launches `opencode mini --standalone [args…] [--prompt <text>]` and resumes `opencode mini --session <id> --standalone [args…]`; a model-selected fresh launch uses the latter shape with a newly created session and retains its prompt. Mini's Yolo mode replaces the native `--auto` argument with once-only permission replies from the installed RimZ plugin. Exact raw `--auto`, `--yolo`, and `--dangerously-skip-permissions` tokens get the same conversion; full-TUI launches keep their native flags.
+OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup and install, and doctor refuse an older readable version with `opencode upgrade --major`. An unreadable version passes without a verdict. From 2.0.13, RimZ-launched sessions start with the native session tab strip off: RimZ sets `tabs.mode = "off"` over whatever `cli.json` or an exported `OPENCODE_CLI_CONFIG_CONTENT` sets and keeps every other setting. Older releases keep their tabs, and OpenCode started by hand keeps its own setting. Fork is unsupported. Model and effort selection uses a checked [session step](../internals/agents/adapter_opencode.md#model-selection), verified on OpenCode 2.2.0. Plan adds no arguments, so select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
-Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `npm install -g @qwen-code/qwen-code@latest`; an unreadable version passes without a verdict. It also refuses disabled hooks, naming the source and fix: `disableAllHooks`, `tools.executionSandbox`, `--safe-mode`, `--bare`, or truthy `QWEN_CODE_SAFE_MODE` or `QWEN_CODE_SIMPLE`. Execution-sandbox policy must be removed by its operator, or Qwen must run outside RimZ. Refresh existing Qwen hooks with `rimz hooks install` to adopt the seconds-based timeout before launching.
+Select OpenCode 2.2.5's mini interface with `agent: opencode-mini`, `rimz agents opencode-mini`, `rimz subagents opencode-mini`, or `--agent opencode-mini` ([example](../guide/configuration.md#profiles)). It stays kind `opencode`, shares `agents/opencode.md`, and survives restart and resume. RimZ launches `opencode mini --standalone [args…] [--prompt <text>]` and resumes `opencode mini --session <id> --standalone [args…]`. A model-selected fresh launch uses the resume shape with a newly created session and keeps its prompt. Mini's Yolo mode replaces the native `--auto` argument with once-only permission replies from the installed RimZ plugin. Exact raw `--auto`, `--yolo`, and `--dangerously-skip-permissions` tokens get the same conversion. Full-TUI launches keep their native flags.
+
+Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `npm install -g @qwen-code/qwen-code@latest`. An unreadable version passes without a verdict. Launch also refuses disabled hooks, naming the source and fix: `disableAllHooks`, `tools.executionSandbox`, `--safe-mode`, `--bare`, or truthy `QWEN_CODE_SAFE_MODE` or `QWEN_CODE_SIMPLE`. Execution-sandbox policy must be removed by its operator, or Qwen must run outside RimZ. Refresh existing Qwen hooks with `rimz hooks install` to adopt the seconds-based timeout before launching.
 
 ### Provider-session resume
 
-`rimz agents <kind-or-profile> --resume` opens a native picker. `--resume=<id>` first checks exact ids recorded in this room; importing an unrecorded id requires a locator, which reads only the room account's home. See [provider-session resume](./cli/agents.md#resume-a-provider-session) for conflicts and refusals.
+`rimz agents <kind-or-profile> --resume` opens a native picker. `--resume=<id>` first checks exact ids recorded in this room. Importing an unrecorded id requires a locator, which reads only the room account's home. See [provider-session resume](./cli/agents.md#resume-a-provider-session) for conflicts and refusals.
 
 | Agent | Bare `--resume` picker | Resume by id (adopt unrecorded) |
 | --- | --- | --- |
 | Claude Code | `claude --resume` | Yes |
-| Codex | Partial: `codex resume --no-daemon`; card binds at the first prompt | Yes, active and archived sessions |
+| Codex | Partial: `codex resume --no-daemon -c tui.question_esc_back=false`, and the card binds at the first prompt | Yes, active and archived sessions |
 | Pi | `pi --resume` | Unsupported |
 | OpenCode | Unsupported | Unsupported |
 | Antigravity | Unsupported | Unsupported |
@@ -256,22 +265,22 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Droid | `droid --resume` | Unsupported |
 | Cursor | Unsupported | Unsupported |
 | Amp | Unsupported | Unsupported |
-| Kiro | Partial: `kiro-cli chat --v3 --resume-picker`; card binds at the first prompt | Unsupported |
+| Kiro | Partial: `kiro-cli chat --v3 --resume-picker`, and the card binds at the first prompt | Unsupported |
 | Qwen | `qwen --resume` | Unsupported |
 | Qoder | `qodercli --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
 | Hermes | Unsupported | Unsupported |
 | OMP | `omp --resume` | Unsupported |
-| Muse | Partial: `muse resume`; card binds at the first prompt | Unsupported |
+| Muse | Partial: `muse resume`, and the card binds at the first prompt | Unsupported |
 | MiniMax Code | `mcode --session` | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
 
-A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. With no mode set, Claude Code, Codex, OpenCode and Pi default to Auto, mapped to the provider's available mode: OpenCode maps Ask, Auto and Plan to Auto (its own permission rules), and Pi maps every mode to Yolo (it has no permission system). Other kinds have no default. RimZ appends the arguments below; `none` means no arguments, and a mode name before it is the mapped mode RimZ records. Empty Auto or Yolo vectors have no corresponding cell except for OpenCode and Pi's mapped modes ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
+A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. With no mode set, Claude Code, Codex, OpenCode, and Pi default to Auto, mapped to the provider's available mode. OpenCode maps Ask, Auto, and Plan to Auto (its own permission rules), and Pi maps every mode to Yolo (it has no permission system). Other kinds have no default. RimZ appends the arguments below. `none` means no arguments, and a mode name before it is the mapped mode RimZ records. Empty Auto or Yolo vectors have no corresponding cell except for OpenCode's and Pi's mapped modes ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
 
-The recorded mode is what RimZ requested, not what the provider granted. Claude Code can start in Manual when Auto is unavailable. Raw permission flags in profile `args` or provider passthrough make the recorded mode unknown: defaults yield to those flags, while an explicitly requested mode still renders its arguments. Restart, resume and rebirth settle an unknown mode again, including the kind default unless raw flags still make it unknown. RimZ does not read provider configuration to choose or infer a permission mode.
+The recorded mode is what RimZ requested, not what the provider granted. Claude Code can start in Manual when Auto is unavailable. Raw permission flags in profile `args` or provider passthrough make the recorded mode unknown: defaults yield to those flags, while an explicitly requested mode still renders its arguments. Restart, resume, and rebirth settle an unknown mode again, including the kind default unless raw flags still make it unknown. RimZ does not read provider configuration to choose or infer a permission mode.
 
 | Agent | Ask | Auto | Plan | Yolo |
 | --- | --- | --- | --- | --- |
@@ -295,13 +304,28 @@ The recorded mode is what RimZ requested, not what the provider granted. Claude 
 | MiniMax Code | none | none | none | none |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
-On host and scoped isolation, Codex keeps your sandbox and network choices. For every mode, RimZ adds only write access to the room's state, runtime, and shared runtime roots where the selected permissions support it. With legacy `workspace-write` or no explicit selection, it appends the roots to `sandbox_workspace_write.writable_roots`, preserving the array from the last argument override or the config layers. With `default_permissions = ":workspace"`, it passes `--add-dir` for each root; with a user-defined permission profile, it adds the roots through `permissions.<name>.workspace_roots`, leaving the profile's own rules in force. Read-only, full access, other built-in profiles, and profile names that are not bare TOML keys (letters, digits, `_`, `-`) receive no grant. An explicit sandbox or session config selector takes precedence over `--profile`; otherwise RimZ reads trusted project `.codex/config.toml` layers over `$CODEX_HOME/<name>.config.toml` over base config. It does not read system config layers or managed requirements. A profile needing full access can pass `--sandbox danger-full-access` in its args.
+Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 
-Under `agents.isolation = "sandbox"`, Codex receives `--sandbox workspace-write` only when the selection above finds no sandbox mode in its arguments or config. Any selected mode, including full access, a permission profile, or Yolo, stays as selected. The room-root grant then follows the resulting selection. Claude's merged settings add `sandbox.enabled: true`. Every other provider warns and launches without a sandbox flag ([security guide](../guide/security.md#provider-sandbox-isolation)).
+OMP Plan uses the same conservative approval flags as Ask, not native plan mode. OMP's `--plan` selects a model role. Launching OMP without a permission mode keeps its native yolo default.
 
-Interactive Ask uses the human reviewer; Auto uses Guardian, including headless runs. Headless Ask cannot escalate, because Codex forces approval policy `never` for the human reviewer. Yolo still bypasses both sandbox and approval checks. Codex validates the user's permissions at startup.
+On host and scoped isolation, Codex keeps your sandbox and network choices. For every mode, RimZ adds only write access to the room's state, runtime, and shared runtime roots where the selected permissions support it:
 
-Claude and Codex additionally receive routine-command permissions by default, independent of permission mode. Claude gets one `Bash(<prefix> *)` rule per prefix through a merged `--settings`, matching the bare command and its arguments. Codex gets one `prefix_rule` per prefix in the installed `$CODEX_HOME/rules/rimz.rules`:
+- With legacy `workspace-write` or no explicit selection, it appends the roots to `sandbox_workspace_write.writable_roots` and keeps the array from the last argument override or the config layers.
+- With `default_permissions = ":workspace"`, it passes `--add-dir` for each root.
+- With a user-defined permission profile, it adds the roots through `permissions.<name>.workspace_roots` and leaves the profile's own rules in force.
+- Read-only, full access, other built-in profiles, and profile names that are not bare TOML keys (letters, digits, `_`, `-`) receive no grant.
+
+An explicit sandbox or session config selector takes precedence over `--profile`. Otherwise RimZ reads trusted project `.codex/config.toml` layers over `$CODEX_HOME/<name>.config.toml` over base config. It does not read system config layers or managed requirements. A profile that needs full access can pass `--sandbox danger-full-access` in its args.
+
+Under `agents.isolation = "sandbox"`, Codex receives `--sandbox workspace-write` only when the selection above finds no sandbox mode in its arguments or config. Any selected mode, including full access, a permission profile, or Yolo, stays as selected, and the room-root grant follows the resulting selection. Claude's merged settings add `sandbox.enabled: true`. Every other provider warns and launches without a sandbox flag ([security guide](../guide/security.md#provider-sandbox-isolation)).
+
+Interactive Codex Ask uses the human reviewer, and Auto uses Guardian, including headless runs. Headless Ask cannot escalate, because Codex forces approval policy `never` for the human reviewer. Yolo still bypasses both sandbox and approval checks. Codex validates the user's permissions at startup.
+
+Under `agents.isolation = "scoped"`, Codex keeps the same sandbox, network, and approval choices as under host isolation, including room-root grants. Claude's merged settings grant its sandbox room-root writes at either level and exclude the routine prefixes below when they are enabled. Scoped isolation also permits nesting. Muse alone receives `--disable-sandbox` under scoped isolation ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
+
+#### Routine RimZ commands
+
+Claude and Codex also receive routine-command permissions by default, independent of permission mode. Claude gets one `Bash(<prefix> *)` rule per prefix through a merged `--settings`, matching the bare command and its arguments. Codex gets one `prefix_rule` per prefix in the installed `$CODEX_HOME/rules/rimz.rules`:
 
 - `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
 - `rimz asks`, `rimz answer`, `rimz wait`
@@ -310,23 +334,29 @@ Claude and Codex additionally receive routine-command permissions by default, in
 - `rimz packs list`, `rimz packs show`, `rimz packs diff`
 - `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp show`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
 
-There is no blanket RimZ grant. `pane send`, `loop add`, `events emit`, pack mutations, the bare `rimz packs` spelling, and `lsp shim`, `attach`, or `stop` are not added. Claude's settings also union the agent-visible scratch/shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry retaining `$defaults`; profile entries remain. Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands). Independently of that switch, a launch carrying a workflow run's notes gets that one canonical folder under `automation-notes/`; launched descendants inherit it, relaunches retain it, and forks clear it. Otherwise a launch gets the canonical archive directory from the nearest working `.rimz/team` link between its cwd and checkout root (or any ancestor outside Git), including subagents launched from checkout subdirectories. A team-tagged launch gets it only when the manifest names that team; an untagged child accepts any working run. A mismatched nearest run grants nothing, not the root's run instead. Neither grant covers a whole notes archive or a foreign folder. These are Claude permission settings, not permission hooks; Claude's managed policy and explicit ask/deny rules still apply. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, and resuming one with `--yolo`. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)).
+There is no blanket RimZ grant. `pane send`, `loop add`, `events emit`, pack mutations, the bare `rimz packs` spelling, and `lsp shim`, `attach`, or `stop` are not added. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, and resuming one with `--yolo`. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)). Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands).
 
-Claude's same `--settings` adds exact `Skill(<name>)` rules for every profile-listed skill, independent of that switch, and for installed `rimz-*` skills when the switch is on. Names are directory names, not frontmatter names; names containing `*` receive no rule. Routine names come from the provider, library, and pack chain with owned links skipped. Profile-listed names receive rules independently of discovery, stay first, and additions are deduplicated.
+Claude's settings also union the agent-visible scratch and shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry that keeps `$defaults`. Profile entries remain. These are Claude permission settings, not permission hooks, so Claude's managed policy and explicit ask and deny rules still apply. Independently of the routine switch, Claude also gets one notes folder:
 
-Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-provider-arguments) permission rules. Claude merges them into the same `permissions.allow`, in all isolation levels and independently of the routine switch. Other kinds warn in `agents validate` and at launch and do not apply the list. Claude auto mode drops some broad rules; the definition reference describes that limit.
+- A launch carrying a workflow run's notes gets that run's canonical folder under `automation-notes/`. Launched descendants inherit it, relaunches keep it, and forks clear it.
+- Otherwise a launch gets the canonical archive directory from the nearest working `.rimz/team` link between its cwd and checkout root (or any ancestor outside Git), including subagents launched from checkout subdirectories. A team-tagged launch gets it only when the manifest names that team, and an untagged child accepts any working run. A mismatched nearest run grants nothing, and RimZ does not fall back to the root's run.
+- Neither grant covers a whole notes archive or a foreign folder.
 
-Codex's managed `rules/rimz.rules` carries a first-line marker and is rewritten by `rimz hooks install`. Existing installs get a rules-file preview at the next `rimz start` consent. Matching commands run unsandboxed, without Guardian or a permission hook. Shell redirects, `$?` expansions, and `VAR=` prefixes do not match the inner prefix; pipes and `;` or `&&` chains stay sandboxed unless every segment has an explicit allow rule. Run routine commands bare to use their rule. Explicit prompt/forbidden rules and managed policy still apply ([upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules)). Set `allow-routine-rimz = false` to remove the managed file at the next hook install or start consent; an unmarked user file is left alone even during an explicit install, and your own rules still apply. The `rules` directory is shared across named accounts, including standalone accounts and Codex's own `default.rules` amendments. With the switch off, commands outside the three granted room roots need escalation, including `rimz packs install crew` and `rimz wait`. A sandboxed wait arm or cancel can refuse before any write when it cannot see the calling agent's live session, or on the home-wide loops lock when the RimZ home is read-only; either refusal leaves the instance row unchanged. `wait list` also refuses an unresolved caller rather than showing the whole room, or a read-only home when it probes a wait's lock. These refusals give the [wait sandbox remedy](./cli/wait.md#arm-a-wait).
+Claude's same `--settings` adds exact `Skill(<name>)` rules for every profile-listed skill, independent of the routine switch, and for installed `rimz-*` skills when the switch is on. Names are directory names, not frontmatter names. Names containing `*` receive no rule. Routine names come from the provider, library, and pack chain with owned links skipped. Profile-listed names receive rules independently of discovery and stay first, and additions are deduplicated.
 
-Under `agents.isolation = "scoped"`, Codex keeps the same sandbox, network, and approval choices as under host isolation, including room-root grants. Claude's merged settings grant its sandbox room-root writes at either level and exclude the routine prefixes above when enabled; scoped isolation additionally permits nesting. Muse alone receives `--disable-sandbox` under scoped isolation ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
+Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-provider-arguments) permission rules. Claude merges them into the same `permissions.allow`, in all isolation levels and independently of the routine switch. Other kinds warn in `agents validate` and at launch and do not apply the list. Claude auto mode drops some broad rules, and the definition reference describes that limit.
 
-Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
+Codex's managed `rules/rimz.rules` carries a first-line marker, and `rimz hooks install` rewrites it. Existing installs get a rules-file preview at the next `rimz start` consent. Matching commands run unsandboxed, without Guardian or a permission hook. The rules have these limits:
 
-OMP Plan uses the same conservative approval flags as Ask, not native plan mode. OMP's `--plan` selects a model role; launching OMP without a permission mode keeps its native yolo default.
+- Shell redirects, `$?` expansions, and `VAR=` prefixes do not match the inner prefix. Pipes and `;` or `&&` chains stay sandboxed unless every segment has an explicit allow rule. Run routine commands bare to use their rule.
+- Explicit prompt or forbidden rules and managed policy still apply ([upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules)).
+- The `rules` directory is shared across named accounts, including standalone accounts and Codex's own `default.rules` amendments.
+
+Set `allow-routine-rimz = false` to remove the managed file at the next hook install or start consent. An unmarked user file is left alone, even during an explicit install, and your own rules still apply. With the switch off, commands outside the three granted room roots need escalation, including `rimz packs install crew` and `rimz wait`. A sandboxed wait arm or cancel can refuse before any write when it cannot see the calling agent's live session, or on the home-wide loops lock when the RimZ home is read-only. Either refusal leaves the instance row unchanged. `wait list` also refuses an unresolved caller instead of showing the whole room, and refuses a read-only home when it probes a wait's lock. These refusals give the [wait sandbox remedy](./cli/wait.md#arm-a-wait).
 
 ### Model and effort
 
-`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode [picks a model and checks its effort variant](../internals/agents/adapter_opencode.md#model-selection) against the configured catalog before launching; a missing model warns and launches without effort. Other model values pass through to the agent; effort levels are whatever the agent's CLI accepts, except Hermes checks its level list.
+`--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. OpenCode [picks a model and checks its effort variant](../internals/agents/adapter_opencode.md#model-selection) against the configured catalog before launching, and a missing model warns and launches without effort. Other model values pass through to the agent. Effort levels are whatever the agent's CLI accepts, except that Hermes checks its level list.
 
 | Agent | Model | Effort |
 | --- | --- | --- |
@@ -341,39 +371,39 @@ OMP Plan uses the same conservative approval flags as Ask, not native plan mode.
 | Amp | `--mode <model>` | skipped with a warning |
 | Kiro | `--model <model>` | `--effort <level>` |
 | Qwen | `--model <model>` | skipped with a warning |
-| Qoder | `--model <model>` | `--reasoning-effort <effort>` |
+| Qoder | `--model <model>` | `--reasoning-effort <level>` |
 | Kimi | `--model <model>` | skipped with a warning |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
-| Hermes | `--model <model>` | `--reasoning <level>`; levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
+| Hermes | `--model <model>` | `--reasoning <level>`, and levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
 | OMP | `--model <model>` | `--thinking <level>` |
 | Muse | `--model <model>` | `--reasoning-effort <level>` |
 | MiniMax Code | `--model <provider/model[#variant]>` | skipped with a warning |
 | Process plugin | declared by bundle | declared by bundle |
 
-Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
+Amp has no model flag. Its `--mode` selects the agent mode, and RimZ passes the `model` value there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
 
 ### Fast mode
 
-The `fast` profile and role field asks the provider for its fast mode (priority serving, at a higher price). Fast is on or off. On renders the switch below; off renders nothing, so the provider's own default stands (a saved Claude `/fast`, a Codex `service_tier` in `config.toml`). The launch record keeps the effective value, so restart, fork, and resume replay it like the recorded model.
+The `fast` profile and role field asks the provider for its fast mode (priority serving, at a higher price). Fast is on or off. On renders the switch below. Off renders nothing, so the provider's own default stands (a saved Claude `/fast`, a Codex `service_tier` in `config.toml`). The launch record keeps the effective value, so restart, fork, and resume replay it like the recorded model.
 
 | Agent | Switch |
 | --- | --- |
 | Claude Code | `"fastMode": true` inside the launch's one `--settings` |
 | Codex | `-c service_tier=fast -c features.fast_mode=true` |
 | Amp | `--fast` |
-| Pi | `RIMZ_LAUNCH_FAST=1`; the RimZ extension requests `service_tier: "priority"` through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses`, on the models each route lists ([limits](../internals/agents/adapter_pi.md#fast-mode)) |
+| Pi | `RIMZ_LAUNCH_FAST=1`, and the RimZ extension requests `service_tier: "priority"` through `openai` / `openai-responses` or `openai-codex` / `openai-codex-responses`, on the models each route lists ([limits](../internals/agents/adapter_pi.md#fast-mode)) |
 | Cursor | skipped with a warning: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
 | Kimi | skipped with a warning: use `--model kimi-for-coding-highspeed` |
 | Droid | skipped with a warning: toggle `/fast` inside the session |
 | Every other built-in and process plugin | skipped with a warning |
 
-A definition that sets `fast: true` on a kind without a switch loads normally; each launch warns with the alternative and records fast as off. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
+A definition that sets `fast: true` on a kind without a switch loads normally. Each launch warns with the alternative and records fast as off. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently. A managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
-The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, Codex's latest `thread_settings_applied` service tier, or Pi's extension envelope `fast` (whether it would request priority for the current model, not the delivered tier). An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp and older Pi extensions, RimZ falls back to the launch record; a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
+The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, Codex's latest `thread_settings_applied` service tier, or Pi's extension envelope `fast` (whether it would request priority for the current model, not the delivered tier). An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp and older Pi extensions, RimZ falls back to the launch record, and a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
 
 ### Launch-prompt replacement
 
-The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) supply the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent. Claude Code, Codex, Pi, OMP, Qwen, and process plugins that declare a flag replace their system prompt with it, and MiniMax appends it to its native prompt. Every other agent takes no RimZ prompt, and a launch that carries one for it refuses.
+The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) supply the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent. Claude Code, Codex, Pi, OMP, Qwen, OpenCode, and process plugins that declare a flag replace their system prompt with it, and MiniMax appends it to its native prompt. Every other agent takes no RimZ prompt, and a launch that carries one for it refuses.
 
 | Agent | Replacement | How the agent receives it |
 | --- | :--: | --- |
@@ -383,39 +413,39 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | OMP | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | OpenCode | ✓ | the composed file as `{file:<path>}` in `OPENCODE_CONFIG_CONTENT` `agents.build.system` |
-| Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| MiniMax Code | ✗ | appends instead: the composed prompt goes through `--append-system-prompt-file` and launch reminders through `--append-system-prompt`, so MiniMax's native prompt stays; its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
+| Droid | ✗ | Droid only appends. Pass its flag through profile `args` |
+| MiniMax Code | ✗ | appends instead: the composed prompt goes through `--append-system-prompt-file` and launch reminders through `--append-system-prompt`, so MiniMax's native prompt stays. Its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
 | Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
 Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills (unless the definition's `tools` list [turns them off](./definitions.md#tools-to-provider-arguments)), and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
 
-OMP likewise retains its discovered append/context material after replacement, and the full replacement text is visible in process arguments. RimZ's launch reminders append through the extension without displacing `APPEND_SYSTEM.md`.
+OMP likewise keeps its discovered append and context material after replacement, and the full replacement text is visible in process arguments. RimZ's launch reminders append through the extension without displacing `APPEND_SYSTEM.md`.
 
-OpenCode's project instructions and RimZ's launch reminder still follow the replaced prompt. The replacement targets its `build` agent only; other selected agents and managed settings have [limits](../internals/agents/adapter_opencode.md#launch-and-resume).
+OpenCode's project instructions and RimZ's launch reminder still follow the replaced prompt. The replacement targets its `build` agent only. Other selected agents and managed settings have [limits](../internals/agents/adapter_opencode.md#launch-and-resume).
 
 ### Interrupt key
 
 [`rimz message --interrupt`](./cli/message.md#when-a-message-lands) types a prompt, then presses the agent's interrupt key to stop the live turn. The message reference describes when Codex replays the prompt as a fresh turn. Only agents with a declared interrupt key support this mode.
 
-| Agent | Interrupt key | Unsupported behaviour |
+| Agent | Interrupt key | Behaviour |
 | --- | :--: | --- |
 | Claude Code | Esc | Supported, without stop confirmation |
-| Codex | Esc | Supported; the Interrupt hook confirms the stop, otherwise RimZ warns |
-| Every other agent and process plugins | none | `--interrupt` refused; use `--steer` or park |
+| Codex | Esc | Supported. The Interrupt hook confirms the stop, otherwise RimZ warns |
+| Every other agent and process plugins | none | `--interrupt` refused. Use `--steer` or park |
 
 ### Auto-compaction window
 
-The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for mid-turn wrap-up and compact-first delivery without changing the native window. Mid-turn participation derives from compact-command, context, and compaction coverage; the configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
+The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction), which uses a seat line for mid-turn wrap-up and compact-first delivery without changing the native window. Mid-turn participation derives from compact-command, context, and compaction coverage. The configuration guide lists skipped kinds, and `rimz doctor` reports detected skips. Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
 
 | Agent | Auto-compaction window | How the agent receives it |
 | --- | :--: | --- |
-| Claude Code | ✓ | `--autocompact <tokens>`; needs Claude Code 2.1.221 or later, and Claude caps it at the model's context window |
-| Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`; Codex clamps it to 90% of the raw model window, not the session's usable window (normally 95% of raw); the compaction-scaled card pairs the effective point with the model's maximum capacity. A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
+| Claude Code | ✓ | `--autocompact <tokens>`. Needs Claude Code 2.1.221 or later, and Claude caps it at the model's context window |
+| Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`. Codex clamps it to 90% of the raw model window, not the session's usable window (normally 95% of raw). The compaction-scaled card pairs the effective point with the model's maximum capacity. A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
 | Every other agent and process plugins | ✗ | skipped with a warning at launch |
 
-Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles; bare-kind launches are unchanged. A switch to a provider without a window flag silently drops this injected default; a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
+Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles. Bare-kind launches get no injected window. A switch to a provider without a window flag silently drops this injected default, while a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
 
 ## The wiring matrix
 
@@ -466,19 +496,19 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | `tools` | Named tool-call counts, live and historical. |
 | `remote` | Driving or spawning a session with no local pane. |
 
-Identical-tool loop detection needs both the tool name and its structured arguments on the hook, because a name-only match would flag legitimate repeated reads. Only Claude Code and Codex send both; every other agent has loop detection off.
+Identical-tool loop detection needs both the tool name and its structured arguments on the hook, because a name-only match would flag legitimate repeated reads. Only Claude Code, Codex, and MiniMax Code send both. Every other agent has loop detection off.
 
 ## The lifecycle hook surface
 
-RimZ folds eleven lifecycle signals into every agent's state. The table names the native event each agent fires for each signal; `rimz coverage --wiring` prints the same grid with marks only (`✓` native, `!` derived, `✗` absent). A ◐ cell is derived: RimZ reconstructs the signal from other evidence.
+RimZ folds eleven lifecycle signals into every agent's state. The table names the native event each agent fires for each signal, and a ◐ cell is derived: RimZ reconstructs the signal from other evidence. `rimz coverage --wiring` prints the same grid with marks only (`✓` native, `!` derived, `✗` absent).
 
 | Agent | `registered` | `turn_started` | `turn_ended` | `tool_used` | `awaiting_input` | `subagent_started` | `subagent_stopped` | `compacting` | `compaction_ended` | `ended` | `lost` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` (non-pausing error) | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
-| Codex | `SessionStart` | `UserPromptSubmit` | `Stop` / `Interrupt` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
-| Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call`; `ui_prompt_start` (Pi 0.84.4+) | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact`; `session_compact_failed` | `session_shutdown` | ◐ derived |
-| OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
-| Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
+| Codex | `SessionStart` | `UserPromptSubmit` | `Stop` / `Interrupt` | `PostToolUse` | `PermissionRequest`, or `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
+| Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call`, or `ui_prompt_start` (Pi 0.84.4+) | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact`, or `session_compact_failed` | `session_shutdown` | ◐ derived |
+| OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`, or `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
+| Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` (file-edit tools) | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript | ◐ child `agentStop` + parent transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | ✗ | ✗ | `PreCompact` | ◐ derived | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | ◐ chat-store child | ◐ child transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
@@ -488,12 +518,14 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qoder | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
-| Hermes | `on_session_start`; `on_session_reset` | `pre_llm_call` | `on_session_end` | `post_tool_call` | ◐ `on_human_input_request` | `subagent_start` | `subagent_stop` | ✗ | ✗ | ◐ derived | ◐ derived |
-| OMP | `session_start` | `before_agent_start` | `agent_end` without `willContinue` | `tool_execution_end` | `tool_call`; `tool_approval_requested` | ✗ | ✗ | `session_before_compact` | `session_compact`; failed `auto_compaction_end` | `session_shutdown` | ◐ derived |
+| Hermes | `on_session_start`, or `on_session_reset` | `pre_llm_call` | `on_session_end` | `post_tool_call` | ◐ `on_human_input_request` | `subagent_start` | `subagent_stop` | ✗ | ✗ | ◐ derived | ◐ derived |
+| OMP | `session_start` | `before_agent_start` | `agent_end` without `willContinue` | `tool_execution_end` | `tool_call`, or `tool_approval_requested` | ✗ | ✗ | `session_before_compact` | `session_compact`, or failed `auto_compaction_end` | `session_shutdown` | ◐ derived |
 | Muse | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `Interrupt` (interrupted) | Model `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | `PermissionRequest` | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 | MiniMax Code | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ✗ | ✗ | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
-`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp, Hermes), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
+`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent.
+
+Where `ended` is derived from pane liveness (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits. Hermes's `ended` also comes from the `rimz exec` wrapper, because Hermes fires its session-finalize hook on `/new` as well as at exit.
 
 Codex's `Interrupt` hook ends the turn with an interrupted outcome. RimZ does not install Codex's `SessionEnd` hook, because Codex also fires it when an idle app server unloads while the pane stays open.
 
@@ -530,7 +562,7 @@ Two cases stay dark even for built-in agents. Remote sessions with no local pane
 
 ## Third-party plugins
 
-A process plugin connects a third-party agent through a shim that speaks RimZ's canonical event protocol. The path is under active development and not ready for outside use; what a plugin supports is declared by its bundle, not by a RimZ tier. The contract is [agent plugins](./agent-plugins.md).
+A process plugin connects a third-party agent through a shim that speaks RimZ's canonical event protocol. The path is under active development and not ready for outside use. What a plugin supports is declared by its bundle, not by a RimZ tier. The contract is [agent plugins](./agent-plugins.md).
 
 ## See also
 
