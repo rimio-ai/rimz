@@ -568,6 +568,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "colorsys"
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1058,6 +1067,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a49173b84e034382284f27f1af4dcbbd231ffa358c0fe316541a7337f376a35"
 dependencies = [
  "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "directories"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
+dependencies = [
+ "dirs-sys 0.5.0",
 ]
 
 [[package]]
@@ -2063,7 +2081,7 @@ version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e03e2e96c5926fe761088d66c8c2aee3a4352a2573f4eaca50043ad130af9117"
 dependencies = [
- "miette",
+ "miette 5.10.0",
  "nom",
  "thiserror 1.0.69",
 ]
@@ -2311,15 +2329,34 @@ dependencies = [
  "backtrace",
  "backtrace-ext",
  "is-terminal",
- "miette-derive",
+ "miette-derive 5.10.0",
  "once_cell",
- "owo-colors",
- "supports-color",
- "supports-hyperlinks",
- "supports-unicode",
+ "owo-colors 3.5.0",
+ "supports-color 2.1.0",
+ "supports-hyperlinks 2.1.0",
+ "supports-unicode 2.1.0",
  "terminal_size 0.1.17",
  "textwrap 0.15.2",
  "thiserror 1.0.69",
+ "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "miette"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f98efec8807c63c752b5bd61f862c165c115b0a35685bdcfd9238c7aeb592b7"
+dependencies = [
+ "backtrace",
+ "backtrace-ext",
+ "cfg-if",
+ "miette-derive 7.6.0",
+ "owo-colors 4.4.0",
+ "supports-color 3.0.2",
+ "supports-hyperlinks 3.2.0",
+ "supports-unicode 3.0.0",
+ "terminal_size 0.4.4",
+ "textwrap 0.16.2",
  "unicode-width 0.1.14",
 ]
 
@@ -2328,6 +2365,17 @@ name = "miette-derive"
 version = "5.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49e7bc1560b95a3c4a25d03de42fe76ca718ab92d1a22a55b9b4cf67b3ae635c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "miette-derive"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db5b29714e950dbb20d5e6f74f9dcec4edbcc1067bb7f8ed198c097b8c1a818b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2441,6 +2489,18 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "memoffset 0.9.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "cfg_aliases 0.2.1",
+ "libc",
 ]
 
 [[package]]
@@ -2652,6 +2712,12 @@ name = "owo-colors"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
+
+[[package]]
+name = "owo-colors"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
 
 [[package]]
 name = "palette"
@@ -3052,6 +3118,16 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
+dependencies = [
+ "bytes",
+ "prost-derive 0.12.6",
+]
+
+[[package]]
+name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
@@ -3071,6 +3147,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3508,7 +3597,7 @@ dependencies = [
  "serde",
  "serde_json",
  "zellij-tile",
- "zellij-utils",
+ "zellij-utils 0.45.1",
 ]
 
 [[package]]
@@ -4210,12 +4299,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "suggest"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ea0e0ed5f30fcbe4c59fa9d387c9e853c964109e6d046d2e56c8960d3969fb8"
+dependencies = [
+ "lev_distance",
+]
+
+[[package]]
 name = "supports-color"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6398cde53adc3c4557306a96ce67b302968513830a77a95b2b17305d9719a89"
 dependencies = [
  "is-terminal",
+ "is_ci",
+]
+
+[[package]]
+name = "supports-color"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c64fc7232dd8d2e4ac5ce4ef302b1d81e0b80d055b9d77c7c4f51f6aa4c867d6"
+dependencies = [
  "is_ci",
 ]
 
@@ -4229,6 +4336,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "supports-hyperlinks"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e396b6523b11ccb83120b115a0b7366de372751aa6edf19844dfb13a6af97e91"
+
+[[package]]
 name = "supports-unicode"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4236,6 +4349,12 @@ checksum = "f850c19edd184a205e883199a261ed44471c81e39bd95b1357f5febbef00e77a"
 dependencies = [
  "is-terminal",
 ]
+
+[[package]]
+name = "supports-unicode"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7401a30af6cb5818bb64852270bb722533397edcfc7344954a38f420819ece2"
 
 [[package]]
 name = "syn"
@@ -4445,6 +4564,10 @@ name = "textwrap"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+dependencies = [
+ "unicode-linebreak",
+ "unicode-width 0.2.3",
+]
 
 [[package]]
 name = "thiserror"
@@ -5594,7 +5717,7 @@ dependencies = [
  "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
- "zellij-utils",
+ "zellij-utils 0.44.3",
 ]
 
 [[package]]
@@ -5608,11 +5731,11 @@ dependencies = [
  "bitflags 2.13.0",
  "clap 3.2.25",
  "clap_complete 3.2.5",
- "colored",
+ "colored 2.2.0",
  "colorsys",
  "crossbeam",
  "crossterm 0.28.1",
- "directories",
+ "directories 5.0.1",
  "dunce",
  "humantime",
  "include_dir",
@@ -5623,7 +5746,7 @@ dependencies = [
  "libc",
  "log",
  "log4rs",
- "miette",
+ "miette 5.10.0",
  "names",
  "nix 0.23.2",
  "notify 6.1.1",
@@ -5636,13 +5759,66 @@ dependencies = [
  "strip-ansi-escapes 0.1.1",
  "strum 0.27.2",
  "strum_macros 0.27.2",
- "suggest",
+ "suggest 0.4.0",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "unicode-width 0.1.14",
+ "url",
+ "uuid",
+ "winapi",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "zellij-utils"
+version = "0.45.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b4eecd7f80c83f17e3855ea6e7f721feff7d1bbd916e0a8fb279e0dfbcd34c"
+dependencies = [
+ "anyhow",
+ "backtrace",
+ "base64 0.22.1",
+ "bitflags 2.13.0",
+ "clap 4.6.7",
+ "clap_complete 4.6.11",
+ "colored 3.1.1",
+ "colorsys",
+ "crossbeam",
+ "crossterm 0.29.0",
+ "directories 6.0.0",
+ "dunce",
+ "humantime",
+ "include_dir",
+ "interprocess",
+ "isahc",
+ "kdl",
+ "lazy_static",
+ "libc",
+ "log",
+ "log4rs",
+ "miette 7.6.0",
+ "names",
+ "nix 0.30.1",
+ "notify 8.2.1",
+ "percent-encoding",
+ "prost 0.12.6",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "shellexpand",
+ "strip-ansi-escapes 0.2.1",
+ "strum 0.28.0",
+ "strum_macros 0.28.0",
+ "suggest 0.5.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "unicode-width 0.2.3",
  "url",
  "uuid",
  "winapi",

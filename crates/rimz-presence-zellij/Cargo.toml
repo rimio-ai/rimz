@@ -39,4 +39,4 @@ serde_json.workspace = true
 [target.'cfg(target_family = "wasm")'.dependencies]
 zellij-tile = "0.44"
 # zellij-tile exposes mouse events but not their kind; use the same API version.
-zellij-utils = "0.44"
+zellij-utils = "0.45"
