@@ -364,8 +364,9 @@ fn show(
     let Some(target) = target else {
         return show::render(&calling_run(globals)?, json, history, globals);
     };
+    let definition = definition::Definition::resolve(target, globals)?;
     if let Some(node) = node {
-        if !resolve::names_workflow(target) {
+        let Some(definition) = definition else {
             return Err(super::usage::UsageError::new(
                 concat!(
                     "use rimz workflow show <workflow> <node>; ",
@@ -374,8 +375,8 @@ fn show(
                 .into(),
             )
             .into());
-        }
-        return node::render(target, node);
+        };
+        return node::render(&definition, node);
     }
     if history && resolve::names_workflow(target) {
         return Err(super::usage::UsageError::new(
@@ -383,10 +384,27 @@ fn show(
         )
         .into());
     }
+    if let Some(definition) = definition
+        .as_ref()
+        .filter(|definition| definition.is_task())
+    {
+        let name = definition.name();
+        let runs = resolve::all()?
+            .into_iter()
+            .filter(|run| {
+                run.record.task.as_deref() == Some(name) && !run.record.state.is_terminal()
+            })
+            .collect::<Vec<_>>();
+        if !json {
+            definition::render(definition, globals)?;
+        }
+        return list::render(&runs, Some(name), json, globals);
+    }
+    let target = target.strip_prefix("workflow:").unwrap_or(target);
     match resolve::select(target, "show", globals, None, &[])? {
         resolve::Selection::Workflow(runs) => {
-            if !json {
-                definition::render(target, globals)?;
+            if !json && let Some(definition) = &definition {
+                definition::render(definition, globals)?;
             }
             list::render(&runs, Some(target), json, globals)
         }
@@ -400,8 +418,19 @@ fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
 
 fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
     let home = paths::workflows_dir();
+    let mut scratch = None;
     let dirs = if let Some(dir) = dir {
-        vec![workflow_view::definition_dir(&dir)]
+        let named = dir
+            .to_str()
+            .map(|raw| definition::Definition::resolve(raw, globals))
+            .transpose()?
+            .flatten();
+        let dir = named.as_ref().map_or_else(
+            || workflow_view::definition_dir(&dir),
+            |named| named.dir().to_owned(),
+        );
+        scratch = named;
+        vec![dir]
     } else {
         let mut dirs = Vec::new();
         match std::fs::read_dir(&home) {
@@ -482,6 +511,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
             writeln!(out, "warning: {}", warning.message)?;
         }
     }
+    drop(scratch);
     if !report.errors.is_empty() {
         bail!("{} workflow error(s)", report.errors.len());
     }

@@ -7,8 +7,9 @@ use rimz::store::workflow::StepLifecycle;
 
 use super::*;
 
-pub(super) fn render(name: &str, node: &str) -> Result<()> {
-    let spec = definition::load(name)?;
+pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<()> {
+    let spec = definition::load(definition)?;
+    let name = definition.name();
     let check = spec.checks.get(node);
     let step = spec.steps.get(node);
     let (kind, runner, summary) = if let Some(check) = check {

@@ -246,6 +246,7 @@ impl AttemptHost for FakeHost {
 
 mod attempts;
 mod commands;
+mod compiled;
 mod conditions;
 mod graph;
 mod inspection;

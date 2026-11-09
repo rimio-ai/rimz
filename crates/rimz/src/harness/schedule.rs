@@ -25,6 +25,7 @@ pub mod arming;
 pub mod backlog;
 mod backlog_store;
 pub mod catalog;
+pub mod compile;
 mod condition;
 mod config_edit;
 pub mod fanout;
@@ -496,6 +497,7 @@ pub enum ScheduleErr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskShape {
     action: Result<TaskAction, TaskActionErr>,
+    compiled: Result<compile::CompiledAction, TaskActionErr>,
     trigger: Result<ParsedTrigger, ScheduleErr>,
     ephemeral: bool,
     kind: TaskKind,
@@ -512,8 +514,10 @@ pub enum TaskKind {
 
 impl TaskShape {
     pub fn compile(name: &str, entry: &TaskEntry) -> Self {
+        let action = TaskAction::from_entry(name, entry);
         Self {
-            action: TaskAction::from_entry(name, entry),
+            compiled: compile::compile(name, entry, action.as_ref()),
+            action,
             trigger: parse_trigger(name, entry),
             ephemeral: ephemeral_lifetime(entry),
             kind: lifecycle_kind(entry),
@@ -522,6 +526,10 @@ impl TaskShape {
 
     pub fn action(&self) -> Result<&TaskAction, &TaskActionErr> {
         self.action.as_ref()
+    }
+
+    pub fn compiled(&self) -> Result<&compile::CompiledAction, &TaskActionErr> {
+        self.compiled.as_ref()
     }
 
     pub fn trigger(&self) -> &Result<ParsedTrigger, ScheduleErr> {

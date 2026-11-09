@@ -35,7 +35,7 @@ enum Action {
 }
 
 pub(super) const WATCH_LOST_GRACE_SECS: i64 = 30;
-const RESIDENT_RETRY_SECS: i64 = 5 * 60;
+pub(super) const RESIDENT_RETRY_SECS: i64 = 5 * 60;
 /// How long a stamped `fire-at` row's runner may hold no lock and record
 /// nothing before the pass dispatches the row again.
 const FIRE_AT_RETRY_SECS: i64 = 5 * 60;

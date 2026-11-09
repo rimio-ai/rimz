@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use rimz::disk::paths;
 use rimz::ids::WorkflowRunId;
-use rimz::store::workflow::{self as records, RunAddress, RunRecord, ScopeKind};
+use rimz::store::workflow::{self as records, RunAddress, RunOrigin, RunRecord, ScopeKind};
 
 use crate::cli::GlobalFlags;
 use crate::cli::render;
@@ -339,9 +339,13 @@ fn pick(
         Target::Workflow(name) => name,
         Target::Id(_) => unreachable!("select returns ids before picking"),
     };
+    // `workflow show` answers a task's name before selecting, so a bare name it selects names
+    // the deployed workflow, never a task's inline runs.
+    let deployed_only = verb == "show" && matches!(target, Target::Workflow(_));
     let mut runs = all
         .iter()
         .filter(|run| run.record.workflow == *name)
+        .filter(|run| !deployed_only || run.record.origin == RunOrigin::Deployed)
         .collect::<Vec<_>>();
     let mut components = Path::new(name).components();
     let definition = matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -500,6 +504,29 @@ mod tests {
             state,
             record,
         }
+    }
+
+    #[test]
+    fn showing_a_workflow_name_lists_its_deployed_runs_and_never_a_tasks_inline_runs() {
+        let deployed = run("/repo", "one", "active", 10);
+        let mut inline = run("/repo", "two", "active", 20);
+        inline.record.origin = RunOrigin::Inline;
+        let all = [deployed, inline];
+        let picked = pick(
+            &Target::Workflow("review".into()),
+            "review",
+            "show",
+            Some(&workspace("/repo")),
+            || Some("/repo".into()),
+            &all,
+            None,
+            &[],
+        )
+        .unwrap();
+        let Picked::Workflow(indices) = picked else {
+            panic!("a bare name shows the workflow");
+        };
+        assert_eq!(indices, [0]);
     }
 
     #[test]
