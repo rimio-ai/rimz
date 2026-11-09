@@ -580,7 +580,7 @@ fn account_merge_sorts_truth_and_pending_and_prunes_prior_only_keys() {
         )]),
         BTreeMap::new(),
     );
-    write_rate_limits_cache(&RateLimitsCache::shared_path(&runtime), &cached);
+    write_rate_limits_cache(&RateLimitsCache::shared_path(&runtime), &cached).unwrap();
     let live = ["z", "a"].map(|id| RateLimitWindow {
         source: WindowSource::BestEffort,
         observed_at: Some(now),
@@ -787,7 +787,8 @@ fn write_claude_windows(runtime: &RuntimePaths, windows: Vec<RateLimitWindow>) {
             BTreeMap::from([("claude".to_owned(), AgentRateLimits { windows })]),
             BTreeMap::new(),
         ),
-    );
+    )
+    .unwrap();
 }
 
 #[test]
@@ -840,7 +841,8 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
             )]),
             BTreeMap::new(),
         ),
-    );
+    )
+    .unwrap();
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("plugin", Vec::new())]);
     apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
     let build = consumer.providers[0]
@@ -929,7 +931,8 @@ fn account_scope_isolates_cached_windows() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let mut matching = provider_panel("qwen", Vec::new());
     matching.account_scope = international.clone();
     let mut matching = snapshot_with_panels(workspace.clone(), vec![matching]);
@@ -982,7 +985,8 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
             )]),
             BTreeMap::new(),
         ),
-    );
+    )
+    .unwrap();
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_credits_path(),
         &crate::sidebar::refresh::credits::CreditsCache {
@@ -1333,7 +1337,8 @@ fn dated_long_window_keeps_undated_lifted_window_cache_fresh() {
             )]),
             BTreeMap::new(),
         ),
-    );
+    )
+    .unwrap();
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
     refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
@@ -1833,7 +1838,8 @@ fn authoritative_omissions_track_lifted_duration_windows() {
             )]),
             BTreeMap::new(),
         ),
-    );
+    )
+    .unwrap();
 
     let only_week = AgentRateLimits {
         windows: vec![authoritative(rl_window_mins(41, None, seven_days))],
@@ -2050,7 +2056,8 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let weekly = stamped(authoritative(rl_window_mins(41, None, 10_080)));
     let mut matching = provider_panel("pi", vec![weekly.clone()]);
     matching.account_scope = openai;
@@ -2111,7 +2118,8 @@ fn drop_kind_removes_only_target_entry() {
                 ("claude".to_owned(), pending(2)),
             ]),
         ),
-    );
+    )
+    .unwrap();
 
     drop_account_rate_limits(&runtime, &login_key("codex").into());
     let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));

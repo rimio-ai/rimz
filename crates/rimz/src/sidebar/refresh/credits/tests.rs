@@ -77,6 +77,7 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
         now,
         nonce(1),
     )
+    .saved()
     .unwrap();
     let claim_o = claim_provider_account_usage_with_hint_at(
         &runtime,
@@ -84,7 +85,8 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
         Some(openai.clone()),
         now,
         nonce(2),
-    );
+    )
+    .saved();
     assert_eq!(
         claim_o,
         Some(nonce(2)),
@@ -102,6 +104,7 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
         now,
         nonce(3),
     )
+    .saved()
     .unwrap();
     assert!(!renew_provider_account_usage_claim_at(
         &runtime,
@@ -132,6 +135,7 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
                     },
                 }
             )
+            .saved()
             .is_some()
         );
     }
@@ -154,7 +158,8 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
                 Some(hint.clone()),
                 now + 2,
                 nonce(4)
-            ),
+            )
+            .saved(),
             None
         );
     }
@@ -163,11 +168,13 @@ fn scoped_claims_leases_and_published_hints_do_not_interfere() {
         ..anthropic
     };
     assert_eq!(
-        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(moved), now + 2, nonce(4)),
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(moved), now + 2, nonce(4))
+            .saved(),
         Some(nonce(4))
     );
     assert_eq!(
-        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(openai), now + 2, nonce(5)),
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(openai), now + 2, nonce(5))
+            .saved(),
         None
     );
 }
@@ -190,6 +197,7 @@ fn a_scope_change_during_completion_keeps_the_other_scopes_live_lease() {
         now,
         nonce(1),
     )
+    .saved()
     .unwrap();
     let current_claim = claim_provider_account_usage_with_hint_at(
         &runtime,
@@ -198,6 +206,7 @@ fn a_scope_change_during_completion_keeps_the_other_scopes_live_lease() {
         now,
         nonce(2),
     )
+    .saved()
     .unwrap();
     complete_provider_account_usage(
         &runtime,
@@ -208,13 +217,15 @@ fn a_scope_change_during_completion_keeps_the_other_scopes_live_lease() {
             snapshot: AccountUsageSnapshot::default(),
         },
     )
+    .saved()
     .unwrap();
     assert!(
         account_usage_claim_matches(&runtime, &key, current_claim),
         "publishing the newly resolved scope must not revoke its other worker"
     );
     assert_eq!(
-        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(prior), now + 1, nonce(3)),
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(prior), now + 1, nonce(3))
+            .saved(),
         None,
         "the original hint still waits its own attempt floor"
     );
@@ -250,6 +261,7 @@ fn changed_scope_completions_preserve_the_target_scopes_partial_display() {
                 ProviderAccountScope::KindWide,
             )),
         )
+        .saved()
         .unwrap();
         let usage_key = AccountUsageKey::new(key.clone(), current.scope.clone());
         let mut probe_identity = current.clone();
@@ -265,7 +277,9 @@ fn changed_scope_completions_preserve_the_target_scopes_partial_display() {
                 snapshot: AccountUsageSnapshot::default(),
             }
         };
-        let completion = complete_provider_account_usage(&runtime, &key, claim, probe).unwrap();
+        let completion = complete_provider_account_usage(&runtime, &key, claim, probe)
+            .saved()
+            .unwrap();
         let cache = read_credits_cache(&runtime.shared_credits_path());
         let entry = cache.get(&usage_key).unwrap();
         assert_eq!(entry.plan.as_deref(), Some("pro"), "failed={failed}");
@@ -291,7 +305,8 @@ fn a_kind_wide_claim_does_not_wait_on_a_legacy_scoped_lease() {
             logins: BTreeMap::from([(key.clone(), prior)]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
             &runtime,
@@ -299,7 +314,8 @@ fn a_kind_wide_claim_does_not_wait_on_a_legacy_scoped_lease() {
             Some(Default::default()),
             now,
             nonce(2)
-        ),
+        )
+        .saved(),
         Some(nonce(2)),
         "a matching-scope legacy fallback must not block another scope"
     );
@@ -352,7 +368,7 @@ fn scoped_credits_prefer_the_new_map_and_migrate_matching_legacy_readings() {
         );
     }
     let cache = serde_json::from_value(json).unwrap();
-    write_credits_cache(&runtime.shared_credits_path(), &cache);
+    write_credits_cache(&runtime.shared_credits_path(), &cache).unwrap();
     merge_provider_realtime_usage(
         &runtime,
         &key,
@@ -444,6 +460,7 @@ fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
             now - 1,
             nonce(1),
         )
+        .saved()
         .unwrap();
         let (entry, _) = read_credits_cache(&runtime.shared_credits_path()).logins[&key]
             .clone()
@@ -459,7 +476,8 @@ fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
         write_credits_cache(
             &runtime.shared_credits_path(),
             &cache_with_reading(key.clone(), entry),
-        );
+        )
+        .unwrap();
         for (at, current_hint, due) in [
             (now + 1, Some(hint.clone()), false),
             (
@@ -486,7 +504,8 @@ fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
                 current_hint.clone(),
                 at,
                 nonce(2),
-            );
+            )
+            .saved();
             assert_eq!(
                 claim.is_some(),
                 due,
@@ -534,6 +553,7 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
             now - 1,
             nonce(1),
         )
+        .saved()
         .unwrap();
         let mut cache = read_credits_cache(&runtime.shared_credits_path());
         let (mut entry, _) = cache
@@ -552,7 +572,7 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
         assert_eq!(entry.oauth_read_hint, Some(hint.clone()));
         entry.oauth_read_hint = None;
         cache.logins.insert(key.clone(), entry);
-        write_credits_cache(&runtime.shared_credits_path(), &cache);
+        write_credits_cache(&runtime.shared_credits_path(), &cache).unwrap();
 
         let claim = claim_provider_account_usage_with_hint_at(
             &runtime,
@@ -560,7 +580,8 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
             Some(hint.clone()),
             now + 1,
             nonce(2),
-        );
+        )
+        .saved();
         assert_eq!(claim.is_some(), due, "{case}, elapsed=1");
         let at = if due {
             now + 1
@@ -575,6 +596,7 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
                 at,
                 nonce(2),
             )
+            .saved()
             .unwrap()
         });
         let mut cache = read_credits_cache(&runtime.shared_credits_path());
@@ -595,7 +617,8 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
         write_credits_cache(
             &runtime.shared_credits_path(),
             &cache_with_reading(key.clone(), entry),
-        );
+        )
+        .unwrap();
         assert_eq!(
             claim_provider_account_usage_with_hint_at(
                 &runtime,
@@ -603,7 +626,8 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
                 Some(hint.clone()),
                 at + 2,
                 nonce(3),
-            ),
+            )
+            .saved(),
             None,
             "{case}, hint recorded again",
         );
@@ -628,6 +652,7 @@ fn unchanged_published_hint_brakes_settled_reads_with_a_newer_probe_stamp() {
             now - 1,
             nonce(1),
         )
+        .saved()
         .unwrap();
         let (entry, _) = read_credits_cache(&runtime.shared_credits_path()).logins[&key]
             .clone()
@@ -639,7 +664,8 @@ fn unchanged_published_hint_brakes_settled_reads_with_a_newer_probe_stamp() {
                 logins: BTreeMap::from([(key.clone(), entry)]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         for (at, current_hint, due) in [
             (
                 now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
@@ -664,7 +690,8 @@ fn unchanged_published_hint_brakes_settled_reads_with_a_newer_probe_stamp() {
                 Some(current_hint),
                 at,
                 nonce(2),
-            );
+            )
+            .saved();
             assert_eq!(claim.is_some(), due, "elapsed={}", at - now);
             if let Some(claim) = claim {
                 assert!(cancel_provider_account_usage_claim(&runtime, &key, claim));
@@ -688,6 +715,7 @@ fn unfinished_claim_does_not_absorb_a_published_hint_move() {
             now,
             nonce(1),
         )
+        .saved()
         .unwrap();
         let mut cache = read_credits_cache(&runtime.shared_credits_path());
         let (entry, _) = cache
@@ -704,7 +732,7 @@ fn unfinished_claim_does_not_absorb_a_published_hint_move() {
             )
             .unwrap();
         cache.logins.insert(key.clone(), entry);
-        write_credits_cache(&runtime.shared_credits_path(), &cache);
+        write_credits_cache(&runtime.shared_credits_path(), &cache).unwrap();
         let claim = claim_provider_account_usage_with_hint_at(
             &runtime,
             &key,
@@ -712,13 +740,15 @@ fn unfinished_claim_does_not_absorb_a_published_hint_move() {
             now + 1,
             nonce(2),
         )
+        .saved()
         .unwrap();
         if cancel {
             assert!(cancel_provider_account_usage_claim(&runtime, &key, claim));
         }
         let at = now + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 2;
         assert_eq!(
-            claim_provider_account_usage_with_hint_at(&runtime, &key, Some(moved), at, nonce(3)),
+            claim_provider_account_usage_with_hint_at(&runtime, &key, Some(moved), at, nonce(3))
+                .saved(),
             Some(nonce(3)),
             "cancelled={cancel}",
         );
@@ -906,7 +936,8 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
             logins: BTreeMap::from([(key.clone(), prior)]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let check = || {
         assert_eq!(
             entitlement(&read_credits_cache(&path).logins[&key]),
@@ -934,7 +965,8 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
             AccountUsageIdentity::default(),
             500,
             claim_nonce
-        ),
+        )
+        .saved(),
         Some(claim_nonce)
     );
     check();
@@ -1195,10 +1227,15 @@ fn non_found_completion_preserves_identityless_turn_death_lapse() {
         super::super::usage::mark_entitlement_lapsed(&runtime, &key, 100);
         let claim_nonce = nonce(208);
         assert_eq!(
-            claim_provider_account_usage_at(&runtime, &key, owner.clone(), 200, claim_nonce),
+            claim_provider_account_usage_at(&runtime, &key, owner.clone(), 200, claim_nonce)
+                .saved(),
             Some(claim_nonce)
         );
-        assert!(complete_provider_account_usage(&runtime, &key, claim_nonce, probe).is_some());
+        assert!(
+            complete_provider_account_usage(&runtime, &key, claim_nonce, probe)
+                .saved()
+                .is_some()
+        );
         let cache = read_credits_cache(&runtime.shared_credits_path());
         assert_eq!(
             cache.logins[&key].entitlement,
@@ -1286,7 +1323,8 @@ fn no_credentials_completion_adopts_preflight_scope_and_settles_cadence() {
             logins: BTreeMap::from([("pi@default".parse().unwrap(), next)]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
@@ -1295,7 +1333,8 @@ fn no_credentials_completion_adopts_preflight_scope_and_settles_cadence() {
             Some(identity(Some(7), None, scope)),
             now + 1,
             nonce(44),
-        ),
+        )
+        .saved(),
         None,
         "the settled no-credentials attempt must not reopen on the next producer fold",
     );
@@ -1456,7 +1495,8 @@ fn account_usage_hints_round_trip_with_optional_wire_members() {
                 logins: BTreeMap::from([(key.clone(), entry.clone())]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let wire: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(wire["logins"][key.to_string()]["oauth_read_hint"], expected);
@@ -1496,7 +1536,7 @@ fn credits_projection_selects_the_room_login_and_never_falls_back() {
             .collect(),
         ..Default::default()
     };
-    write_credits_cache(&runtime.shared_credits_path(), &cache);
+    write_credits_cache(&runtime.shared_credits_path(), &cache).unwrap();
     let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
         runtime.workspace_id.clone(),
         vec![panel("claude", true)],
@@ -1631,7 +1671,8 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
@@ -1639,7 +1680,8 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
             identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
             now + 1,
             nonce(1),
-        ),
+        )
+        .saved(),
         None
     );
     for (index, (stamp, key, scope)) in [
@@ -1678,7 +1720,8 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
                 )]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let claim_id = nonce(index as u128 + 2);
         assert!(
             claim_provider_account_usage_at(
@@ -1688,6 +1731,7 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
                 now + 2,
                 claim_id,
             )
+            .saved()
             .is_some()
         );
         cancel_provider_account_usage_claim(
@@ -1711,7 +1755,8 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert!(
         claim_provider_account_usage_at(
             &runtime,
@@ -1720,6 +1765,7 @@ fn account_usage_fresh_attempt_blocks_claim_but_hint_changes_are_due() {
             now + 2,
             nonce(9),
         )
+        .saved()
         .is_some()
     );
 }
@@ -1764,7 +1810,8 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
                     ..Default::default()
                 },
             ),
-        );
+        )
+        .unwrap();
         assert_eq!(
             claim_provider_account_usage_with_hint_at(
                 &runtime,
@@ -1773,6 +1820,7 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
                 now + 1,
                 nonce(11),
             )
+            .saved()
             .is_some(),
             expected_claim
         );
@@ -1798,7 +1846,8 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
@@ -1806,7 +1855,8 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
             identity(Some(7), None, ProviderAccountScope::KindWide),
             now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
             nonce(1),
-        ),
+        )
+        .saved(),
         None
     );
     assert_eq!(
@@ -1816,7 +1866,8 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
             identity(Some(8), None, ProviderAccountScope::KindWide),
             now + 1,
             nonce(2),
-        ),
+        )
+        .saved(),
         Some(nonce(2))
     );
 }
@@ -1841,7 +1892,8 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
             &runtime,
@@ -1849,7 +1901,8 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
             Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
             now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
             nonce(1),
-        ),
+        )
+        .saved(),
         None
     );
     assert_eq!(
@@ -1859,7 +1912,8 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
             Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
             now + OAUTH_USAGE_SETTLED_TTL.as_millis() as u64 + 1,
             nonce(2),
-        ),
+        )
+        .saved(),
         Some(nonce(2))
     );
 }
@@ -1914,7 +1968,8 @@ fn completion_detects_symmetric_owner_and_scope_changes() {
                 )]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let current = identity(None, current_key, current_scope);
         let claim = claim_provider_account_usage_at(
             &runtime,
@@ -1923,6 +1978,7 @@ fn completion_detects_symmetric_owner_and_scope_changes() {
             100,
             nonce(1),
         )
+        .saved()
         .unwrap();
         let completion = complete_provider_account_usage(
             &runtime,
@@ -1933,6 +1989,7 @@ fn completion_detects_symmetric_owner_and_scope_changes() {
                 snapshot: AccountUsageSnapshot::default(),
             },
         )
+        .saved()
         .unwrap();
         assert_eq!(completion.account_changed, expected);
     }
@@ -1951,7 +2008,8 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
             hint.clone(),
             100,
             first
-        ),
+        )
+        .saved(),
         Some(first)
     );
     assert_eq!(
@@ -1961,7 +2019,8 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
             hint.clone(),
             101,
             second
-        ),
+        )
+        .saved(),
         None
     );
     assert_eq!(
@@ -1971,7 +2030,8 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
             hint.clone(),
             100 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64,
             second,
-        ),
+        )
+        .saved(),
         None,
         "the lease remains live at its exact boundary"
     );
@@ -1983,7 +2043,8 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
             hint,
             expired,
             second
-        ),
+        )
+        .saved(),
         Some(second)
     );
     assert!(!account_usage_claim_matches(
@@ -2009,6 +2070,7 @@ fn renewal_requires_the_matching_live_nonce() {
         100,
         first,
     )
+    .saved()
     .unwrap();
 
     assert!(renew_provider_account_usage_claim_at(
@@ -2040,6 +2102,7 @@ fn renewal_requires_the_matching_live_nonce() {
         200 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 1,
         second,
     )
+    .saved()
     .unwrap();
     assert!(!renew_provider_account_usage_claim_at(
         &runtime,
@@ -2066,6 +2129,7 @@ fn cancel_and_late_completion_require_matching_nonce() {
         100,
         nonce(1),
     )
+    .saved()
     .unwrap();
     assert!(cancel_provider_account_usage_claim(
         &runtime,
@@ -2085,6 +2149,7 @@ fn cancel_and_late_completion_require_matching_nonce() {
         101,
         nonce(2),
     )
+    .saved()
     .unwrap();
     assert!(
         complete_provider_account_usage(
@@ -2093,6 +2158,7 @@ fn cancel_and_late_completion_require_matching_nonce() {
             first,
             AccountUsageProbe::Failed(Default::default()),
         )
+        .saved()
         .is_none()
     );
     assert!(account_usage_claim_matches(
@@ -2100,6 +2166,91 @@ fn cancel_and_late_completion_require_matching_nonce() {
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         second
     ));
+}
+
+fn codex_default() -> LoginKey {
+    LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))
+}
+
+#[test]
+fn a_claim_whose_write_fails_is_not_granted() {
+    let (_dir, runtime) = runtime();
+    std::fs::create_dir(runtime.shared_credits_path()).unwrap();
+    let claim = claim_provider_account_usage_at(
+        &runtime,
+        &codex_default(),
+        Default::default(),
+        100,
+        nonce(1),
+    );
+    assert_eq!(
+        claim,
+        CreditsWrite::Failed,
+        "an unsaved claim authorizes nothing, and is not read as not due"
+    );
+}
+
+#[test]
+fn a_renewal_whose_write_fails_keeps_the_old_lease() {
+    let (_dir, runtime) = runtime();
+    let key = codex_default();
+    let claim = claim_provider_account_usage_at(&runtime, &key, Default::default(), 100, nonce(1))
+        .saved()
+        .unwrap();
+    fail_credits_writes(true);
+    let renewed = renew_provider_account_usage_claim_at(&runtime, &key, claim, 200);
+    fail_credits_writes(false);
+    assert!(!renewed, "an unsaved renewal extends nothing");
+    let persisted = read_credits_cache(&runtime.shared_credits_path()).logins[&key]
+        .direct_query_claim
+        .clone()
+        .unwrap();
+    assert_eq!((persisted.nonce, persisted.claimed_at_ms), (claim, 100));
+}
+
+#[test]
+fn a_completion_whose_write_fails_keeps_the_claim_and_prior_reading() {
+    let (_dir, runtime) = runtime();
+    let key = codex_default();
+    write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            logins: BTreeMap::from([(
+                key.clone(),
+                claimed_entry(nonce(1), ProviderAccountScope::KindWide),
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    fail_credits_writes(true);
+    let completion = complete_provider_account_usage(
+        &runtime,
+        &key,
+        nonce(1),
+        AccountUsageProbe::Found {
+            identity: identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
+            snapshot: AccountUsageSnapshot {
+                plan: Some("max".to_owned()),
+                ..Default::default()
+            },
+        },
+    )
+    .saved();
+    fail_credits_writes(false);
+    assert!(
+        completion.is_none(),
+        "an unsaved completion publishes nothing"
+    );
+    let entry = read_credits_cache(&runtime.shared_credits_path()).logins[&key].clone();
+    assert_eq!(
+        (
+            entry.direct_query_claim.map(|claim| claim.nonce),
+            entry.oauth_read_at_ms,
+            entry.plan.as_deref()
+        ),
+        (Some(nonce(1)), 1, Some("pro"))
+    );
 }
 
 #[test]
@@ -2124,7 +2275,8 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
             logins: BTreeMap::from([(key.clone(), prior.clone())]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     invalidate_oauth_read(&runtime, &usage_key);
     let claim = claim_provider_account_usage_at(
         &runtime,
@@ -2133,6 +2285,7 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
         100,
         nonce(1),
     )
+    .saved()
     .unwrap();
     complete_provider_account_usage(
         &runtime,
@@ -2140,6 +2293,7 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
         claim,
         AccountUsageProbe::Failed(Default::default()),
     )
+    .saved()
     .unwrap();
     let entry = read_credits_cache(&runtime.shared_credits_path())
         .get(&usage_key)
@@ -2172,7 +2326,8 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let claim = claim_provider_account_usage_at(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("plugin")),
@@ -2180,6 +2335,7 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
         100,
         nonce(1),
     )
+    .saved()
     .unwrap();
     let completion = complete_provider_account_usage(
         &runtime,
@@ -2187,6 +2343,7 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
         claim,
         AccountUsageProbe::Failed(Default::default()),
     )
+    .saved()
     .unwrap();
     assert!(completion.account_changed);
     let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
@@ -2219,7 +2376,8 @@ fn successful_partial_read_preserves_prior_optional_credits() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let claim = claim_provider_account_usage_at(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
@@ -2227,6 +2385,7 @@ fn successful_partial_read_preserves_prior_optional_credits() {
         100,
         nonce(1),
     )
+    .saved()
     .unwrap();
     complete_provider_account_usage(
         &runtime,
@@ -2237,6 +2396,7 @@ fn successful_partial_read_preserves_prior_optional_credits() {
             snapshot: AccountUsageSnapshot::default(),
         },
     )
+    .saved()
     .unwrap();
     let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
         [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))];
@@ -2287,7 +2447,8 @@ fn realtime_write_preserves_attempt_and_claim() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     merge_provider_realtime_usage(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
@@ -2359,7 +2520,8 @@ fn merged_over(
                 logins: BTreeMap::from([(key.clone(), prior)]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
     }
     let usage_key = AccountUsageKey::new(key.clone(), incoming.scope.clone());
     merge_provider_realtime_usage(&runtime, &key, incoming, snapshot);
@@ -2443,11 +2605,13 @@ fn realtime_write_after_a_credentials_rewrite_leaves_the_direct_read_due() {
             logins: BTreeMap::from([(key.clone(), settled)]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let rewritten = identity(Some(9), Some("owner"), ProviderAccountScope::KindWide);
     merge_provider_realtime_usage(&runtime, &key, rewritten.clone(), plan_reading("pro"));
     assert!(
         claim_provider_account_usage_with_hint_at(&runtime, &key, Some(rewritten), 2_000, nonce(9))
+            .saved()
             .is_some()
     );
 }
@@ -2625,7 +2789,8 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
                 logins: BTreeMap::from([(key.clone(), entry)]),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(
             claim_idle_account_usage_at(
                 &runtime,
@@ -2633,7 +2798,8 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
                 hint.clone(),
                 read_at + floor - 1,
                 nonce(1)
-            ),
+            )
+            .saved(),
             None,
             "inside the floor after {outcome}"
         );
@@ -2644,12 +2810,14 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
                 hint.clone(),
                 read_at + floor - 1,
                 nonce(2)
-            ),
+            )
+            .saved(),
             Some(nonce(2)),
             "an in-use claim keeps its own cadence after {outcome}"
         );
         assert_eq!(
-            claim_idle_account_usage_at(&runtime, &key, hint.clone(), read_at + floor, nonce(3)),
+            claim_idle_account_usage_at(&runtime, &key, hint.clone(), read_at + floor, nonce(3))
+                .saved(),
             None,
             "another room's live claim blocks the idle lane after {outcome}"
         );
@@ -2659,7 +2827,7 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
             nonce(2)
         ));
         assert_eq!(
-            claim_idle_account_usage_at(&runtime, &key, hint, read_at + floor, nonce(4)),
+            claim_idle_account_usage_at(&runtime, &key, hint, read_at + floor, nonce(4)).saved(),
             Some(nonce(4)),
             "due at the floor after {outcome}"
         );
@@ -2667,7 +2835,7 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
 
     let (_dir, runtime) = runtime();
     assert_eq!(
-        claim_idle_account_usage_at(&runtime, &key, None, read_at, nonce(5)),
+        claim_idle_account_usage_at(&runtime, &key, None, read_at, nonce(5)).saved(),
         Some(nonce(5)),
         "an account never attempted is due at once"
     );
