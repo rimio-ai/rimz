@@ -4869,7 +4869,6 @@ allowed-dependencies = [
     "(crate)",
     "agents",
     "config",
-    "disk::atomic",
     "harness::assist_log",
     "harness::auto_continue",
     "harness::hibernate",
@@ -4884,7 +4883,6 @@ allowed-dependencies = [
     "workspace",
 ]
 # Queued delivery shares the typed interrupt-key preflight with pane sends.
-# Delivery and compact-first writes share pre-write wake-stamp maintenance (+1).
 # Deferral names why a boundary write stopped on its post-wait row; it reads the
 # same CardStatus gate as candidacy, from harness::auto_continue (+1).
 surface-budget = 12
