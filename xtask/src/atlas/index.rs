@@ -36,9 +36,7 @@ pub(super) fn ensure_revision(root: &Path, revision: &str, sources: &[Source]) -
     let key = cache_key(sources, &lockfile);
     let destination = cache_path(&cache_dir, &key);
     if destination.is_file() {
-        touch(&destination)?;
-        remove_old_indexes(&cache_dir)?;
-        return Ok(destination);
+        return reuse_cached(&cache_dir, destination, &key);
     }
 
     fs::create_dir_all(&cache_dir)
@@ -73,6 +71,17 @@ pub(super) fn ensure_revision(root: &Path, revision: &str, sources: &[Source]) -
 
 fn cache_path(cache_dir: &Path, key: &str) -> PathBuf {
     cache_dir.join(format!("{CACHE_PREFIX}{key}{CACHE_SUFFIX}"))
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "atlas says when it reads a cached SCIP index instead of a fresh export"
+)]
+fn reuse_cached(cache_dir: &Path, destination: PathBuf, key: &str) -> Result<PathBuf> {
+    touch(&destination)?;
+    remove_old_indexes(cache_dir)?;
+    eprintln!("atlas: reusing cached SCIP index {key}");
+    Ok(destination)
 }
 
 fn touch(path: &Path) -> Result<()> {
@@ -144,9 +153,7 @@ fn ensure_keyed(
 ) -> Result<PathBuf> {
     let destination = cache_path(cache_dir, key);
     if destination.is_file() {
-        touch(&destination)?;
-        remove_old_indexes(cache_dir)?;
-        return Ok(destination);
+        return reuse_cached(cache_dir, destination, key);
     }
 
     check_rust_analyzer(index_root)?;
