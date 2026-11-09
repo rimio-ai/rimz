@@ -29,17 +29,6 @@ pub enum OpenTurn {
     Compacting,
 }
 
-impl OpenTurn {
-    const fn phrase(self) -> &'static str {
-        match self {
-            Self::Working => "is working",
-            Self::WaitingOnUser => "is waiting on you",
-            Self::Paused => "is paused on a limit",
-            Self::Compacting => "is compacting",
-        }
-    }
-}
-
 /// What a takeover of one checkout does with the agents already in it.
 #[derive(Debug)]
 pub enum Takeover<'a> {
@@ -128,15 +117,6 @@ fn plan<'a>(
     } else {
         Takeover::Blocked(blockers)
     }
-}
-
-/// The skip reason for a blocked takeover, one clause per blocker handle.
-pub(super) fn blocked_reason(blockers: &[(String, OpenTurn)]) -> String {
-    blockers
-        .iter()
-        .map(|(handle, turn)| format!("{handle} {}", turn.phrase()))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {

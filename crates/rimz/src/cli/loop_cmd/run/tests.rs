@@ -163,7 +163,6 @@ fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
     use rimz::harness::schedule::runner::{TaskFireFinished, TaskFireNotice};
 
     let finished = |result, notice| TaskFireFinished {
-        replace_holder: None,
         record: LoopRunRecord::new("test", result, LoopRunMode::Manual, 0),
         presentation: LoopRunPresentation::default(),
         transition: RunTransition::Recorded,
@@ -224,11 +223,9 @@ fn summary(
     entry: &TaskEntry,
     duration_ms: u64,
     mode: LoopRunMode,
-    keep: bool,
     outcome: &RunOutcome,
 ) -> String {
-    anstream::adapter::strip_str(&raw_summary(name, entry, duration_ms, mode, keep, outcome))
-        .to_string()
+    anstream::adapter::strip_str(&raw_summary(name, entry, duration_ms, mode, outcome)).to_string()
 }
 
 fn raw_summary(
@@ -236,7 +233,6 @@ fn raw_summary(
     entry: &TaskEntry,
     duration_ms: u64,
     mode: LoopRunMode,
-    keep: bool,
     outcome: &RunOutcome,
 ) -> String {
     let mut record = outcome.record.clone();
@@ -251,7 +247,7 @@ fn raw_summary(
         .action()
         .unwrap()
         .clone();
-    write_run_summary(&mut out, name, entry, &action, mode, keep, &summary).unwrap();
+    write_run_summary(&mut out, name, entry, &action, mode, &summary).unwrap();
     String::from_utf8(out).unwrap()
 }
 
@@ -266,14 +262,7 @@ fn failed_summary_links_run_transcript_and_loop_show() {
             "error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned(),
         ));
 
-    let out = summary(
-        "watchdog",
-        &entry,
-        1_900,
-        LoopRunMode::Manual,
-        false,
-        &outcome,
-    );
+    let out = summary("watchdog", &entry, 1_900, LoopRunMode::Manual, &outcome);
 
     assert!(out.contains("✗ failed (exit 1) in 1.9s"));
     assert!(out.contains("  │ error: boom\n  │ Usage: codex [OPTIONS] [PROMPT]"));
@@ -296,14 +285,7 @@ fn manual_run_summary_snapshot() {
 
     insta::assert_snapshot!(
         "manual_run_summary",
-        summary(
-            "watchdog",
-            &entry,
-            1_900,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
+        summary("watchdog", &entry, 1_900, LoopRunMode::Manual, &outcome)
     );
 }
 
@@ -323,24 +305,10 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     );
     let entry = spawn_entry(true, CheckOn::Fail);
     assert_eq!(
-        summary(
-            "watchdog",
-            &entry,
-            9_000,
-            LoopRunMode::Manual,
-            false,
-            &spawn,
-        ),
+        summary("watchdog", &entry, 9_000, LoopRunMode::Manual, &spawn),
         "✓ check passed (exit 0) in 4.4s — codex not started; fires when the check fails\n"
     );
-    let raw = raw_summary(
-        "watchdog",
-        &entry,
-        9_000,
-        LoopRunMode::Manual,
-        false,
-        &spawn,
-    );
+    let raw = raw_summary("watchdog", &entry, 9_000, LoopRunMode::Manual, &spawn);
     assert!(raw.contains(&ui::paint(
         ui::palette::good(),
         "✓ check passed (exit 0) in 4.4s"
@@ -364,7 +332,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     );
     let entry = wait_entry(true, CheckOn::Success);
     assert_eq!(
-        summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wait,),
+        summary("nudge", &entry, 8_000, LoopRunMode::Manual, &wait),
         "○ check failed (exit 1) in 2.0s — @planner not woken; fires when the check passes\n"
     );
 
@@ -410,14 +378,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
             timeout: None,
         }));
         assert_eq!(
-            summary(
-                "watchdog",
-                &entry,
-                8_000,
-                LoopRunMode::Manual,
-                false,
-                &outcome
-            ),
+            summary("watchdog", &entry, 8_000, LoopRunMode::Manual, &outcome),
             expected
         );
     }
@@ -440,49 +401,13 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
     );
 
     assert_eq!(
-        summary(
-            "watchdog",
-            &entry,
-            900,
-            LoopRunMode::Scheduled,
-            false,
-            &outcome,
-        ),
+        summary("watchdog", &entry, 900, LoopRunMode::Scheduled, &outcome),
         "loop `watchdog`: check passed (exit 0) in 700ms — codex not started; fires when the check fails\n"
     );
 }
 
 #[test]
-fn trip_line_names_check_fact_and_action() {
-    let check = CheckRecord {
-        duration_ms: None,
-        agent: None,
-        output_path: None,
-        code: Some(101),
-        timed_out: false,
-        output: "failed".to_owned(),
-    };
-    let mut out = Vec::new();
-
-    let mut record = LoopRunRecord::new("guard", LoopRunResult::Completed, LoopRunMode::Manual, 0);
-    record.check = Some(check);
-    write_check_trip_line(
-        &mut out,
-        &TaskAction::Spawn("codex".to_owned()),
-        &record,
-        None,
-        12_000,
-    )
-    .unwrap();
-
-    assert_eq!(
-        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
-        "  ✗ check failed (exit 101) in 12s → starting codex\n"
-    );
-}
-
-#[test]
-fn completed_spawn_summary_prints_cost_message_and_keep_hint() {
+fn completed_spawn_summary_prints_cost_and_message() {
     let outcome = RunOutcome::completed(None)
         .with_exit_code(Some(0))
         .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
@@ -496,10 +421,9 @@ fn completed_spawn_summary_prints_cost_message_and_keep_hint() {
             &spawn_entry(false, CheckOn::Fail),
             180_000,
             LoopRunMode::Manual,
-            false,
-            &outcome,
+            &outcome
         ),
-        "✓ completed in 3m · $0.42 · ↘ 12k ↗ 3k\n  │ pong\n  run: run_0123456789abcdef01234567\n  transcript: /tmp/transcript.jsonl\n  pane closed; rerun with --keep to watch\n"
+        "✓ completed in 3m · $0.42 · ↘ 12k ↗ 3k\n  │ pong\n  run: run_0123456789abcdef01234567\n  transcript: /tmp/transcript.jsonl\n"
     );
 }
 
@@ -517,8 +441,7 @@ fn streamed_spawn_summary_skips_repeated_message_and_links_run() {
             &spawn_entry(false, CheckOn::Fail),
             1_000,
             LoopRunMode::Manual,
-            true,
-            &outcome,
+            &outcome
         ),
         "✓ completed in 1.0s\n  run: run_0123456789abcdef01234567\n  transcript: /tmp/transcript.jsonl\n"
     );
@@ -534,8 +457,7 @@ fn scheduled_summary_prints_run_spend() {
             &spawn_entry(false, CheckOn::Fail),
             120_000,
             LoopRunMode::Scheduled,
-            false,
-            &outcome,
+            &outcome
         ),
         "loop `watchdog`: completed in 2m · $0.09 · ↘ 14k ↗ 269\n"
     );
@@ -549,8 +471,7 @@ fn scheduled_summary_prints_run_spend() {
             &spawn_entry(false, CheckOn::Fail),
             120_000,
             LoopRunMode::Scheduled,
-            false,
-            &outcome,
+            &outcome
         ),
         "loop `watchdog`: failed (exit 1) in 2m · $0.09 · ↘ 14k ↗ 269\n  see: rimz loop show watchdog\n"
     );
@@ -568,10 +489,9 @@ fn completed_spawn_summary_falls_back_when_last_message_is_blank() {
             &spawn_entry(false, CheckOn::Fail),
             1_000,
             LoopRunMode::Manual,
-            false,
-            &outcome,
+            &outcome
         ),
-        "✓ completed in 1.0s\n  no final message; see: rimz loop show watchdog\n  run: run_0123456789abcdef01234567\n  pane closed; rerun with --keep to watch\n"
+        "✓ completed in 1.0s\n  no final message; see: rimz loop show watchdog\n  run: run_0123456789abcdef01234567\n"
     );
 }
 
@@ -585,8 +505,7 @@ fn delivered_summary_names_target_handle() {
             &wait_entry(false, CheckOn::Fail),
             90,
             LoopRunMode::Manual,
-            false,
-            &outcome,
+            &outcome
         ),
         "✓ delivered to @planner in 90ms\n"
     );
@@ -628,8 +547,7 @@ fn check_only_verdicts_name_the_check_fact() {
                 &check_entry(),
                 1_200,
                 LoopRunMode::Manual,
-                false,
-                &outcome,
+                &outcome
             ),
             expected
         );
@@ -637,23 +555,29 @@ fn check_only_verdicts_name_the_check_fact() {
 }
 
 #[test]
-fn keep_hint_only_prints_for_manual_spawn_without_keep() {
-    let outcome = RunOutcome::completed(None)
-        .with_exit_code(Some(0))
-        .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
-        .with_last_message(Some("done".to_owned()));
-    let entry = spawn_entry(false, CheckOn::Fail);
-
-    for (mode, keep, should_hint) in [
-        (LoopRunMode::Manual, false, true),
-        (LoopRunMode::Manual, true, false),
-        (LoopRunMode::Scheduled, false, false),
+fn keep_hint_prints_only_while_a_fresh_agent_run_can_still_reach_its_agent() {
+    let spawn = spawn_entry(false, CheckOn::Fail);
+    let stay = TaskEntry {
+        stay: true,
+        ..spawn_entry(false, CheckOn::Fail)
+    };
+    let hint = "  the agent's pane closes after its turn; fire with --keep to leave it open";
+    for (entry, keep, ended, expected) in [
+        (&spawn, false, false, Some(hint)),
+        (&spawn, true, false, None),
+        (&spawn, false, true, None),
+        (&stay, false, false, None),
+        (&check_entry(), false, false, None),
+        (&wait_entry(false, CheckOn::Fail), false, false, None),
     ] {
-        let stripped = summary("watchdog", &entry, 100, mode, keep, &outcome);
+        let action = schedule::TaskShape::compile("watchdog", entry)
+            .action()
+            .unwrap()
+            .clone();
         assert_eq!(
-            stripped.contains("pane closed; rerun with --keep to watch"),
-            should_hint,
-            "{mode:?} keep={keep}: {stripped}"
+            keep_hint(entry, &action, keep, ended),
+            expected,
+            "{entry:?} keep={keep} ended={ended}"
         );
     }
 }
@@ -663,13 +587,13 @@ fn manual_early_exits_explain_what_stays_in_place() {
     let entry = wait_entry(false, CheckOn::Fail);
     let gone = RunOutcome::target_gone("@planner", None);
     assert_eq!(
-        summary("nudge", &entry, 100, LoopRunMode::Manual, false, &gone,),
+        summary("nudge", &entry, 100, LoopRunMode::Manual, &gone),
         "○ @planner not alive — schedule left in place\n"
     );
 
     let expired = RunOutcome::expiry();
     assert_eq!(
-        summary("nudge", &entry, 100, LoopRunMode::Manual, false, &expired,),
+        summary("nudge", &entry, 100, LoopRunMode::Manual, &expired),
         "○ deadline expired — task left in place\n"
     );
 }
@@ -704,23 +628,6 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
             output: String::new(),
             output_path: Some("/tmp/wait.log".into()),
         };
-        let mut out = Vec::new();
-        let mut record =
-            LoopRunRecord::new("watch", LoopRunResult::Completed, LoopRunMode::Manual, 0);
-        record.check = Some(check.clone());
-        write_check_trip_line(
-            &mut out,
-            &TaskAction::Spawn("codex".to_owned()),
-            &record,
-            Some(&verdict),
-            0,
-        )
-        .unwrap();
-        let raw = String::from_utf8(out).unwrap();
-        assert_eq!(
-            anstream::adapter::strip_str(&raw).to_string(),
-            format!("  ✗ {} → starting codex\n", verdict.label())
-        );
         for result in [LoopRunResult::Delivered, LoopRunResult::CheckSkipped] {
             let mut outcome = RunOutcome::terminal(result).with_check(Some(check.clone()));
             outcome.record.watch = Some(verdict.clone());
@@ -730,7 +637,6 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
                     &wait_entry(true, CheckOn::Success),
                     0,
                     mode,
-                    false,
                     &outcome,
                 );
                 assert_eq!(out.matches(&verdict.label()).count(), 1, "{out}");

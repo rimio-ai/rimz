@@ -142,7 +142,6 @@ pub(super) fn launch_layout(
         allow_in_place,
         entry: rimz::launcher::RoomEntry::Live,
         starter: rimz::launcher::Starter::Human,
-        resident_loop: None,
         workflow: None,
         automation: None,
         leader_run: None,

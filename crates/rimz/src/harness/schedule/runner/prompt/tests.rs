@@ -850,21 +850,3 @@ fn signal_note_is_verbatim_regardless_of_armer() {
         );
     }
 }
-
-#[test]
-fn signal_note_and_guard_evidence_remain_after_wait_body() {
-    let signal = signal("deploy.failed", serde_json::json!({"branch":"feature"}));
-    let body = compose_wait(
-        "deployment",
-        &task(),
-        None,
-        Evidence::Signal(&signal),
-        "Inspect {{branch}}",
-        now(),
-    );
-    let outcome = super::super::CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
-    assert_eq!(
-        super::super::augment_prompt(body, "check `false` exited 1", &outcome.output),
-        "waited on deploy.failed\nfired [deployment]\nbranch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
-    );
-}

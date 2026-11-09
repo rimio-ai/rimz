@@ -17,7 +17,6 @@ const AGENT_RELAUNCH: &str = "launch from a directory the account already trusts
 #[derive(Clone, Copy)]
 pub enum Unattended {
     Team,
-    Loop,
     Workflow,
     Subagent,
     Agent,
@@ -27,7 +26,6 @@ impl std::fmt::Display for Unattended {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Team => "team",
-            Self::Loop => "loop",
             Self::Workflow => "workflow",
             Self::Subagent => "subagent resume",
             Self::Agent => "agent-started",
@@ -160,7 +158,6 @@ mod tests {
             for unattended in [
                 None,
                 Some(super::Unattended::Team),
-                Some(super::Unattended::Loop),
                 Some(super::Unattended::Subagent),
                 Some(super::Unattended::Agent),
             ] {
@@ -316,7 +313,6 @@ mod tests {
         for unattended in [
             None,
             Some(super::Unattended::Team),
-            Some(super::Unattended::Loop),
             Some(super::Unattended::Subagent),
             Some(super::Unattended::Agent),
         ] {

@@ -1,20 +1,17 @@
 //! Loop-fire policy from ordered gates through one durable history transition.
 //!
 //! [`TaskFire`] owns checks, deadlines, task consumption, run locks, prompt and
-//! launch preparation, and terminal record mapping. CLI executes the prepared
-//! supervised-run or message effect and returns its typed result.
+//! launch preparation, and terminal record mapping. Every other fire starts a workflow
+//! run here; the CLI executes a prepared message delivery and returns its typed result.
 
-pub(super) mod agent_check;
 mod prompt;
 pub(in crate::harness) use prompt::signal_details;
 pub use prompt::signal_subject;
-mod reminder;
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -46,23 +43,18 @@ use crate::agents::{
     RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
     find_definition, preflight_hooks,
 };
-#[cfg(test)]
-use crate::config::TaskCheck;
-use crate::config::{
-    CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec,
-};
+use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
-use crate::harness::run::{RunCancellation, SupervisedRunOutcome, SupervisedRunRequest};
+use crate::harness::run::{RunCancellation, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
+use crate::harness::schedule::compile::{CompiledAction, TaskWorkflow};
 use crate::harness::schedule::run_log::{
-    self, CheckRecord, JudgeRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
-    RunStage, RunTransition, SignalRecord,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    RunTransition, SignalRecord,
 };
-use crate::harness::schedule::signal::{
-    Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome, WatchVerdict,
-};
+use crate::harness::schedule::signal::{Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome};
 use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
@@ -127,25 +119,6 @@ pub struct TaskFireFinished {
     pub presentation: LoopRunPresentation,
     pub transition: RunTransition,
     pub notice: TaskFireNotice,
-    pub replace_holder: Option<Box<RunLockInfo>>,
-}
-
-/// One fired guard check awaiting CLI presentation before its effect.
-#[derive(Clone, Debug)]
-pub struct CheckTrip {
-    pub record: LoopRunRecord,
-    pub watch: Option<WatchVerdict>,
-    pub duration_ms: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct PreparedSpawn {
-    pub root: PathBuf,
-    pub request: SupervisedRunRequest,
-    pub stream: bool,
-    /// The fire's own tree, handed to the launch; its caller cleans it up when the launch errors
-    /// or the budget refuses an attempt.
-    pub fire_tree: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,122 +144,26 @@ pub struct PreparedDelivery {
 )]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
+    /// The checkout's memory says a run was already started there; nothing is recorded.
     AlreadyLaunched,
-    DeclineHeld,
-    CapacityHeld,
-    Resident {
-        root: PathBuf,
-        cwd: PathBuf,
-        worktree: Option<String>,
-        spec: String,
-        prompt: String,
-        permission_override: Option<PermissionMode>,
-        /// The `### Loop` reminder body for the prompt leader.
-        reminder_body: String,
-        loop_notes_at: Option<Timestamp>,
-    },
-    Spawn(PreparedSpawn),
+    /// A drained trigger went back to wait for the run still holding the scope.
+    Waiting,
     Deliver(PreparedDelivery),
 }
 
 #[derive(Debug)]
 pub enum TaskFireEffect {
-    Resident {
-        leader: String,
-        checkout: PathBuf,
-        handles: Vec<String>,
-        /// Handles of the checkout occupants a takeover stopped first.
-        stopped: Vec<String>,
-    },
-    /// A takeover found an open turn in the checkout; nothing was stopped or
-    /// launched.
-    TakeoverBlocked {
-        blockers: Vec<(String, super::takeover::OpenTurn)>,
-    },
-    Spawn(SupervisedRunOutcome),
     Delivered(crate::ids::MessageId),
     TargetGone,
 }
 
-#[derive(Clone, Debug)]
-enum PendingEffect {
-    Resident,
-    Spawn { stream: bool },
-    Deliver { target: TaskTarget },
-}
-
-enum FiredCheck {
-    Shell {
-        command: String,
-        record: CheckRecord,
-    },
-    Judge {
-        tier: usize,
-        record: JudgeRecord,
-    },
-}
-
-enum GuardStop {
-    Interrupted,
-    Declined,
-    Gate(LoopRunResult, String),
-    CheckOnly(LoopRunResult),
-}
-
-impl FiredCheck {
-    fn heading(&self) -> String {
-        match self {
-            Self::Judge { record, .. } => {
-                let status = record
-                    .verdict
-                    .map_or("no verdict", |pass| if pass { "pass" } else { "fail" });
-                format!(
-                    "judge `{}` ({} {}): {status}",
-                    record.profile,
-                    record.kind,
-                    record.model.as_deref().unwrap_or("default")
-                )
-            }
-            Self::Shell { command, record } => {
-                let status = if record.timed_out {
-                    "timeout".to_owned()
-                } else {
-                    record
-                        .code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "signal".to_owned())
-                };
-                format!("check `{command}` exited {status}")
-            }
-        }
-    }
-
-    fn output(&self) -> String {
-        match self {
-            Self::Shell { record, .. } => record.output.clone(),
-            Self::Judge { record, .. } => std::iter::once(
-                record
-                    .reason
-                    .as_deref()
-                    .or(record.error.as_deref())
-                    .unwrap_or_default(),
-            )
-            .chain(record.warnings.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        }
-    }
-
-    fn duration_ms(&self) -> u64 {
-        match self {
-            Self::Shell { record, .. } => record.duration_ms.unwrap_or_default(),
-            Self::Judge { record, .. } => record.duration_ms.unwrap_or_default(),
-        }
-    }
+/// Where a fire's run reads its definition.
+enum WorkflowSource {
+    Deployed(PathBuf),
+    Inline(crate::harness::workflow::InlineDefinition),
 }
 
 struct FireContext {
-    action: TaskAction,
     root: PathBuf,
     scope: Option<FireScope>,
 }
@@ -295,7 +172,6 @@ struct FireScope {
     kind: crate::ids::AgentKind,
     scope_runtime: RuntimePaths,
     scope_state: StatePaths,
-    resolved: Option<ResolvedSingleAgentLaunch>,
     managed_launch: ManagedLaunchState,
     /// The task's [`task_login`] for `kind`.
     login: Option<ProviderLogin>,
@@ -309,7 +185,6 @@ impl FireScope {
         kind: crate::ids::AgentKind,
         scope_runtime: RuntimePaths,
         scope_state: StatePaths,
-        resolved: Option<ResolvedSingleAgentLaunch>,
         login: Option<ProviderLogin>,
     ) -> Self {
         Self {
@@ -318,7 +193,6 @@ impl FireScope {
             kind,
             scope_runtime,
             scope_state,
-            resolved,
             managed_launch: ManagedLaunchState::Unsupported,
             capacity: OnceCell::new(),
         }
@@ -351,7 +225,6 @@ impl FireScope {
             kind,
             runtime,
             StatePaths::for_project_root(&workspace.project_root)?,
-            Some(resolved.clone()),
             login,
         );
         scope.account_skip = account_skip;
@@ -373,15 +246,10 @@ impl FireScope {
     }
 
     fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
-        if entry.surplus.is_none() && entry.surplus_after.is_none() {
-            return None;
-        }
-        surplus_gate_in(
-            entry,
-            self.kind.as_str(),
+        surplus_refusal(entry, self.kind.as_str(), || {
             self.capacity()
-                .and_then(|capacity| capacity.longest_window_surplus(now)),
-        )
+                .and_then(|capacity| capacity.longest_window_surplus(now))
+        })
     }
 }
 
@@ -389,11 +257,7 @@ impl FireContext {
     fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
         let root = entry.resolved_root();
         if matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)) {
-            return Ok(Self {
-                action,
-                root,
-                scope: None,
-            });
+            return Ok(Self { root, scope: None });
         }
         let launch = LaunchLogin::from(entry.account.clone());
         let scope = match &action {
@@ -411,7 +275,6 @@ impl FireContext {
                     target.kind.clone(),
                     runtime,
                     StatePaths::for_project_root(&project_root)?,
-                    None,
                     login,
                 );
                 scope.managed_launch =
@@ -423,7 +286,6 @@ impl FireContext {
             }
         };
         Ok(Self {
-            action,
             root,
             scope: Some(scope),
         })
@@ -449,13 +311,97 @@ fn fire_tree_room(root: &Path) -> Option<(crate::Store, crate::ResolvedWorkspace
     Some((store, workspace))
 }
 
-/// The worktree one fire of a `fresh-worktree` task created for its guard and turn.
+/// The worktree one fire of a `fresh-worktree` task cut as its run's scope.
 struct FireTree {
     name: String,
     path: PathBuf,
     base_fallback: Option<String>,
-    /// A launch took it over, so the harness never force-removes it.
+    /// A run took it over, so the fire never force-removes it; the run's report settles it.
     handed_over: bool,
+}
+
+/// Force-remove the fresh tree a loop fire cut, then retire its sessions and archive its channel.
+fn remove_fire_tree(
+    task: &str,
+    root: &Path,
+    config: &crate::config::WorktreeConfig,
+    name: &str,
+    path: &Path,
+) {
+    let memo = crate::worktree::LandedMemo::load(root);
+    match crate::worktree::remove(
+        root,
+        config,
+        name,
+        path,
+        true,
+        &crate::worktree::ProtectionSet::default(),
+        &memo,
+    ) {
+        Ok(removed) => {
+            if let Some((store, workspace)) = fire_tree_room(root) {
+                let retirement = crate::worktree::retire_removal(
+                    &store,
+                    &removed,
+                    crate::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+                    &workspace.session_name,
+                );
+                for (step, result) in [
+                    ("retire its sessions", retirement.session_retirement),
+                    ("archive its channel", retirement.message_archival),
+                ] {
+                    if let Err(error) = result {
+                        tracing::warn!(task, worktree = %path.display(), %error, "failed to {step} after removing the fire's unused worktree");
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(task, worktree = %path.display(), error = %format!("{error:#}"), "failed to remove the fire's unused worktree");
+        }
+    }
+    memo.save();
+}
+
+/// Settle the fresh tree a reported run worked in, through a detached `rimz`: the engine reports
+/// under the workspace lock, which the removal's store writes take. A run that never acted only
+/// ran its guards there, so `worktree remove --force` takes the tree. An acted run's agent may
+/// have left work or still hold the pane, so `worktree cleanup` keeps the tree for either and
+/// removes it otherwise: the agent's own wrapper cleanup ran while the live run protected it.
+pub(super) fn settle_fire_tree(run: &crate::store::workflow::RunRecord, acted: bool) {
+    let Some(task) = run.task.as_deref().filter(|_| run.fire_tree) else {
+        return;
+    };
+    let path = &run.scope.path;
+    let marker = match crate::worktree::read_marker_for_worktree(path) {
+        Ok(Some(marker)) => marker,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(task, worktree = %path.display(), %error, "fire tree marker unreadable; tree kept");
+            return;
+        }
+    };
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "--root".into(),
+        run.project_root.clone().into_os_string(),
+        "worktree".into(),
+    ];
+    if acted {
+        args.extend(["cleanup".into(), path.clone().into_os_string()]);
+        args.push("--non-interactive".into());
+    } else {
+        args.extend(["remove".into(), marker.name.into(), "--force".into()]);
+    }
+    let spawned = StatePaths::for_project_root(&run.project_root)
+        .and_then(|paths| RuntimePaths::for_state(&paths))
+        .map_err(anyhow::Error::from)
+        .and_then(|runtime| {
+            crate::child_process::spawn_detached_rimz(&runtime, &args, "loop-fire-tree")
+                .map_err(anyhow::Error::from)
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(task, worktree = %path.display(), error = %format!("{error:#}"), "fire tree cleanup not started; gc reclaims a clean tree");
+    }
 }
 
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
@@ -471,8 +417,6 @@ pub struct TaskFire<'a> {
     keep: bool,
     now: Timestamp,
     config: Arc<MachineConfig>,
-    check_echo: Option<CheckEcho>,
-    check_trip: Option<CheckTrip>,
     signal: Option<TriggerSignal>,
     arrived_at: Option<Timestamp>,
     from_arrived_at: Option<Timestamp>,
@@ -486,20 +430,19 @@ pub struct TaskFire<'a> {
     record_hold: Option<CheckSignalGuard>,
     backlog_paths: Option<StatePaths>,
     absorbed: u64,
-    needs_room: bool,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
-    throttle_host: Arc<dyn throttle::Host>,
-    /// Ctrl-C heard from before the check on, for the hold to inherit.
-    check_interrupts: Option<throttle::Interrupts>,
-    throttle_turn: Option<throttle::Turn>,
-    throttle_wait: Option<Duration>,
     /// How far past its `fire-at` instant a scheduled one-shot started, taken at construction.
     late_ms: Option<u64>,
-    resident_groups: Vec<throttle::StartGroup>,
-    fired_guard: Vec<FiredCheck>,
-    pending: Option<PendingEffect>,
+    /// A watch's verdict, recorded as the fire's check.
+    watch_check: Option<CheckRecord>,
+    pending: Option<TaskTarget>,
     finished: bool,
-    check_process: agent_check::ProcessRunner,
+    /// This fire took its trigger from the backlog.
+    draining: bool,
+    /// A fresh queued arrival that served the queue's head under the lease.
+    queued_arrival: Option<WaitingTrigger>,
+    /// This fire started a run or found one live, whose report drains the backlog.
+    saw_run: bool,
 }
 
 impl<'a> TaskFire<'a> {
@@ -516,7 +459,6 @@ impl<'a> TaskFire<'a> {
         now: Timestamp,
         config: Arc<MachineConfig>,
         signal: Option<TriggerSignal>,
-        check_echo: CheckEcho,
         started: Instant,
     ) -> Result<Self> {
         let name = name.into();
@@ -540,8 +482,6 @@ impl<'a> TaskFire<'a> {
             keep,
             now,
             config,
-            check_echo: Some(check_echo),
-            check_trip: None,
             signal,
             arrived_at: None,
             from_arrived_at: None,
@@ -553,23 +493,15 @@ impl<'a> TaskFire<'a> {
             record_hold: None,
             backlog_paths: None,
             absorbed: 0,
-            needs_room: false,
             run_lock_path,
-            throttle_host: Arc::new(throttle::SystemHost),
-            resident_groups: Vec::new(),
-            check_interrupts: None,
-            throttle_turn: None,
-            throttle_wait: None,
             late_ms,
-            fired_guard: Vec::new(),
+            watch_check: None,
             pending: None,
             finished: false,
-            check_process: agent_check::execute,
+            draining: false,
+            queued_arrival: None,
+            saw_run: false,
         })
-    }
-
-    pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
-        self.check_trip.take()
     }
 
     /// Hand an action's SIGTERM guard through terminal recording and run-lock release.
@@ -587,9 +519,7 @@ impl<'a> TaskFire<'a> {
         if waiting.triggers.is_empty() {
             return Ok(false);
         }
-        let path = self
-            .fire_run_lock_path(true)?
-            .context("waiting trigger needs a run lock")?;
+        let path = self.fire_run_lock_path()?;
         let RunLockAttempt::Acquired(guard) = acquire_run_lock_file(
             &path,
             Some(self.task.kind()),
@@ -607,6 +537,7 @@ impl<'a> TaskFire<'a> {
         self.run_lock = Some(guard);
         self.backlog_paths = Some(paths.clone());
         self.serve_trigger(trigger);
+        self.draining = true;
         self.now = Timestamp::now();
         Ok(true)
     }
@@ -626,7 +557,7 @@ impl<'a> TaskFire<'a> {
             self.record_hold = None;
             return Ok(());
         }
-        let Some(paths) = self.backlog_paths.as_ref() else {
+        let Some(paths) = self.backlog_paths.as_ref().filter(|_| !self.saw_run) else {
             self.run_lock = None;
             self.record_hold = None;
             return Ok(());
@@ -748,314 +679,20 @@ impl<'a> TaskFire<'a> {
         self
     }
 
-    /// Report the committed launch of a resident plan, so the throttle turn
-    /// this fire holds passes on once the provider reports the agent.
-    pub fn report_launch(&self, workspace: &WorkspaceId, agent: &crate::ids::AgentSessionId) {
-        if let Some(turn) = &self.throttle_turn {
-            turn.report_launch(workspace, agent);
-        }
-    }
-
-    fn capacity_condition(&self) -> bool {
-        self.mode == LoopRunMode::Scheduled
-            && self.entry.agent.is_some()
-            && self.entry.when.is_some()
-    }
-
-    fn capacity_now(&self) -> Result<Timestamp> {
-        Ok(Timestamp::from_millisecond(i64::try_from(
-            self.throttle_host.now_ms(),
-        )?)?)
-    }
-
-    fn capacity_gives_up_at(&self, first: Timestamp) -> Result<Option<Timestamp>> {
-        use crate::config::CapacityWait;
-        let until = match self.entry.capacity_wait {
-            Some(CapacityWait::Forever) => None,
-            Some(CapacityWait::Duration(duration)) => first.checked_add(duration).ok(),
-            None => match self
-                .task
-                .trigger()
-                .as_ref()
-                .ok()
-                .map(|parsed| &parsed.trigger)
-            {
-                Some(Trigger::Schedule(schedule)) if !schedule.once => {
-                    let runtime = RuntimePaths::for_project_root(&self.entry.resolved_root())?;
-                    let key = self
-                        .checkout
-                        .as_ref()
-                        .filter(|_| self.entry.each_worktree)
-                        .map_or_else(
-                            || self.name.clone(),
-                            |checkout| super::fire::scope_key(&self.name, checkout),
-                        );
-                    let stamp = super::fire::last_stamps(&runtime)
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(self.now);
-                    schedule
-                        .schedule
-                        .next_after(stamp, &self.now.to_zoned(self.config.time_zone()))
-                        .and_then(|at| at.checked_sub(Duration::from_secs(1)).ok())
-                }
-                _ => None,
-            },
-        };
-        Ok(match (until, self.entry.deadline) {
-            (Some(until), Some(deadline)) => Some(until.min(deadline)),
-            (until, deadline) => until.or(deadline),
-        })
-    }
-
-    fn clear_capacity(&self) -> Result<()> {
-        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-        if let Err(error) = super::launch_ledger_store::remove_checkout_capacity(
-            &paths,
-            &self.name,
-            &self.launch_checkout(),
-        ) {
-            tracing::warn!(
-                task = %self.name, path = %super::launch_ledger::capacity_path(&paths).display(),
-                %error, "failed to clear loop capacity wait"
-            );
-        }
-        Ok(())
-    }
-
-    fn prepare_capacity_end(&mut self) -> Result<Option<TaskFirePlan>> {
-        if !self.capacity_condition() {
-            return Ok(None);
-        }
-        if self.entry.deadline.is_some()
-            && let Some(done) = self.prepare_deadline_at(self.capacity_now()?)?
-        {
-            return Ok(Some(TaskFirePlan::Done(done)));
-        }
-        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-        let waits = super::launch_ledger::load_capacity(&paths)?;
-        let Some(wait) = waits
-            .get(&self.name)
-            .and_then(|checkouts| checkouts.get(&self.launch_checkout()))
-            .filter(|wait| {
-                wait.since
-                    == self
-                        .condition
-                        .as_ref()
-                        .and_then(|condition| condition.since)
-            })
-        else {
-            return Ok(None);
-        };
-        if wait.gave_up {
-            self.finished = true;
-            return Ok(Some(TaskFirePlan::CapacityHeld));
-        }
-        let now = self.capacity_now()?;
-        if wait.gives_up_at.is_some_and(|at| now >= at) {
-            return self
-                .record_capacity_hold(wait.reason.clone(), wait.kinds.clone(), wait.hold)
-                .map(Some);
-        }
-        Ok(None)
-    }
-
-    fn record_capacity_hold(
-        &mut self,
-        reason: String,
-        kinds: Vec<AgentKind>,
-        hold: Option<crate::ids::HoldKind>,
-    ) -> Result<TaskFirePlan> {
-        let now = self.capacity_now()?;
-        let since = self
-            .condition
-            .as_ref()
-            .and_then(|condition| condition.since);
-        let gives_up_at = self.capacity_gives_up_at(now)?;
-        let wait = super::launch_ledger_store::record_capacity(
-            &StatePaths::for_project_root(&self.entry.resolved_root())?,
-            &self.name,
-            &self.launch_checkout(),
-            |previous| {
-                let previous = previous.filter(|wait| wait.since == since);
-                let first = previous.as_ref().map_or(now, |wait| wait.first);
-                let gives_up_at = previous
-                    .as_ref()
-                    .map_or(gives_up_at, |wait| wait.gives_up_at);
-                super::launch_ledger::CapacityRecord {
-                    since,
-                    first,
-                    last: now,
-                    count: previous.map_or(1, |wait| wait.count.saturating_add(1)),
-                    kinds,
-                    reason,
-                    hold,
-                    gives_up_at,
-                    gave_up: gives_up_at.is_some_and(|at| now >= at),
-                }
-            },
-        )?;
-        if wait.gave_up {
-            let waited = Duration::from_millis(
-                u64::try_from(now.duration_since(wait.first).as_millis()).unwrap_or(0),
-            );
-            return Ok(TaskFirePlan::Done(self.record_gate(
-                LoopRunResult::ThrottleSkipped,
-                format!(
-                    "gave up waiting for capacity after {}; {}",
-                    crate::utils::time::format_duration_compact(waited),
-                    wait.reason
-                ),
-            )));
-        }
-        if wait.count == 1 {
-            self.record_terminal_with(
-                LoopRunResult::CapacityHeld,
-                LoopRunPresentation::default(),
-                TaskFireNotice::None,
-                Some(self.now),
-                |record| record.error = Some(wait.reason),
-            );
-        } else {
-            self.finished = true;
-        }
-        Ok(TaskFirePlan::CapacityHeld)
-    }
-
-    fn prepare_capacity_look(&mut self) -> Result<Option<TaskFirePlan>> {
-        if let Some(plan) = self.prepare_capacity_end()? {
-            return Ok(Some(plan));
-        }
-        if !self.capacity_condition()
-            || (self.entry.guard().shell.is_none() && self.entry.guard().judges.is_empty())
-        {
-            return Ok(None);
-        }
-        let run = self.throttle_run()?;
-        let held = throttle::look_in(self.throttle_host.as_ref(), &self.config.throttle, &run)?;
-        if let Some(plan) = self.prepare_capacity_end()? {
-            return Ok(Some(plan));
-        }
-        held.map(|hold| self.record_capacity_hold(hold.text, hold.kinds, Some(hold.kind)))
-            .transpose()
-    }
-
-    fn throttle_run(&self) -> Result<throttle::Run> {
-        let root = self.entry.resolved_root();
-        let groups = match self
-            .context
-            .as_ref()
-            .and_then(|context| context.scope.as_ref())
-        {
-            Some(scope) => vec![throttle::StartGroup {
-                kind: scope.kind.clone(),
-                account: scope.login.as_ref().map(|login| login.name().clone()),
-                agents: 1,
-            }],
-            None => self.resident_groups.clone(),
-        };
-        Ok(throttle::Run {
-            machine_gated: self.entry.throttle != Some(ThrottleSwitch::Off),
-            limits: None,
-            groups,
-            gives_up_ms: self
-                .capacity_gives_up_at(self.capacity_now()?)?
-                .and_then(|at| u64::try_from(at.as_millisecond()).ok()),
-            task: self.name.clone(),
-            workspace: StatePaths::for_project_root(&root)?.workspace_id,
-            root,
-            checkout: self.launch_checkout(),
-            disk: throttle::disk_at(
-                &self.entry,
-                &self.config.agents.worktree,
-                self.launch_checkout(),
-            ),
-        })
-    }
-
-    /// Only a spawning fire reaches admission; condition fires never keep a ticket while held.
-    fn prepare_throttle(&mut self) -> Result<Option<TaskFirePlan>> {
-        if self.entry.deadline.is_some()
-            && let Some(done) = self.prepare_deadline_at(self.capacity_now()?)?
-        {
-            return Ok(Some(TaskFirePlan::Done(done)));
-        }
-        if self.throttle_turn.is_some() {
-            return Ok(None);
-        }
-        if self.mode == LoopRunMode::Manual {
-            self.clear_capacity()?;
-            return Ok(None);
-        }
-        if let Some(plan) = self.prepare_capacity_end()? {
-            return Ok(Some(plan));
-        }
-        let run = self.throttle_run()?;
-        if self.capacity_condition() {
-            let attempt = throttle::try_admit_in(&self.throttle_host, &self.config.throttle, &run)?;
-            if let Some(plan) = self.prepare_capacity_end()? {
-                return Ok(Some(plan));
-            }
-            match attempt {
-                throttle::Attempt::Held(hold) => {
-                    return self
-                        .record_capacity_hold(hold.text, hold.kinds, Some(hold.kind))
-                        .map(Some);
-                }
-                throttle::Attempt::Turn(turn) => self.throttle_turn = Some(turn),
-                throttle::Attempt::Open => {}
-            }
-            self.clear_capacity()?;
-            return Ok(None);
-        }
-        let listening = self.check_interrupts.take();
-        let admission =
-            throttle::admit(&self.throttle_host, &self.config.throttle, &run, listening)?;
-        self.clear_capacity()?;
-        match admission {
-            throttle::Admission::Open => Ok(None),
-            throttle::Admission::Turn { turn, waited } => {
-                self.throttle_turn = Some(turn);
-                self.throttle_wait = waited;
-                Ok(None)
-            }
-            throttle::Admission::Skipped { reason } => {
-                if let Some(done) = self.prepare_deadline_at(self.capacity_now()?)? {
-                    return Ok(Some(TaskFirePlan::Done(done)));
-                }
-                Ok(Some(TaskFirePlan::Done(
-                    self.record_gate(LoopRunResult::ThrottleSkipped, reason),
-                )))
-            }
-            throttle::Admission::Interrupted => {
-                Ok(Some(TaskFirePlan::Done(self.record_terminal_with(
-                    LoopRunResult::Canceled,
-                    LoopRunPresentation {
-                        exit_code: Some(130),
-                        ..LoopRunPresentation::default()
-                    },
-                    TaskFireNotice::None,
-                    None,
-                    |record| record.error = Some("interrupted while held".to_owned()),
-                ))))
-            }
-        }
-    }
-
     fn launch_checkout(&self) -> PathBuf {
         self.checkout
             .clone()
             .unwrap_or_else(|| self.entry.run_dir())
     }
 
-    /// Where the guard and the turn run: the fire's fresh tree, else the launch checkout.
+    /// The run's scope: the fire's fresh tree, else the launch checkout.
     fn fire_dir(&self) -> PathBuf {
         self.fire_tree
             .as_ref()
             .map_or_else(|| self.launch_checkout(), |tree| tree.path.clone())
     }
 
-    /// Create a `fresh-worktree` fire's tree from trunk and announce it when the room's
+    /// Cut a `fresh-worktree` fire's tree from trunk and announce it when the room's
     /// store exists; a scheduled check-only fire births no room.
     fn prepare_fire_tree(&mut self) -> Result<()> {
         let Some(crate::config::TaskWorktree::Fresh { prefix }) = self.entry.task_worktree() else {
@@ -1090,267 +727,463 @@ impl<'a> TaskFire<'a> {
         Ok(())
     }
 
-    /// From the launch on, a pane, dirt or commits may hold the tree, so only the
-    /// keep-assessed wrapper cleanup removes it.
-    fn hand_over_fire_tree(&mut self) -> Option<PathBuf> {
-        let tree = self.fire_tree.as_mut()?;
-        tree.handed_over = true;
-        Some(tree.path.clone())
+    /// From `create` on, the run owns the tree and its report settles it.
+    fn hand_over_fire_tree(&mut self) {
+        if let Some(tree) = self.fire_tree.as_mut() {
+            tree.handed_over = true;
+        }
     }
 
-    /// Remove a fire's tree that no launch took over, forced: only the guard touched
-    /// it, and the run record keeps the guard's output.
+    /// Remove a fire's tree that no run took over, forced: nothing ran in it.
     fn remove_unlaunched_fire_tree(&mut self) {
         let Some(tree) = self.fire_tree.take_if(|tree| !tree.handed_over) else {
             return;
         };
-        let root = self.entry.resolved_root();
-        let memo = crate::worktree::LandedMemo::load(&root);
-        match crate::worktree::remove(
-            &root,
+        remove_fire_tree(
+            &self.name,
+            &self.entry.resolved_root(),
             &self.config.agents.worktree,
             &tree.name,
             &tree.path,
-            true,
-            &crate::worktree::ProtectionSet::default(),
-            &memo,
-        ) {
-            Ok(removed) => {
-                if let Some((store, workspace)) = fire_tree_room(&root) {
-                    let retirement = crate::worktree::retire_removal(
-                        &store,
-                        &removed,
-                        crate::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
-                        &workspace.session_name,
-                    );
-                    for (step, result) in [
-                        ("retire its sessions", retirement.session_retirement),
-                        ("archive its channel", retirement.message_archival),
-                    ] {
-                        if let Err(error) = result {
-                            tracing::warn!(task = %self.name, worktree = %tree.path.display(), %error, "failed to {step} after removing the fire's unused worktree");
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(task = %self.name, worktree = %tree.path.display(), error = %format!("{error:#}"), "failed to remove the fire's unused worktree");
-            }
-        }
-        memo.save();
+        );
     }
 
     pub fn prepare(
         &mut self,
-        before_check: &mut dyn FnMut(&Path) -> Result<()>,
+        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        if let Some(TaskAction::Workflow(name)) = self.action.as_ref() {
-            return self.prepare_workflow(name.clone(), before_check);
+        match self.task.compiled().map_err(Clone::clone)?.clone() {
+            CompiledAction::Workflow(workflow) => self.prepare_workflow(workflow, before_launch),
+            CompiledAction::Deliver(target) => self.prepare_wait(target),
         }
-        if self.entry.stay {
-            return self.prepare_resident(before_check);
-        }
+    }
+
+    /// An unguarded wait: scope gates, the lease, the deadline and a watch's verdict, then the
+    /// delivery to its living session.
+    fn prepare_wait(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        let may_birth = self.context.as_ref().is_some_and(|context| {
-            matches!(context.action, TaskAction::Spawn(_))
-                || (self.mode == LoopRunMode::Scheduled && context.action.is_check_only())
-        });
-        if let Some(done) = self.prepare_run_lock(may_birth)? {
+        if let Some(done) = self.prepare_run_lock()? {
             return Ok(TaskFirePlan::Done(done));
         }
-
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
-
-        if let Some(plan) = self.prepare_capacity_look()? {
-            return Ok(plan);
-        }
-
-        let check = if self.run_lock.is_none()
-            && self
-                .context
-                .as_ref()
-                .is_some_and(|context| context.action.is_check_only())
-        {
-            before_check(&self.context_root()?)?;
-            if let Some(done) = self.prepare_run_lock(false)? {
-                return Ok(TaskFirePlan::Done(done));
-            }
-            self.prepare_fire_tree()?;
-            self.prepare_check(&mut |_| Ok(()))?
-        } else {
-            self.prepare_fire_tree()?;
-            self.prepare_check(before_check)?
-        };
-        if let ControlFlow::Break(done) = check {
+        if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        if self.run_lock.is_none() || self.needs_room {
-            if let Some(done) = self.prepare_throttle()? {
-                return Ok(done);
-            }
-            before_check(&self.context_root()?)?;
-            self.needs_room = false;
-            if let Some(done) = self.prepare_run_lock(false)? {
-                return Ok(TaskFirePlan::Done(done));
-            }
-        }
-        self.prepare_effect()
+        self.prepare_delivery(target)
     }
 
-    /// The effect of a one-shot fire whose gates passed. Only a spawn takes a
-    /// turn in the start throttle, before its ephemeral row is consumed.
-    fn prepare_effect(&mut self) -> Result<TaskFirePlan> {
-        match self
-            .context
-            .as_ref()
-            .context("loop task context missing after gates")?
-            .action
-            .clone()
-        {
-            TaskAction::Spawn(spec) => {
-                if let Some(done) = self.prepare_throttle()? {
-                    return Ok(done);
-                }
-                if let Some(done) = self.reconcile_backlog()? {
-                    return Ok(TaskFirePlan::Done(done));
-                }
-                self.prepare_spawn(spec)
-            }
-            TaskAction::Deliver(target) => self.prepare_delivery(target),
-            TaskAction::CheckOnly => {
-                unreachable!("check-only action is completed by prepare_check")
-            }
-            TaskAction::Workflow(_) => {
-                unreachable!("workflow action is completed by prepare_workflow")
-            }
+    /// A watch's verdict arrives with its fire: a check-in passes on, and a terminal verdict
+    /// passes only on the polarity `on` names.
+    fn prepare_watch(&mut self) -> Result<Option<TaskFireFinished>> {
+        let Some(watch) = self.watch_spec().and(self.watch_outcome()) else {
+            return Ok(None);
+        };
+        let outcome = watch.to_check_outcome();
+        let terminal = watch.verdict.is_terminal();
+        let duration_ms = watch.verdict.elapsed_ms();
+        let mut record = check_record(&outcome);
+        record.duration_ms = Some(duration_ms);
+        record.output_path.clone_from(&watch.output_path);
+        self.watch_check = Some(record);
+        if !terminal {
+            return Ok(None);
         }
+        let interrupted = outcome.interrupted;
+        if !interrupted && polarity_fires(self.entry.on, &outcome) {
+            return Ok(None);
+        }
+        if self.mode == LoopRunMode::Scheduled && !interrupted {
+            self.remove_schedule()?;
+        }
+        let result = if interrupted {
+            LoopRunResult::Canceled
+        } else {
+            LoopRunResult::CheckSkipped
+        };
+        Ok(Some(self.record_terminal_with(
+            result,
+            LoopRunPresentation {
+                check_duration_ms: Some(duration_ms),
+                exit_code: interrupted.then_some(130),
+                ..LoopRunPresentation::default()
+            },
+            TaskFireNotice::None,
+            None,
+            |run| run.error = interrupted.then(|| "check interrupted".to_owned()),
+        )))
     }
 
+    /// Every fire but an unguarded wait starts a workflow run, behind the ladder: scope gates,
+    /// deadline and memory, the admission lease, budget and surplus, then overlap against the
+    /// live run, which `create` refuses.
     fn prepare_workflow(
         &mut self,
-        name: String,
+        workflow: TaskWorkflow,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        super::validate_name(&name)?;
-        if let Some(done) = self.prepare_run_lock(true)? {
+        if let TaskWorkflow::Named(name) = &workflow {
+            super::validate_name(name)?;
+        }
+        if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        if self.run_lock.is_some() && self.workflow_already_launched()? {
+        if let Some(done) = self.prepare_agent_scope_gates()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        if let Some(done) = self.prepare_deadline()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        if self.workflow_already_launched()? {
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
-        if let Some(done) = self.prepare_deadline()? {
+        // A definition the row cannot compile refuses before the fire births a room.
+        let mut inline = match &workflow {
+            TaskWorkflow::Inline(_) => Some(self.workflow_source(&workflow)?),
+            TaskWorkflow::Named(_) => None,
+        };
+        if let Some(done) = self.prepare_run_lock()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        // A fire the cap or surplus would skip records it without birthing a room; the check
+        // repeats under the budget lock below, where it decides. A deployed workflow that does
+        // not resolve here refuses there, after the room.
+        let deployed = match &workflow {
+            TaskWorkflow::Named(_) => self.workflow_source(&workflow).ok(),
+            TaskWorkflow::Inline(_) => None,
+        };
+        if let Some(source) = inline.as_ref().or(deployed.as_ref())
+            && let Some(done) = self.prepare_workflow_admission(source)?
+        {
             return Ok(TaskFirePlan::Done(done));
         }
         let root = self.entry.resolved_root();
         before_launch(&root)?;
-        if self.run_lock.is_none() {
-            if let Some(done) = self.prepare_run_lock(false)? {
-                return Ok(TaskFirePlan::Done(done));
-            }
-            if self.workflow_already_launched()? {
-                self.finished = true;
-                return Ok(TaskFirePlan::AlreadyLaunched);
-            }
+        // Another fire may have started a run while this one waited for the room or lease.
+        if self.workflow_already_launched()? {
+            self.finished = true;
+            return Ok(TaskFirePlan::AlreadyLaunched);
         }
         let state = StatePaths::for_project_root(&root)?;
-        let home = crate::disk::paths::workflows_dir().canonicalize()?;
-        let dir = home.join(&name).canonicalize()?;
-        anyhow::ensure!(
-            dir.starts_with(&home),
-            "workflow must exist inside {}",
-            home.display()
-        );
-        // Under the run lock, so two fires cannot both fit under the cap.
-        if let Some(done) = self.prepare_workflow_admission(&dir)? {
+        let source = match inline.take() {
+            Some(source) => source,
+            None => self.workflow_source(&workflow)?,
+        };
+        // Each checkout of an each-worktree task fires under its own lease, so a capped task's
+        // fires also hold its budget lock from the budget read until `create` publishes the run
+        // the next read counts. A root with no state has no live run and `create` refuses it.
+        let _budget = (self.entry.budget_per_day.is_some() && state.root.exists())
+            .then(|| super::launch_ledger_store::hold_budget(&state, &self.name))
+            .transpose()?;
+        if let Some(done) = self.prepare_workflow_admission(&source)? {
             return Ok(TaskFirePlan::Done(done));
         }
+        if let Some(done) = self.reconcile_backlog()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        let fresh = matches!(
+            self.entry.task_worktree(),
+            Some(crate::config::TaskWorktree::Fresh { .. })
+        );
+        if self.mode == LoopRunMode::Manual {
+            self.supersede_held_decline(&state)?;
+        }
+        if fresh && let Some(blocker) = self.live_task_run(&state)? {
+            return self.prepare_overlap(&blocker.id, None);
+        }
+        // The last rung: a fresh task's run works in a tree cut for this fire alone.
+        self.prepare_fire_tree()?;
+        let named_prompt = matches!(source, WorkflowSource::Deployed(_))
+            && (self.entry.prompt.is_some() || self.entry.prompt_file.is_some());
         let prompt = || {
-            if self.entry.prompt.is_none() && self.entry.prompt_file.is_none() {
+            if !named_prompt {
                 return Ok(None);
             }
             self.resolve_effect_prompt()
                 .map(Some)
                 .map_err(|error| format!("{error:#}"))
         };
-        let result = crate::harness::workflow::create(
-            &state,
-            crate::harness::workflow::DefinitionSource::Deployed {
-                dir: &dir,
+        let definition = match &source {
+            WorkflowSource::Deployed(dir) => crate::harness::workflow::DefinitionSource::Deployed {
+                dir,
                 task: Some(self.name.clone()),
             },
+            WorkflowSource::Inline(definition) => {
+                crate::harness::workflow::DefinitionSource::Inline {
+                    task: self.name.clone(),
+                    definition: crate::harness::workflow::InlineDefinition {
+                        text: definition.text.clone(),
+                        assets: definition.assets.clone(),
+                    },
+                    fire_tree: fresh,
+                }
+            }
+        };
+        let checkout = self.fire_dir();
+        std::fs::metadata(&checkout)
+            .with_context(|| format!("task checkout {}", checkout.display()))?;
+        let created = crate::harness::workflow::create(
+            &state,
+            definition,
             crate::harness::workflow::ScopeRoots {
-                checkout: self.launch_checkout(),
+                checkout,
                 project: root,
             },
             prompt,
             self.mode == LoopRunMode::Manual,
         );
-        let (result, id, error) = match result {
-            Ok(run) => {
-                assist_log::append(&AssistRecord {
-                    at: Timestamp::now(),
-                    assist: Assist::WorkflowStart {
-                        run: run.id.clone(),
-                        workflow: run.workflow,
-                        task: run.task,
-                        checkout: run.scope.path,
-                        prompt: run.prompt.is_some(),
-                    },
-                });
-                let error = self.record_workflow_launch(
-                    &state,
-                    &run.id,
-                    run.scope.kind,
-                    run.created_at,
-                    self.mode == LoopRunMode::Manual,
-                );
-                (LoopRunResult::Launched, run.id, error)
+        let run = match created {
+            Ok(run) => run,
+            Err(crate::harness::workflow::WorkflowErr::Exists {
+                run, task, kind, ..
+            }) => {
+                let repair = (task.as_deref() == Some(self.name.as_str()))
+                    .then(|| self.record_workflow_launch(&state, &run, kind, self.now, false))
+                    .flatten();
+                return self.prepare_overlap(&run, repair);
             }
-            Err(error) => match &error {
-                crate::harness::workflow::WorkflowErr::Exists {
-                    run, task, kind, ..
-                } => {
-                    let repair_error = if task.as_deref() == Some(self.name.as_str()) {
-                        self.record_workflow_launch(&state, run, *kind, self.now, false)
-                    } else {
-                        None
-                    };
-                    let reason = match repair_error {
-                        Some(repair) => format!("{error}; {repair}"),
-                        None => error.to_string(),
-                    };
-                    (LoopRunResult::WorkflowSkipped, run.clone(), Some(reason))
-                }
-                _ => return Err(error.into()),
-            },
+            Err(crate::harness::workflow::WorkflowErr::NoRoom(root)) => {
+                return Ok(TaskFirePlan::Done(self.record_gate(
+                    LoopRunResult::StartFailed,
+                    format!(
+                        "no room at {}; run `rimz start` there first",
+                        root.display()
+                    ),
+                )));
+            }
+            Err(error) => return Err(error.into()),
         };
-        self.consume_ephemeral()?;
+        self.saw_run = true;
+        // The run owns its tree now; its report removes it, or keeps it while it holds work.
+        self.hand_over_fire_tree();
+        let worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
+            path: tree.path.clone(),
+            base_fallback: tree.base_fallback.clone(),
+        });
+        assist_log::append(&AssistRecord {
+            at: Timestamp::now(),
+            assist: Assist::WorkflowStart {
+                run: run.id.clone(),
+                workflow: run.workflow.clone(),
+                task: run.task.clone(),
+                checkout: run.scope.path.clone(),
+                prompt: run.prompt.is_some(),
+            },
+        });
+        let error = self.record_workflow_launch(
+            &state,
+            &run.id,
+            run.scope.kind,
+            run.created_at,
+            self.mode == LoopRunMode::Manual,
+        );
+        // A poll-until row lives until a run acts, which the run's report decides.
+        if self.entry.deadline.is_none() {
+            self.consume_ephemeral()?;
+        }
         Ok(TaskFirePlan::Done(self.record_terminal_with(
-            result,
+            LoopRunResult::Launched,
             LoopRunPresentation::default(),
             TaskFireNotice::None,
             None,
             |record| {
-                record.run_id = Some(id.to_string());
+                record.run_id = Some(run.id.to_string());
+                record.worktree = worktree;
                 record.error = error;
             },
         )))
     }
 
+    /// The task's live run keyed on its firing checkout, read before a fresh tree is cut so
+    /// a fire that would overlap cuts none; `create` still decides under the workspace lock.
+    fn live_task_run(
+        &self,
+        state: &StatePaths,
+    ) -> Result<Option<crate::store::workflow::RunRecord>> {
+        let checkout = self.launch_checkout().canonicalize()?;
+        Ok(crate::store::workflow::list(state)?
+            .into_iter()
+            .find(|run| run.started_by(&self.name) && run.firing_checkout() == checkout))
+    }
+
+    /// A manual fire supersedes the task's run holding a judge decline on its checkout, which
+    /// would otherwise refuse it as an overlap: it cancels that run as `rimz workflow cancel`
+    /// does and waits for the cancel, so `create` finds the checkout free.
+    fn supersede_held_decline(&self, state: &StatePaths) -> Result<()> {
+        // A checkout that is gone holds no run; the fire's own checkout read names it.
+        if !self.launch_checkout().exists() {
+            return Ok(());
+        }
+        let Some(run) = self.live_task_run(state)? else {
+            return Ok(());
+        };
+        if !run.node.starts_with(super::compile::DECLINE_HOLD) {
+            return Ok(());
+        }
+        let output = std::process::Command::new(crate::proc::rimz_exe())
+            .arg("--root")
+            .arg(self.entry.resolved_root())
+            .args(crate::harness::workflow::cancel_args(
+                &run.id,
+                "superseded by a manual fire",
+            ))
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "cannot cancel run {} holding a judge decline: {}",
+            run.id,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(())
+    }
+
+    /// The live run `create` refused on: `skip` records an overlap naming it; `coalesce`,
+    /// `queue` and `replace` keep the trigger waiting for its report, and `replace` cancels it.
+    /// A drained trigger whose blocker still runs goes back to the head of its queue.
+    fn prepare_overlap(
+        &mut self,
+        run: &crate::ids::WorkflowRunId,
+        repair: Option<String>,
+    ) -> Result<TaskFirePlan> {
+        self.saw_run = true;
+        let policy = self.entry.overlap.unwrap_or_default();
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        if self.draining {
+            let mut backlog = LockedBacklog::acquire(&paths)?;
+            let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+            waiting.triggers.push_front(self.waiting_trigger());
+            backlog.save()?;
+            self.finished = true;
+            return Ok(TaskFirePlan::Waiting);
+        }
+        let repair = repair
+            .map(|repair| format!("; {repair}"))
+            .unwrap_or_default();
+        if self.mode != LoopRunMode::Scheduled || policy == OverlapPolicy::Skip {
+            let detail = format!("run {run} still active — skipped");
+            return Ok(TaskFirePlan::Done(self.record_terminal_with(
+                LoopRunResult::Overlapped,
+                LoopRunPresentation::default(),
+                TaskFireNotice::Overlap {
+                    detail: Some(detail.clone()),
+                },
+                None,
+                |record| {
+                    record.blocking_run = Some(run.clone());
+                    record.error = Some(format!("{detail}{repair}"));
+                },
+            )));
+        }
+        let limit = self.entry.overlap_limit.unwrap_or(10);
+        let mut backlog = LockedBacklog::acquire(&paths)?;
+        let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+        // The head this arrival served waits again first, and the arrival queues behind it.
+        if let Some(arrival) = self.queued_arrival.take() {
+            waiting.triggers.retain(|trigger| *trigger != arrival);
+            waiting.triggers.push_front(self.waiting_trigger());
+            self.serve_trigger(arrival);
+        }
+        let enqueued = waiting.enqueue(policy, limit, self.waiting_trigger());
+        let count = waiting.triggers.len();
+        backlog.save()?;
+        drop(backlog);
+        let suffix = if !enqueued {
+            format!("queue full ({count}/{limit}), skipped")
+        } else if policy == OverlapPolicy::Queue {
+            format!("waiting (queue {count}/{limit})")
+        } else if policy == OverlapPolicy::Replace {
+            self.cancel_blocker(&paths, run);
+            "canceling it for this trigger".to_owned()
+        } else {
+            "waiting".to_owned()
+        };
+        let detail = format!("run {run} still active — {suffix}");
+        Ok(TaskFirePlan::Done(self.record_terminal_with(
+            if enqueued {
+                LoopRunResult::Deferred
+            } else {
+                LoopRunResult::Overlapped
+            },
+            LoopRunPresentation::default(),
+            TaskFireNotice::Overlap {
+                detail: Some(detail.clone()),
+            },
+            None,
+            |record| {
+                record.blocking_run = Some(run.clone());
+                record.error = Some(format!("{detail}{repair}"));
+            },
+        )))
+    }
+
+    /// Cancel a replaced run in a detached helper; its report drains the waiting trigger once
+    /// the run is terminal, so a cancel that returns early never starts the replacement.
+    fn cancel_blocker(&self, paths: &StatePaths, run: &crate::ids::WorkflowRunId) {
+        let mut args: Vec<std::ffi::OsString> =
+            vec!["--root".into(), self.entry.resolved_root().into_os_string()];
+        args.extend(crate::harness::workflow::cancel_args(
+            run,
+            "replaced by a newer trigger",
+        ));
+        let spawned = RuntimePaths::for_state(paths)
+            .map_err(anyhow::Error::from)
+            .and_then(|runtime| {
+                crate::child_process::spawn_detached_rimz(&runtime, &args, "loop-replace")
+                    .map_err(anyhow::Error::from)
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(task = %self.name, %run, error = %format!("{error:#}"), "replacement could not cancel the active run; trigger remains waiting");
+        }
+    }
+
+    /// The definition a fire starts: a deployed directory, or the task's compiled graph with
+    /// its assets read now and the trigger's evidence in its prompt.
+    fn workflow_source(&self, workflow: &TaskWorkflow) -> Result<WorkflowSource> {
+        let inline = match workflow {
+            TaskWorkflow::Named(name) => {
+                let home = crate::disk::paths::workflows_dir().canonicalize()?;
+                let dir = home.join(name).canonicalize()?;
+                anyhow::ensure!(
+                    dir.starts_with(&home),
+                    "workflow must exist inside {}",
+                    home.display()
+                );
+                return Ok(WorkflowSource::Deployed(dir));
+            }
+            TaskWorkflow::Inline(inline) => inline,
+        };
+        let mut definition = inline.definition(&self.name, &self.task, &self.config)?;
+        if let Some(prompt) = definition.assets.get_mut(super::compile::PROMPT) {
+            *prompt = self.resolve_effect_prompt()?.into_bytes();
+        }
+        if self.keep {
+            definition.text = super::compile::keep_agent(&definition.text)?;
+        }
+        Ok(WorkflowSource::Inline(definition))
+    }
+
     /// A task's daily cap and surplus gate admit each run its workflow starts. The cap counts
     /// finished runs' reported cost plus what each live run of the task reserves, and the next
     /// run reserves its graph's agent-step budgets; surplus reads every agent's account.
-    fn prepare_workflow_admission(&mut self, dir: &Path) -> Result<Option<TaskFireFinished>> {
+    fn prepare_workflow_admission(
+        &mut self,
+        source: &WorkflowSource,
+    ) -> Result<Option<TaskFireFinished>> {
         let surplus = self.entry.surplus.is_some() || self.entry.surplus_after.is_some();
         if self.entry.budget_per_day.is_none() && !surplus {
             return Ok(None);
         }
-        let spec = crate::harness::workflow::load(dir)?;
+        let spec = match source {
+            WorkflowSource::Deployed(dir) => crate::harness::workflow::load(dir)?,
+            WorkflowSource::Inline(definition) => {
+                crate::harness::workflow::parse(&definition.text)?
+            }
+        };
         if self.entry.budget_per_day.is_some() {
             let zoned_now = self.now.to_zoned(self.config.time_zone());
             let live = live_reservation(&self.entry.resolved_root(), &self.name)?;
@@ -1402,12 +1235,13 @@ impl<'a> TaskFire<'a> {
             return Ok(false);
         }
         let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        let residents = super::launch_ledger::load(&paths)?;
         let workflows = super::launch_ledger::load_workflows(&paths)?;
         Ok(super::launch_ledger::launched(
             &self.entry,
             &self.name,
             &self.launch_checkout(),
-            &Default::default(),
+            &residents,
             &workflows,
         )
         .is_some())
@@ -1448,103 +1282,6 @@ impl<'a> TaskFire<'a> {
         Some(error.to_string())
     }
 
-    fn prepare_resident(
-        &mut self,
-        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<TaskFirePlan> {
-        if let Some(done) = self.prepare_run_lock(true)? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        let root = self.entry.resolved_root();
-        let paths = StatePaths::for_project_root(&root)?;
-        let cwd = self.launch_checkout();
-        if self.mode == LoopRunMode::Scheduled
-            && super::launch_ledger::load(&paths)?
-                .get(&self.name)
-                .is_some_and(|launches| launches.contains_key(&cwd))
-        {
-            self.clear_capacity()?;
-            self.finished = true;
-            return Ok(TaskFirePlan::AlreadyLaunched);
-        }
-        if self.mode == LoopRunMode::Scheduled
-            && self.entry.guard().shell.is_none()
-            && super::launch_ledger::holding_decline(
-                &super::launch_ledger::load_declines(&paths)?,
-                &self.name,
-                &self.entry,
-                &cwd,
-                self.condition
-                    .as_ref()
-                    .and_then(|condition| condition.since),
-                self.now,
-            )
-            .is_some()
-        {
-            self.clear_capacity()?;
-            self.finished = true;
-            return Ok(TaskFirePlan::DeclineHeld);
-        }
-        if let Some(done) = self.prepare_resident_scope_gates(&cwd)? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        if let Some(done) = self.prepare_deadline()? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        if let Some(plan) = self.prepare_capacity_look()? {
-            return Ok(plan);
-        }
-        if let ControlFlow::Break(done) = self.prepare_check(before_launch)? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        if let Some(done) = self.prepare_throttle()? {
-            return Ok(done);
-        }
-        let TaskAction::Spawn(spec) = self
-            .action
-            .take()
-            .context("resident task already prepared")?
-        else {
-            bail!("--stay requires an agent layout");
-        };
-        let prompt = self.resolve_effect_prompt()?;
-        let permission_override =
-            task_permission_mode(&self.entry)?.filter(|mode| *mode != PermissionMode::Auto);
-        before_launch(&root)?;
-        if self.run_lock.is_none() {
-            if let Some(done) = self.prepare_run_lock(false)? {
-                return Ok(TaskFirePlan::Done(done));
-            }
-            if self.mode == LoopRunMode::Scheduled
-                && super::launch_ledger::load(&paths)?
-                    .get(&self.name)
-                    .is_some_and(|launches| launches.contains_key(&cwd))
-            {
-                let detail = "resident launch completed during room birth — skipped".to_owned();
-                return Ok(TaskFirePlan::Done(self.record_terminal_with(
-                    LoopRunResult::Overlapped,
-                    LoopRunPresentation::default(),
-                    TaskFireNotice::Overlap {
-                        detail: Some(detail.clone()),
-                    },
-                    None,
-                    |record| record.error = Some(detail),
-                )));
-            }
-        }
-        self.pending = Some(PendingEffect::Resident);
-        Ok(TaskFirePlan::Resident {
-            root,
-            cwd,
-            worktree: self.entry.worktree.clone(),
-            spec,
-            prompt,
-            permission_override,
-            reminder_body: self.reminder_body(None),
-            loop_notes_at: (self.entry.notes != Some(false)).then_some(self.now),
-        })
-    }
-
     fn prepare_deadline(&mut self) -> Result<Option<TaskFireFinished>> {
         self.prepare_deadline_at(self.now)
     }
@@ -1565,7 +1302,29 @@ impl<'a> TaskFire<'a> {
         )))
     }
 
-    fn prepare_resident_scope_gates(&mut self, cwd: &Path) -> Result<Option<TaskFireFinished>> {
+    /// The provider gates an agent row reads before its run starts: the pinned account, the
+    /// fleet budget and the provider budget, for each cell a staying layout launches. Surplus
+    /// waits for admission, under the lease.
+    fn prepare_agent_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
+        let Ok(TaskAction::Spawn(agent)) = self.task.action() else {
+            return Ok(None);
+        };
+        if self.entry.stay {
+            return self.prepare_layout_scope_gates(&self.launch_checkout());
+        }
+        let context = FireContext::resolve(&self.entry, TaskAction::Spawn(agent.clone()))?;
+        let Some(scope) = context.scope.as_ref() else {
+            return Ok(None);
+        };
+        if let Some((result, reason)) = self.scope_refusal(scope, false) {
+            return Ok(Some(self.record_gate(result, reason)));
+        }
+        // The run's turn reports completion through the kind's hooks; refuse before it starts.
+        preflight_kind(scope.kind.as_str(), scope.login.as_ref())?;
+        Ok(None)
+    }
+
+    fn prepare_layout_scope_gates(&mut self, cwd: &Path) -> Result<Option<TaskFireFinished>> {
         let workspace = WorkspaceResolver::resolve(cwd, Some(self.entry.resolved_root()))?;
         let state = StatePaths::for_project_root(&workspace.project_root)?;
         let runtime = RuntimePaths::for_state(&state)?;
@@ -1592,7 +1351,6 @@ impl<'a> TaskFire<'a> {
             self.entry.agent.as_deref(),
             None,
         )?;
-        let mut groups: Vec<throttle::StartGroup> = Vec::new();
         for cell in layout.layout.agent_cells() {
             let resolved = ResolvedSingleAgentLaunch {
                 kind: cell.kind.as_str().to_owned(),
@@ -1600,31 +1358,13 @@ impl<'a> TaskFire<'a> {
                 model: cell.launch.model.clone(),
             };
             let login = task_login(&LaunchLogin::RoomDefault, &cell.kind, &runtime)?;
-            let account = login.as_ref().map(|login| login.name().clone());
-            match groups
-                .iter_mut()
-                .find(|group| group.kind == cell.kind && group.account == account)
-            {
-                Some(group) => group.agents += 1,
-                None => groups.push(throttle::StartGroup {
-                    kind: cell.kind.clone(),
-                    account,
-                    agents: 1,
-                }),
-            }
-            let mut scope = FireScope::new(
-                cell.kind.clone(),
-                runtime.clone(),
-                state.clone(),
-                None,
-                login,
-            );
+            let mut scope =
+                FireScope::new(cell.kind.clone(), runtime.clone(), state.clone(), login);
             scope.managed_launch = resolve_managed_spawn_state(&self.entry, &workspace, &resolved)?;
-            if let Some((result, reason)) = self.scope_refusal(&scope) {
+            if let Some((result, reason)) = self.scope_refusal(&scope, false) {
                 return Ok(Some(self.record_gate(result, reason)));
             }
         }
-        self.resident_groups = groups;
         Ok(None)
     }
 
@@ -1646,7 +1386,7 @@ impl<'a> TaskFire<'a> {
         if let Some((result, reason)) = context
             .scope
             .as_ref()
-            .and_then(|scope| self.scope_refusal(scope))
+            .and_then(|scope| self.scope_refusal(scope, true))
         {
             return Ok(Some(self.record_gate(result, reason)));
         }
@@ -1655,8 +1395,8 @@ impl<'a> TaskFire<'a> {
     }
 
     /// The first scope gate that refuses this fire, in ladder order; every
-    /// one reads the task's login.
-    fn scope_refusal(&self, scope: &FireScope) -> Option<(LoopRunResult, String)> {
+    /// one reads the task's login. A run's admission reads surplus itself.
+    fn scope_refusal(&self, scope: &FireScope, surplus: bool) -> Option<(LoopRunResult, String)> {
         if let Some(reason) = scope.account_skip.clone() {
             return Some((LoopRunResult::AccountSkipped, reason));
         }
@@ -1679,16 +1419,17 @@ impl<'a> TaskFire<'a> {
         }
         scope
             .surplus_gate(&self.entry, self.now)
+            .filter(|_| surplus)
             .map(|reason| (LoopRunResult::SurplusSkipped, reason))
     }
 
-    fn prepare_run_lock(&mut self, may_birth: bool) -> Result<Option<TaskFireFinished>> {
+    /// The admission lease: it serializes fires of one task, while the live run is what a
+    /// later fire overlaps. A fire held off by another admission waits under the policy.
+    fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
         if self.run_lock.is_some() {
             return Ok(None);
         }
-        let Some(path) = self.fire_run_lock_path(may_birth)? else {
-            return Ok(None);
-        };
+        let path = self.fire_run_lock_path()?;
         let policy = self.entry.overlap.unwrap_or_default();
         if policy != OverlapPolicy::Skip {
             let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
@@ -1701,10 +1442,14 @@ impl<'a> TaskFire<'a> {
                 RunLockAttempt::Acquired(guard) => {
                     if self.mode == LoopRunMode::Scheduled {
                         let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
-                        waiting.enqueue(policy, usize::MAX, self.waiting_trigger());
+                        let arrival = self.waiting_trigger();
+                        waiting.enqueue(policy, usize::MAX, arrival.clone());
                         // The fresh arrival was just enqueued while the queue was locked.
                         let trigger = waiting.triggers.pop_front().expect("arrival enqueued");
                         backlog.save()?;
+                        if policy == OverlapPolicy::Queue && trigger != arrival {
+                            self.queued_arrival = Some(arrival);
+                        }
                         self.serve_trigger(trigger);
                     }
                     self.run_lock = Some(guard);
@@ -1716,42 +1461,15 @@ impl<'a> TaskFire<'a> {
                     let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
                     let enqueued = waiting.enqueue(policy, limit, self.waiting_trigger());
                     let count = waiting.triggers.len();
-                    let mut replace_holder = None;
-                    let stopping = if policy == OverlapPolicy::Replace
-                        && let Some(info) = info
-                        && !throttle::held(&self.name, &self.entry.resolved_root())
-                            .iter()
-                            .any(|held| held.pid == info.pid)
-                    {
-                        if !waiting
-                            .stopping
-                            .as_ref()
-                            .is_some_and(|mark| info.matches_stop(mark))
-                        {
-                            waiting.stopping = Some(StopMark {
-                                pid: info.pid,
-                                started_at: info.started_at,
-                                cause: StopCause::Replace,
-                            });
-                            replace_holder = Some(Box::new(info));
-                        }
-                        true
-                    } else {
-                        false
-                    };
                     backlog.save()?;
                     let suffix = if !enqueued {
                         format!("queue full ({count}/{limit}), skipped")
                     } else if policy == OverlapPolicy::Queue {
                         format!("waiting (queue {count}/{limit})")
-                    } else if stopping {
-                        "stopping it for this trigger".to_owned()
-                    } else if policy == OverlapPolicy::Replace && info.is_none() {
-                        "waiting (holder identity unavailable)".to_owned()
                     } else {
                         "waiting".to_owned()
                     };
-                    let mut finished = self.record_terminal_with(
+                    return Ok(Some(self.record_terminal_with(
                         if enqueued {
                             LoopRunResult::Deferred
                         } else {
@@ -1766,9 +1484,7 @@ impl<'a> TaskFire<'a> {
                             record.holder = info;
                             record.error = Some(format!("previous run still active — {suffix}"));
                         },
-                    );
-                    finished.replace_holder = replace_holder;
-                    return Ok(Some(finished));
+                    )));
                 }
                 RunLockAttempt::Held(info) => return Ok(Some(self.record_overlap(info))),
             }
@@ -1786,35 +1502,26 @@ impl<'a> TaskFire<'a> {
         }
     }
 
-    fn fire_run_lock_path(&mut self, may_birth: bool) -> Result<Option<PathBuf>> {
+    /// The lease file, taken before the fire births the room it runs in.
+    fn fire_run_lock_path(&mut self) -> Result<PathBuf> {
         let checkout = self
             .entry
             .each_worktree
             .then(|| WorkspaceId::from_project_root(&self.launch_checkout()));
         let file = run_lock_file_name(&self.name, checkout.as_ref());
-        let path = match (self.run_lock_path)(&file, &self.entry) {
-            Ok(path) => path,
+        match (self.run_lock_path)(&file, &self.entry) {
+            Ok(path) => Ok(path),
             Err(err)
-                if may_birth
-                    && matches!(
-                        err.downcast_ref::<crate::workspace::WorkspaceErr>(),
-                        Some(crate::workspace::WorkspaceErr::NoRoom { .. })
-                    ) =>
+                if matches!(
+                    err.downcast_ref::<crate::workspace::WorkspaceErr>(),
+                    Some(crate::workspace::WorkspaceErr::NoRoom { .. })
+                ) =>
             {
-                let guard = self.entry.guard();
-                if (self.entry.stay || self.entry.workflow.is_some())
-                    && guard.shell.is_none()
-                    && guard.judges.is_empty()
-                {
-                    return Ok(None);
-                }
-                self.needs_room = true;
                 let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-                RuntimePaths::for_state(&paths)?.lock_path(&file)
+                Ok(RuntimePaths::for_state(&paths)?.lock_path(&file))
             }
-            Err(err) => return Err(err),
-        };
-        Ok(Some(path))
+            Err(err) => Err(err),
+        }
     }
 
     fn record_overlap(&mut self, info: Option<RunLockInfo>) -> TaskFireFinished {
@@ -1833,65 +1540,12 @@ impl<'a> TaskFire<'a> {
     }
 
     pub fn finish(&mut self, effect: TaskFireEffect) -> Result<TaskFireFinished> {
-        let pending = self
+        let target = self
             .pending
             .take()
             .context("loop task has no prepared effect to finish")?;
-        match (pending, effect) {
-            (
-                PendingEffect::Resident,
-                TaskFireEffect::Resident {
-                    leader,
-                    checkout,
-                    handles,
-                    stopped,
-                },
-            ) => {
-                let cwd = self.launch_checkout();
-                let destination = self.entry.worktree.as_ref().map(|_| checkout);
-                let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-                let assist = AssistRecord {
-                    at: Timestamp::now(),
-                    assist: Assist::ResidentLaunch {
-                        task: self.name.clone(),
-                        checkout: destination.clone().unwrap_or_else(|| cwd.clone()),
-                        condition: self.condition.clone(),
-                        stopped,
-                        handles,
-                    },
-                };
-                super::launch_ledger_store::record(
-                    &paths,
-                    &self.name,
-                    &cwd,
-                    super::launch_ledger::LaunchRecord {
-                        at: assist.at,
-                        leader: leader.clone(),
-                        destination,
-                    },
-                    || assist_log::try_append(&assist),
-                )?;
-                Ok(self.record_terminal_with(
-                    LoopRunResult::Launched,
-                    LoopRunPresentation::default(),
-                    TaskFireNotice::None,
-                    None,
-                    |record| {
-                        record.target = Some(format!("@{leader}"));
-                    },
-                ))
-            }
-            (PendingEffect::Resident, TaskFireEffect::TakeoverBlocked { blockers }) => Ok(self
-                .record_gate(
-                    LoopRunResult::TakeoverBlocked,
-                    super::takeover::blocked_reason(&blockers),
-                )),
-            (PendingEffect::Spawn { stream }, TaskFireEffect::Spawn(outcome)) => {
-                let mut record = self.terminal_record(LoopRunResult::Completed);
-                let (presentation, notice) = finish_spawn_effect(&mut record, outcome, stream);
-                Ok(self.finish_record(record, presentation, notice, None))
-            }
-            (PendingEffect::Deliver { target }, TaskFireEffect::Delivered(message_id)) => {
+        match effect {
+            TaskFireEffect::Delivered(message_id) => {
                 self.consume_ephemeral()?;
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
@@ -1905,7 +1559,7 @@ impl<'a> TaskFire<'a> {
                     },
                 ))
             }
-            (PendingEffect::Deliver { target }, TaskFireEffect::TargetGone) => {
+            TaskFireEffect::TargetGone => {
                 if self.mode == LoopRunMode::Scheduled {
                     self.remove_schedule()?;
                 }
@@ -1922,12 +1576,11 @@ impl<'a> TaskFire<'a> {
                     },
                 ))
             }
-            _ => anyhow::bail!("loop task effect does not match its prepared plan"),
         }
     }
 
     pub fn finish_error(&mut self, err: &anyhow::Error) -> TaskFireFinished {
-        if matches!(self.pending.take(), Some(PendingEffect::Deliver { .. }))
+        if self.pending.take().is_some()
             && let Err(consume) = self.consume_ephemeral()
         {
             tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
@@ -1954,356 +1607,6 @@ impl<'a> TaskFire<'a> {
         )
     }
 
-    fn prepare_check(
-        &mut self,
-        before_check: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<ControlFlow<TaskFireFinished, ()>> {
-        let stop = self.run_guard(before_check)?;
-        let duration_ms = self.fired_guard.iter().map(FiredCheck::duration_ms).sum();
-        if let ControlFlow::Break(stop) = stop {
-            let (result, interrupted, consume) = match stop {
-                GuardStop::Gate(result, reason) => {
-                    return Ok(ControlFlow::Break(self.record_gate(result, reason)));
-                }
-                GuardStop::Interrupted => (LoopRunResult::Canceled, true, false),
-                GuardStop::Declined => (
-                    LoopRunResult::CheckSkipped,
-                    false,
-                    self.watch_spec().is_some(),
-                ),
-                GuardStop::CheckOnly(result) => (result, false, self.ephemeral),
-            };
-            if result == LoopRunResult::CheckSkipped
-                && let Some(FiredCheck::Judge { tier, record }) = self.fired_guard.last()
-                && !record.reused
-                && record.verdict.is_some()
-            {
-                let checkout = self.launch_checkout();
-                let assist = AssistRecord {
-                    at: Timestamp::now(),
-                    assist: Assist::JudgeDecline {
-                        task: self.name.clone(),
-                        checkout: checkout.clone(),
-                        profile: record.profile.clone(),
-                        kind: record.kind.clone(),
-                        reason: record.reason.clone().unwrap_or_default(),
-                        cost_usd: record.cost_usd,
-                    },
-                };
-                if self.entry.stay {
-                    super::launch_ledger_store::record_decline(
-                        &StatePaths::for_project_root(&self.entry.resolved_root())?,
-                        &self.name,
-                        &checkout,
-                        super::launch_ledger::DeclineRecord {
-                            tier: *tier,
-                            at: assist.at,
-                            since: self
-                                .condition
-                                .as_ref()
-                                .and_then(|condition| condition.since),
-                            reason: record.reason.clone().unwrap_or_default(),
-                            profile: record.profile.clone(),
-                            kind: Some(record.kind.clone()),
-                            model: record.model.clone(),
-                            fingerprint: super::launch_ledger::check_fingerprint(&self.entry),
-                        },
-                        || assist_log::try_append(&assist),
-                    )?;
-                } else {
-                    assist_log::try_append(&assist)?;
-                }
-            }
-            if self.mode == LoopRunMode::Scheduled && consume {
-                self.remove_schedule()?;
-            }
-            return Ok(ControlFlow::Break(self.record_terminal_with(
-                result,
-                LoopRunPresentation {
-                    check_duration_ms: Some(duration_ms),
-                    exit_code: interrupted.then_some(130),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::None,
-                None,
-                |run| run.error = interrupted.then(|| "check interrupted".to_owned()),
-            )));
-        }
-        if self.mode == LoopRunMode::Manual
-            && self.entry.stay
-            && self.fired_guard.iter().any(|stage| matches!(stage, FiredCheck::Judge { record, .. } if record.verdict.is_some()))
-        {
-            super::launch_ledger_store::remove_checkout_decline(
-                &StatePaths::for_project_root(&self.entry.resolved_root())?,
-                &self.name,
-                &self.launch_checkout(),
-            )?;
-        }
-        let supplied_watch = self
-            .watch_spec()
-            .and(self.watch_outcome())
-            .map(|watch| watch.verdict.clone());
-        if self.mode == LoopRunMode::Manual
-            && !self.fired_guard.is_empty()
-            && supplied_watch
-                .as_ref()
-                .is_none_or(WatchVerdict::is_terminal)
-        {
-            self.check_trip = Some(CheckTrip {
-                record: self.terminal_record(LoopRunResult::Completed),
-                watch: supplied_watch,
-                duration_ms,
-            });
-        }
-        Ok(ControlFlow::Continue(()))
-    }
-
-    fn run_guard(
-        &mut self,
-        before_check: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<ControlFlow<GuardStop, ()>> {
-        if let Some((command, watch)) = self
-            .watch_spec()
-            .map(WatchSpec::describe)
-            .zip(self.watch_outcome())
-        {
-            let outcome = watch.to_check_outcome();
-            let terminal = watch.verdict.is_terminal();
-            let mut record = check_record(&outcome);
-            record.duration_ms = Some(watch.verdict.elapsed_ms());
-            record.output_path.clone_from(&watch.output_path);
-            self.fired_guard.push(FiredCheck::Shell { command, record });
-            if !terminal {
-                return Ok(ControlFlow::Continue(()));
-            }
-            if outcome.interrupted {
-                return Ok(ControlFlow::Break(GuardStop::Interrupted));
-            }
-            if !polarity_fires(self.entry.on, &outcome) {
-                return Ok(ControlFlow::Break(GuardStop::Declined));
-            }
-            return Ok(ControlFlow::Continue(()));
-        }
-        let guard = self.entry.guard();
-        let shell = guard.shell.map(str::to_owned);
-        let shell_timeout = guard
-            .shell_timeout
-            .map(parse_task_timeout)
-            .transpose()
-            .map_err(anyhow::Error::msg)?
-            .unwrap_or(CHECK_DEFAULT_TIMEOUT);
-        let judges: Vec<_> = guard.judges.into_iter().cloned().collect();
-        if shell.is_none() && judges.is_empty() {
-            return Ok(ControlFlow::Continue(()));
-        }
-        let root = if self.entry.stay {
-            self.entry.resolved_root()
-        } else {
-            self.context_root()?
-        };
-        if !self.entry.stay
-            && ((self.run_lock.is_some() && !self.needs_room)
-                || !matches!(
-                    self.context.as_ref().map(|context| &context.action),
-                    Some(TaskAction::Spawn(_))
-                ))
-        {
-            before_check(&root)?;
-        }
-        // The shell check leaves SIGINT ignored once it returns, so listen first
-        // and let a hold this fire reaches inherit the listener.
-        self.check_interrupts = Some(
-            self.throttle_host
-                .interrupts()
-                .map_err(throttle::ThrottleError::Interrupts)?,
-        );
-        let dir = self.fire_dir();
-        if let Some(command) = shell {
-            if self.check_interrupted() {
-                return Ok(ControlFlow::Break(GuardStop::Interrupted));
-            }
-            let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
-            env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
-            env.insert(
-                crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-                dir.to_string_lossy().into_owned(),
-            );
-            let started = Instant::now();
-            let mut outcome = run_command(
-                &dir,
-                &command,
-                WatchDeadline::KillAfter(shell_timeout),
-                self.check_echo.take().unwrap_or(CheckEcho::Capture),
-                &env,
-                |_, _| {},
-                &mut self.record_hold,
-            )?;
-            outcome.passed &= !outcome.timed_out;
-            let mut record = check_record(&outcome);
-            record.duration_ms = Some(elapsed_millis(started));
-            self.fired_guard.push(FiredCheck::Shell { command, record });
-            if outcome.interrupted || self.check_interrupted() {
-                return Ok(ControlFlow::Break(GuardStop::Interrupted));
-            }
-            if self
-                .context
-                .as_ref()
-                .is_some_and(|context| context.action.is_check_only())
-            {
-                return Ok(ControlFlow::Break(GuardStop::CheckOnly(check_only_result(
-                    &outcome,
-                ))));
-            }
-            if !polarity_fires(self.entry.on, &outcome) {
-                if self.entry.stay {
-                    super::launch_ledger_store::remove_checkout_decline(
-                        &StatePaths::for_project_root(&self.entry.resolved_root())?,
-                        &self.name,
-                        &self.launch_checkout(),
-                    )?;
-                }
-                return Ok(ControlFlow::Break(GuardStop::Declined));
-            }
-            self.record_hold = None;
-        }
-        if self.mode == LoopRunMode::Scheduled && self.entry.stay && !judges.is_empty() {
-            let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-            let declines = super::launch_ledger::load_declines(&paths)?;
-            if let Some(decline) = super::launch_ledger::holding_decline(
-                &declines,
-                &self.name,
-                &self.entry,
-                &dir,
-                self.condition
-                    .as_ref()
-                    .and_then(|condition| condition.since),
-                Timestamp::now(),
-            ) && let Some(kind) = &decline.kind
-            {
-                if self.check_interrupted() {
-                    return Ok(ControlFlow::Break(GuardStop::Interrupted));
-                }
-                let record = agent_check::replay(self, decline, kind);
-                self.fired_guard.push(FiredCheck::Judge {
-                    tier: decline.tier,
-                    record,
-                });
-                return Ok(ControlFlow::Break(GuardStop::Declined));
-            }
-        }
-        for (tier, judge) in judges.iter().enumerate() {
-            if self.check_interrupted() {
-                return Ok(ControlFlow::Break(GuardStop::Interrupted));
-            }
-            let (outcome, record) = match agent_check::run(self, tier, judge, &dir, &root)? {
-                ControlFlow::Continue(stage) => stage,
-                ControlFlow::Break((result, reason)) => {
-                    return Ok(ControlFlow::Break(GuardStop::Gate(result, reason)));
-                }
-            };
-            let has_verdict = record.verdict.is_some();
-            self.fired_guard.push(FiredCheck::Judge { tier, record });
-            if outcome.interrupted || self.check_interrupted() {
-                return Ok(ControlFlow::Break(GuardStop::Interrupted));
-            }
-            if has_verdict && !polarity_fires(self.entry.on, &outcome) {
-                return Ok(ControlFlow::Break(GuardStop::Declined));
-            }
-            self.record_hold = None;
-        }
-        Ok(ControlFlow::Continue(()))
-    }
-
-    fn check_interrupted(&self) -> bool {
-        self.check_interrupts
-            .as_ref()
-            .is_some_and(throttle::Interrupts::raised)
-    }
-
-    fn prepare_spawn(&mut self, spec: String) -> Result<TaskFirePlan> {
-        let managed_launch = {
-            let scope = self
-                .context
-                .as_ref()
-                .and_then(|context| context.scope.as_ref())
-                .context("loop spawn context missing provider scope")?;
-            let resolved = scope
-                .resolved
-                .as_ref()
-                .context("loop spawn context missing resolved task spec")?;
-            preflight_kind(&resolved.kind, scope.login.as_ref())?;
-            scope.managed_launch.clone()
-        };
-        let prompt = self.resolve_effect_prompt()?;
-        let mut request = self.compile_spawn_request(spec, prompt, managed_launch)?;
-        request.throttle_turn.clone_from(&self.throttle_turn);
-        self.consume_ephemeral()?;
-        let stream = self.mode == LoopRunMode::Manual;
-        self.pending = Some(PendingEffect::Spawn { stream });
-        Ok(TaskFirePlan::Spawn(PreparedSpawn {
-            root: self.context_root()?,
-            request,
-            stream,
-            fire_tree: self.hand_over_fire_tree(),
-        }))
-    }
-
-    fn compile_spawn_request(
-        &self,
-        spec: String,
-        prompt: String,
-        managed_launch: ManagedLaunchState,
-    ) -> Result<SupervisedRunRequest> {
-        let system_prompt_file = self
-            .entry
-            .system_prompt_file
-            .as_deref()
-            .map(resolve_config_path)
-            .transpose()?;
-        let permission_mode = task_permission_mode(&self.entry)?;
-        let budget = self
-            .entry
-            .budget
-            .as_deref()
-            .map(str::parse::<crate::harness::budget::BudgetSpec>)
-            .transpose()?;
-        let mut request = SupervisedRunRequest::new(spec, prompt, permission_mode, managed_launch);
-        request.login = LaunchLogin::from(self.entry.account.clone());
-        request.worktree = match (self.entry.task_worktree(), &self.fire_tree) {
-            (Some(crate::config::TaskWorktree::Named(name)), _) => Some(name.to_owned()),
-            (_, Some(tree)) => Some(tree.name.clone()),
-            _ => None,
-        };
-        request.system_prompt_file = system_prompt_file;
-        request.effort.clone_from(&self.entry.effort);
-        request.fast = self.entry.fast;
-        request.budget = budget;
-        request.timeout = task_timeout(&self.entry)?;
-        request.keep = self.keep;
-        request.verify.clone_from(&self.entry.verify);
-        request.max_attempts = self.entry.max_attempts;
-        shape_loop_owned(&mut request, &self.name, &self.config, self.mode)?;
-        request.agent_shell_persistence = match self.mode {
-            LoopRunMode::Scheduled => crate::harness::launch::AgentShellPersistence::PerLaunch,
-            LoopRunMode::Manual => crate::harness::launch::AgentShellPersistence::Room,
-        };
-        request.reminder_section = Some(crate::harness::launch::ReminderSection::Loop(
-            self.reminder_body(request.timeout),
-        ));
-        request.loop_notes_at = (self.entry.notes != Some(false)).then_some(self.now);
-        Ok(request)
-    }
-
-    fn reminder_body(&self, timeout: Option<Duration>) -> String {
-        reminder::compose(&reminder::LoopFire {
-            name: &self.name,
-            task: &self.task,
-            mode: self.mode,
-            keep: self.keep,
-            timeout,
-        })
-    }
-
     fn prepare_delivery(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
         if !catalog::delivery_target_alive(&self.entry, &target)? {
             if self.mode == LoopRunMode::Scheduled {
@@ -2326,9 +1629,7 @@ impl<'a> TaskFire<'a> {
         // The one-shot row is consumed in `finish`, once the wake's message
         // record exists: turn-completion waits read the row, then the queue,
         // so the agent never looks rested between the two.
-        self.pending = Some(PendingEffect::Deliver {
-            target: target.clone(),
-        });
+        self.pending = Some(target.clone());
         Ok(TaskFirePlan::Deliver(PreparedDelivery {
             root: self.context_root()?,
             target,
@@ -2441,17 +1742,7 @@ impl<'a> TaskFire<'a> {
                 self.now,
             );
         }
-        if self.entry.watch.is_none() {
-            body = self.augment_guard_prompt(body);
-        }
         Ok(body)
-    }
-
-    fn augment_guard_prompt(&self, mut body: String) -> String {
-        for stage in &self.fired_guard {
-            body = augment_prompt(body, &stage.heading(), &stage.output());
-        }
-        body
     }
 
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
@@ -2465,24 +1756,11 @@ impl<'a> TaskFire<'a> {
         });
         record.condition = self.condition.clone();
         record.absorbed = self.absorbed;
-        for stage in &self.fired_guard {
-            match stage {
-                FiredCheck::Shell { record: shell, .. } => record.check = Some(shell.clone()),
-                FiredCheck::Judge { record: judge, .. } => record.judge.push(judge.clone()),
-            }
-        }
-        record.throttle_wait_ms = self
-            .throttle_wait
-            .map(|waited| u64::try_from(waited.as_millis()).unwrap_or(u64::MAX));
+        record.check.clone_from(&self.watch_check);
         record.late_ms = self.late_ms;
         if self.entry.stay || self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
         }
-        record.worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
-            path: tree.path.clone(),
-            base_fallback: tree.base_fallback.clone(),
-        });
-        add_check_usage(&mut record);
         record
     }
 
@@ -2540,27 +1818,17 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, error = %format!("{err:#}"), "failed to remove a fired fire-at task");
         }
-        if record.result != LoopRunResult::CapacityHeld
-            && !(record.result == LoopRunResult::ThrottleSkipped && self.capacity_condition())
-            && let Err(error) = self.clear_capacity()
-        {
-            tracing::warn!(task = %self.name, %error, "failed to clear loop capacity wait");
-        }
-        self.remove_unlaunched_fire_tree();
         let result = record.result;
         let transition = self.record_and_release(&mut record);
         if record.result != result {
             presentation.exit_code = record.result.spawn_exit_code();
         }
         self.finished = true;
-        // A turn this fire never reported is released with its row.
-        self.throttle_turn = None;
         TaskFireFinished {
             record,
             presentation,
             transition,
             notice,
-            replace_holder: None,
         }
     }
 
@@ -2594,7 +1862,12 @@ impl<'a> TaskFire<'a> {
                 }
             }
             let transition = run_log::record_transition(&self.task, record);
-            let release = spawn_backlog_drain(&paths, &root, &self.name, &backlog.record);
+            // A run this fire saw drains the backlog from its own report.
+            let release = if self.saw_run {
+                Ok(())
+            } else {
+                spawn_backlog_drain(&paths, &root, &self.name, &backlog.record)
+            };
             // Keep the terminal row and release in one critical section: a stop
             // must not install a new mark after this row has already been written.
             self.run_lock = None;
@@ -2621,77 +1894,6 @@ impl Drop for TaskFire<'_> {
             tracing::warn!(task = %self.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
         }
     }
-}
-
-fn finish_spawn_effect(
-    record: &mut LoopRunRecord,
-    effect: SupervisedRunOutcome,
-    stream: bool,
-) -> (LoopRunPresentation, TaskFireNotice) {
-    match effect {
-        SupervisedRunOutcome::Record(run) => {
-            let run = *run;
-            let status = run.status;
-            record.result = status.into();
-            record.run_id = Some(run.run_id.to_string());
-            record.transcript_path = run.transcript_path;
-            record.last_message = run.last_message;
-            record.cost_usd = run.cost_usd;
-            record.input_tokens = run.input_tokens;
-            record.output_tokens = run.output_tokens;
-            add_check_usage(record);
-            (
-                LoopRunPresentation {
-                    failure_tail: run.failure_tail,
-                    streamed: stream,
-                    exit_code: Some(status.exit_code()),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::None,
-            )
-        }
-        SupervisedRunOutcome::Background { .. } => {
-            (LoopRunPresentation::default(), TaskFireNotice::None)
-        }
-        SupervisedRunOutcome::BudgetExceeded { reason } => {
-            record.result = LoopRunResult::BudgetSkipped;
-            record.error = Some(reason.clone());
-            (
-                LoopRunPresentation::default(),
-                TaskFireNotice::Gate { reason },
-            )
-        }
-    }
-}
-
-fn add_check_usage(record: &mut LoopRunRecord) {
-    let (mut cost_usd, mut input_tokens, mut output_tokens) =
-        (record.cost_usd, record.input_tokens, record.output_tokens);
-    for stage in record.stages() {
-        let RunStage::Judge(judge) = stage else {
-            continue;
-        };
-        cost_usd = match (cost_usd, judge.cost_usd) {
-            (None, None) => None,
-            (run, check) => Some(run.unwrap_or_default() + check.unwrap_or_default()),
-        };
-        input_tokens = match (input_tokens, judge.input_tokens) {
-            (None, None) => None,
-            (run, check) => Some(
-                run.unwrap_or_default()
-                    .saturating_add(check.unwrap_or_default()),
-            ),
-        };
-        output_tokens = match (output_tokens, judge.output_tokens) {
-            (None, None) => None,
-            (run, check) => Some(
-                run.unwrap_or_default()
-                    .saturating_add(check.unwrap_or_default()),
-            ),
-        };
-    }
-    (record.cost_usd, record.input_tokens, record.output_tokens) =
-        (cost_usd, input_tokens, output_tokens);
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -3077,7 +2279,7 @@ pub(super) fn resolve_config_path(path: &Path) -> Result<PathBuf> {
     Ok(config_dir.join(expanded))
 }
 
-fn expand_tilde(path: &Path) -> PathBuf {
+pub(super) fn expand_tilde(path: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
     if raw == "~" {
         return home_dir();
@@ -3198,7 +2400,6 @@ pub enum StopOutcome {
 pub fn stop_task(
     name: &str,
     root: &Path,
-    cause: StopCause,
     expected: Option<RunLockInfo>,
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
 ) -> Result<(StopOutcome, RunTransition)> {
@@ -3245,7 +2446,7 @@ pub fn stop_task(
         waiting.stopping = Some(StopMark {
             pid: info.pid,
             started_at: info.started_at,
-            cause,
+            cause: StopCause::Stop,
         });
     }
     let waiting = waiting.triggers.len();
@@ -3363,32 +2564,25 @@ fn append_stopped_record(
     record.run_lock = Some(info);
     set_stopped_result(&mut record, mark.cause);
     record.run_id = run.map(|record| record.run_id.to_string());
-    let transition = if mark.cause == StopCause::Replace {
-        let catalog = TaskCatalog::load(Some(root))?;
-        let task = catalog
-            .for_run(name)
-            .context("replaced loop task was removed")?;
-        record.kind = Some(task.kind());
-        backlog.save()?;
-        run_log::record_transition(task, &record)
-    } else {
-        backlog.save()?;
-        run_log::record_stopped(root, &record, kind);
-        RunTransition::Recorded
-    };
+    backlog.save()?;
+    run_log::record_stopped(root, &record, kind);
     if let Err(error) = spawn_backlog_drain(&paths, root, name, &backlog.record) {
         tracing::warn!(task = name, %error, "failed to start loop backlog drain");
     }
-    Ok(transition)
+    Ok(RunTransition::Recorded)
 }
 
+/// A stopped holder's row is a strike-neutral `canceled`; a `replace` mark an older RimZ left
+/// keeps its reason.
 fn set_stopped_result(record: &mut LoopRunRecord, cause: StopCause) {
-    let (result, detail) = match cause {
-        StopCause::Replace => (LoopRunResult::Replaced, "replaced by a newer trigger"),
-        StopCause::Stop => (LoopRunResult::Canceled, "stopped by rimz loop stop"),
-    };
-    record.result = result;
-    record.error = Some(detail.to_owned());
+    record.result = LoopRunResult::Canceled;
+    record.error = Some(
+        match cause {
+            StopCause::Replace => "replaced by a newer trigger",
+            StopCause::Stop => "stopped by rimz loop stop",
+        }
+        .to_owned(),
+    );
 }
 
 fn spawn_backlog_drain(
@@ -3761,26 +2955,12 @@ pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
         .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
-fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
-    if outcome.timed_out {
-        LoopRunResult::TimedOut
-    } else if outcome.passed {
-        LoopRunResult::Completed
-    } else {
-        LoopRunResult::Failed
-    }
-}
-
 fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
     match on.unwrap_or_default() {
         CheckOn::Fail => !outcome.passed,
         CheckOn::Success => outcome.passed,
         CheckOn::Any => true,
     }
-}
-
-fn augment_prompt(base: String, heading: &str, output: &str) -> String {
-    format!("{base}\n\n--- {heading} ---\n{output}")
 }
 
 pub fn run_check(
@@ -3820,6 +3000,50 @@ fn check_command(command: &str) -> Command {
     child
 }
 
+/// A workflow's shell check or command step, through the same session trampoline as a loop
+/// check: a command that opens `/dev/tty` must not stop on the caller's terminal job control.
+/// Hosted argv comes from the validated workflow resolver.
+#[cfg(not(test))]
+fn hosted_command(
+    dir: &Path,
+    env: &BTreeMap<String, String>,
+    cmd: &str,
+    argv: Option<&[std::ffi::OsString]>,
+) -> std::io::Result<Command> {
+    // The trampoline's failed exec would read as the command's exit, so a missing program
+    // fails here as a direct spawn would, against the child's PATH.
+    let path = env
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    let program = argv.map_or("sh".as_ref(), |argv| argv[0].as_os_str());
+    which::which_in(program, path, dir)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
+    let Some(argv) = argv else {
+        return Ok(check_command(cmd));
+    };
+    let mut child = Command::new(crate::proc::rimz_exe());
+    child.args(["loop", "check-exec", "--"]).args(argv);
+    Ok(child)
+}
+
+#[cfg(test)]
+fn hosted_command(
+    _dir: &Path,
+    _env: &BTreeMap<String, String>,
+    cmd: &str,
+    argv: Option<&[std::ffi::OsString]>,
+) -> std::io::Result<Command> {
+    use std::os::unix::process::CommandExt;
+
+    let Some((program, args)) = argv.and_then(<[std::ffi::OsString]>::split_first) else {
+        return Ok(check_command(cmd));
+    };
+    let mut child = Command::new(program);
+    child.args(args).process_group(0);
+    Ok(child)
+}
+
 #[cfg(test)]
 fn check_command(command: &str) -> Command {
     use std::os::unix::process::CommandExt;
@@ -3843,8 +3067,6 @@ static CHECK_SIGNALS: Mutex<CheckSignalState> = Mutex::new(CheckSignalState {
 /// Keep SIGTERM handled until an action's terminal record releases its run lock.
 pub struct CheckSignalGuard {
     cancellation: Option<signal_hook::SigId>,
-    /// A stop the judge's poll read after the judge had exited, so it kept its verdict.
-    stop_read: bool,
 }
 
 impl CheckSignalGuard {
@@ -3869,13 +3091,7 @@ impl CheckSignalGuard {
         let handler = register()?;
         state.active += 1;
         unhandled.store(false, Ordering::SeqCst);
-        Ok((
-            handler,
-            Self {
-                cancellation: None,
-                stop_read: false,
-            },
-        ))
+        Ok((handler, Self { cancellation: None }))
     }
 }
 
@@ -3959,6 +3175,7 @@ pub(crate) fn run_command(
             .map(|capture| capture.output())
             .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))
     };
+    let spawn_context = || format!("running loop check `{cmd}` in {}", dir.display());
     let (mut command, mut interrupts, kill_after, check_in_after) = match &deadline {
         WatchDeadline::KillAfter(timeout) | WatchDeadline::CapacityCheck(timeout) => (
             check_command(cmd),
@@ -3974,22 +3191,12 @@ pub(crate) fn run_command(
             command.args(["-c", cmd]);
             (command, None, None, *check_in)
         }
-        WatchDeadline::Hosted { argv, .. } => {
-            use std::os::unix::process::CommandExt;
-
-            let mut command = if let Some(argv) = argv {
-                // Hosted argv comes from the validated workflow resolver.
-                let mut command = Command::new(&argv[0]);
-                command.args(&argv[1..]);
-                command
-            } else {
-                let mut command = Command::new("sh");
-                command.args(["-c", cmd]);
-                command
-            };
-            command.process_group(0);
-            (command, None, None, None)
-        }
+        WatchDeadline::Hosted { argv, .. } => (
+            hosted_command(dir, env, cmd, *argv).with_context(spawn_context)?,
+            None,
+            None,
+            None,
+        ),
     };
     if env.contains_key(LOOP_TASK_ENV) {
         command.env_remove(crate::workspace::ENV_CHANNEL);
@@ -4006,7 +3213,7 @@ pub(crate) fn run_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
+        .with_context(spawn_context)?;
     let stdout = drain_pipe(
         child.stdout.take(),
         Arc::clone(&capture),
@@ -4318,7 +3525,8 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
     }
     let mut reserved = 0.0;
     for record in crate::store::workflow::list(&state)? {
-        if !record.started_by(task) {
+        // A finished run whose report is owed has no history row yet, so its cost counts here.
+        if !record.started_by(task) && !(record.ran_for(task) && record.owes_loop_report()) {
             continue;
         }
         // The sealed copy is what the run spends by; a deployed source may have changed since.
@@ -4327,6 +3535,20 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
         reserved += spec.reserved_usd();
     }
     Ok(reserved)
+}
+
+/// Why task `entry`'s surplus setting holds an agent on `kind`'s account back, from that
+/// account's window `reading`, read only when the task sets a surplus gate: a fire's admission
+/// and a workflow judge's spawn read it alike.
+pub(in crate::harness) fn surplus_refusal(
+    entry: &TaskEntry,
+    kind: &str,
+    reading: impl FnOnce() -> Option<WindowSurplus>,
+) -> Option<String> {
+    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+        return None;
+    }
+    surplus_gate_in(entry, kind, reading())
 }
 
 fn surplus_gate_in(

@@ -457,7 +457,8 @@ impl TaskCatalog {
             });
         };
         let root = task.entry().resolved_root();
-        if task.entry().workflow.is_some() {
+        let records_workflows = task.entry().workflow.is_some() || task.entry().stay;
+        if records_workflows {
             super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
         }
         let key = task.key(name);
@@ -473,13 +474,13 @@ impl TaskCatalog {
             let paths = StatePaths::for_project_root(&root)?;
             match super::launch_ledger_store::remove_workflows(&paths, name) {
                 Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
-                    if task.entry().workflow.is_none() =>
+                    if !records_workflows =>
                 {
                     tracing::warn!(
                         task = name,
                         root = %root.display(),
                         %error,
-                        "cannot clear workflow launch memory for a non-workflow task"
+                        "cannot clear workflow launch memory for a task that records none"
                     );
                 }
                 result => result?,

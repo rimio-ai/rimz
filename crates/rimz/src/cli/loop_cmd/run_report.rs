@@ -31,13 +31,12 @@ pub(super) fn write_run_summary(
     entry: &TaskEntry,
     action: &TaskAction,
     mode: LoopRunMode,
-    keep: bool,
     summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
     let action_kind = action.kind();
     match mode {
         LoopRunMode::Manual => {
-            write_manual_run_summary(out, name, entry, action, action_kind, keep, summary)
+            write_manual_run_summary(out, name, entry, action, action_kind, summary)
         }
         LoopRunMode::Scheduled => write_scheduled_run_summary(out, name, entry, action, summary),
     }
@@ -49,7 +48,6 @@ fn write_manual_run_summary(
     entry: &TaskEntry,
     action: &TaskAction,
     action_kind: TaskActionKind,
-    keep: bool,
     summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
     let record = summary.record;
@@ -94,21 +92,19 @@ fn write_manual_run_summary(
     } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
         write_completion_detail(out, name, summary)?;
     }
-    if action_kind.is_spawn()
-        && !is_spawn_failure(record.result)
-        && !keep
-        && record.run_id.is_some()
-    {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(
-                ui::palette::muted(),
-                "  pane closed; rerun with --keep to watch"
-            )
-        )?;
-    }
     Ok(())
+}
+
+/// The `--keep` hint for a manual fire's run, while the run can still open a fresh agent whose
+/// pane `--keep` would leave open.
+pub(super) fn keep_hint(
+    entry: &TaskEntry,
+    action: &TaskAction,
+    keep: bool,
+    run_ended: bool,
+) -> Option<&'static str> {
+    (action.kind().is_spawn() && !entry.stay && !keep && !run_ended)
+        .then_some("  the agent's pane closes after its turn; fire with --keep to leave it open")
 }
 
 fn manual_early_verdict(summary: &RunSummary<'_>) -> Option<(LoopRunResult, String)> {
@@ -273,41 +269,6 @@ fn check_result_label(
             None => "check failed (signal)".to_owned(),
         }
     }
-}
-
-pub(super) fn write_check_trip_line(
-    out: &mut impl Write,
-    action: &TaskAction,
-    record: &LoopRunRecord,
-    watch: Option<&WatchVerdict>,
-    duration_ms: u64,
-) -> std::io::Result<()> {
-    for stage in record.stages() {
-        let (glyph, style) = if stage.verdict() == Some(true) {
-            ("✓", ui::palette::good())
-        } else {
-            ("✗", ui::palette::alarm())
-        };
-        let mut label = check_result_label(&stage, watch, false);
-        let duration_ms = match &stage {
-            RunStage::Check(check) => check.duration_ms,
-            RunStage::Judge(judge) => judge.duration_ms,
-        }
-        .unwrap_or(duration_ms);
-        if watch.is_none() {
-            label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
-        }
-        write!(out, "  {}", ui::paint(style, &format!("{glyph} {label}")))?;
-        writeln!(
-            out,
-            " {}",
-            ui::paint(
-                ui::palette::accent(),
-                &format!("→ {}", render::action_progressive_phrase(action))
-            )
-        )?;
-    }
-    Ok(())
 }
 
 fn write_check_skipped_summary(
@@ -1020,25 +981,6 @@ mod tests {
                 agent: Some(agent),
             });
             assert_eq!(detail_exit_segment(&record), None);
-            let mut trip = Vec::new();
-            write_check_trip_line(
-                &mut trip,
-                &TaskAction::Spawn("claude".into()),
-                &record,
-                None,
-                1,
-            )
-            .unwrap();
-            let trip = String::from_utf8(trip).unwrap();
-            let label = match verdict {
-                Some(true) => "judge `haiku` passed",
-                Some(false) => "judge `haiku` failed",
-                None => "provider down",
-            };
-            assert!(
-                trip.contains(label) && !trip.contains("declined") && !trip.contains("signal"),
-                "{trip}"
-            );
             let mut out = Vec::new();
             write_check_section(
                 &mut out,

@@ -734,28 +734,22 @@ fn fire_signal_with_wait(
     Ok(fired)
 }
 
-fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Option<Vec<std::ffi::OsString>> {
-    if signal.source == SignalSource::Lifecycle {
-        return None;
-    }
-    Some(crate::harness::workflow::advance_args(
-        project_root,
-        None,
-        Some(signal),
-        None,
-    ))
+fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Vec<std::ffi::OsString> {
+    crate::harness::workflow::advance_args(project_root, None, Some(signal), None)
 }
 
 fn wake_workflows(project_root: &Path, signal: &Signal) {
-    let Some(args) = workflow_wake_args(project_root, signal) else {
-        return;
-    };
+    let args = workflow_wake_args(project_root, signal);
     let launch = || -> Result<(), Box<dyn std::error::Error>> {
         let paths = StatePaths::for_project_root(project_root)?;
-        if !crate::store::workflow::list(&paths)?
-            .iter()
-            .any(|r| r.state == crate::store::workflow::RunState::Active)
-        {
+        let heard = if signal.source == SignalSource::Lifecycle {
+            crate::harness::workflow::hears_lifecycle(&paths, signal)?
+        } else {
+            crate::store::workflow::list(&paths)?
+                .iter()
+                .any(|r| r.state == crate::store::workflow::RunState::Active)
+        };
+        if !heard {
             return Ok(());
         }
         crate::child_process::spawn_detached_reaped(
@@ -865,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_wakes_exclude_only_lifecycle_signals() {
+    fn workflow_wakes_carry_the_whole_signal_from_every_source() {
         for source in [
             SignalSource::Cli,
             SignalSource::Watch,
@@ -886,21 +880,14 @@ mod tests {
             };
             let args = workflow_wake_args(Path::new("/project"), &signal);
             assert_eq!(
-                args.is_some(),
-                source != SignalSource::Lifecycle,
-                "only lifecycle edges must leave workflow waits untouched"
+                args[..5],
+                ["--root", "/project", "workflow", "advance", "--wake-signal"]
+                    .map(std::ffi::OsString::from)
             );
-            if let Some(args) = args {
-                assert_eq!(
-                    args[..5],
-                    ["--root", "/project", "workflow", "advance", "--wake-signal"]
-                        .map(std::ffi::OsString::from)
-                );
-                assert_eq!(
-                    serde_json::from_str::<Signal>(args[5].to_str().unwrap()).ok(),
-                    Some(signal)
-                );
-            }
+            assert_eq!(
+                serde_json::from_str::<Signal>(args[5].to_str().unwrap()).ok(),
+                Some(signal)
+            );
         }
     }
 

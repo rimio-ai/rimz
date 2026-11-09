@@ -309,6 +309,16 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
+    if args.until.is_some() {
+        bail!(
+            "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check"
+        );
+    }
+    if args.wait.is_some() && (args.check.is_some() || args.judge.is_some()) {
+        bail!(
+            "--check and --judge no longer guard a --wait delivery; fire on a condition with --when, or deliver from a workflow message step"
+        );
+    }
     if args.workflow.is_some() {
         reject_workflow_flags(args)?;
     }
@@ -335,21 +345,20 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         anyhow::ensure!(limit > 0, "--overlap-limit must be at least 1");
     }
     if args.overlap.is_some() {
-        if args.stay {
-            bail!("--stay cannot use --overlap; a resident task launches once per checkout");
-        }
         for (used, reason) in [
-            (
-                !args.when.is_empty(),
-                "overlap supports repeating clock and signal triggers only",
-            ),
             (args.wait.is_some(), "a wait delivery has no run to overlap"),
             (
+                args.each_worktree,
+                "waiting triggers are kept per task, and an each-worktree task fires per checkout",
+            ),
+            (
                 args.once
-                    || args.until.is_some()
                     || args.in_after.is_some()
                     || args.after_reset.is_some()
-                    || (args.every.is_none() && args.cron.is_none() && args.signal.is_none()),
+                    || (args.every.is_none()
+                        && args.cron.is_none()
+                        && args.signal.is_none()
+                        && args.when.is_empty()),
                 "a one-shot has no task left to drain",
             ),
         ] {
@@ -424,7 +433,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         (!args.subscribe.is_empty(), "--subscribe"),
     ] {
         if used && !args.stay {
-            bail!("{flag} requires --stay; it applies to resident layouts");
+            bail!("{flag} requires --stay; it applies to staying layouts");
         }
     }
     if args.each_worktree && args.workflow.is_none() && args.when.is_empty() {
@@ -450,57 +459,52 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
             (
                 args.account.is_some(),
                 "--account",
-                "resident layouts use the room's accounts; omit --account or --stay",
+                "staying layouts use the room's accounts; omit --account or --stay",
             ),
             (
                 args.max_attempts.is_some(),
                 "--max-attempts",
-                "resident layouts are not supervised retries",
+                "staying layouts are not supervised retries",
             ),
             (
                 args.budget_per_day.is_some(),
                 "--budget-per-day",
-                "resident layouts have no per-fire spend accounting",
+                "staying layouts have no per-fire spend accounting",
             ),
             (
                 args.verify.is_some(),
                 "--verify",
-                "resident layouts are not supervised turns",
+                "staying layouts are not supervised turns",
             ),
             (
                 args.budget.is_some(),
                 "--budget",
-                "resident layouts have no supervised run budget",
+                "staying layouts have no supervised run budget",
             ),
             (
                 args.surplus.is_some(),
                 "--surplus",
-                "resident layouts have no bounded run spend",
+                "staying layouts have no bounded run spend",
             ),
             (
                 args.surplus_after.is_some(),
                 "--surplus-after",
-                "resident layouts have no bounded run spend",
+                "staying layouts have no bounded run spend",
             ),
             (
                 args.timeout.is_some(),
                 "--timeout",
-                "resident agents remain open",
-            ),
-            (
-                args.until.is_some(),
-                "--until",
-                "resident launches are not poll-until actions",
+                "staying agents remain open",
             ),
             (
                 args.system_prompt_file.is_some(),
                 "--system-prompt-file",
-                "resident layouts use their profiles' system prompts",
+                "staying layouts use their profiles' system prompts",
             ),
             (
                 args.once,
                 "--once",
-                "resident launches are deduplicated per checkout, not per task",
+                "staying launches are deduplicated per checkout, not per task",
             ),
             (
                 !args.subscribe.is_empty()
@@ -513,7 +517,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
             (
                 args.project,
                 "--project",
-                "resident launch state is machine-local",
+                "staying launch memory is machine-local",
             ),
         ] {
             if used {
@@ -539,10 +543,6 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
             (
                 args.wait.is_some(),
                 "--project tasks cannot use --wait; project config cannot pin a machine-local session",
-            ),
-            (
-                args.until.is_some(),
-                "--project tasks cannot use --until; poll-until deadlines are machine state",
             ),
             (
                 args.every.is_none() && args.cron.is_none() && args.signal.is_none(),
@@ -601,25 +601,6 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     if args.max_attempts == Some(0) {
         bail!("--max-attempts must be at least 1");
     }
-    let until_error = args.until.as_ref().and_then(|_| {
-        [
-            (
-                args.check.is_none() && args.judge.is_none(),
-                "--until requires --check or --judge",
-            ),
-            (args.every.is_none(), "--until requires --every"),
-            (
-                !action_kind.has_effect(),
-                "--until requires --agent or --wait",
-            ),
-            (args.in_after.is_some(), "--until conflicts with --in"),
-        ]
-        .into_iter()
-        .find_map(|(invalid, message)| invalid.then_some(message))
-    });
-    if let Some(message) = until_error {
-        bail!(message);
-    }
     Ok(action_kind)
 }
 
@@ -632,10 +613,9 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
     let checks = "checks and waits are the workflow's `[checks.<name>]` nodes";
     let profile = "choose it through the `agent` profile of the workflow's `[steps.<name>]`";
     let spend = "set `budget` on the workflow's agent `[steps.<name>]`; `--budget-per-day` and `--surplus` gate the task's runs";
-    let overlap = "a live run holds its scope, and a fire that finds it records `workflow skipped`";
     let no_window =
         "a workflow task has no provider window to read; use a clock trigger or another condition";
-    let groups: [(&[(bool, &str)], &str); 13] = [
+    let groups: [(&[(bool, &str)], &str); 12] = [
         (
             &[(args.stay, "--stay")],
             "a workflow's agent steps launch and stop agents",
@@ -660,7 +640,6 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
                 (args.on.is_some(), "--on"),
                 (args.verify.is_some(), "--verify"),
                 (args.max_attempts.is_some(), "--max-attempts"),
-                (args.until.is_some(), "--until"),
             ],
             checks,
         ),
@@ -688,13 +667,6 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
             profile,
         ),
         (&[(args.budget.is_some(), "--budget")], spend),
-        (
-            &[
-                (args.overlap.is_some(), "--overlap"),
-                (args.overlap_limit.is_some(), "--overlap-limit"),
-            ],
-            overlap,
-        ),
         (
             &[(args.worktree.is_some(), "--worktree")],
             "a run scopes to the task's checkout; pass --root <worktree> or --each-worktree",
@@ -1370,12 +1342,11 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
 }
 
 fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
-    let deadline = args.until.as_deref().map(resolve_deadline).transpose()?;
     let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
     let mut timing = AddTiming {
         at: None,
         fire_at: None,
-        deadline,
+        deadline: None,
     };
     if let Some(raw) = args.in_after.as_deref() {
         let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -1444,12 +1415,12 @@ fn write_add_feedback(
             if entry.each_worktree {
                 writeln!(
                     out,
-                    "action: leaves resident layout {agent} in each matching owned worktree"
+                    "action: leaves staying layout {agent} in each matching owned worktree"
                 )?;
             } else if let Some(name) = entry.worktree.as_deref() {
                 writeln!(
                     out,
-                    "action: leaves resident layout {agent} in worktree `{name}` (created from trunk for a team, the configured base otherwise, or reused when the task fires)"
+                    "action: leaves staying layout {agent} in worktree `{name}` (created from trunk for a team, the configured base otherwise, or reused when the task fires)"
                 )?;
                 writeln!(
                     out,
@@ -1459,7 +1430,7 @@ fn write_add_feedback(
             } else {
                 writeln!(
                     out,
-                    "action: leaves resident layout {agent} in {}",
+                    "action: leaves staying layout {agent} in {}",
                     entry.run_dir().display()
                 )?;
             }
@@ -1583,18 +1554,6 @@ fn first_next_fire(parsed: &schedule::ParsedTrigger) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
     parsed.next_after(&now.to_zoned(zone))
-}
-
-fn resolve_deadline(raw: &str) -> Result<Timestamp> {
-    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
-    if duration.is_zero() {
-        bail!("--until must be greater than zero");
-    }
-    Ok(Timestamp::now()
-        .to_zoned(MachineConfig::load_lenient().time_zone())
-        .checked_add(duration)
-        .context("resolving --until against the configured clock")?
-        .timestamp())
 }
 
 #[cfg(test)]

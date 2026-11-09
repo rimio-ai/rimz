@@ -9,92 +9,6 @@ mod holds;
 const NAME: &str = "task";
 
 #[test]
-fn capacity_non_stay_conditions_retry_at_sixty_seconds_and_stop_after_give_up() {
-    let now = zdt(2026, 6, 24, 8, 0, 0);
-    let tasks = one(loaded(TaskEntry {
-        agent: Some("claude".into()),
-        prompt: Some("repair".into()),
-        when: Some(vec!["team.stage=Done".into()]),
-        ..Default::default()
-    }));
-    let states = one(condition_state(None, now.timestamp(), true));
-    let verdicts = one(Verdict {
-        ok: true,
-        readings: BTreeMap::new(),
-        unread: Default::default(),
-    });
-    let mut record = super::super::launch_ledger::CapacityRecord {
-        since: Some(now.timestamp()),
-        first: now.timestamp(),
-        last: now.timestamp(),
-        count: 1,
-        kinds: vec![crate::ids::AgentKind::new_unchecked("claude")],
-        reason: "no capacity".into(),
-        hold: None,
-        gives_up_at: None,
-        gave_up: false,
-    };
-    let mut actual = Vec::new();
-    for (seconds, gave_up) in [(59, false), (60, false), (300, true)] {
-        record.gave_up = gave_up;
-        let tick = now
-            .checked_add(jiff::SignedDuration::from_secs(seconds))
-            .unwrap();
-        actual.push(
-            plan(
-                &one(record.clone()),
-                &tasks,
-                &one(now.timestamp()),
-                &BTreeMap::new(),
-                &tick,
-                &states,
-                &verdicts,
-                &BTreeSet::new(),
-            )
-            .0,
-        );
-    }
-    assert_eq!(actual, [vec![], vec![(NAME.into(), Action::Fire)], vec![]]);
-    let tick = now
-        .checked_add(jiff::SignedDuration::from_secs(301))
-        .unwrap();
-    let capacity = one(record);
-    let (_, stamps, cleared) = plan(
-        &capacity,
-        &tasks,
-        &one(now.timestamp()),
-        &BTreeMap::new(),
-        &tick,
-        &states,
-        &one(Verdict {
-            ok: false,
-            readings: BTreeMap::new(),
-            unread: Default::default(),
-        }),
-        &BTreeSet::new(),
-    );
-    assert!(
-        cleared.is_empty(),
-        "give-up suppression still folds a false edge"
-    );
-    assert_eq!(
-        plan(
-            &capacity,
-            &tasks,
-            &stamps,
-            &BTreeMap::new(),
-            &tick,
-            &cleared,
-            &verdicts,
-            &BTreeSet::new(),
-        )
-        .0,
-        [(NAME.into(), Action::Fire)],
-        "a new true edge retires the old give-up"
-    );
-}
-
-#[test]
 fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     let root = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root(root.path()).unwrap();
@@ -190,199 +104,6 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     }
 }
 
-#[test]
-fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
-    use super::super::launch_ledger::{DeclineRecord, Declines};
-    let (_root, mut tasks, owned) = worktree_tasks(None);
-    let mut entry = tasks[NAME].entry().clone();
-    entry.check = Some(crate::config::TaskCheck::Agent(crate::config::Judge {
-        agent: "codex".into(),
-        prompt: Some("any work?".into()),
-        prompt_file: None,
-        recheck: None,
-        timeout: None,
-    }));
-    tasks.insert(NAME.into(), loaded(entry.clone()));
-    let now = Timestamp::from_second(1000).unwrap();
-    let since = Timestamp::from_second(800).unwrap();
-    let key = scope_key(NAME, &owned[0]);
-    let mut clocks = BTreeMap::from([(
-        key.clone(),
-        WhenState {
-            fingerprint: Some(("team.stage=Done".into(), None, entry.run_dir())),
-            since,
-            fired: true,
-        },
-    )]);
-    let mut declines = Declines::from([(
-        NAME.into(),
-        BTreeMap::from([(
-            owned[0].clone(),
-            DeclineRecord {
-                kind: None,
-                model: None,
-                tier: 0,
-                at: now,
-                since: Some(since),
-                reason: "No work".into(),
-                profile: "codex".into(),
-                fingerprint: super::super::launch_ledger::check_fingerprint(&entry),
-            },
-        )]),
-    )]);
-    let scopes = scoped_tasks(
-        &tasks,
-        &BTreeMap::new(),
-        &Default::default(),
-        &owned,
-        &declines,
-        &clocks,
-        now,
-    );
-    assert!(
-        !scopes.contains_key(&key),
-        "holding decline must suppress the helper"
-    );
-    assert_eq!(scopes.len(), 1, "another checkout remains eligible");
-    // A stale pass carries the clock, so the decline's `since` still matches it.
-    let (_, _, held) = plan(
-        &BTreeMap::new(),
-        &BTreeMap::from([(key.clone(), tasks[NAME].clone())]),
-        &BTreeMap::from([(key.clone(), since)]),
-        &BTreeMap::new(),
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
-        &clocks,
-        &BTreeMap::from([(
-            key.clone(),
-            Verdict {
-                ok: false,
-                readings: BTreeMap::new(),
-                unread: BTreeMap::from([(
-                    "ci".into(),
-                    "probed before the last fire or first sight".into(),
-                )]),
-            },
-        )]),
-        &BTreeSet::new(),
-    );
-    assert_eq!(held, clocks);
-    assert!(
-        !scoped_tasks(
-            &tasks,
-            &BTreeMap::new(),
-            &Default::default(),
-            &owned,
-            &declines,
-            &held,
-            now
-        )
-        .contains_key(&key),
-        "the decline still holds after a stale pass"
-    );
-    clocks.get_mut(&key).unwrap().since = now;
-    assert!(
-        scoped_tasks(
-            &tasks,
-            &BTreeMap::new(),
-            &Default::default(),
-            &owned,
-            &declines,
-            &clocks,
-            now
-        )
-        .contains_key(&key)
-    );
-    clocks.get_mut(&key).unwrap().since = since;
-    if let Some(crate::config::TaskCheck::Agent(check)) = &mut entry.check {
-        check.recheck = Some("1m".into());
-    }
-    declines
-        .get_mut(NAME)
-        .unwrap()
-        .get_mut(&owned[0])
-        .unwrap()
-        .fingerprint = super::super::launch_ledger::check_fingerprint(&entry);
-    tasks.insert(NAME.into(), loaded(entry));
-    for (seconds, expected) in [(1059, false), (1060, true)] {
-        assert_eq!(
-            scoped_tasks(
-                &tasks,
-                &BTreeMap::new(),
-                &Default::default(),
-                &owned,
-                &declines,
-                &clocks,
-                Timestamp::from_second(seconds).unwrap()
-            )
-            .contains_key(&key),
-            expected
-        );
-    }
-}
-
-#[test]
-fn held_judges_suppress_helpers_only_without_a_shell_check() {
-    use super::super::launch_ledger::{DeclineRecord, Declines};
-    let (_root, mut tasks, owned) = worktree_tasks(None);
-    let now = Timestamp::from_second(1000).unwrap();
-    for each_worktree in [false, true] {
-        for shell in [None, Some("cargo test")] {
-            let mut entry = tasks[NAME].entry().clone();
-            entry.each_worktree = each_worktree;
-            entry.check = shell.map(|command| crate::config::TaskCheck::Shell(command.into()));
-            entry.judge = vec![crate::config::Judge {
-                agent: "codex".into(),
-                prompt: Some("any work?".into()),
-                prompt_file: None,
-                recheck: None,
-                timeout: None,
-            }];
-            entry.on = Some(crate::config::CheckOn::Success);
-            let checkout = if each_worktree {
-                owned[0].clone()
-            } else {
-                entry.run_dir()
-            };
-            let key = if each_worktree {
-                scope_key(NAME, &checkout)
-            } else {
-                NAME.into()
-            };
-            let declines = Declines::from([(
-                NAME.into(),
-                BTreeMap::from([(
-                    checkout,
-                    DeclineRecord {
-                        kind: None,
-                        model: None,
-                        at: now,
-                        since: None,
-                        reason: "No work".into(),
-                        profile: "codex".into(),
-                        tier: 0,
-                        fingerprint: super::super::launch_ledger::check_fingerprint(&entry),
-                    },
-                )]),
-            )]);
-            tasks.insert(NAME.into(), loaded(entry));
-            assert_eq!(
-                scoped_tasks(
-                    &tasks,
-                    &BTreeMap::new(),
-                    &Default::default(),
-                    &owned,
-                    &declines,
-                    &BTreeMap::new(),
-                    now
-                )
-                .contains_key(&key),
-                shell.is_some(),
-                "each-worktree={each_worktree}, shell={shell:?}"
-            );
-        }
-    }
-}
-
 fn worktree_tasks(
     hold: Option<&str>,
 ) -> (
@@ -415,15 +136,7 @@ fn worktree_tasks(
 fn worktree_scopes_normalize_marker_components() {
     let (root, tasks, _) = worktree_tasks(None);
     let owned = vec![root.path().join("b/../a")];
-    let scoped = scoped_tasks(
-        &tasks,
-        &BTreeMap::new(),
-        &Default::default(),
-        &owned,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        Timestamp::now(),
-    );
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
     let scope = scoped.values().next().unwrap();
     assert_eq!(
         scope.checkout.as_deref(),
@@ -449,16 +162,7 @@ fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
         },
     )]));
     assert_eq!(
-        scoped_tasks(
-            &tasks,
-            &ledger,
-            &Default::default(),
-            &owned,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            now
-        )
-        .len(),
+        scoped_tasks(&tasks, &ledger, &Default::default(), &owned,).len(),
         2
     );
 }
@@ -511,20 +215,10 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
                 },
             )]),
         );
-        results.push(
-            scoped_tasks(
-                &one(loaded(entry)),
-                &BTreeMap::new(),
-                &workflows,
-                &owned,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                now,
-            )
-            .len(),
-        );
+        results.push(scoped_tasks(&one(loaded(entry)), &BTreeMap::new(), &workflows, &owned).len());
     }
-    assert_eq!(results, vec![1, 0, 0, 2, 2]);
+    // A stay task runs as a workflow, so its run's memory holds its checkout too.
+    assert_eq!(results, vec![1, 0, 0, 2, 1]);
 }
 
 #[test]
@@ -635,15 +329,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             )
             .unwrap();
         }
-        let scoped = scoped_tasks(
-            &tasks,
-            &ledger,
-            &Default::default(),
-            &owned,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            now.timestamp(),
-        );
+        let scoped = scoped_tasks(&tasks, &ledger, &Default::default(), &owned);
         assert_eq!(scoped.len(), if ledger.is_empty() { 2 } else { 1 });
         let planned: BTreeMap<_, _> = scoped
             .iter()
@@ -668,7 +354,6 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             })
             .collect();
         let (_, stamps, _) = plan(
-            &BTreeMap::new(),
             &planned,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -678,7 +363,6 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &BTreeSet::new(),
         );
         let (actions, _, _) = plan(
-            &BTreeMap::new(),
             &planned,
             &stamps,
             &BTreeMap::new(),
@@ -717,15 +401,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
 fn worktree_retries_use_each_checkouts_last_fire() {
     let (_root, tasks, owned) = worktree_tasks(None);
     let now = zdt(2026, 6, 24, 8, 5, 0);
-    let scoped = scoped_tasks(
-        &tasks,
-        &BTreeMap::new(),
-        &Default::default(),
-        &owned,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        Timestamp::now(),
-    );
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
     let planned = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -763,7 +439,6 @@ fn worktree_retries_use_each_checkouts_last_fire() {
         );
     }
     let (actions, next_stamps, _) = plan(
-        &BTreeMap::new(),
         &planned,
         &stamps,
         &BTreeMap::new(),
@@ -791,22 +466,13 @@ fn worktree_retries_use_each_checkouts_last_fire() {
 fn worktree_holds_have_independent_clocks() {
     let (_root, tasks, owned) = worktree_tasks(Some("30m"));
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    let scoped = scoped_tasks(
-        &tasks,
-        &BTreeMap::new(),
-        &Default::default(),
-        &owned,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        Timestamp::now(),
-    );
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
     assert_eq!(scoped.len(), 2);
     let planned: BTreeMap<_, _> = scoped
         .iter()
         .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
         .collect();
     let (_, mut stamps, mut states) = plan(
-        &BTreeMap::new(),
         &planned,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -836,7 +502,6 @@ fn worktree_holds_have_independent_clocks() {
             })
             .collect();
         let (actions, next_stamps, next_states) = plan(
-            &BTreeMap::new(),
             &planned,
             &stamps,
             &BTreeMap::new(),
@@ -1094,7 +759,6 @@ fn condition_replacement_resets_fired_and_hold_state() {
             }
             let should_fire = entry.hold.is_none();
             let (actions, _, states) = plan(
-                &BTreeMap::new(),
                 &one(loaded(entry)),
                 &one(prior),
                 &BTreeMap::new(),
@@ -1134,7 +798,6 @@ fn condition_tick(
         BTreeMap::new()
     };
     plan(
-        &BTreeMap::new(),
         &one(task),
         &stamp.map(one).unwrap_or_default(),
         &arming,
@@ -1177,7 +840,6 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             unread: Default::default(),
         });
         let (_, mut stamps, mut states) = plan(
-            &BTreeMap::new(),
             &tasks,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -1195,7 +857,6 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
             let (actions, next_stamps, next_states) = plan(
-                &BTreeMap::new(),
                 &tasks,
                 &stamps,
                 &BTreeMap::new(),
@@ -1386,7 +1047,6 @@ fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires
     }));
     let tick = |ok: bool, unread: &[(&str, &str)]| {
         plan(
-            &BTreeMap::new(),
             &tasks,
             &one(prior),
             &BTreeMap::new(),
@@ -1938,7 +1598,6 @@ impl Tick {
     /// The task's action this tick and the stamp carried into the next one.
     fn run(self, task: &LoadedTask, now: &Zoned) -> (Option<Action>, Option<Timestamp>) {
         let (actions, next, _) = plan(
-            &BTreeMap::new(),
             &one(task.clone()),
             &self.state.map(one).unwrap_or_default(),
             &self
@@ -2027,7 +1686,6 @@ fn plan_arms_fires_and_carries_each_task_state() {
 
     // State for a task the catalog no longer holds is dropped, not carried.
     let (actions, next, _) = plan(
-        &BTreeMap::new(),
         &BTreeMap::new(),
         &one(due),
         &BTreeMap::new(),

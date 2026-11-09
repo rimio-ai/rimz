@@ -142,10 +142,15 @@ pub fn launched<'a>(
     residents: &'a Ledger,
     workflows: &'a WorkflowLedger,
 ) -> Option<Launch<'a>> {
-    if entry.stay {
-        return residents.get(task)?.get(checkout).map(Launch::Resident);
+    // A resident remembered before the cutover still counts; its runs since are workflows.
+    if entry.stay
+        && let Some(launch) = residents
+            .get(task)
+            .and_then(|launches| launches.get(checkout))
+    {
+        return Some(Launch::Resident(launch));
     }
-    if !entry.is_condition_workflow() {
+    if !entry.dedupes_checkout() {
         return None;
     }
     let launches = workflows.tasks.get(task)?;
@@ -331,6 +336,55 @@ mod tests {
         );
     }
 
+    fn judge(prompt: &str, recheck: Option<&str>) -> Judge {
+        Judge {
+            agent: "codex".into(),
+            prompt: Some(prompt.into()),
+            prompt_file: None,
+            timeout: None,
+            recheck: recheck.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn guard_fingerprint_covers_shell_judges_and_polarity() {
+        let mut entry = TaskEntry {
+            check: Some(TaskCheck::Shell("cargo test".into())),
+            judge: vec![
+                judge("first question", None),
+                judge("second question", None),
+            ],
+            on: Some(CheckOn::Fail),
+            ..Default::default()
+        };
+        let original = check_fingerprint(&entry).unwrap();
+        for tier in 0..2 {
+            let prompt = entry.judge[tier].prompt.replace("edited".into());
+            assert_ne!(
+                check_fingerprint(&entry).as_deref(),
+                Some(original.as_str())
+            );
+            entry.judge[tier].prompt = prompt;
+        }
+        entry.check = Some(TaskCheck::Shell("cargo check".into()));
+        assert_ne!(
+            check_fingerprint(&entry).as_deref(),
+            Some(original.as_str())
+        );
+        entry.check = Some(TaskCheck::Shell("cargo test".into()));
+        entry.on = Some(CheckOn::Success);
+        assert_ne!(
+            check_fingerprint(&entry).as_deref(),
+            Some(original.as_str())
+        );
+        entry.on = Some(CheckOn::Fail);
+        entry.check = None;
+        assert!(
+            check_fingerprint(&entry).is_some(),
+            "judge-only chains have a fingerprint"
+        );
+    }
+
     #[test]
     fn live_capacity_requires_the_current_scoped_or_task_condition_clock() {
         let dir = tempfile::tempdir().unwrap();
@@ -408,55 +462,6 @@ mod tests {
                 ("fanout", std::path::Path::new("/repo/a")),
                 ("live", std::path::Path::new("/repo/a"))
             ]
-        );
-    }
-
-    fn judge(prompt: &str, recheck: Option<&str>) -> Judge {
-        Judge {
-            agent: "codex".into(),
-            prompt: Some(prompt.into()),
-            prompt_file: None,
-            timeout: None,
-            recheck: recheck.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn guard_fingerprint_covers_shell_judges_and_polarity() {
-        let mut entry = TaskEntry {
-            check: Some(TaskCheck::Shell("cargo test".into())),
-            judge: vec![
-                judge("first question", None),
-                judge("second question", None),
-            ],
-            on: Some(CheckOn::Fail),
-            ..Default::default()
-        };
-        let original = check_fingerprint(&entry).unwrap();
-        for tier in 0..2 {
-            let prompt = entry.judge[tier].prompt.replace("edited".into());
-            assert_ne!(
-                check_fingerprint(&entry).as_deref(),
-                Some(original.as_str())
-            );
-            entry.judge[tier].prompt = prompt;
-        }
-        entry.check = Some(TaskCheck::Shell("cargo check".into()));
-        assert_ne!(
-            check_fingerprint(&entry).as_deref(),
-            Some(original.as_str())
-        );
-        entry.check = Some(TaskCheck::Shell("cargo test".into()));
-        entry.on = Some(CheckOn::Success);
-        assert_ne!(
-            check_fingerprint(&entry).as_deref(),
-            Some(original.as_str())
-        );
-        entry.on = Some(CheckOn::Fail);
-        entry.check = None;
-        assert!(
-            check_fingerprint(&entry).is_some(),
-            "judge-only chains have a fingerprint"
         );
     }
 

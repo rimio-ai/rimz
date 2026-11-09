@@ -611,6 +611,14 @@ expression: value
               "default": {},
               "type": "object"
             },
+            "prompt": {
+              "default": null,
+              "description": "Text a staying step's leader gets after the forwarded signal; steps only.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "signal": {
               "type": "string"
             }

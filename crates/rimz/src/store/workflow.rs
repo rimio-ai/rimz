@@ -569,6 +569,10 @@ pub struct RunRecord {
     pub spec_digest: String,
     pub prompt: Option<String>,
     pub scope: Scope,
+    /// A loop fire cut `scope` as its own fresh worktree, so loop keys the run on
+    /// `project_root`, through [`RunRecord::firing_checkout`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fire_tree: bool,
     pub project_root: PathBuf,
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -665,6 +669,16 @@ impl RunRecord {
     /// The shared predicate for a live run of a loop task.
     pub fn started_by(&self, task: &str) -> bool {
         !self.state.is_terminal() && self.ran_for(task)
+    }
+
+    /// The checkout a loop task fired from: the project root for a run in its fire's own tree,
+    /// else the run's scope. Overlap, the backlog and the task's history key on it.
+    pub fn firing_checkout(&self) -> &Path {
+        if self.fire_tree {
+            &self.project_root
+        } else {
+            &self.scope.path
+        }
     }
 
     /// Whether loop task `task` started this run, live or finished.

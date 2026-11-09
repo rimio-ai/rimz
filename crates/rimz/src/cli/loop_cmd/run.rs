@@ -1,12 +1,8 @@
 //! Execute loop tasks and record foreground or scheduled run outcomes.
 
-use super::run_report::{
-    RunSummary, write_check_trip_line, write_manual_verdict, write_run_summary,
-};
+use super::run_report::{RunSummary, keep_hint, write_manual_verdict, write_run_summary};
 use super::*;
 use rimz::harness::launch::AgentShellPersistence;
-use rimz::harness::schedule::takeover::{self, Takeover};
-use std::ops::ControlFlow;
 
 // ---- run --------------------------------------------------------------------
 
@@ -127,20 +123,6 @@ pub(super) fn run_one(
     if mode == LoopRunMode::Manual {
         crate::cli::report_unknown_config_keys(&config)?;
     }
-    let check_echo = match mode {
-        LoopRunMode::Scheduled => CheckEcho::Capture,
-        LoopRunMode::Manual => CheckEcho::Stream {
-            announcement: entry.guard().shell.map(|command| {
-                let label = if matches!(action, TaskAction::CheckOnly) {
-                    format!("  check: {command}")
-                } else {
-                    format!("  guard: {}", render::guard_value(&entry))
-                };
-                format!("{}\n", ui::paint(ui::palette::muted(), &label))
-            }),
-            prefix: ui::paint(ui::palette::faint(), "  │ "),
-        },
-    };
     if mode == LoopRunMode::Manual {
         let mut observed_entry = entry.clone();
         if let Some(checkout) = &checkout {
@@ -166,7 +148,6 @@ pub(super) fn run_one(
         Timestamp::now(),
         config.clone(),
         signal,
-        check_echo,
         started,
     )?
     .with_arrived_at(arrived_at)
@@ -183,12 +164,15 @@ pub(super) fn run_one(
             return record_task_error(&mut fire, name, &entry, error).map(|_| ());
         }
     }
-    let mut plan = fire.prepare(&mut |root| {
+    let plan = fire.prepare(&mut |root| {
+        // An agent task's room is born here, so its birth keeps the fire's shell persistence;
+        // the run's step launch then finds it open.
         if !entry.stay
+            && !matches!(action, TaskAction::Spawn(_))
             && (mode != LoopRunMode::Scheduled
                 || !matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)))
         {
-            if !matches!(action, TaskAction::Spawn(_) | TaskAction::Workflow(_)) {
+            if !matches!(action, TaskAction::Workflow(_)) {
                 return Ok(());
             }
             let workspace = WorkspaceResolver::resolve_participant(root, Some(root.to_path_buf()))?;
@@ -217,241 +201,27 @@ pub(super) fn run_one(
         )?;
         Ok(())
     });
-    if mode == LoopRunMode::Manual
-        && let Some(trip) = fire.take_check_trip()
-        && let Err(source) = write_check_trip_line(
-            &mut ui::out(),
-            &action,
-            &trip.record,
-            trip.watch.as_ref(),
-            trip.duration_ms,
-        )
-    {
-        let err = source.into();
-        if matches!(
-            &plan,
-            Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(_))
-        ) {
-            return Err(err);
-        }
-        plan = Err(err);
-    }
     let finished = match plan {
         Err(err) => record_task_error(&mut fire, name, &entry, err)?,
         Ok(
             rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched
-            | rimz::harness::schedule::runner::TaskFirePlan::DeclineHeld
-            | rimz::harness::schedule::runner::TaskFirePlan::CapacityHeld,
+            | rimz::harness::schedule::runner::TaskFirePlan::Waiting,
         ) => return Ok(()),
-        Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
-            root,
-            cwd,
-            worktree,
-            spec,
-            prompt,
-            permission_override,
-            reminder_body,
-            loop_notes_at,
-        }) => {
-            let effect = (|| {
-                let mut launch_globals = globals.clone();
-                launch_globals.root = Some(root.clone());
-                let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
-                let request = rimz::launcher::LayoutRequest {
-                    context: rimz::launcher::LaunchContext {
-                        workspace: ctx.workspace.clone(),
-                        store: ctx.store.clone(),
-                        machine: config.clone(),
-                        mux: launch_globals.mux,
-                        root: launch_globals.root.clone(),
-                        channel: ctx.channel().map(str::to_owned),
-                    },
-                    launch: rimz::launcher::LayoutLaunch {
-                        spec: Some(spec),
-                        prompt: Some(prompt),
-                        cohort: rimz::launcher::CohortRequest {
-                            new_tab: true,
-                            bg: true,
-                            worktree: worktree.clone(),
-                            fresh: worktree.is_some() && entry.takeover,
-                            ..Default::default()
-                        },
-                        overrides: rimz::launcher::LaunchOverrides {
-                            mode: permission_override,
-                            preset: rimz::agents::LaunchPreset {
-                                effort: rimz::harness::plan::normalized_preset_value(
-                                    entry.effort.as_deref(),
-                                ),
-                                fast: entry.fast,
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    cwd: worktree.is_none().then(|| cwd.clone()),
-                    allow_in_place: false,
-                    entry: rimz::launcher::RoomEntry::Live,
-                    starter: rimz::launcher::Starter::Loop,
-                    resident_loop: Some(rimz::launcher::ResidentLoop {
-                        task: name.to_owned(),
-                        reminder: reminder_body,
-                        loop_notes_at,
-                    }),
-                    workflow: None,
-                    automation: None,
-                    leader_run: None,
-                };
-                let mut interaction = crate::cli::launch_interaction::CliInteraction;
-                let prepared = match rimz::launcher::prepare_layout(request, &mut interaction)? {
-                    rimz::launcher::Preparation::Prepared(prepared) => prepared,
-                    rimz::launcher::Preparation::Handled(_) => {
-                        anyhow::bail!("resident launch aborted")
-                    }
-                };
-                let stopped = if entry.takeover {
-                    let destination = worktree
-                        .as_deref()
-                        .map(|name| {
-                            let requested = rimz::worktree::parse_requested_name(name)?;
-                            rimz::worktree::worktree_path(
-                                ctx.workspace.launch_repo_root(),
-                                &config.agents.worktree,
-                                &requested.name,
-                            )
-                        })
-                        .transpose()?;
-                    match take_over_checkout(
-                        &ctx,
-                        &launch_globals,
-                        &root,
-                        destination.as_deref().unwrap_or(&cwd),
-                    )? {
-                        ControlFlow::Continue(stopped) => stopped,
-                        ControlFlow::Break(blocked) => return Ok(blocked),
-                    }
-                } else {
-                    Vec::new()
-                };
-                let rimz::launcher::LaunchOutcome::Opened(launched) =
-                    rimz::launcher::execute(*prepared, &mut interaction)?
-                else {
-                    anyhow::bail!("resident launch aborted");
-                };
-                let leader = launched
-                    .leader_index
-                    .and_then(|index| launched.identities.get(index))
-                    .context("resident layout has no prompt leader")?;
-                fire.report_launch(&ctx.workspace.workspace_id, &leader.agent_id);
-                Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
-                    leader: leader.name.clone(),
-                    checkout: launched.cwd,
-                    handles: launched
-                        .identities
-                        .iter()
-                        .map(|identity| format!("@{}", identity.name))
-                        .collect(),
-                    stopped,
-                })
-            })();
-            finish_task_effect(&mut fire, effect, name, &entry)?
-        }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => finished,
-        Ok(rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared)) => {
-            let mut run_globals = globals.clone();
-            run_globals.root = Some(prepared.root.clone());
-            let effect = crate::cli::supervised::run::run_supervised(
-                prepared.request,
-                crate::cli::supervised::SupervisedPresentation::text(prepared.stream),
-                &run_globals,
-                fire.record_signal_guard(),
-            )
-            .and_then(|outcome| {
-                outcome
-                    .map(rimz::harness::schedule::runner::TaskFireEffect::Spawn)
-                    .context("scheduled launch aborted despite its explicit root")
-            });
-            // No pane is left to clean an errored launch's tree, nor one the budget refused
-            // before or between attempts.
-            if matches!(
-                &effect,
-                Err(_)
-                    | Ok(rimz::harness::schedule::runner::TaskFireEffect::Spawn(
-                        rimz::harness::run::SupervisedRunOutcome::BudgetExceeded { .. }
-                    ))
-            ) && let Some(tree) = prepared.fire_tree.as_deref()
-                && let Err(error) =
-                    crate::cli::worktree::cleanup_worktree(tree, &run_globals, false)
-            {
-                tracing::warn!(task = name, worktree = %tree.display(), error = %format!("{error:#}"), "failed to clean up the worktree a launch left");
-            }
-            finish_task_effect(&mut fire, effect, name, &entry)?
-        }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared)) => {
             let effect = execute_prepared_delivery(prepared, globals);
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
     };
-    if let Some(holder) = finished.replace_holder.as_deref() {
-        match stop_active_run(
-            name,
-            &entry.resolved_root(),
-            schedule::backlog::StopCause::Replace,
-            Some(*holder),
-            globals,
-        ) {
-            Ok((_, None)) => {}
-            Ok((_, Some(open))) => tracing::warn!(task = name, "{open}"),
-            Err(error) => {
-                tracing::warn!(task = name, %error, "replacement could not stop the active run; trigger remains waiting")
-            }
-        }
-    }
     fire.release_run_lock()?;
-    present_finished(name, &entry, &action, mode, keep, &finished)?;
+    present_finished(name, &entry, &action, mode, &finished)?;
     if mode == LoopRunMode::Manual {
-        write_launched_run_command(&entry, &action, &finished.record, globals)?;
+        write_launched_run_command(&entry, &action, keep, &finished.record, globals)?;
     }
     if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);
     }
     Ok(())
-}
-
-/// Stop every agent occupying the launch checkout and return their handles for
-/// the launch to record, or stop none and break with the blocked effect.
-fn take_over_checkout(
-    ctx: &crate::cli::ctx::Ctx,
-    globals: &GlobalFlags,
-    root: &Path,
-    cwd: &Path,
-) -> Result<ControlFlow<rimz::harness::schedule::runner::TaskFireEffect, Vec<String>>> {
-    let snapshot = ctx.alive_snapshot()?;
-    let card_status = rimz::harness::CardStatus::new(&ctx.store);
-    let takeover = takeover::read(&snapshot, &card_status, cwd, root)?;
-    let peers = rimz::address::addressable_agents(&snapshot);
-    let handle =
-        |agent: &rimz::agents::AgentState| rimz::address::agent_handle(agent, &peers, true);
-    let occupants = match takeover {
-        Takeover::Stop(occupants) => occupants,
-        Takeover::Blocked(blockers) => {
-            return Ok(ControlFlow::Break(
-                rimz::harness::schedule::runner::TaskFireEffect::TakeoverBlocked {
-                    blockers: blockers
-                        .into_iter()
-                        .map(|(agent, turn)| (handle(agent), turn))
-                        .collect(),
-                },
-            ));
-        }
-    };
-    let stops = crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, &occupants)?;
-    for (occupant, stop) in occupants.iter().zip(stops) {
-        stop.into_result(&handle(occupant))?;
-    }
-    Ok(ControlFlow::Continue(
-        occupants.into_iter().map(handle).collect(),
-    ))
 }
 
 fn resident_checkout(
@@ -564,7 +334,8 @@ pub(super) fn handle_run_transition(name: &str, root: &Path, transition: RunTran
     }
 }
 
-fn notify_loop_disabled(name: &str, root: &Path, count: u32) {
+/// The strike-out notice: a desktop notification and a sidebar toast.
+pub(super) fn notify_loop_disabled(name: &str, root: &Path, count: u32) {
     let notification = rimz::sidebar::notify::Notification {
         agents: Vec::new(),
         notification_kind: rimz::sidebar::notify::NotificationKind::LoopDisabled,
@@ -605,7 +376,6 @@ fn present_finished(
     entry: &TaskEntry,
     action: &TaskAction,
     mode: LoopRunMode,
-    keep: bool,
     finished: &rimz::harness::schedule::runner::TaskFireFinished,
 ) -> Result<()> {
     use rimz::harness::schedule::runner::TaskFireNotice;
@@ -655,7 +425,7 @@ fn present_finished(
         presentation: &finished.presentation,
         prose: ui::prose::Prose::for_stdout(),
     };
-    print_run_summary(name, entry, action, mode, keep, &summary)
+    print_run_summary(name, entry, action, mode, &summary)
 }
 
 /// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, as `workflow run`
@@ -663,10 +433,11 @@ fn present_finished(
 fn write_launched_run_command(
     entry: &TaskEntry,
     action: &TaskAction,
+    keep: bool,
     record: &LoopRunRecord,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    if action.kind() != TaskActionKind::Workflow || record.result != LoopRunResult::Launched {
+    if record.result != LoopRunResult::Launched {
         return Ok(());
     }
     let Some(id) = record
@@ -683,6 +454,9 @@ fn write_launched_run_command(
         "  → {}",
         crate::cli::workflow_view::resolve::run_command(&run, "show", globals, None, &[], &[])
     )?;
+    if let Some(hint) = keep_hint(entry, action, keep, run.state.is_terminal()) {
+        writeln!(ui::out(), "{}", ui::paint(ui::palette::muted(), hint))?;
+    }
     Ok(())
 }
 
@@ -803,11 +577,10 @@ fn print_run_summary(
     entry: &TaskEntry,
     action: &TaskAction,
     mode: LoopRunMode,
-    keep: bool,
     summary: &RunSummary<'_>,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(&mut out, name, entry, action, mode, keep, summary)?;
+    write_run_summary(&mut out, name, entry, action, mode, summary)?;
     Ok(())
 }
 

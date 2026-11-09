@@ -1,5 +1,5 @@
-//! The one headless judge: answer contracts, a bounded attempt classed by how it
-//! failed, and the retry rule loop and workflow judges share.
+//! The one headless judge: the workflow answer contract, a bounded attempt classed
+//! by how it failed, and the retry rule workflow judges use.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,56 +17,33 @@ use crate::proc::BoundedOutput;
 
 const WORKFLOW_SCHEMA: &str = r#"{"type":"object","properties":{"outcome":{"type":"string"},"reason":{"type":"string"},"recheck_at":{"type":"string"},"key":{}},"required":["outcome"]}"#;
 
-/// A loop judge's closed answer: one outcome word and its reason.
+/// A closed outcome-word answer contract, the fixture adapter tests decode a closed schema with.
+#[cfg(test)]
 pub(crate) const LOOP_ANSWER_SCHEMA: &str = r#"{"type":"object","properties":{"outcome":{"type":"string","enum":["pass","fail"]},"reason":{"type":"string"}},"required":["outcome","reason"],"additionalProperties":false}"#;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+/// The answer [`LOOP_ANSWER_SCHEMA`] admits; a decode failure is a shape the schema refuses.
+#[cfg(test)]
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LoopAnswer {
+    #[expect(dead_code, reason = "decoded to pin the closed shape")]
+    outcome: LoopOutcome,
+    #[expect(dead_code, reason = "decoded to pin the closed shape")]
+    reason: String,
+}
+
+#[cfg(test)]
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum LoopOutcome {
+enum LoopOutcome {
     Pass,
     Fail,
 }
 
-/// A loop judge's decoded answer, its reason cut to a 4 KiB tail.
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LoopAnswer {
-    pub outcome: LoopOutcome,
-    pub reason: String,
-}
-
+#[cfg(test)]
 impl LoopAnswer {
-    /// Decodes a loop judge's object; any other shape is an `invalid` attempt.
-    pub(crate) fn from_value(value: Value) -> Result<Self, Failure> {
-        let mut answer = serde_json::from_value::<Self>(value).map_err(|error| {
-            Failure::new(
-                FailureKind::Invalid,
-                format!("invalid judge answer: {error}"),
-            )
-        })?;
-        let mut start = answer.reason.len().saturating_sub(4 * 1024);
-        while !answer.reason.is_char_boundary(start) {
-            start += 1;
-        }
-        answer.reason.drain(..start);
-        Ok(answer)
-    }
-}
-
-/// What a judge must answer: workflow's open outcome object, validated by the
-/// engine, or a loop's closed outcome word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Contract {
-    Workflow,
-    Loop,
-}
-
-impl Contract {
-    fn schema(self) -> &'static str {
-        match self {
-            Self::Workflow => WORKFLOW_SCHEMA,
-            Self::Loop => LOOP_ANSWER_SCHEMA,
-        }
+    pub(crate) fn from_value(value: Value) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(value)
     }
 }
 
@@ -148,8 +125,6 @@ impl Failure {
 pub(crate) struct Attempt {
     pub answer: Result<Value, Failure>,
     pub cost_usd: Option<f64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
     /// The process output, absent when the judge never ran to an exit.
     pub output: Option<BoundedOutput>,
 }
@@ -160,7 +135,6 @@ pub(crate) struct Request<'a> {
     pub identity: ExecIdentity,
     pub dir: &'a Path,
     pub root: &'a Path,
-    pub contract: Contract,
     pub schema_file: PathBuf,
     pub verdict_file: PathBuf,
     /// The deadline the caller's execute step enforces, named in a timeout's text.
@@ -194,9 +168,9 @@ pub(crate) fn prepare(
     config: &MachineConfig,
     runtime: &RuntimePaths,
 ) -> Result<(Prepared, Vec<String>), HeadlessErr> {
-    let schema = request.contract.schema();
+    let schema = WORKFLOW_SCHEMA;
     let headless = HeadlessRequest {
-        schema_open: request.contract == Contract::Workflow,
+        schema_open: true,
         schema: schema.into(),
         schema_file: request.schema_file,
         verdict_file: request.verdict_file,
@@ -232,10 +206,6 @@ impl Prepared {
         self.plan.request.identity.params.model.as_deref()
     }
 
-    pub(crate) fn verdict_file(&self) -> &Path {
-        &self.headless.verdict_file
-    }
-
     /// Runs one attempt. Launch refusals are `Err`; every process-level end is an
     /// attempt, classed by how it failed.
     pub(crate) fn attempt(
@@ -257,8 +227,6 @@ impl Prepared {
                 return Ok(Attempt {
                     answer: Err(Failure::new(kind, error.to_string())),
                     cost_usd: None,
-                    input_tokens: None,
-                    output_tokens: None,
                     output: None,
                 });
             }
@@ -283,8 +251,6 @@ impl Prepared {
         Ok(Attempt {
             answer,
             cost_usd: response.cost_usd,
-            input_tokens: response.input_tokens,
-            output_tokens: response.output_tokens,
             output: Some(output),
         })
     }

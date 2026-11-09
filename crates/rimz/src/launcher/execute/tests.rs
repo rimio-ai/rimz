@@ -4,8 +4,6 @@ use crate::ids::MuxName;
 use crate::launcher::test_backend as fake_backend;
 use crate::store::run::RunStatus;
 
-mod loop_notes;
-
 struct Fixture {
     _dir: tempfile::TempDir,
     fresh: FreshLaunch,
@@ -92,7 +90,6 @@ impl Fixture {
                 pick_session: false,
                 reminder_section: None,
                 loop_task: None,
-                loop_notes_at: None,
                 description: None,
                 report_to: ReportTo::Launcher,
                 cleanup_worktree: false,

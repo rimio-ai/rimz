@@ -37,7 +37,6 @@ struct ActionWords {
     subject: String,
     base: &'static str,
     third_person: &'static str,
-    progressive: &'static str,
     untouched: &'static str,
 }
 
@@ -47,14 +46,12 @@ fn action_words(action: &TaskAction) -> Option<ActionWords> {
             subject: subject.clone(),
             base: "start",
             third_person: "starts",
-            progressive: "starting",
             untouched: "not started",
         }),
         TaskAction::Deliver(target) => Some(ActionWords {
             subject: target.handle.clone(),
             base: "wake",
             third_person: "wakes",
-            progressive: "waking",
             untouched: "not woken",
         }),
         TaskAction::CheckOnly => None,
@@ -153,12 +150,6 @@ pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> Stri
         rule.push_str(&format!(", verify `{cmd}` (up to {attempts} attempts)"));
     }
     rule
-}
-
-pub(super) fn action_progressive_phrase(action: &TaskAction) -> String {
-    action_words(action)
-        .map(|words| format!("{} {}", words.progressive, words.subject))
-        .unwrap_or_else(|| "running <invalid>".to_owned())
 }
 
 pub(super) fn check_skip_decision(entry: &TaskEntry, task_action: &TaskAction) -> String {

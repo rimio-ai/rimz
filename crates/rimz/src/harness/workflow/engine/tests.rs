@@ -585,6 +585,46 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
 }
 
 #[test]
+fn min_disk_is_read_where_a_steps_worktree_will_be_made() {
+    for worktree in [Some("feat"), None] {
+        let line = worktree.map_or_else(String::new, |name| format!("worktree='{name}'\n"));
+        let (home, state, mut record, spec) = fixture(&format!(
+            "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\n\
+             prompt-file='prompt.md'\n{line}then='@done'\n"
+        ));
+        record.task = Some("nightly".into());
+        let paths = state.workflow(&record.id);
+        let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        workflow::write(&paths, &record, &guard).unwrap();
+        drop(guard);
+        let decision = prepare(
+            &state,
+            &paths,
+            &spec,
+            &mut BTreeSet::new(),
+            &super::super::tests::FakeHost::new(),
+            &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+            &mut Admission::default(),
+        )
+        .unwrap();
+        let Decision::Admit(admit) = decision else {
+            panic!("a task's agent step is admitted first")
+        };
+        // The default worktree home sits beside the checkout and does not exist yet, so its
+        // nearest existing ancestor is the filesystem the launch will write to.
+        let expected = match worktree {
+            Some(_) => home.path().parent().unwrap(),
+            None => home.path(),
+        };
+        assert_eq!(
+            admit.2.disk.canonicalize().unwrap(),
+            expected.canonicalize().unwrap(),
+            "worktree {worktree:?}"
+        );
+    }
+}
+
+#[test]
 fn admission_rechecks_bounds_after_occupancy() {
     admission_after_occupancy(true);
 }
@@ -890,6 +930,7 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
                 .map(|(name, body)| ((*name).to_owned(), body.as_bytes().to_vec()))
                 .collect(),
         },
+        fire_tree: false,
     }
 }
 
@@ -993,7 +1034,7 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
     ] {
         let error = start_at(&state, home.path(), source).unwrap_err();
         assert!(
-            matches!(&error, WorkflowErr::Refused(reason) if reason.starts_with("no room at")),
+            matches!(error, WorkflowErr::NoRoom(_)),
             "a fire in a root with no room refuses, as trunk's did: {error}"
         );
     }

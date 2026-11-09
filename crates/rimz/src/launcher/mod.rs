@@ -49,7 +49,6 @@ pub struct LayoutRequest {
     pub allow_in_place: bool,
     pub entry: RoomEntry,
     pub starter: Starter,
-    pub resident_loop: Option<ResidentLoop>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     pub automation: Option<crate::agents::Automation>,
     pub leader_run: Option<LeaderRun>,
@@ -114,14 +113,7 @@ pub enum Starter {
     Human,
     Agent,
     Team,
-    Loop,
     Workflow,
-}
-
-pub struct ResidentLoop {
-    pub task: String,
-    pub reminder: String,
-    pub loop_notes_at: Option<jiff::Timestamp>,
 }
 
 pub enum Preparation {
@@ -328,13 +320,18 @@ pub fn prepare_layout(
     mut request: LayoutRequest,
     interaction: &mut dyn Interaction,
 ) -> Result<Preparation> {
-    if matches!(request.starter, Starter::Loop) {
-        request.automation = Some(crate::agents::Automation::Loop);
+    if let Some(leader) = request.leader_run.as_mut()
+        && request.workflow.is_some()
+    {
+        leader.workflow.clone_from(&request.workflow);
     }
-    if let Some(mut leader) = request.leader_run.take() {
-        if request.workflow.is_some() {
-            leader.workflow.clone_from(&request.workflow);
-        }
+    // A team keeps its leader's run but launches as a resident team task does.
+    if !request
+        .leader_run
+        .as_ref()
+        .is_some_and(|leader| resident_leader(&request, leader))
+        && let Some(leader) = request.leader_run.take()
+    {
         return supervised::prepare_run_layout(request, leader, interaction);
     }
     let mut args = request;
@@ -342,11 +339,11 @@ pub fn prepare_layout(
     let machine_config = ctx.machine.clone();
     let cwd = args.cwd.clone();
     let allow_in_place = args.allow_in_place;
-    let loop_fire = args
-        .resident_loop
+    // A loop task's agent launches unattended: it never adopts a cohort it would have to ask about.
+    let loop_task = args
+        .leader_run
         .as_ref()
-        .map(|fire| (fire.task.as_str(), fire.reminder.as_str()));
-    let loop_task = loop_fire.map(|(task, _)| task);
+        .and_then(|run| run.loop_task.clone());
     let explicit_worktree_name = if args.launch.selection == Selection::Cohort {
         None
     } else {
@@ -484,7 +481,7 @@ pub fn prepare_layout(
         )?;
     }
     let projection = store.runtime_projection(crate::RuntimeScope::Audit)?;
-    let caller = if matches!(args.starter, Starter::Loop | Starter::Workflow) {
+    let caller = if matches!(args.starter, Starter::Workflow) {
         None
     } else {
         ancestry::resolve_caller(&projection.agents)
@@ -626,7 +623,6 @@ pub fn prepare_layout(
                     )
                 },
                 match args.starter {
-                    Starter::Loop => Some(trust::Unattended::Loop),
                     Starter::Workflow => Some(trust::Unattended::Workflow),
                     Starter::Agent => Some(trust::Unattended::Agent),
                     Starter::Team => Some(trust::Unattended::Team),
@@ -641,6 +637,7 @@ pub fn prepare_layout(
             empty_dir = prepared;
         }
     }
+    let leader_run = args.leader_run.clone();
     Ok(Preparation::Prepared(Box::new(PreparedLaunch {
         state: PreparedState::Layout(Box::new(PreparedLayout {
             request: args,
@@ -666,8 +663,34 @@ pub fn prepare_layout(
             resume_scope,
             reported_warnings,
         })),
-        leader_run: None,
+        leader_run,
     })))
+}
+
+/// A workflow `stay` step a loop task started, or one naming a team (validation admits no
+/// other run-bearing team), launches through the layout path a resident launch takes.
+fn resident_leader(request: &LayoutRequest, leader: &LeaderRun) -> bool {
+    if leader.lifecycle != crate::store::run::RunLifecycle::Session || request.workflow.is_none() {
+        return false;
+    }
+    if leader.loop_task.is_some() {
+        return true;
+    }
+    let root = request
+        .cwd
+        .as_deref()
+        .unwrap_or(&request.context.workspace.project_root);
+    let Ok(effective) = crate::config::effective::load(&request.context.machine, root) else {
+        return false;
+    };
+    crate::harness::plan::resolve_launch(
+        &effective,
+        crate::config::effective::ProfileScope::Agents,
+        &request.context.machine.agents.commands,
+        request.launch.spec.as_deref(),
+        None,
+    )
+    .is_ok_and(|resolved| resolved.team_name.is_some())
 }
 
 fn settle_layout(
@@ -703,11 +726,10 @@ fn settle_layout(
     let store = &ctx.store;
     let machine_config = ctx.machine.clone();
     let cwd = args.cwd.clone();
-    let loop_fire = args
-        .resident_loop
+    let loop_task = args
+        .leader_run
         .as_ref()
-        .map(|fire| (fire.task.as_str(), fire.reminder.as_str()));
-    let loop_task = loop_fire.map(|(task, _)| task);
+        .and_then(|run| run.loop_task.clone());
     let worktree_launch =
         args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
     let single_cell = layout
@@ -750,6 +772,10 @@ fn settle_layout(
         .or(default_lane.as_deref());
     let room = match args.entry {
         RoomEntry::Live => RoomContext::live_tab(workspace, machine_config.clone(), ctx.mux)?,
+        // A team's leader run opens its tab in the room its fire ensured.
+        RoomEntry::Birth if args.leader_run.is_some() => {
+            RoomContext::live_tab(workspace, machine_config.clone(), ctx.mux)?
+        }
         RoomEntry::Birth => bail!("room birth requires a leader run"),
     };
     let backend = room.backend();
@@ -1040,20 +1066,18 @@ fn settle_layout(
         leader_index: receipt_leader_index,
         placement,
         pick_session,
-        reminder_section: loop_fire.map(|(_, reminder)| {
-            crate::harness::launch::ReminderSection::Loop(reminder.to_owned())
-        }),
+        reminder_section: args
+            .leader_run
+            .as_ref()
+            .and_then(|leader| leader.reminder_section.clone()),
         description: args.launch.cohort.description.clone(),
         report_to: args.launch.report_to,
         managed_launches: Vec::new(),
-        loop_task: loop_task.map(str::to_owned),
-        loop_notes_at: args
-            .resident_loop
-            .as_ref()
-            .and_then(|fire| fire.loop_notes_at),
+        loop_task: loop_task.clone(),
         cleanup_worktree: true,
         inherit_cwd: !worktree_launch && loop_task.is_none(),
-        force_new_tab: false,
+        // A run-bearing leader opens its own tab, as a supervised launch does.
+        force_new_tab: args.leader_run.is_some(),
         agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
         room: Some(Arc::new(room)),
         recovery: crate::room::AttendedRecovery::RequireExplicitReset,

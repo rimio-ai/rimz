@@ -323,6 +323,9 @@ pub(super) enum Wake {
         signal: String,
         #[serde(default, rename = "match")]
         matches: BTreeMap<String, String>,
+        /// Text a staying step's leader gets after the forwarded signal; steps only.
+        #[serde(default)]
+        prompt: Option<String>,
     },
 }
 
@@ -346,12 +349,15 @@ impl<'de> Deserialize<'de> for Wake {
                     signal: String,
                     #[serde(default, rename = "match")]
                     matches: BTreeMap<String, String>,
+                    #[serde(default)]
+                    prompt: Option<String>,
                 }
                 let binding =
                     Binding::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(Wake::Binding {
                     signal: binding.signal,
                     matches: binding.matches,
+                    prompt: binding.prompt,
                 })
             }
         }
@@ -360,16 +366,48 @@ impl<'de> Deserialize<'de> for Wake {
 }
 
 impl Wake {
+    /// A check's wake, which lifecycle signals never reach.
     pub(super) fn subscription(&self) -> Result<Subscription, SpecErr> {
-        let (raw, matches) = match self {
-            Self::Selector(signal) => (signal, BTreeMap::new()),
-            Self::Binding { signal, matches } => (signal, matches.clone()),
-        };
-        let selector = schedule::parse_signal_selector("workflow wake", raw, Some(&matches))?;
-        if selector.family() == "agent" || (selector.family() == "team" && raw != "team.stage") {
+        let (selector, matches) = self.parsed()?;
+        if selector.family() == "agent"
+            || (selector.family() == "team" && selector.to_string() != "team.stage")
+        {
             return Err(SpecErr::LifecycleWake);
         }
         Ok((selector, matches))
+    }
+
+    /// A staying step's subscription, which may hear lifecycle signals, though never the
+    /// leader's own: an `agent` selector names another agent by handle or session.
+    pub(super) fn step_subscription(&self) -> Result<Subscription, SpecErr> {
+        let (selector, matches) = self.parsed()?;
+        let names_another = ["handle", "session"].iter().any(|key| {
+            matches.get(*key).is_some_and(|value| {
+                !value.is_empty() && !schedule::signal::is_match_wildcard(value)
+            })
+        });
+        if selector.family() == "agent" && !names_another {
+            return Err(SpecErr::SelfSignal);
+        }
+        Ok((selector, matches))
+    }
+
+    fn parsed(&self) -> Result<Subscription, SpecErr> {
+        let (raw, matches) = match self {
+            Self::Selector(signal) => (signal, BTreeMap::new()),
+            Self::Binding {
+                signal, matches, ..
+            } => (signal, matches.clone()),
+        };
+        let selector = schedule::parse_signal_selector("workflow wake", raw, Some(&matches))?;
+        Ok((selector, matches))
+    }
+
+    pub(super) fn prompt(&self) -> Option<&str> {
+        match self {
+            Self::Selector(_) => None,
+            Self::Binding { prompt, .. } => prompt.as_deref(),
+        }
     }
 }
 
@@ -640,7 +678,7 @@ impl Step {
         self.subscribe
             .iter()
             .flatten()
-            .map(Wake::subscription)
+            .map(Wake::step_subscription)
             .collect()
     }
 
@@ -652,6 +690,9 @@ impl Step {
             .map(|(selector, matches)| {
                 let scope = match schedule::arm::default_signal_match_key(&selector, &matches) {
                     Some("path") => Some("for this checkout"),
+                    Some("instance") if selector.to_string() != "team.stage" => {
+                        Some("for this checkout's team")
+                    }
                     Some("instance") if !matches.contains_key("board") => {
                         Some("for this checkout's team board")
                     }
@@ -777,6 +818,10 @@ pub enum SpecErr {
     Signal(#[from] schedule::ScheduleErr),
     #[error("lifecycle signals cannot wake workflows; use team.stage or a non-lifecycle selector")]
     LifecycleWake,
+    #[error(
+        "an agent.* subscription needs match handle=<other> or session=<other>, so the leader is not woken by its own lifecycle signal"
+    )]
+    SelfSignal,
 }
 
 pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
@@ -800,7 +845,7 @@ pub(crate) fn parse_run(text: &str, record: &RunRecord) -> Result<WorkflowSpec, 
     )
 }
 
-pub(super) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
     parse_with_defaults(
         text,
         StepLifecycle::Until,

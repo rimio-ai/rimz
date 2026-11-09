@@ -66,8 +66,8 @@ fn judge_args(extra: &[&str]) -> AddArgs {
 
 #[test]
 fn shell_and_judge_flags_validate_caps_and_polarity() {
-    for action in [vec!["--agent", "codex"], vec!["--wait"]] {
-        let flags = action
+    {
+        let flags = ["--agent", "codex"]
             .into_iter()
             .chain([
                 "--check",
@@ -460,14 +460,56 @@ fn resident_launch_rejects_supervised_and_one_shot_options() {
         assert!(error.to_string().contains(flags[0]), "{error}");
         assert!(error.to_string().contains("--stay"), "{error}");
     }
-    let error = validate_add_args(&args(&[
-        "--agent", "claude", "--stay", "--every", "1m", "--until", "1h", "--check", "true",
-    ]))
-    .expect_err("resident poll-until must be refused");
-    assert!(
-        error.to_string().contains("--stay") && error.to_string().contains("--until"),
-        "{error}"
-    );
+}
+
+const UNTIL_REFUSAL: &str = "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check";
+const GUARDED_WAIT_REFUSAL: &str = "--check and --judge no longer guard a --wait delivery; fire on a condition with --when, or deliver from a workflow message step";
+
+#[test]
+fn until_and_guarded_waits_refuse_with_their_replacements() {
+    let judge = ["--judge", "haiku", "--judge-prompt", "q", "--on", "fail"];
+    let cases: [(Vec<&str>, &str); 5] = [
+        (
+            vec![
+                "--agent", "claude", "--stay", "--every", "1m", "--until", "1h", "--check", "true",
+            ],
+            UNTIL_REFUSAL,
+        ),
+        (
+            ["--agent", "claude", "--until", "1h", "--every", "1m"]
+                .into_iter()
+                .chain(judge)
+                .collect(),
+            UNTIL_REFUSAL,
+        ),
+        (
+            vec!["--wait", "--check", "true", "--every", "15m"],
+            GUARDED_WAIT_REFUSAL,
+        ),
+        (
+            ["--wait", "--every", "15m"]
+                .into_iter()
+                .chain(judge)
+                .collect(),
+            GUARDED_WAIT_REFUSAL,
+        ),
+        (
+            vec![
+                "--wait",
+                "--judge",
+                "haiku",
+                "--judge-prompt-file",
+                "q.md",
+                "--on",
+                "any",
+            ],
+            GUARDED_WAIT_REFUSAL,
+        ),
+    ];
+    for (argv, refusal) in cases {
+        let error = validate_add_args(&judge_args(&argv)).expect_err("refused at add");
+        assert_eq!(error.to_string(), refusal, "{argv:?}");
+    }
 }
 
 #[test]
@@ -530,18 +572,6 @@ fn agent_check_flags_require_a_profile_prompt_and_action() {
 #[test]
 fn resident_checks_and_agent_check_polarity_are_accepted() {
     for flags in [
-        vec![
-            "--until",
-            "1h",
-            "--every",
-            "1m",
-            "--judge",
-            "haiku",
-            "--judge-prompt",
-            "q",
-            "--on",
-            "fail",
-        ],
         vec!["--stay", "--check", "true", "--on", "success"],
         vec![
             "--stay",
@@ -563,18 +593,6 @@ fn resident_checks_and_agent_check_polarity_are_accepted() {
             .collect::<Vec<_>>();
         assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
     }
-    assert!(
-        validate_add_args(&args(&[
-            "--wait",
-            "--judge",
-            "haiku",
-            "--judge-prompt-file",
-            "q.md",
-            "--on",
-            "any"
-        ]))
-        .is_ok()
-    );
 }
 
 #[test]

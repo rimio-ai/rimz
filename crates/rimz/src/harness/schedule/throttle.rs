@@ -30,7 +30,6 @@ use crate::utils::time::format_duration_compact;
 mod limits;
 pub(in crate::harness) use limits::WorkflowStart;
 
-const RECHECK: Duration = Duration::from_secs(1);
 const SAMPLE_EVERY_MS: u64 = 5_000;
 const CHECK_REUSE_MS: u64 = 60_000;
 const TURN_CEILING: Duration = Duration::from_secs(10);
@@ -75,8 +74,6 @@ pub enum ThrottleError {
     WriteStamps(#[source] AtomicErr),
     #[error("loop throttle ticket {0} vanished from the queue")]
     Vanished(PathBuf),
-    #[error("listening for Ctrl-C while held: {0}")]
-    Interrupts(#[source] io::Error),
 }
 
 type Result<T, E = ThrottleError> = std::result::Result<T, E>;
@@ -118,8 +115,6 @@ pub(super) struct Owner {
 /// [`SystemHost`] is the machine.
 pub(super) trait Host: Send + Sync {
     fn now_ms(&self) -> u64;
-    fn sleep(&self, duration: Duration);
-    fn throttle_config(&self) -> Option<ThrottleConfig>;
     fn queue_dir(&self) -> PathBuf;
     fn queue_lock(&self) -> PathBuf;
     fn check_cache(&self) -> PathBuf;
@@ -133,8 +128,6 @@ pub(super) trait Host: Send + Sync {
     ) -> std::result::Result<super::runner::CheckOutcome, String>;
     fn owner(&self) -> Owner;
     fn owner_is_live(&self, owner: &Owner) -> bool;
-    /// Start listening for Ctrl-C, until the returned listener is dropped.
-    fn interrupts(&self) -> io::Result<Interrupts>;
     /// `Err` is the missing source, for the fail-fast message.
     fn pressure(&self, resource: Resource) -> Result<Pressure, String>;
     fn memory_available(&self) -> Result<u64, String>;
@@ -152,10 +145,6 @@ pub(super) trait Host: Send + Sync {
 pub(super) struct SystemHost;
 
 impl Host for SystemHost {
-    fn throttle_config(&self) -> Option<ThrottleConfig> {
-        MachineConfig::load_throttle().ok()
-    }
-
     fn check_cache(&self) -> PathBuf {
         paths::loop_throttle_check_cache()
     }
@@ -208,10 +197,6 @@ impl Host for SystemHost {
         crate::utils::time::unix_now_ms()
     }
 
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
-
     fn queue_dir(&self) -> PathBuf {
         paths::loop_throttle_queue_dir()
     }
@@ -230,15 +215,6 @@ impl Host for SystemHost {
 
     fn owner_is_live(&self, owner: &Owner) -> bool {
         crate::proc::process_is_live(owner.pid, owner.start.as_deref())
-    }
-
-    fn interrupts(&self) -> io::Result<Interrupts> {
-        let raised = Arc::new(AtomicBool::new(false));
-        let id = signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&raised))?;
-        Ok(Interrupts {
-            raised,
-            id: Some(id),
-        })
     }
 
     fn pressure(&self, resource: Resource) -> Result<Pressure, String> {
@@ -306,34 +282,6 @@ impl Host for SystemHost {
             }
         }
         Ok(runs)
-    }
-}
-
-/// Ctrl-C while a run is held. A check's handler, once dropped, leaves
-/// SIGINT ignored, so a fire that runs a check listens from before it and
-/// hands this listener to the hold; a fire that ran none listens once held.
-pub(super) struct Interrupts {
-    raised: Arc<AtomicBool>,
-    id: Option<signal_hook::SigId>,
-}
-
-impl Interrupts {
-    /// A listener raised through `raised` rather than a signal.
-    #[cfg(test)]
-    pub(super) fn raised_by(raised: Arc<AtomicBool>) -> Self {
-        Self { raised, id: None }
-    }
-
-    pub(super) fn raised(&self) -> bool {
-        self.raised.load(Ordering::SeqCst)
-    }
-}
-
-impl Drop for Interrupts {
-    fn drop(&mut self) {
-        if let Some(id) = self.id.take() {
-            signal_hook::low_level::unregister(id);
-        }
     }
 }
 
@@ -409,7 +357,7 @@ pub(super) fn try_admit_in(
         write_ticket(&path, &ticket)?;
         Turn::new(host, path, started_past_limit)
     };
-    match check_groups(host.as_ref(), config, run, false)? {
+    match check_groups(host.as_ref(), config, run)? {
         Some(hold) => Ok(Attempt::Held(hold)),
         // A check cut at the give-up instant answered nothing, so it grants no turn.
         None if run.limits.as_ref().is_none_or(|start| start.may_wait)
@@ -440,30 +388,6 @@ pub(super) fn try_admit_in(
             Ok(Attempt::Turn(turn))
         }
     }
-}
-
-/// Inspect the same tail without a ticket or reservation, even during its check.
-pub(super) fn look_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
-    if !run.machine_gated && !caps(config) && run.limits.is_none() {
-        return Ok(None);
-    }
-    if run.machine_gated
-        && let Some(problem) = unreadable(host, config)
-    {
-        return Err(ThrottleError::Unreadable(problem));
-    }
-    {
-        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-        if let Some(hold) = pass(host, config, run, None, host.now_ms(), &mut None)?.hold() {
-            return Ok(Some(hold));
-        }
-    }
-    let hold = check_groups(host, config, run, false)?;
-    if hold.is_some() || !run.machine_gated || config.check.is_none() {
-        return Ok(hold);
-    }
-    let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-    Ok(pass(host, config, run, None, host.now_ms(), &mut None)?.hold())
 }
 
 /// The latest capacity-check errors, read without running a check or taking a turn.
@@ -507,12 +431,7 @@ fn read_verdicts(host: &dyn Host) -> Vec<Verdict> {
         .unwrap_or_default()
 }
 
-fn check_groups(
-    host: &dyn Host,
-    config: &ThrottleConfig,
-    run: &Run,
-    refresh: bool,
-) -> Result<Option<Hold>> {
+fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<Option<Hold>> {
     if !run.machine_gated || config.check.is_none() {
         return Ok(None);
     }
@@ -527,8 +446,7 @@ fn check_groups(
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
             let now = host.now_ms();
             read_verdicts(host).into_iter().find(|verdict| {
-                !refresh
-                    && verdict.kind == group.kind
+                verdict.kind == group.kind
                     && verdict.account == group.account
                     && verdict.outcome != CheckAnswer::Room
                     && now
@@ -812,23 +730,6 @@ impl Drop for TurnInner {
     }
 }
 
-/// How one gated run left the queue.
-#[derive(Debug)]
-pub(super) enum Admission {
-    /// Nothing is configured to gate on; no ticket is retained.
-    Open,
-    Turn {
-        turn: Turn,
-        /// How long the run was held, when it was held at all.
-        waited: Option<Duration>,
-    },
-    Skipped {
-        reason: String,
-    },
-    /// Ctrl-C ended the hold; the ticket is gone and nothing launches.
-    Interrupted,
-}
-
 fn caps(config: &ThrottleConfig) -> bool {
     config.max_parallel_agents.is_some() || config.max_parallel_automation.is_some()
 }
@@ -861,143 +762,6 @@ pub fn preflight(config: &ThrottleConfig) -> Result<()> {
         Some(problem) => Err(ThrottleError::Unreadable(problem)),
         None => Ok(()),
     }
-}
-
-/// Take a turn for `run`, waiting until its give-up instant.
-/// A caller already `listening` for Ctrl-C hands its
-/// listener over; without one, the run listens once it is held.
-pub(super) fn admit(
-    host: &Arc<dyn Host>,
-    config: &ThrottleConfig,
-    run: &Run,
-    listening: Option<Interrupts>,
-) -> Result<Admission> {
-    if !run.machine_gated && !caps(config) && run.limits.is_none() {
-        return Ok(Admission::Open);
-    }
-    if run.machine_gated
-        && let Some(problem) = unreadable(host.as_ref(), config)
-    {
-        return Err(ThrottleError::Unreadable(problem));
-    }
-    let enqueued_ms = host.now_ms();
-    let path = {
-        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-        enqueue(host.as_ref(), run, enqueued_ms)?
-    };
-    // From here an early return drops the turn, which removes the ticket.
-    let turn = Turn::new(host, path.clone(), None);
-    let expired = |now| run.gives_up_ms.is_some_and(|until| now >= until);
-    let skipped = |reason: &str| {
-        Ok(Admission::Skipped {
-            reason: format!(
-                "gave up waiting for capacity after {}; {reason}",
-                format_duration_compact(Duration::from_millis(
-                    host.now_ms().saturating_sub(enqueued_ms)
-                ))
-            ),
-        })
-    };
-    let mut blocked: Option<(u64, Hold)> = None;
-    let mut heard: Option<String> = None;
-    let mut interrupts = listening;
-    let mut config = config.clone();
-    let mut refresh_check = false;
-    loop {
-        if let Some(current) = host.throttle_config()
-            && current != config
-        {
-            if run.machine_gated
-                && let Some(problem) = unreadable(host.as_ref(), &current)
-            {
-                return Err(ThrottleError::Unreadable(problem));
-            }
-            refresh_check |=
-                current.check != config.check || current.check_timeout != config.check_timeout;
-            config = current;
-            blocked = None;
-        }
-        let mut hold = {
-            let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-            // A Ctrl-C heard while sleeping or taking the lock wins over both
-            // the deadline and an admission.
-            if interrupts.as_ref().is_some_and(Interrupts::raised) {
-                return Ok(Admission::Interrupted);
-            }
-            // Read after the lock, so time spent waiting for it counts.
-            let now = host.now_ms();
-            // A held run past its deadline never gets another chance to start.
-            if let Some(reason) = &heard
-                && expired(now)
-            {
-                return skipped(reason);
-            }
-            if !run.machine_gated && !caps(&config) && run.limits.is_none() {
-                return Ok(Admission::Open);
-            }
-            pass(host.as_ref(), &config, run, Some(&path), now, &mut blocked)?.hold()
-        };
-        if hold.is_none() {
-            hold = check_groups(
-                host.as_ref(),
-                &config,
-                run,
-                std::mem::take(&mut refresh_check),
-            )?;
-            if hold.is_none() && run.machine_gated && config.check.is_some() {
-                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-                hold = pass(
-                    host.as_ref(),
-                    &config,
-                    run,
-                    Some(&path),
-                    host.now_ms(),
-                    &mut None,
-                )?
-                .hold();
-            }
-            if let Some(hold) = &hold {
-                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
-                let mut ticket =
-                    read_ticket(&path)?.ok_or_else(|| ThrottleError::Vanished(path.clone()))?;
-                ticket.state = TicketState::Waiting {
-                    reason: Some(hold.clone()),
-                };
-                write_ticket(&path, &ticket)?;
-            }
-        }
-        if interrupts.as_ref().is_some_and(Interrupts::raised) {
-            return Ok(Admission::Interrupted);
-        }
-        // The script and its cache write may have carried this pass past the bound.
-        let now = host.now_ms();
-        if expired(now) {
-            return skipped(
-                hold.as_ref()
-                    .map(|hold| hold.text.as_str())
-                    .or(heard.as_deref())
-                    .unwrap_or("wait deadline reached"),
-            );
-        }
-        let waited_ms = now.saturating_sub(enqueued_ms);
-        let Some(hold) = hold else {
-            return Ok(Admission::Turn {
-                turn,
-                waited: heard.is_some().then(|| Duration::from_millis(waited_ms)),
-            });
-        };
-        if interrupts.is_none() {
-            interrupts = Some(host.interrupts().map_err(ThrottleError::Interrupts)?);
-        }
-        heard = Some(hold.text);
-        host.sleep(RECHECK);
-    }
-}
-
-fn enqueue(host: &dyn Host, run: &Run, enqueued_ms: u64) -> Result<PathBuf> {
-    let path = paths::loop_throttle_ticket_in(&host.queue_dir(), enqueued_ms);
-    write_ticket(&path, &Ticket::new(host, run, enqueued_ms))?;
-    Ok(path)
 }
 
 fn duration_ms(duration: Duration) -> u64 {

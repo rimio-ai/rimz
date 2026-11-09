@@ -247,6 +247,8 @@ impl WorkflowSpec {
         if self.checks.contains_key(node) {
             return if outcome == "hold" {
                 Some("@wait".into())
+            } else if outcome == "budget" {
+                Some("@failed".into())
             } else {
                 edges
                     .into_iter()

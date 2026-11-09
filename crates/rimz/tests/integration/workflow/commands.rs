@@ -46,6 +46,78 @@ fn command_step_start_runs_without_an_initial_check() {
     );
 }
 
+/// The run outlives `workflow run` while the terminal's session leader lives on, as a user's
+/// shell does, so the run step's terminal job control must not reach it.
+#[test]
+fn terminal_run_step_outlived_by_its_session_leader_runs_to_completion() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    if which::which("bash").is_err() {
+        crate::common::skip("bash not on PATH");
+        return;
+    }
+    let (env, dir) = command_fixture("run", "bash -i -c 'printf step-ready'");
+    let path = dir.join("workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'")
+            .replace("timeout='1h'", "timeout='10s'"),
+    )
+    .unwrap();
+    let receipt = env.project_root.join("receipt.txt");
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new("sh");
+    env.pin_pty_command(&mut command);
+    command.args([
+        "-c",
+        "\"$1\" workflow run review --prompt go > \"$2\"; sleep 90",
+        "leader",
+    ]);
+    command.arg(env.rimz_bin());
+    command.arg(&receipt);
+    command.cwd(&env.project_root);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let id = loop {
+        let text = fs::read_to_string(&receipt).unwrap_or_default();
+        if let Some(id) = text.split_whitespace().find(|s| s.starts_with("wf_")) {
+            break id.to_owned();
+        }
+        assert!(Instant::now() < deadline, "no run receipt: {text}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let value = until(&env, &id, |v| {
+        v["record"]["state"] != "active" && v["record"]["attempt"].is_null()
+    });
+    let leader_alive = child.try_wait().unwrap().is_none();
+    let _ = child.kill();
+    child.wait().unwrap();
+    drop(pair.master);
+    output.join().unwrap();
+    assert!(leader_alive, "the session leader outlives the run");
+    assert_eq!(value["record"]["state"], "done", "{value:#}");
+    let attempts = events(&value, "attempt");
+    let log = fs::read_to_string(attempts[0]["log"].as_str().unwrap()).unwrap();
+    assert!(log.contains("step-ready"), "{log}");
+}
+
 fn edit_record(env: &Env, id: &str, edit: impl FnOnce(&mut RunRecord)) {
     let state = env.state_path_for(&env.project_root);
     let paths = state.workflow(&id.parse().unwrap());

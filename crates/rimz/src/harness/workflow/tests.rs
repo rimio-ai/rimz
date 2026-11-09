@@ -13,6 +13,8 @@ pub(super) struct FakeHost {
     failure: RefCell<Option<LaunchFailure>>,
     evict_error: Cell<bool>,
     stale_after_evict: Cell<bool>,
+    /// The occupancy the checkout reaches while a launch is prepared, after its first read.
+    arrives_at_launch: RefCell<Option<Occupancy>>,
     stops: Cell<usize>,
     detaches: Cell<usize>,
     evictions: Cell<usize>,
@@ -55,6 +57,7 @@ impl FakeHost {
             failure: RefCell::new(None),
             evict_error: Cell::new(false),
             stale_after_evict: Cell::new(false),
+            arrives_at_launch: RefCell::new(None),
             stops: Cell::new(0),
             detaches: Cell::new(0),
             evictions: Cell::new(0),
@@ -80,6 +83,37 @@ impl FakeHost {
             retired: RefCell::new(Vec::new()),
         }
     }
+
+    /// The checkout's occupancy without counting a read, `excluded` left out.
+    fn current_occupancy(&self, excluded: &[String]) -> Occupancy {
+        if self.stale_after_evict.get() && self.evictions.get() > 0 {
+            return Occupancy::Blocked(vec![(
+                "stale occupant".into(),
+                crate::harness::schedule::takeover::OpenTurn::Working,
+            )]);
+        }
+        let mut occupancy = match &*self.occupancy.borrow() {
+            Occupancy::Free => Occupancy::Free,
+            Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
+            Occupancy::Blocked(blockers) => Occupancy::Blocked(blockers.clone()),
+        };
+        match &mut occupancy {
+            Occupancy::Occupied(handles) if !handles.is_empty() => {
+                handles.retain(|handle| !excluded.contains(handle));
+                if handles.is_empty() {
+                    return Occupancy::Free;
+                }
+            }
+            Occupancy::Blocked(blockers) if !blockers.is_empty() => {
+                blockers.retain(|(handle, _)| !excluded.contains(handle));
+                if blockers.is_empty() {
+                    return Occupancy::Free;
+                }
+            }
+            _ => {}
+        }
+        occupancy
+    }
 }
 
 impl AttemptHost for FakeHost {
@@ -93,56 +127,33 @@ impl AttemptHost for FakeHost {
         if let Some(check) = &*self.on_occupancy.borrow() {
             check();
         }
-        if self.stale_after_evict.get() && self.evictions.get() > 0 {
-            return Ok(Occupancy::Blocked(vec![(
-                "stale occupant".into(),
-                crate::harness::schedule::takeover::OpenTurn::Working,
-            )]));
-        }
-        let mut occupancy = match &*self.occupancy.borrow() {
-            Occupancy::Free => Occupancy::Free,
-            Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
-            Occupancy::Blocked(blockers) => Occupancy::Blocked(blockers.clone()),
-        };
-        match &mut occupancy {
-            Occupancy::Occupied(handles) if !handles.is_empty() => {
-                handles.retain(|handle| !excluded.contains(handle));
-                if handles.is_empty() {
-                    return Ok(Occupancy::Free);
-                }
-            }
-            Occupancy::Blocked(blockers) if !blockers.is_empty() => {
-                blockers.retain(|(handle, _)| !excluded.contains(handle));
-                if blockers.is_empty() {
-                    return Ok(Occupancy::Free);
-                }
-            }
-            _ => {}
-        }
-        Ok(occupancy)
+        Ok(self.current_occupancy(excluded))
     }
 
-    fn evict(
-        &self,
-        _: &std::path::Path,
-        _: &std::path::Path,
-        _: &[String],
-    ) -> Result<Vec<String>, WorkflowErr> {
-        self.evictions.set(self.evictions.get() + 1);
-        if self.evict_error.get() {
-            return Err(WorkflowErr::Refused("occupant did not stop".into()));
+    fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, NotLaunched>, WorkflowErr> {
+        if let Some(arrived) = self.arrives_at_launch.borrow_mut().take() {
+            *self.occupancy.borrow_mut() = arrived;
         }
-        *self.occupancy.borrow_mut() = Occupancy::Free;
-        Ok(vec!["sweeper".into()])
-    }
-
-    fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr> {
+        // As the CLI host does: read the checkout again once the launch is prepared.
+        if let Some(evict) = &step.evict {
+            match self.current_occupancy(&evict.excluded) {
+                Occupancy::Free => {}
+                Occupancy::Occupied(_) if step.takeover => {
+                    self.evictions.set(self.evictions.get() + 1);
+                    if self.evict_error.get() {
+                        return Err(WorkflowErr::Refused("occupant did not stop".into()));
+                    }
+                    *self.occupancy.borrow_mut() = Occupancy::Free;
+                }
+                taken => return Ok(Err(NotLaunched::Taken(taken))),
+            }
+        }
         self.launched.borrow_mut().push(step);
         if let Some(check) = &*self.on_launch.borrow() {
             check();
         }
         Ok(match self.failure.borrow_mut().take() {
-            Some(failure) => Err(failure),
+            Some(failure) => Err(failure.into()),
             None => Ok(AttemptRun {
                 run_id: crate::ids::RunId::new(),
                 handle: "@builder".into(),
@@ -666,6 +677,27 @@ fn validation_accepts_step_layouts() {
             Some("steps.build.agent"),
         ),
         (
+            "team until",
+            VALID
+                .replace("agent = \"claude\"", "agent = 'forge'")
+                .replace("lifecycle = \"turn\"", "lifecycle='until'"),
+            Some("steps.build.agent"),
+        ),
+        (
+            "team omitted lifecycle",
+            VALID
+                .replace("agent = \"claude\"", "agent = 'forge'")
+                .replace("lifecycle = \"turn\"", ""),
+            Some("steps.build.agent"),
+        ),
+        (
+            "team stay",
+            VALID
+                .replace("agent = \"claude\"", "agent = 'forge'")
+                .replace("lifecycle = \"turn\"", "lifecycle='stay'"),
+            None,
+        ),
+        (
             "judge layout",
             VALID.replace(
                 "run = \"python3 checks/pick.py\"",
@@ -692,7 +724,11 @@ fn validation_accepts_step_layouts() {
                 Some(path) => report.errors.iter().any(|issue| {
                     issue.path == path
                         && match label {
-                            "team" => issue.message.contains("use an agent layout"),
+                            label if label.starts_with("team") => {
+                                issue.message
+                                    == "example: steps.build.agent: a team runs only in a stay \
+                                        step; set lifecycle = \"stay\""
+                            }
                             "no agent" => issue.message.contains("add an agent"),
                             "ambiguous leader" => issue.message.contains("choose an unambiguous"),
                             _ => true,

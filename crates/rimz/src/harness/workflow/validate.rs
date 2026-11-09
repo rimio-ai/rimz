@@ -324,7 +324,7 @@ pub(super) fn validate_spec(
         }
         let layout = if let Some(StepKind::Agent(agent)) = step.kind() {
             report.prompt(dir, &path, step.prompt_file.as_deref());
-            match step_layout(dir, agent, definitions, project_root) {
+            match step_layout(dir, agent, step.lifecycle(), definitions, project_root) {
                 Ok(layout) => Some(layout),
                 Err(error) => {
                     report.error(&format!("{path}.agent"), error);
@@ -841,6 +841,7 @@ fn message_then(report: &mut Validation, spec: &WorkflowSpec, path: &str, then: 
 fn step_layout(
     dir: &Path,
     agent: &str,
+    lifecycle: StepLifecycle,
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> anyhow::Result<crate::harness::spec::LayoutSpec> {
@@ -863,8 +864,10 @@ fn step_layout(
         Some(agent),
         None,
     )?;
-    if resolved.team_name.is_some() {
-        anyhow::bail!("steps do not support teams; use an agent layout instead");
+    // A stay step holds its attempt until the leader's session ends and judges no turn end,
+    // the one thing a team has no answer for.
+    if resolved.team_name.is_some() && lifecycle != StepLifecycle::Stay {
+        anyhow::bail!("a team runs only in a stay step; set lifecycle = \"stay\"");
     }
     if resolved.layout.agent_cells().next().is_none() {
         anyhow::bail!("step layout needs a prompt leader; add an agent cell");

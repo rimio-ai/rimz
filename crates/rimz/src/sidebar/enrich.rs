@@ -570,20 +570,9 @@ pub fn project_local(
 }
 
 fn throttle_notices(
-    state: &StatePaths,
-    runtime: &RuntimePaths,
     workflows: &[crate::store::workflow::RunRecord],
     root: Option<&Path>,
 ) -> Vec<ThrottleNotice> {
-    let waits = crate::harness::schedule::launch_ledger::load_live_capacity(state, runtime)
-        .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, "loop capacity waits unreadable for the sidebar");
-            Default::default()
-        });
-    let loop_waits = waits
-        .values()
-        .flat_map(BTreeMap::values)
-        .map(|wait| (wait.hold, wait.first, wait.reason.as_str()));
     let workflow_waits = workflows
         .iter()
         .filter(|record| record.state == crate::store::workflow::RunState::Active)
@@ -607,7 +596,7 @@ fn throttle_notices(
         (wait.hold, since, wait.reason.as_deref().unwrap_or_default())
     });
     let mut notices: Vec<(Timestamp, ThrottleNotice)> = Vec::new();
-    for (hold, since, reason) in loop_waits.chain(workflow_waits).chain(ticket_waits) {
+    for (hold, since, reason) in workflow_waits.chain(ticket_waits) {
         let Some(kind) = hold.filter(|kind| kind.needs_fix()) else {
             continue;
         };
@@ -640,14 +629,12 @@ fn throttle_notices(
 fn project_workflow_and_throttle_state(
     snapshot: &mut SidebarSnapshot,
     state: &StatePaths,
-    runtime: &RuntimePaths,
 ) -> Vec<crate::store::workflow::RunRecord> {
     let records = crate::store::workflow::list(state).unwrap_or_else(|err| {
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
     });
-    snapshot.throttle_notices =
-        throttle_notices(state, runtime, &records, snapshot.project_root.as_deref());
+    snapshot.throttle_notices = throttle_notices(&records, snapshot.project_root.as_deref());
     records
 }
 
@@ -767,7 +754,7 @@ fn enrich_core(
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
         crate::store::raised::attach(&mut snapshot.agents, state);
     }
-    let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state, runtime);
+    let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state);
     let workflow_seeds = workflows::seeds(&workflow_records, state);
     let outages = crate::harness::drainer_outage::read(runtime);
     snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {

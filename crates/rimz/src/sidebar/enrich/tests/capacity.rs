@@ -31,7 +31,7 @@ fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -
 }
 
 #[test]
-fn durable_capacity_waits_merge_sources_on_producer_and_consumer_folds() {
+fn workflow_capacity_waits_fold_alike_on_producer_and_consumer_folds() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
     let path = capacity_path(&state);
@@ -79,69 +79,14 @@ fn durable_capacity_waits_merge_sources_on_producer_and_consumer_folds() {
         let projected = fold(snapshot.clone(), None, &runtime, opts);
         actual.push(serde_json::to_value(projected).unwrap()["throttle_notices"].clone());
     }
-    waits["task"]["/repo/a"]["first"] = "2025-12-31T23:59:00Z".into();
-    std::fs::write(&path, serde_json::to_vec(&waits).unwrap()).unwrap();
-    for opts in [cached_opts(), producing_opts()] {
-        let projected = fold(snapshot.clone(), None, &runtime, opts);
-        actual.push(serde_json::to_value(projected).unwrap()["throttle_notices"].clone());
-    }
     let expected = serde_json::json!([
-        {"kind": "disk", "reason": "oldest disk", "count": 3},
-        {"kind": "store", "reason": "cannot count open agents: broken", "count": 1}
+        {"kind": "disk", "reason": "free disk low", "count": 2}
     ]);
     assert_eq!(
         actual,
-        [
-            expected.clone(),
-            expected.clone(),
-            expected.clone(),
-            expected
-        ],
-        "count scopes/runs, not retry counts; ignore give-ups and non-capacity/inactive runs"
-    );
-}
-
-#[test]
-fn capacity_waits_disappear_when_the_condition_clock_changes_or_is_absent() {
-    let (_dir, runtime, snapshot) = runtime();
-    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
-    let path = capacity_path(&state);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(
-        path,
-        serde_json::to_vec(&serde_json::json!({"task": {"/repo/a": {
-            "since": "2026-01-01T00:00:00Z", "first": "2026-01-01T00:00:00Z",
-            "last": "2026-01-01T00:00:00Z", "count": 1, "kinds": ["claude"],
-            "reason": "free disk low", "hold": "disk", "gave_up": false
-        }}}))
-        .unwrap(),
-    )
-    .unwrap();
-    let matching = serde_json::json!({"since": "2026-01-01T00:00:00Z", "fired": true});
-    let changed = serde_json::json!({"since": "2026-01-01T00:01:00Z", "fired": true});
-    let scoped = serde_json::to_string(&("task", "/repo/a")).unwrap();
-    let mut actual = Vec::new();
-    let when_path = runtime.lane_path("loop-when.json");
-    std::fs::create_dir_all(when_path.parent().unwrap()).unwrap();
-    for clocks in [
-        serde_json::json!({"task": matching}),
-        serde_json::json!({"task": changed}),
-        serde_json::json!({}),
-        serde_json::json!({&scoped: matching}),
-        serde_json::json!({&scoped: changed, "task": matching}),
-    ] {
-        std::fs::write(&when_path, serde_json::to_vec(&clocks).unwrap()).unwrap();
-        let projected = fold_cached(snapshot.clone(), None, &runtime);
-        actual.push(
-            serde_json::to_value(projected).unwrap()["throttle_notices"]
-                .as_array()
-                .is_some_and(|notices| !notices.is_empty()),
-        );
-    }
-    assert_eq!(
-        actual,
-        [true, false, false, true, false],
-        "only a wait matching its current condition clock may show"
+        [expected.clone(), expected],
+        "count runs, not retry counts; ignore non-capacity and inactive runs and the loop \
+         capacity records only an older RimZ wrote"
     );
 }
 

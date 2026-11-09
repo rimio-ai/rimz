@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
-use crate::harness::headless::judge::{self as core, Contract, FailureKind};
+use crate::harness::headless::judge::{self as core, FailureKind};
 use crate::harness::headless::{HeadlessProfile, ProcessErr};
 use crate::harness::launch::ExecIdentity;
 
@@ -59,6 +59,28 @@ fn run(
         Timestamp::now(),
     )
     .map_err(|e| e.to_string())?;
+    let managed = managed_launch(&profile, record)?;
+    let catalog = record.task.as_ref().map(|_| {
+        crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(&record.project_root))
+    });
+    let task = record
+        .task
+        .as_deref()
+        .zip(catalog.as_ref())
+        .and_then(|(name, catalog)| catalog.for_run(name))
+        .map(|task| task.entry());
+    if let Some(reason) = budget_refusal(
+        &config,
+        &profile,
+        &managed,
+        task,
+        state,
+        &runtime,
+        Timestamp::now(),
+    ) {
+        result.failure = "budget";
+        return Err(reason);
+    }
     let kind = profile.cell.kind.clone();
     let mut identity = ExecIdentity {
         params: profile.cell.launch.clone(),
@@ -92,7 +114,6 @@ fn run(
             identity,
             dir: &record.scope.path,
             root: &record.project_root,
-            contract: Contract::Workflow,
             schema_file,
             verdict_file: output_path,
             timeout,
@@ -143,6 +164,59 @@ fn run(
         });
     }
     Err(failure.text)
+}
+
+/// The judge's account binding, resolved for its checkout as a loop fire resolves the agent
+/// it launches.
+fn managed_launch(
+    profile: &HeadlessProfile,
+    record: &RunRecord,
+) -> Result<crate::agents::ManagedLaunchState, String> {
+    let mut invocation = crate::harness::launch::ExecRequest::bare_launch(
+        profile.cell.kind.clone(),
+        profile.cell.args.clone(),
+    );
+    invocation.identity.params.model = profile.cell.launch.model.clone();
+    crate::harness::launch::compile_managed_agent_process(
+        &record.project_root,
+        &invocation,
+        &record.scope.path,
+        &crate::agents::ManagedLaunchState::PendingResolution,
+        None,
+    )
+    .map(|(_, managed)| managed)
+    .map_err(|e| e.to_string())
+}
+
+/// Why the judge's account may not spend now: the fleet's or the account's daily cap is spent,
+/// the account is parked, its bound provider quota is exhausted until a reset, or the window
+/// lacks the surplus the run's loop `task` asks for. A refused judge never spawns, as a refused
+/// agent launch never does.
+pub(in crate::harness::workflow) fn budget_refusal(
+    config: &crate::config::MachineConfig,
+    profile: &HeadlessProfile,
+    managed: &crate::agents::ManagedLaunchState,
+    task: Option<&crate::config::TaskEntry>,
+    state: &StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    now: Timestamp,
+) -> Option<String> {
+    let key = profile.login.key();
+    if let Some(reason) =
+        crate::harness::budget::scope_gate(runtime, state, Some(&key), config, now)
+    {
+        return Some(reason);
+    }
+    if let Some(binding) = managed.binding()
+        && let Some(reason) = crate::agents::provider_budget_gate(runtime, &key, binding, now)
+    {
+        return Some(reason);
+    }
+    crate::harness::schedule::runner::surplus_refusal(task?, profile.cell.kind.as_str(), || {
+        managed
+            .capacity(runtime, &key)
+            .and_then(|capacity| capacity.longest_window_surplus(now))
+    })
 }
 
 /// A fresh answer from a loop task's judge that holds the task's act back is one assist,

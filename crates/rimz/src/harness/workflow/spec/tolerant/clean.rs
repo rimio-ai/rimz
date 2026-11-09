@@ -127,7 +127,25 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 "field is not supported by this check kind",
             );
         }
-        subscriptions(&mut check.wake, &format!("{path}.wake"), indices, ignored);
+        subscriptions(
+            &mut check.wake,
+            Wake::subscription,
+            &format!("{path}.wake"),
+            indices,
+            ignored,
+        );
+        let wakes = format!("{path}.wake");
+        for (index, wake) in check.wake.iter_mut().flatten().enumerate() {
+            if let Wake::Binding { prompt, .. } = wake {
+                let index = indices.get(&wakes).map_or(index, |indices| indices[index]);
+                ignore(
+                    prompt,
+                    &format!("{wakes}.{index}.prompt"),
+                    ignored,
+                    "field is supported only on a step's subscribe binding",
+                );
+            }
+        }
         for (outcome, route) in &mut check.on {
             if let Route::Delayed { default, .. } = route
                 && *default
@@ -387,6 +405,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
         }
         subscriptions(
             &mut step.subscribe,
+            Wake::step_subscription,
             &format!("{path}.subscribe"),
             indices,
             ignored,
@@ -618,6 +637,7 @@ fn sanitize<T, E: Display>(
 /// Drop each entry that names no valid subscription, warning at its original index.
 fn subscriptions(
     entries: &mut Option<Vec<Wake>>,
+    parse: fn(&Wake) -> Result<super::super::Subscription, super::super::SpecErr>,
     path: &str,
     indices: &BTreeMap<String, Vec<usize>>,
     ignored: &mut Vec<Issue>,
@@ -628,7 +648,7 @@ fn subscriptions(
     *entries = std::mem::take(entries)
         .into_iter()
         .enumerate()
-        .filter_map(|(index, entry)| match entry.subscription() {
+        .filter_map(|(index, entry)| match parse(&entry) {
             Ok(_) => Some(entry),
             Err(error) => {
                 let index = indices.get(path).map_or(index, |indices| indices[index]);

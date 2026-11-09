@@ -134,7 +134,6 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
             "--max-attempts",
             checks,
         ),
-        (&["--until", "30m"], "--until", checks),
         (&["--throttle", "off"], "--throttle", steps),
         (&["--capacity-wait", "1h"], "--capacity-wait", steps),
         (&["--timeout", "1h"], "--timeout", steps),
@@ -153,12 +152,6 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
             &["--budget", "5", "--budget-per-day", "5"],
             "--budget",
             spend,
-        ),
-        (&["--overlap", "queue"], "--overlap", "workflow skipped"),
-        (
-            &["--overlap", "queue", "--overlap-limit", "2"],
-            "--overlap-limit",
-            "workflow skipped",
         ),
         (&["--worktree", "lane"], "--worktree", "--root <worktree>"),
     ];
@@ -204,6 +197,20 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
             "{flags:?}"
         );
     }
+    // A workflow task follows its overlap policy like any repeating task.
+    success(
+        room.command(&["loop", "add", "nightly", "--workflow", "review"])
+            .args([
+                "--every",
+                "1h",
+                "--overlap",
+                "queue",
+                "--overlap-limit",
+                "2",
+            ])
+            .output()
+            .unwrap(),
+    );
 }
 
 #[test]

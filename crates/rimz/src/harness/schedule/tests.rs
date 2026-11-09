@@ -609,7 +609,6 @@ fn task_action_from_entry_maps_field_combinations() {
             predicates,
             "{entry:?}"
         );
-        assert_eq!(action.is_check_only(), predicates.2, "{entry:?}");
     }
 
     for (entry, message) in [
@@ -807,15 +806,21 @@ fn watch_refuses_a_judge_guard() {
 
 #[test]
 fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
+    // Stay, condition and workflow tasks overlap on their live run.
+    for fields in [
+        "agent='claude'\nstay=true\nevery='1h'",
+        "check='true'\nwhen=['team.stage=Done']",
+        "workflow='review'\nevery='1h'",
+    ] {
+        let entry: crate::config::TaskEntry =
+            toml::from_str(&format!("overlap='coalesce'\n{fields}")).unwrap();
+        let shape = TaskShape::compile("busy", &entry);
+        assert!(
+            shape.action().is_ok(),
+            "overlap must admit {fields}: {shape:?}"
+        );
+    }
     for (fields, reason) in [
-        (
-            "agent='claude'\nstay=true\nevery='1h'",
-            "resident task launches once per checkout",
-        ),
-        (
-            "check='true'\nwhen=['team.stage=Done']",
-            "clock and signal triggers",
-        ),
         ("check='true'\nat='07:00'", "one-shot"),
         ("check='true'\nevery='1h'\nonce=true", "one-shot"),
         (
@@ -826,11 +831,15 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
             "wait={kind='claude',session='s',handle='@a'}\nsignal='deploy.done'",
             "no run to overlap",
         ),
-        (
-            "workflow='review'\nevery='1h'",
-            "workflow admission owns its runs",
-        ),
         ("check='true'\nevery='1h'\noverlap-limit=2", "queue"),
+        (
+            "agent='claude'\nstay=true\neach-worktree=true\nwhen=['team.stage=Done']",
+            "per checkout",
+        ),
+        (
+            "workflow='review'\neach-worktree=true\nevery='1h'",
+            "per checkout",
+        ),
     ] {
         let entry: crate::config::TaskEntry =
             toml::from_str(&format!("overlap='coalesce'\n{fields}")).unwrap();
@@ -1961,4 +1970,39 @@ fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
             "{expr}"
         );
     }
+}
+
+#[test]
+fn judge_prompt_file_uses_the_task_rows_origin() {
+    let root = tempfile::tempdir().unwrap();
+    let path = std::path::Path::new("questions/check.md");
+    let task = |source| {
+        catalog::LoadedTask::new(
+            "guard",
+            TaskEntry {
+                root: root.path().to_owned(),
+                ..TaskEntry::default()
+            },
+            source,
+        )
+    };
+    let machine = task(catalog::TaskSource::Config);
+    assert_eq!(
+        compile::judge_prompt_path(path, &machine).unwrap(),
+        crate::config::MachineConfig::loop_path()
+            .parent()
+            .unwrap()
+            .join(path)
+    );
+    let project = task(catalog::TaskSource::Project {
+        state: crate::trust::TrustState::Trusted,
+    });
+    assert_eq!(
+        compile::judge_prompt_path(path, &project).unwrap(),
+        root.path().join(".rimz").join(path)
+    );
+    assert_eq!(
+        compile::judge_prompt_path(root.path(), &project).unwrap(),
+        root.path()
+    );
 }

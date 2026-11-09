@@ -81,7 +81,6 @@ pub enum DeliveryProvenance {
         reader: Option<String>,
     },
     Loop,
-    Resident(String),
     Team(TeamInstanceId),
 }
 
@@ -602,16 +601,15 @@ fn build_entry(
             "self waits require a timer or watched command without a prompt or guard",
         ));
     }
-    if matches!(
-        spec.provenance,
-        DeliveryProvenance::Team(_) | DeliveryProvenance::Resident(_)
-    ) && !matches!(
-        spec.trigger,
-        DeliveryTrigger::Signal {
-            lifetime: SubscriptionLifetime::Standing,
-            ..
-        }
-    ) {
+    if matches!(spec.provenance, DeliveryProvenance::Team(_))
+        && !matches!(
+            spec.trigger,
+            DeliveryTrigger::Signal {
+                lifetime: SubscriptionLifetime::Standing,
+                ..
+            }
+        )
+    {
         return Err(ArmFailure::InvalidProvenance(
             "declared bindings require a standing signal subscription",
         ));
@@ -629,10 +627,6 @@ fn build_entry(
     let reader = match spec.provenance {
         DeliveryProvenance::Team(instance) => {
             entry.team = Some(instance);
-            None
-        }
-        DeliveryProvenance::Resident(task) => {
-            entry.loop_task = Some(task);
             None
         }
         DeliveryProvenance::SelfWait { reader } => reader,

@@ -20,22 +20,22 @@ mod spec;
 mod state;
 mod validate;
 
-pub(crate) use engine::reassign_task;
 pub use engine::{
     DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, restart, resume,
     wake, wake_run,
 };
+pub(crate) use engine::{hears_lifecycle, reassign_task};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
     repeats_evaluation, routing_hop, timeout_at,
 };
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
-pub(crate) use spec::parse_run;
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, Limit, OutcomeCap, Route,
     ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
 };
+pub(crate) use spec::{parse, parse_run};
 pub use validate::{NodeRow, Validation, validate};
 
 pub struct ScopeRoots {
@@ -90,13 +90,7 @@ pub trait AttemptHost {
         project_root: &Path,
         excluded: &[String],
     ) -> Result<Occupancy, WorkflowErr>;
-    fn evict(
-        &self,
-        scope: &Path,
-        project_root: &Path,
-        excluded: &[String],
-    ) -> Result<Vec<String>, WorkflowErr>;
-    fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr>;
+    fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, NotLaunched>, WorkflowErr>;
     fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
     fn push(
         &self,
@@ -154,6 +148,21 @@ pub struct StepLaunch {
     pub cwd: PathBuf,
     pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
     pub overrides: LaunchOverrides,
+    /// The step stops its checkout's occupants, so a named worktree's stopped cohort
+    /// relaunches fresh.
+    pub takeover: bool,
+    /// The loop task that started the run, whose agents launch as that task's.
+    pub task: Option<String>,
+    /// The checkout to read again once the launch is prepared: a takeover stops its occupants
+    /// then, so a refused launch stops no one, and any other step refuses one that arrived.
+    pub evict: Option<Eviction>,
+}
+
+/// An agent step's checkout, read as `AttemptHost::occupancy` read it.
+pub struct Eviction {
+    pub checkout: PathBuf,
+    pub project_root: PathBuf,
+    pub excluded: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -243,6 +252,21 @@ pub fn leader_turn(
 pub struct LaunchFailure {
     pub outcome: AttemptOutcome,
     pub reason: String,
+}
+
+/// Why a launch opened no agent.
+pub enum NotLaunched {
+    /// The launch failed, ending its attempt with this outcome.
+    Failed(LaunchFailure),
+    /// The checkout's read once the launch was prepared found it taken; the step waits as it
+    /// would on the first read, with no attempt counted.
+    Taken(Occupancy),
+}
+
+impl From<LaunchFailure> for NotLaunched {
+    fn from(failure: LaunchFailure) -> Self {
+        Self::Failed(failure)
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use super::super::{AttemptHost, LaunchFailure, Observation, Observed, StepLaunch};
+use super::super::{AttemptHost, LaunchFailure, NotLaunched, Observation, Observed, StepLaunch};
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
 use crate::store::run::RunStatus;
@@ -346,15 +346,22 @@ pub(super) fn prepare_end(
     Ok(Decision::End(Box::new(t.record.clone())))
 }
 
+/// A published agent attempt ready to launch: its record, prompt, machine turn, and takeover.
+pub(super) type Launch = (
+    RunRecord,
+    std::result::Result<String, String>,
+    Option<crate::harness::schedule::throttle::Turn>,
+    Option<super::super::Eviction>,
+);
+
 pub(super) fn launch(
     state: &StatePaths,
     paths: &WorkflowPaths,
     spec: &WorkflowSpec,
-    record: &RunRecord,
-    prompt: std::result::Result<String, String>,
-    throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    (record, prompt, throttle_turn, evict): Launch,
     host: &dyn AttemptHost,
 ) -> Result<bool> {
+    let record = &record;
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
     let step = &spec.steps[&record.node];
@@ -389,18 +396,22 @@ pub(super) fn launch(
                 cwd: record.scope.path.clone(),
                 throttle_turn,
                 overrides,
+                takeover: step.takeover.unwrap_or_default(),
+                task: record.task.clone(),
+                evict,
             })
             .unwrap_or_else(|error| {
-                Err(LaunchFailure {
+                Err(NotLaunched::Failed(LaunchFailure {
                     outcome: AttemptOutcome::Died,
                     reason: error.to_string(),
-                })
+                }))
             }),
-        Err(reason) => Err(LaunchFailure {
+        Err(reason) => Err(NotLaunched::Failed(LaunchFailure {
             outcome: AttemptOutcome::Died,
             reason,
-        }),
+        })),
     };
+
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
         record: workflow::load(paths)?,
@@ -420,6 +431,20 @@ pub(super) fn launch(
         }
         return Ok(false);
     }
+    let launched = match launched {
+        Ok(run) => Ok(run),
+        Err(NotLaunched::Failed(failure)) => Err(failure),
+        Err(NotLaunched::Taken(occupancy)) => {
+            // The step waits as the first read would have, with no attempt counted.
+            t.withdraw_attempt();
+            let wait = super::occupancy_wait(&occupancy, step.takeover.unwrap_or_default());
+            if let Some(wait) = wait {
+                t.step_wait(wait, None);
+            }
+            persist(&mut t, &guard)?;
+            return Ok(wait.is_none());
+        }
+    };
     if record.restart.is_some() && t.record.restart == record.restart {
         t.record.restart = None;
     }

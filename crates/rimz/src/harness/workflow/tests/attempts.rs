@@ -2032,6 +2032,53 @@ fn eviction_failure_is_a_counted_died_attempt() {
 }
 
 #[test]
+fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
+    let occupied = || Occupancy::Occupied(vec!["sweeper".into()]);
+    let blocked = || {
+        Occupancy::Blocked(vec![(
+            "sweeper".into(),
+            crate::harness::schedule::takeover::OpenTurn::Working,
+        )])
+    };
+    for (takeover, arrived, wait) in [
+        (true, occupied(), None),
+        (false, occupied(), Some("occupied")),
+        (false, blocked(), Some("takeover")),
+        (true, blocked(), Some("takeover")),
+    ] {
+        let (_dir, state, record) = setup(&format!("{STEP}takeover={takeover}\n"));
+        let host = FakeHost::new();
+        *host.arrives_at_launch.borrow_mut() = Some(arrived);
+        let live = advance_ok(&state, &record.id, &host);
+        let launched = usize::from(wait.is_none());
+        assert_eq!(
+            (host.launched.borrow().len(), host.evictions.get()),
+            (launched, launched),
+            "takeover={takeover} {wait:?}: an arrival after a free read is stopped or waited on"
+        );
+        let Some(wait) = wait else {
+            continue;
+        };
+        // The late read waits as the first read would: no attempt, no visit, no failure.
+        assert_eq!(live.state, RunState::Active, "{live:#?}");
+        assert_eq!(
+            live.wait.as_ref().map(|wait| wait.outcome.as_str()),
+            Some(wait)
+        );
+        assert!(
+            live.attempt.is_none() && live.prev_attempt.is_none(),
+            "{live:#?}"
+        );
+        assert!(
+            live.visits
+                .get(&live.node)
+                .is_none_or(|visits| visits.total == 0),
+            "{live:#?}"
+        );
+    }
+}
+
+#[test]
 fn sharing_step_launches_beside_any_occupant_without_reading_or_stopping_it() {
     let (_dir, state, record) = setup(&format!("{STEP}share=true\n"));
     let host = FakeHost::new();

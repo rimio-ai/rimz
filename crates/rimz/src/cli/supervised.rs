@@ -37,16 +37,6 @@ pub(in crate::cli) struct SupervisedPresentation {
     pub(in crate::cli) worktree_fresh_command: Option<String>,
 }
 
-impl SupervisedPresentation {
-    pub(in crate::cli) fn text(stream_text: bool) -> Self {
-        Self {
-            output_format: OutputFormat::Text,
-            stream_text,
-            worktree_fresh_command: None,
-        }
-    }
-}
-
 static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<RunCancellation> = OnceLock::new();
 static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
 const SUBAGENT_STOPPED_EVENT: &str = "rimz.subagent-stopped";

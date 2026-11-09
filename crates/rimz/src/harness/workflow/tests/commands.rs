@@ -2,28 +2,29 @@ use super::*;
 use crate::store::workflow::{self as records, AttemptOutcome, RunState};
 
 #[test]
-fn workflow_definition_reaches_command_run_and_shell_children() {
+fn workflow_definition_and_loop_task_reach_command_run_and_shell_children() {
     let text = r#"
 [workflow]
 scope='worktree'
 start='command'
 [steps.command]
-shell='printf "%s" "$RIMZ_WORKFLOW_DEFINITION"'
+shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK"'
 timeout='1m'
 then='run'
 [checks.run]
 run='sh checks/env.sh'
 on.ok='shell'
 [checks.shell]
-shell='printf "%s" "$RIMZ_WORKFLOW_DEFINITION" > "$RIMZ_WORKFLOW_DIR/shell-definition"'
+shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK" > "$RIMZ_WORKFLOW_DIR/shell-definition"'
 on={pass='@done',fail='@failed'}
 "#;
     let (dir, state, mut record) = super::attempts::setup(text);
     record.spec_dir = dir.path().join("workflow definitions");
+    record.task = Some("nightly".into());
     fs::create_dir_all(record.spec_dir.join("checks")).unwrap();
     fs::write(
         record.spec_dir.join("checks/env.sh"),
-        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\"}' \"$RIMZ_WORKFLOW_DEFINITION\"\n",
+        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\"}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\"\n",
     )
     .unwrap();
     let paths = state.workflow(&record.id);
@@ -32,15 +33,18 @@ on={pass='@done',fail='@failed'}
     drop(guard);
     advance(&state, &record.id, &FakeHost::new()).unwrap();
     let definition = record.spec_dir.display().to_string();
-    assert_eq!(fs::read_to_string(paths.step_log(1)).unwrap(), definition);
+    let seen = format!("{definition}|nightly");
+    assert_eq!(fs::read_to_string(paths.step_log(1)).unwrap(), seen);
     assert_eq!(
         fs::read_to_string(paths.work.join("shell-definition")).unwrap(),
-        definition
+        seen
     );
     let journal = records::journal(&paths).unwrap();
-    assert!(journal.iter().any(|row| matches!(&row.event,
+    assert!(
+        journal.iter().any(|row| matches!(&row.event,
         records::JournalEvent::Evaluation { object, .. }
-        if row.node == "run" && object["definition"] == definition)));
+        if row.node == "run" && object["definition"] == definition && object["task"] == "nightly"))
+    );
 }
 
 #[test]

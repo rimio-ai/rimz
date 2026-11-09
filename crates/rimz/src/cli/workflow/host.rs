@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::{AgentState, AskDelivery, AskKind, ProviderCapacity, TurnErrorClass};
 use rimz::harness::schedule::takeover::{self, Takeover};
@@ -39,6 +39,40 @@ impl<'a> Host<'a> {
         Ctx::for_workspace(self.state.workspace_id.clone(), self.globals.mux)
     }
 
+    /// Read the checkout again once the launch is prepared: a takeover stops its occupants,
+    /// so a launch the preparation refuses (an untrusted folder, untrusted hooks) stops no one.
+    /// An occupant that arrived while the launch was prepared returns the checkout's occupancy,
+    /// which the step waits on as it would on the first read.
+    fn evict(
+        &self,
+        eviction: &workflow::Eviction,
+        stops: bool,
+    ) -> Result<Option<workflow::Occupancy>> {
+        let ctx = self.ctx()?;
+        let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, &eviction.excluded);
+        let card_status = rimz::harness::CardStatus::new(&ctx.store);
+        let takeover = takeover::read(
+            &snapshot,
+            &card_status,
+            &eviction.checkout,
+            &eviction.project_root,
+        )?;
+        let peers = rimz::address::addressable_agents(&snapshot);
+        if let Takeover::Stop(agents) = &takeover
+            && stops
+        {
+            let results = agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, agents)?;
+            for (agent, stop) in agents.iter().zip(results) {
+                stop.into_result(&rimz::address::agent_handle(agent, &peers, true))?;
+            }
+            return Ok(None);
+        }
+        Ok(match occupancy_of(takeover, &peers) {
+            workflow::Occupancy::Free => None,
+            taken => Some(taken),
+        })
+    }
+
     fn owns_push(&self, run: &RunRecord, push: &rimz::store::workflow::PushBack) -> Result<bool> {
         let pin = run
             .workflow
@@ -58,6 +92,23 @@ impl<'a> Host<'a> {
 
 fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
     WorkflowErr::Refused(error.to_string())
+}
+
+/// The checkout's occupants as a workflow step reads them, by handle.
+fn occupancy_of(takeover: Takeover<'_>, peers: &[&AgentState]) -> workflow::Occupancy {
+    let handle = |agent: &AgentState| rimz::address::agent_handle(agent, peers, true);
+    match takeover {
+        Takeover::Stop(agents) if agents.is_empty() => workflow::Occupancy::Free,
+        Takeover::Stop(agents) => {
+            workflow::Occupancy::Occupied(agents.into_iter().map(handle).collect())
+        }
+        Takeover::Blocked(agents) => workflow::Occupancy::Blocked(
+            agents
+                .into_iter()
+                .map(|(agent, turn)| (handle(agent), turn))
+                .collect(),
+        ),
+    }
 }
 
 fn occupancy_snapshot(mut snapshot: SidebarSnapshot, excluded: &[String]) -> SidebarSnapshot {
@@ -191,46 +242,7 @@ impl workflow::AttemptHost for Host<'_> {
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);
-            let handle = |agent: &AgentState| rimz::address::agent_handle(agent, &peers, true);
-            Ok(match takeover {
-                Takeover::Stop(agents) if agents.is_empty() => workflow::Occupancy::Free,
-                Takeover::Stop(agents) => {
-                    workflow::Occupancy::Occupied(agents.into_iter().map(handle).collect())
-                }
-                Takeover::Blocked(agents) => workflow::Occupancy::Blocked(
-                    agents
-                        .into_iter()
-                        .map(|(agent, turn)| (handle(agent), turn))
-                        .collect(),
-                ),
-            })
-        })()
-        .map_err(host_error)
-    }
-
-    fn evict(
-        &self,
-        scope: &Path,
-        root: &Path,
-        excluded: &[String],
-    ) -> Result<Vec<String>, WorkflowErr> {
-        (|| -> Result<_> {
-            let ctx = self.ctx()?;
-            let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, excluded);
-            let card_status = rimz::harness::CardStatus::new(&ctx.store);
-            let Takeover::Stop(agents) = takeover::read(&snapshot, &card_status, scope, root)?
-            else {
-                bail!("checkout acquired an open turn before takeover");
-            };
-            let peers = rimz::address::addressable_agents(&snapshot);
-            let stops = agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, &agents)?;
-            let mut stopped = Vec::new();
-            for (agent, stop) in agents.into_iter().zip(stops) {
-                let handle = rimz::address::agent_handle(agent, &peers, true);
-                stop.into_result(&handle)?;
-                stopped.push(handle);
-            }
-            Ok(stopped)
+            Ok(occupancy_of(takeover, &peers))
         })()
         .map_err(host_error)
     }
@@ -238,9 +250,10 @@ impl workflow::AttemptHost for Host<'_> {
     fn launch(
         &self,
         step: workflow::StepLaunch,
-    ) -> Result<Result<AttemptRun, workflow::LaunchFailure>, WorkflowErr> {
+    ) -> Result<Result<AttemptRun, workflow::NotLaunched>, WorkflowErr> {
         let resume = step.resume.clone();
         let workflow_id = step.workflow.run.clone();
+        let evict = step.evict;
         // A resumed session keeps the account, system prompt, and checkout it was launched with.
         let fresh = step.resume.is_none();
         let set = step.overrides;
@@ -279,6 +292,7 @@ impl workflow::AttemptHost for Host<'_> {
                     prompt: Some(step.prompt),
                     cwd: cwd.clone(),
                     cohort: launcher::CohortRequest {
+                        fresh: worktree.is_some() && step.takeover,
                         worktree,
                         budget: set.budget,
                         bg: true,
@@ -293,7 +307,6 @@ impl workflow::AttemptHost for Host<'_> {
                 allow_in_place: false,
                 entry: launcher::RoomEntry::Birth,
                 starter: launcher::Starter::Workflow,
-                resident_loop: None,
                 workflow: Some(step.workflow.clone()),
                 automation: Some(step.automation),
                 leader_run: Some(launcher::LeaderRun {
@@ -314,7 +327,7 @@ impl workflow::AttemptHost for Host<'_> {
                     subagent: false,
                     warn: Vec::new(),
                     grace: None,
-                    loop_task: None,
+                    loop_task: step.task,
                     workflow: Some(step.workflow),
                     throttle_turn: step.throttle_turn,
                     reader: None,
@@ -324,12 +337,20 @@ impl workflow::AttemptHost for Host<'_> {
             };
             let mut interaction = crate::cli::launch_interaction::CliInteraction;
             match launcher::prepare_layout(request, &mut interaction)? {
-                Preparation::Prepared(prepared) => launcher::execute(*prepared, &mut interaction),
-                Preparation::Handled(outcome) => Ok(outcome),
+                Preparation::Prepared(prepared) => {
+                    if let Some(eviction) = &evict
+                        && let Some(taken) = self.evict(eviction, step.takeover)?
+                    {
+                        return Ok(Err(taken));
+                    }
+                    launcher::execute(*prepared, &mut interaction).map(Ok)
+                }
+                Preparation::Handled(outcome) => Ok(Ok(outcome)),
             }
         })();
         let (outcome, reason) = match result {
-            Ok(LaunchOutcome::Opened(opened)) => {
+            Ok(Err(taken)) => return Ok(Err(workflow::NotLaunched::Taken(taken))),
+            Ok(Ok(LaunchOutcome::Opened(opened))) => {
                 let run = opened
                     .run
                     .context("workflow launch did not publish its leader run")
@@ -351,8 +372,8 @@ impl workflow::AttemptHost for Host<'_> {
                     run_id: run.record.run_id,
                 }));
             }
-            Ok(LaunchOutcome::BudgetExceeded { reason }) => (AttemptOutcome::Limited, reason),
-            Ok(LaunchOutcome::Declined | LaunchOutcome::Existing) => {
+            Ok(Ok(LaunchOutcome::BudgetExceeded { reason })) => (AttemptOutcome::Limited, reason),
+            Ok(Ok(LaunchOutcome::Declined | LaunchOutcome::Existing)) => {
                 (AttemptOutcome::Died, "workflow launch aborted".into())
             }
             Err(error) => (
@@ -366,7 +387,9 @@ impl workflow::AttemptHost for Host<'_> {
                 },
             ),
         };
-        Ok(Err(workflow::LaunchFailure { outcome, reason }))
+        Ok(Err(workflow::NotLaunched::Failed(
+            workflow::LaunchFailure { outcome, reason },
+        )))
     }
 
     fn observe(

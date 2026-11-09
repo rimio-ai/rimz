@@ -4216,7 +4216,8 @@ path = "crates/rimz/src/store"
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
 # workflow::LoopReport and RunRecord::owes_loop_report mark a task-started run's outcome report for the engine, the tick backstop, and GC (+2).
-surface-budget = 594
+# RunRecord::firing_checkout keys a fire-tree run's overlap, backlog and history at the project root (+1).
+surface-budget = 595
 
 [[verdict]]
 kind = "item"
@@ -5376,6 +5377,8 @@ allowed-dependencies = [
     # The testkit signal-read rendezvous is a crate-root dependency.
     "(crate)",
     "agents",
+    # A replace overlap cancels its blocking run through a detached `rimz workflow cancel`.
+    "child_process",
     "config",
     # Run claims and liveness reads share the directory-gated lease protocol with watcher and GC attempts.
     "disk::lease",
@@ -5419,7 +5422,8 @@ allowed-dependencies = [
 # CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
 # CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
-surface-budget = 69
+# `surplus_refusal` lets a workflow judge read its loop task's surplus gate as a fire's admission does (+1).
+surface-budget = 70
 
 [[verdict]]
 kind = "item"

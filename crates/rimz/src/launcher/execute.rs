@@ -82,7 +82,6 @@ pub(super) struct FreshLaunch {
     pub(super) pick_session: bool,
     pub(super) reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub(super) loop_task: Option<String>,
-    pub(super) loop_notes_at: Option<jiff::Timestamp>,
     pub(super) description: Option<String>,
     pub(super) report_to: ReportTo,
     pub(super) cleanup_worktree: bool,
@@ -95,57 +94,6 @@ pub(super) struct FreshLaunch {
     pub(super) soft_name: bool,
     pub(super) throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
     pub(super) fallback_assist: Option<crate::harness::assist_log::Assist>,
-}
-
-impl FreshLaunch {
-    fn prepare_loop_notes(&mut self, task: Option<&str>) -> Result<()> {
-        let Some(crate::harness::launch::ReminderSection::Loop(body)) = &mut self.reminder_section
-        else {
-            return Ok(());
-        };
-        let Some(index) = self.prompt_index else {
-            return Ok(());
-        };
-        let cell = self
-            .layout
-            .columns
-            .iter_mut()
-            .flat_map(|column| &mut column.rows)
-            .filter_map(|cell| match cell {
-                crate::harness::spec::Cell::Agent(cell) => Some(cell),
-                _ => None,
-            })
-            .nth(index)
-            .context("loop launch has no prompt leader")?;
-        let record = cell.launch.record.get_or_insert_with(Default::default);
-        let at = self.loop_notes_at.take().filter(|_| {
-            self.team
-                .as_ref()
-                .is_none_or(|(_, team)| team.stages.is_empty())
-        });
-        if let Some((at, task)) = at.zip(task.or(self.loop_task.as_deref())) {
-            let state = self.context.store.paths();
-            let relative = crate::store::notes::allocate(
-                state,
-                crate::store::notes::Kind::Loop {
-                    task: task.to_owned(),
-                },
-                &self.launch.cwd,
-                at,
-            )?;
-            let folder = state
-                .notes_run(crate::disk::paths::Class::AutomationNotes, &relative)
-                .canonicalize()
-                .context("opening loop notes folder")?;
-            body.push_str(&format!(
-                "\n\n`{}/{task}-notes.md` is this run's working memory. Only this run's agent writes it, across restarts and its subagents. Write it for someone arriving cold. Note any change you made outside this repository: pushes, PR or issue comments, databases, remote services.",
-                folder.display()
-            ));
-            record.notes = Some(relative);
-        }
-        record.loop_section = Some(body.clone());
-        Ok(())
-    }
 }
 
 pub struct OpenedRun {
@@ -281,11 +229,6 @@ fn open_fresh(
     interaction: &mut dyn Interaction,
     backend: &dyn crate::mux::MuxBackend,
 ) -> Result<LaunchOutcome> {
-    fresh.prepare_loop_notes(
-        leader
-            .as_ref()
-            .and_then(|leader| leader.loop_task.as_deref()),
-    )?;
     let room = fresh.room.as_ref().context("prepared launch has no room")?;
     let workspace = &fresh.context.workspace;
     let store = &fresh.context.store;
@@ -375,13 +318,18 @@ fn open_fresh(
             }
         }
     }
-    if leader.is_none()
-        && let Some(index) = fresh.prompt_index
-    {
-        requests[index]
-            .launch
-            .loop_task
-            .clone_from(&fresh.loop_task);
+    if let Some(index) = fresh.prompt_index {
+        // A task's workflow step launches its leader as that task's agent.
+        let task = match &leader {
+            None => fresh.loop_task.clone(),
+            Some(leader) => leader
+                .loop_task
+                .clone()
+                .filter(|_| leader.workflow.is_some()),
+        };
+        if leader.is_none() || task.is_some() {
+            requests[index].launch.loop_task = task;
+        }
     }
     let title_parents = if matches!(
         fresh.ancestry.as_ref(),

@@ -19,6 +19,8 @@ enum JudgeFailure {
     Canceled,
     /// A provider limit held the judge; it rechecks after the reset.
     Limited,
+    /// The judge's account may not spend: the run fails, as a refused agent launch fails it.
+    Budget,
     /// The first failure; the judge runs once more.
     Retry,
     /// A second failure on a run sealed before on-break, parked at `@user`.
@@ -81,6 +83,7 @@ impl Transition<'_> {
         let reason = object.expect_err("failed judge evaluation");
         let kind = FailureKind::from_label(failure);
         let disposition = match kind {
+            _ if failure == "budget" => JudgeFailure::Budget,
             Some(FailureKind::Canceled) => JudgeFailure::Canceled,
             Some(FailureKind::Limited) => JudgeFailure::Limited,
             Some(kind) if kind.retry_owed(self.record.check_retry > 0) => JudgeFailure::Retry,
@@ -117,6 +120,18 @@ impl Transition<'_> {
             JudgeFailure::Limited => {
                 self.record.recheck_at =
                     self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
+                Ok(false)
+            }
+            JudgeFailure::Budget => {
+                let target = self.spec.engine_target(&self.record.node, "budget");
+                self.push(
+                    Some(seq),
+                    JournalEvent::Route {
+                        outcome: "budget".into(),
+                        input: object.clone(),
+                    },
+                );
+                self.route(&target, object, ParkReason::Check)?;
                 Ok(false)
             }
             JudgeFailure::Retry => {
@@ -526,6 +541,35 @@ impl Transition<'_> {
             },
         );
         self.route(target, object, reason)
+    }
+
+    /// Take back a published agent attempt that opened nothing, with the visit it counted.
+    pub(super) fn withdraw_attempt(&mut self) {
+        let Some(attempt) = self.record.attempt.take() else {
+            return;
+        };
+        if attempt.visit.is_none() {
+            return;
+        }
+        let (outcome, key) = self.record.visit_bucket();
+        let bucket = (outcome.map(str::to_owned), key.cloned());
+        let Some(visits) = self.record.visits.get_mut(&attempt.node) else {
+            return;
+        };
+        visits.total = visits.total.saturating_sub(1);
+        if let Some(index) = visits
+            .outcomes
+            .iter()
+            .position(|row| (&row.outcome, &row.key) == (&bucket.0, &bucket.1))
+        {
+            visits.outcomes[index].visits = visits.outcomes[index].visits.saturating_sub(1);
+            if visits.outcomes[index].visits == 0 {
+                visits.outcomes.remove(index);
+            }
+        }
+        if visits.total == 0 && visits.outcomes.is_empty() {
+            self.record.visits.remove(&attempt.node);
+        }
     }
 
     pub(super) fn step_wait(&mut self, outcome: &str, detail: Option<String>) {
@@ -1040,10 +1084,13 @@ impl Transition<'_> {
             ),
         };
         if owns_group && let Ok(pid) = i32::try_from(child.pid) {
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(pid),
-                nix::sys::signal::Signal::SIGKILL,
-            );
+            use nix::sys::signal::{Signal, kill, killpg};
+
+            let pid = nix::unistd::Pid::from_raw(pid);
+            // A child that has not reached its trampoline's `setsid` leads no group yet.
+            if killpg(pid, Signal::SIGKILL) == Err(nix::errno::Errno::ESRCH) {
+                let _ = kill(pid, Signal::SIGKILL);
+            }
         }
     }
 }
