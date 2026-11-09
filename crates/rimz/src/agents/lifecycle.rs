@@ -291,7 +291,6 @@ impl LifecycleSignal {
     }
 
     /// Data-less kind for matrix rows and definition conformance.
-    #[cfg(test)]
     pub(super) const fn kind(&self) -> LifecycleSignalKind {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
@@ -319,19 +318,9 @@ impl LifecycleSignal {
     /// Stable serde tag for runtime wakeups and diagnostics.
     pub const fn tag(&self) -> &'static str {
         match self {
-            Self::Registered => "registered",
-            Self::TurnStarted { .. } => "turn_started",
-            Self::TurnEnded { .. } => "turn_ended",
             Self::TurnInterrupted { .. } => "turn_interrupted",
-            Self::SubagentStarted => "subagent_started",
-            Self::SubagentStopped { .. } => "subagent_stopped",
-            Self::ToolUsed { .. } => "tool_used",
-            Self::AwaitingInput { .. } => "awaiting_input",
             Self::AskResolved { .. } => "ask_resolved",
-            Self::Compacting => "compacting",
-            Self::CompactionEnded { .. } => "compaction_ended",
-            Self::Ended => "ended",
-            Self::Lost => "lost",
+            _ => self.kind().short_label(),
         }
     }
 }
