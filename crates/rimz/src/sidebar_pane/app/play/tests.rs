@@ -59,14 +59,14 @@ fn cost_beat_key_frame_waits_for_the_money_roll() {
 
 #[test]
 fn unread_ui_beat_is_painted_before_at_and_key_capture() {
-    let scenario = Scenario::parse("unread", "scenario unread length 3s\nagent @a claude\nagent @b codex\n0s @a done\n0s @b done\n0s ui select @a\n0s ui key u\n1s ui key m").unwrap();
+    let scenario = Scenario::parse("unread", "scenario unread length 3s\nagent @a claude\nagent @b codex\n0s @a done\n0s @b done\n0s ui select @a\n0s ui key f\n0s ui key u\n1s ui key m").unwrap();
     let mut column = Column::new(&scenario, None, None).unwrap();
     let opening = text_at(&mut column, &scenario, 0);
     assert!(opening.contains("@a#main") && opening.contains("@b#main"));
     let mut keys = Vec::new();
     column
         .run_until(&scenario, Duration::from_secs(1), |frame| {
-            if frame.key && frame.beat == 4 {
+            if frame.key && frame.beat == 5 {
                 keys.push(frame.text(None));
             }
             Ok(())
@@ -83,7 +83,7 @@ fn unread_ui_beat_is_painted_before_at_and_key_capture() {
     );
     column
         .run_until(&scenario, Duration::from_millis(1_500), |frame| {
-            if frame.key && frame.beat == 4 {
+            if frame.key && frame.beat == 5 {
                 keys.push(frame.text(None));
             }
             Ok(())
@@ -125,7 +125,7 @@ fn filmstrip_reexport_removes_only_previous_export_files() {
 fn an_offscreen_ui_beat_is_recorded_even_when_the_body_does_not_change() {
     let scenario = Scenario::parse(
         "missing-ui",
-        "scenario missing-ui length 3s pets off\nagent @a claude\nagent @b codex\n0s @b runs \"work\"\n1s ui key w\n2s ui select @a",
+        "scenario missing-ui length 3s pets off\nagent @a claude\nagent @b codex\n0s @b runs \"work\"\n1s ui key f\n1s ui key w\n2s ui select @a",
     )
     .unwrap();
     let dir = tempfile::tempdir().unwrap();

@@ -268,7 +268,7 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     // Home is fixture setup: wait for this terminal's key acknowledgment, not just publication.
     wait_screen(
         || {
-            first.send(b"g");
+            first.send(b"gg");
             first.screen()
         },
         |s| {
@@ -294,7 +294,7 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         |s| sidebar_view(s) == bottom,
         "co-viewer sees the same scroll",
     );
-    second.send(b"g");
+    second.send(b"gg");
     wait_screen(
         || first.screen(),
         |s| {
@@ -410,7 +410,7 @@ fn two_clients_share_the_sidebar_view_through_detach() {
         },
         "reattach after the hold has no carried selection",
     ));
-    fresh.send(b"g");
+    fresh.send(b"gg");
     let homed = sidebar_view(&wait_screen(
         || fresh.screen(),
         |s| {
@@ -606,7 +606,7 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
     drop(staged);
     std::fs::rename(&replacement, &binary).expect("install replacement binary");
 
-    server.tmux(&["send-keys", "-t", pane.raw(), "r"]);
+    server.tmux(&["send-keys", "-t", pane.raw(), "R"]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let handoff_started = Instant::now();
     loop {

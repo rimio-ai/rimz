@@ -2574,7 +2574,7 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     let wakeup = Wakeup::Press {
-        code: KeyCode::Char('r'),
+        code: KeyCode::Char('R'),
         mods: KeyModifiers::NONE,
     };
     let mut rig = Rig::new();

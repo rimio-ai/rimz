@@ -43,7 +43,7 @@ fn renderer_hidden_tabs_follow_one_client_without_reveal() {
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", visible.id));
     std::thread::sleep(SETTLE_WINDOW);
 
-    backend.send_keys(&pane, &name, "a").unwrap();
+    backend.send_keys(&pane, &name, "<").unwrap();
     let narrower = wait_for_sidebar_columns_matching(
         xdg,
         &name,
@@ -114,7 +114,7 @@ fn renderer_hidden_tabs_follow_one_client_without_reveal() {
     };
     assert_visible_client();
 
-    backend.send_keys(&pane, &name, "d").unwrap();
+    backend.send_keys(&pane, &name, ">").unwrap();
     let wider = wait_for_sidebar_columns_matching(
         xdg,
         &name,
@@ -207,7 +207,7 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     let initial = listed.pane_columns;
 
     backend
-        .send_keys(&pane, &name, "d")
+        .send_keys(&pane, &name, ">")
         .expect("send wider key");
     let wider = wait_for_sidebar_columns_matching(
         xdg,
@@ -224,7 +224,7 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     );
 
     backend
-        .send_keys(&pane, &name, "a")
+        .send_keys(&pane, &name, "<")
         .expect("send narrower key");
     let narrower = wait_for_sidebar_columns_matching(
         xdg,

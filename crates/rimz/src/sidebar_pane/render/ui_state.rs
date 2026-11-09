@@ -4,7 +4,7 @@ use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
@@ -229,6 +229,11 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
     pub(in crate::sidebar_pane) make_up_filter: BodyLens,
     pub(in crate::sidebar_pane) search_draft: Option<String>,
+    /// The in-pane keys pressed so far toward a longer bound sequence, empty
+    /// when none waits. It has no timeout: the next key resolves or cancels it.
+    pub(in crate::sidebar_pane) pending_keys: Vec<crate::config::keys::sidebar::SidebarChord>,
+    /// A refusal from the last in-pane key, cleared by the next key.
+    pub(in crate::sidebar_pane) notice: Option<String>,
     /// Worktree groups unfolded by the user in this client view.
     /// Presentation state only: the snapshot carries the full roster. A user
     /// fold clears the key, as does closing the section for inactive groups.
@@ -239,7 +244,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
     /// Open pages of inactive groups' receipts, `None` while closed. It travels
     /// with the view across tab moves, mirrors and forks. It opens and closes
-    /// only on the user toggle (chip or `i`), `+K older` raises its page count,
+    /// only on the user toggle (chip or `z i`), `+K older` raises its page count,
     /// and the close resets it.
     pub(in crate::sidebar_pane) inactive_peek: Option<InactivePeek>,
     /// View-owned open/closed choice for an agent card's delegation
@@ -401,19 +406,43 @@ impl ViewState {
             return Vec::new();
         }
         let roster = self.visible_roster(snapshot);
-        let Some(row) = roster.row(index) else {
+        let Some((row, expansion)) = self.card_expansion(&roster, snapshot, index) else {
             return Vec::new();
         };
-        let Some(group) = roster
+        super::sections::delegation_entry_stops(
+            row,
+            expansion,
+            &snapshot.theme.display,
+            snapshot.now,
+        )
+    }
+
+    /// The row id at `index` and whether its subagents and waits section is
+    /// drawn open, as the card renders it.
+    pub(in crate::sidebar_pane) fn delegation_open(
+        &self,
+        snapshot: &SidebarSnapshot,
+        index: usize,
+    ) -> Option<(String, bool)> {
+        let roster = self.visible_roster(snapshot);
+        let (row, expansion) = self.card_expansion(&roster, snapshot, index)?;
+        Some((row.id.clone(), expansion.delegation))
+    }
+
+    fn card_expansion<'a>(
+        &self,
+        roster: &VisibleRoster<'a>,
+        snapshot: &SidebarSnapshot,
+        index: usize,
+    ) -> Option<(&'a SidebarRow, super::sections::CardExpansion)> {
+        let row = roster.row(index)?;
+        let group = roster
             .groups()
             .iter()
-            .find(|group| group.range().contains(&index))
-        else {
-            return Vec::new();
-        };
-        let held = self.effective_held_expansions(&roster);
+            .find(|group| group.range().contains(&index))?;
+        let held = self.effective_held_expansions(roster);
         let reach =
-            super::sections::row_selection_reach(&roster, group, index, self.selected_index, &held);
+            super::sections::row_selection_reach(roster, group, index, self.selected_index, &held);
         let expansion = super::sections::CardExpansion::resolve(
             &self.delegation_overrides,
             &self.delegation_history,
@@ -421,12 +450,7 @@ impl ViewState {
             row,
             reach,
         );
-        super::sections::delegation_entry_stops(
-            row,
-            expansion,
-            &snapshot.theme.display,
-            snapshot.now,
-        )
+        Some((row, expansion))
     }
 
     pub(in crate::sidebar_pane) fn validate_entry_cursor(&mut self, snapshot: &SidebarSnapshot) {

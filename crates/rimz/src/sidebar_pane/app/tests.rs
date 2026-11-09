@@ -1,4 +1,4 @@
-use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
+use super::input::{InputMode, KeyAction, Wakeup, resolve_one};
 use super::loop_state::handle_wakeup;
 use super::notify::{
     BellDecision, bell_decision, desktop_notification_targets_renderer,
@@ -519,9 +519,9 @@ fn configurable_width_bindings_shadow_fixed_actions() {
             KeyModifiers::NONE,
             KeyAction::WidthWider,
         ),
-        (KeyCode::Esc, KeyModifiers::NONE, KeyAction::CancelSearch),
+        (KeyCode::Esc, KeyModifiers::NONE, KeyAction::Cancel),
     ] {
-        assert_eq!(resolve_key(&keymap, InputMode::Normal, code, mods), action);
+        assert_eq!(resolve_one(&keymap, InputMode::Normal, code, mods), action);
     }
     for (code, mods) in [
         (KeyCode::Esc, KeyModifiers::CONTROL),
@@ -530,12 +530,12 @@ fn configurable_width_bindings_shadow_fixed_actions() {
         (KeyCode::Char('s'), KeyModifiers::CONTROL),
     ] {
         assert_eq!(
-            resolve_key(&keymap, InputMode::Normal, code, mods),
+            resolve_one(&keymap, InputMode::Normal, code, mods),
             KeyAction::Other
         );
     }
     assert_eq!(
-        resolve_key(
+        resolve_one(
             &keymap,
             InputMode::Help,
             KeyCode::Char('/'),
@@ -570,7 +570,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             mods: KeyModifiers::NONE,
         },
         Wakeup::Press {
-            code: KeyCode::Char('r'),
+            code: KeyCode::Char('R'),
             mods: KeyModifiers::NONE,
         },
         Wakeup::Press {
@@ -610,7 +610,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
 
     let outcome = handle_wakeup(
         Wakeup::Press {
-            code: KeyCode::Char('r'),
+            code: KeyCode::Char('R'),
             mods: KeyModifiers::NONE,
         },
         &mut render::ViewState::default(),

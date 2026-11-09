@@ -310,6 +310,7 @@ pub(super) fn handle_wakeup(
     keymap: &crate::config::keys::sidebar::SidebarKeymap,
     alert_active: bool,
 ) -> InputOutcome {
+    let mut pending_moved = false;
     let wakeup = match wakeup {
         Wakeup::Press { code, mods } => {
             let mode = if view.help_visible {
@@ -319,7 +320,10 @@ pub(super) fn handle_wakeup(
             } else {
                 InputMode::Normal
             };
-            Wakeup::Key(resolve_key(keymap, mode, code, mods))
+            let pending = view.pending_keys.len();
+            let action = resolve_key(keymap, mode, &mut view.pending_keys, code, mods);
+            pending_moved = pending > 0 || !view.pending_keys.is_empty();
+            Wakeup::Key(action)
         }
         wakeup => wakeup,
     };
@@ -335,7 +339,7 @@ pub(super) fn handle_wakeup(
         view.help_visible = false;
         return InputOutcome::redraw();
     }
-    match wakeup {
+    let mut outcome = match wakeup {
         Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
         Wakeup::Key(action) => handle_key(action, view, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
@@ -379,7 +383,9 @@ pub(super) fn handle_wakeup(
         | Wakeup::FocusFailed { .. }
         | Wakeup::FocusSuperseded { .. }
         | Wakeup::FocusDispatched { .. } => InputOutcome::default(),
-    }
+    };
+    outcome.redraw |= pending_moved;
+    outcome
 }
 
 impl LoopState {
@@ -1983,7 +1989,7 @@ impl LoopState {
         self.commit_local_mark();
     }
 
-    /// Mark every readable row read without jumping (`M`): write room receipts
+    /// Mark every readable row read without jumping (`U`): write room receipts
     /// for every unread or needs-a-look row, clear local unread bits, and refetch
     /// so peers converge through the producer.
     fn mark_all_read(&mut self) {

@@ -311,13 +311,13 @@ On Zellij, a silent or stale presence-plugin warning does not stop repair: it us
 
 A banner such as `⚠ Sidebar degraded for 8s: snapshot failed` means a render could not read a fresh snapshot, usually because the binary moved on disk or the durable state directory vanished mid-write. Nothing is lost: the durable store stays the source of truth, so fixing the underlying cause (reinstall or repoint the binary, confirm the state directory exists) clears the banner on the next good frame.
 
-Once it recovers, the banner steps down to a dim, dismissable notice (`⚠ last alert 8s ago: …  ·  x dismiss`), so a failure that flickered past is still visible after the fact. Press `x` to clear it; two consecutive failed renders re-arm it, which is why a single bad frame does not.
+Once it recovers, the banner steps down to a dim, dismissable notice (`⚠ last alert 8s ago: …  ·  Esc dismiss`), so a failure that flickered past is still visible after the fact. Press `Esc` to clear it (after any search or notice it clears first); two consecutive failed renders re-arm it, which is why a single bad frame does not.
 
 ### The "hook drainer unreachable" alert
 
 `⚠ hook drainer unreachable for 40s · coder's card may be stale` means an agent's updates may not be reaching the room: its hook drainer has been unreachable for at least 10 seconds. The agent keeps running, and the sidebar's dashboard, footer, and search still work. The label matches the card when present; with several affected agents the line names the earliest one and counts the other cards.
 
-Run `rimz doctor` for the outage and reconnect error. The incident stays Investigate with Warn impact even after recovery. The alert stays active for about 3 seconds after recovery, then becomes a dim `last alert … ago: hook drainer unreachable for … · x dismiss` line until you press `x`; `x` cannot dismiss it while active. A refresh failure's active `Sidebar degraded` alert takes precedence over this line.
+Run `rimz doctor` for the outage and reconnect error. The incident stays Investigate with Warn impact even after recovery. The alert stays active for about 3 seconds after recovery, then becomes a dim `last alert … ago: hook drainer unreachable for … · Esc dismiss` line until you press `Esc`; `Esc` cannot dismiss it while active. A refresh failure's active `Sidebar degraded` alert takes precedence over this line.
 
 Reconnect attempts never print into the agent's pane. A gap closed under 10 seconds leaves only a Contained diagnostic, detailed under `rimz doctor --audit`, and no sidebar alert. Doctor also retains outages that start and finish while a sidebar view is hidden, or whose lingering notice is lost when the host restarts.
 
@@ -478,7 +478,7 @@ On Zellij, a `[mux] status_bar` change reaches tabs RimZ opens at once, while ex
 rimz config set theme "Catppuccin Mocha"
 ```
 
-Two keys never reach a live sidebar at all. `theme.display.width_percent` and `max_cols` are read once, when the sidebar process starts, and `rimz reload` refetches in place without re-reading them. Press `a` and `d` in the sidebar to set the width now, or end the room and start it again. [Display](./theme.md#display) covers both.
+Two keys never reach a live sidebar at all. `theme.display.width_percent` and `max_cols` are read once, when the sidebar process starts, and `rimz reload` refetches in place without re-reading them. Press `<` and `>` in the sidebar to set the width now, or end the room and start it again. [Display](./theme.md#display) covers both.
 
 ### `rimz setup` dropped my config comments
 

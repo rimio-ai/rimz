@@ -75,7 +75,7 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
                 .pane_id
                 .clone()
         };
-        for action in [KeyAction::InboxNext, KeyAction::InboxPrev] {
+        for action in [KeyAction::SearchNext, KeyAction::SearchPrev] {
             assert_eq!(
                 handle_key(
                     action,
@@ -126,7 +126,7 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
+        handle_key(KeyAction::SearchNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(child.clone())
     );
     snapshot.focused_pane = Some(child.clone());
@@ -140,7 +140,7 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     reconcile_selection(&mut ui, &snapshot, baseline);
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
+        handle_key(KeyAction::SearchNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             ..InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
@@ -157,7 +157,7 @@ fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
     }
 }
 
-/// Forward inbox step from `selected` — the `Space`/`n` walk. A readable test
+/// Forward inbox step from `selected` — the `n` walk. A readable test
 /// seam over the directional [`step_attention_index`].
 fn next_attention_index(
     snapshot: &SidebarSnapshot,

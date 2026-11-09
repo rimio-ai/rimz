@@ -1,4 +1,4 @@
-//! Host-coalesced reload decisions (`rimz reload` or the `r` keypress).
+//! Host-coalesced reload decisions (`rimz reload` or the `R` keypress).
 //!
 //! Resolve the digest-verified workspace target and compare it to the running host image once per queued request batch. A changed image drains the host; otherwise the plane refreshes in place. The supervisor owns host-first promotion and its own later exec.
 
@@ -6,7 +6,7 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// What a reload (`rimz reload` or the `r` keypress) does this tick: request a host drain onto a changed on-disk binary, refetch when it is byte-identical, or keep serving when nothing usable is on disk.
+/// What a reload (`rimz reload` or the `R` keypress) does this tick: request a host drain onto a changed on-disk binary, refetch when it is byte-identical, or keep serving when nothing usable is on disk.
 pub(super) enum ReloadAction {
     /// The on-disk binary differs from the running image: the host drains so supervisors can start the target with pane PIDs kept.
     Reexec(PathBuf),

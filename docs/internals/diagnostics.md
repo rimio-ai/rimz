@@ -70,7 +70,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `fetch_reduction_stats` | none | Retained fetch windows without trigger counts; no current code emits it |
 | `group_migration` | `sidebar_pane::app::state` | A pane whose group changed between committed snapshots, with cwd before and after |
 | `renderer_panic` | `sidebar_pane::app` | Panics that would otherwise vanish with the pane |
-| `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app::width_control` | Intent verdicts, controller nudges, learned feedback, and terminal outcomes for `a`/`d` width control |
+| `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app::width_control` | Intent verdicts, controller nudges, learned feedback, and terminal outcomes for `<`/`>` width control |
 | `sidebar_host_unavailable`, `supervisor_pane_gone`, `supervisor_convergence`, `supervisor_preflight_rejected`, `self_close_rejected`, `renderer_exit` | `sidebar_pane::supervise` | A failed host round, a watchdog-confirmed missing pane, a stable target about to be preflighted or a preflight that refused one, a declined self-close with the sibling count, and a confirmed self-close ([supervisor kinds](#supervisor-kinds)) |
 | `work_pane_boundary_moved` | `sidebar::presence` (Zellij), `sidebar::presence::tmux` | Before and after horizontal geometry for a stable work-pane set whose view and sidebar widths did not change, drift that would otherwise leave no trace |
 | `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale writers, with plugin id, loaded-at generation, accepted writer, and reject count |

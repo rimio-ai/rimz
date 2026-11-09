@@ -110,13 +110,13 @@ pub struct DisplayConfig {
     /// Sidebar pane width as a percentage of each view, capped by `max_cols`.
     /// Unset uses 30% above 240 view columns or when pets are enabled, and 25%
     /// otherwise; an explicit value stays fixed and is clamped to 10 through
-    /// `max_percent` when used. A room-wide `a`/`d` width selection outranks
+    /// `max_percent` when used. A room-wide `<`/`>` width selection outranks
     /// this percentage and `max_cols`, but never `max_percent`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width_percent: Option<u16>,
     /// Cap on the sidebar pane width in columns. Reconcile converges live panes
     /// toward the configured percentage up to this cap unless a room-wide
-    /// `a`/`d` width selection is present.
+    /// `<`/`>` width selection is present.
     pub max_cols: NonZeroU16,
     /// Maximum sidebar share, including user selections; clamped to 10-90.
     pub max_percent: u16,

@@ -22,7 +22,7 @@ fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
         "the outage needs its own alert slot"
     );
     assert!(!rig.state.alert_active());
-    rig.input(KeyAction::Dismiss);
+    rig.input(KeyAction::Cancel);
     assert!(
         rig.view()
             .ui()
@@ -51,7 +51,7 @@ fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
     );
     let recovered = rig.view().ui().hook_drainer_alert.clone();
     rig.view().ctx().health.alert = recovered;
-    rig.input(KeyAction::Dismiss);
+    rig.input(KeyAction::Cancel);
     assert!(rig.view().ctx().health.alert.is_none());
     assert!(rig.view().ui().hook_drainer_alert.is_none());
 }

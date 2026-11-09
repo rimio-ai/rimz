@@ -133,6 +133,10 @@ pub(crate) enum Component {
     RemoteControlOff,
     /// Which-key chord text inside the help overlay.
     HelpKey,
+    /// The pending prefix and continuation keys on the bottom which-key row.
+    KeyHint,
+    /// The pane notice: the last in-pane key's refusal, above the key row.
+    PaneNotice,
     /// The capability-line window token, by size class: a neutral→cool→accent
     /// salience ramp so a bigger window reads louder without borrowing any
     /// provider identity. Small (`<128k`).
@@ -228,6 +232,8 @@ impl Component {
         Component::RemoteControlDown,
         Component::RemoteControlOff,
         Component::HelpKey,
+        Component::KeyHint,
+        Component::PaneNotice,
         Component::WindowSmall,
         Component::WindowMedium,
         Component::WindowLarge,
@@ -254,7 +260,7 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         tone_color(match self {
-            Sessions | Output | HelpKey | WindowHuge | Typing => palette.accent,
+            Sessions | Output | HelpKey | KeyHint | WindowHuge | Typing => palette.accent,
             LaneSpine | EntrySpine => palette.selection,
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
                 palette.body
@@ -265,7 +271,7 @@ impl Component {
                 palette.good
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
-            | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked => palette.warn,
+            | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked | PaneNotice => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
