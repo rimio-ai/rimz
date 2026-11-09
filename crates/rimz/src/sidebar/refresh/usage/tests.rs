@@ -101,7 +101,9 @@ fn claimed_helper_passes_its_pinned_credential_to_the_direct_probe() {
         scope: ProviderAccountScope::sub_provider("anthropic", "oauth"),
         ..Default::default()
     };
-    let claim = claim_provider_account_usage(&runtime, &key, Some(identity.clone())).unwrap();
+    let claim = claim_provider_account_usage(&runtime, &key, Some(identity.clone()))
+        .saved()
+        .unwrap();
     assert!(refresh_claimed_account_usage_with(
         &runtime,
         &key,
@@ -159,7 +161,8 @@ fn entitlement_marker_creates_an_entry_and_keeps_first_seen() {
             logins: BTreeMap::from([(key.clone(), entry)]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     mark_entitlement_lapsed(&runtime, &key, 200);
     let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
     assert_eq!(cache.logins[&key].plan.as_deref(), Some("max"));
@@ -250,7 +253,9 @@ fn claimed_usage_refuses_and_cancels_a_login_outside_the_catalog() {
     let (_, set) = spare_room();
     for refused in ["codex@gone", "claude@work"] {
         let refused: LoginKey = refused.parse().unwrap();
-        let claim = claim_provider_account_usage(&runtime, &refused, None).unwrap();
+        let claim = claim_provider_account_usage(&runtime, &refused, None)
+            .saved()
+            .unwrap();
         assert!(!refresh_claimed_account_usage_with(
             &runtime,
             &refused,
@@ -261,7 +266,11 @@ fn claimed_usage_refuses_and_cancels_a_login_outside_the_catalog() {
             |_, _, _| unreachable!("an undeclared login must not be probed"),
         ));
         assert!(!account_usage_claim_matches(&runtime, &refused, claim));
-        assert!(claim_provider_account_usage(&runtime, &refused, None).is_some());
+        assert!(
+            claim_provider_account_usage(&runtime, &refused, None)
+                .saved()
+                .is_some()
+        );
     }
 }
 
@@ -269,7 +278,9 @@ fn claimed_usage_refuses_and_cancels_a_login_outside_the_catalog() {
 fn claimed_usage_reads_an_idle_account_by_the_direct_probe_alone() {
     let (_dir, runtime) = account_usage_runtime();
     let (spare, set) = spare_room();
-    let claim = claim_provider_account_usage(&runtime, &spare, None).unwrap();
+    let claim = claim_provider_account_usage(&runtime, &spare, None)
+        .saved()
+        .unwrap();
     let credits = crate::agents::ResetCredits {
         count: 2,
         soonest_expiry: None,
@@ -338,7 +349,8 @@ fn idle_accounts_are_claimed_on_their_own_floor_beside_the_in_use_cadence() {
                 logins,
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let mut spawned = Vec::new();
         refresh_account_usage_with(&snapshot, &runtime, &set, |_, key, _, _| {
             spawned.push(key.to_string());
@@ -374,7 +386,9 @@ fn claimed_usage_keeps_refreshing_a_live_agents_old_login() {
     agent.login = Some(work.name.clone());
     let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new())
         .with_agents(&[agent]);
-    let claim = claim_provider_account_usage(&runtime, &work, None).unwrap();
+    let claim = claim_provider_account_usage(&runtime, &work, None)
+        .saved()
+        .unwrap();
     assert!(refresh_claimed_account_usage_with(
         &runtime,
         &work,
@@ -414,7 +428,9 @@ fn claimed_usage_probes_default_under_the_native_home() {
         ("CODEX_HOME".to_owned(), "/srv/spare".to_owned()),
     ]);
     let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), ambient);
-    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
+    let claim = claim_provider_account_usage(&runtime, &key, None)
+        .saved()
+        .unwrap();
     let mut realtime_env = None;
     let mut direct_env = None;
     assert!(refresh_claimed_account_usage_with(
@@ -461,7 +477,8 @@ fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let mut called = false;
 
     assert!(refresh_provider_usage_with(
@@ -505,7 +522,8 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
             logins: BTreeMap::from([(key.clone(), serde_json::from_value(entry).unwrap())]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let mut realtime = complete_realtime();
     realtime.rate_limits = Some(usage_windows(12));
 
@@ -616,7 +634,9 @@ fn claimed_realtime_reading_publishes_under_its_own_identity_and_survives_the_di
     let (_dir, runtime) = account_usage_runtime();
     let key: LoginKey = "codex@default".parse().unwrap();
     let set = RoomLoginSet::new(Some(Default::default()), None, BTreeMap::new());
-    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
+    let claim = claim_provider_account_usage(&runtime, &key, None)
+        .saved()
+        .unwrap();
     let mut realtime = complete_realtime();
     realtime.rate_limits = Some(usage_windows(12));
     assert!(refresh_claimed_account_usage_with(
@@ -645,13 +665,13 @@ fn completed_realtime_reading_publishes_under_its_own_identity_and_survives_the_
     ));
     assert_published_under_owner(&runtime, &key, 12);
 
-    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
-    assert!(complete_direct_account_usage(
-        &runtime,
-        &key,
-        claim,
-        same_account_direct_read(),
-    ));
+    let claim = claim_provider_account_usage(&runtime, &key, None)
+        .saved()
+        .unwrap();
+    assert!(
+        complete_direct_account_usage(&runtime, &key, claim, same_account_direct_read(),)
+            .is_saved()
+    );
     assert_published_under_owner(&runtime, &key, 12);
 }
 
@@ -719,7 +739,8 @@ fn authoritative_direct_completion_survives_live_session_exit() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     super::super::rate_limits::merge_account_rate_limits(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
@@ -746,36 +767,40 @@ fn authoritative_direct_completion_survives_live_session_exit() {
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
         Some(identity.clone()),
     )
+    .saved()
     .unwrap();
-    assert!(complete_direct_account_usage(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
-        claim,
-        crate::agents::AccountUsageProbe::Found {
-            identity,
-            snapshot: AccountUsageSnapshot {
-                rate_limits: Some(AgentRateLimits {
-                    windows: vec![
-                        RateLimitWindow {
-                            duration_mins: Some(300),
-                            used_percentage: Some(36),
-                            resets_at: Some(future),
-                            source: crate::agents::context::WindowSource::Authoritative,
-                            ..Default::default()
-                        },
-                        RateLimitWindow {
-                            duration_mins: Some(10_080),
-                            used_percentage: Some(4),
-                            resets_at: Some(future),
-                            source: crate::agents::context::WindowSource::Authoritative,
-                            ..Default::default()
-                        },
-                    ],
-                }),
-                ..Default::default()
+    assert!(
+        complete_direct_account_usage(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+            claim,
+            crate::agents::AccountUsageProbe::Found {
+                identity,
+                snapshot: AccountUsageSnapshot {
+                    rate_limits: Some(AgentRateLimits {
+                        windows: vec![
+                            RateLimitWindow {
+                                duration_mins: Some(300),
+                                used_percentage: Some(36),
+                                resets_at: Some(future),
+                                source: crate::agents::context::WindowSource::Authoritative,
+                                ..Default::default()
+                            },
+                            RateLimitWindow {
+                                duration_mins: Some(10_080),
+                                used_percentage: Some(4),
+                                resets_at: Some(future),
+                                source: crate::agents::context::WindowSource::Authoritative,
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                },
             },
-        },
-    ));
+        )
+        .is_saved()
+    );
 
     let cache = read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime));
     assert_eq!(
@@ -839,7 +864,8 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     super::super::rate_limits::merge_account_rate_limits(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
@@ -870,6 +896,7 @@ fn claim(runtime: &RuntimePaths) -> Uuid {
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         None,
     )
+    .saved()
     .unwrap()
 }
 
@@ -888,27 +915,30 @@ fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
 fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_new_owner() {
     let (_dir, runtime) = owned_usage_runtime("owner-a");
     let reset = windows(&runtime)[0].resets_at;
-    assert!(complete_direct_account_usage(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
-        claim(&runtime),
-        crate::agents::AccountUsageProbe::Found {
-            identity: usage_identity(Some("owner-b")),
-            snapshot: AccountUsageSnapshot {
-                plan: Some("new plan".to_owned()),
-                rate_limits: Some(AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        duration_mins: Some(300),
-                        used_percentage: Some(12),
-                        resets_at: reset,
-                        source: crate::agents::context::WindowSource::Authoritative,
-                        ..Default::default()
-                    }],
-                }),
-                ..Default::default()
+    assert!(
+        complete_direct_account_usage(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Found {
+                identity: usage_identity(Some("owner-b")),
+                snapshot: AccountUsageSnapshot {
+                    plan: Some("new plan".to_owned()),
+                    rate_limits: Some(AgentRateLimits {
+                        windows: vec![RateLimitWindow {
+                            duration_mins: Some(300),
+                            used_percentage: Some(12),
+                            resets_at: reset,
+                            source: crate::agents::context::WindowSource::Authoritative,
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                },
             },
-        },
-    ));
+        )
+        .is_saved()
+    );
     assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
     let entry = &read_rate_limits_cache(&RateLimitsCache::shared_path(&runtime)).entries
         [&"antigravity@default".parse().unwrap()];
@@ -926,22 +956,30 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
     );
 
     let (_dir, runtime) = owned_usage_runtime("owner-a");
-    assert!(complete_direct_account_usage(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
-        claim(&runtime),
-        crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
-    ));
+    assert!(
+        complete_direct_account_usage(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
+        )
+        .is_saved()
+    );
     assert!(windows(&runtime).is_empty());
 
     for failed_identity in [usage_identity(None), usage_identity(Some("owner-a"))] {
         let (_dir, runtime) = owned_usage_runtime("owner-a");
-        assert!(complete_direct_account_usage(
-            &runtime,
-            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
-            claim(&runtime),
-            crate::agents::AccountUsageProbe::Failed(failed_identity),
-        ));
+        assert!(
+            complete_direct_account_usage(
+                &runtime,
+                &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                    "antigravity"
+                )),
+                claim(&runtime),
+                crate::agents::AccountUsageProbe::Failed(failed_identity),
+            )
+            .is_saved()
+        );
         assert_eq!(windows(&runtime)[0].used_percentage, Some(88));
     }
 }
@@ -949,22 +987,26 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
 #[test]
 fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
     let (_dir, runtime) = owned_usage_runtime("owner-a");
-    assert!(complete_direct_account_usage(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
-        claim(&runtime),
-        crate::agents::AccountUsageProbe::Found {
-            identity: usage_identity(Some("owner-a")),
-            snapshot: AccountUsageSnapshot::default(),
-        },
-    ));
+    assert!(
+        complete_direct_account_usage(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Found {
+                identity: usage_identity(Some("owner-a")),
+                snapshot: AccountUsageSnapshot::default(),
+            },
+        )
+        .is_saved()
+    );
 
     assert_eq!(
         claim_provider_account_usage(
             &runtime,
             &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
             None
-        ),
+        )
+        .saved(),
         None
     );
 }
@@ -1096,7 +1138,8 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
@@ -1172,7 +1215,8 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
             )]),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
@@ -1368,6 +1412,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
                 ..Default::default()
             })
         )
+        .saved()
         .is_some()
     );
 }
@@ -1431,4 +1476,167 @@ fn account_usage_segments_fit_strictly_inside_the_renewed_lease() {
 
     assert!(realtime_segment < crate::sidebar::timing::ACCOUNT_USAGE_CLAIM_TTL);
     assert!(direct_segment < crate::sidebar::timing::ACCOUNT_USAGE_CLAIM_TTL);
+}
+
+fn metered_claude_room() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
+    let (dir, runtime) = account_usage_runtime();
+    super::super::accounts::write_accounts_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+                ProviderRecord {
+                    consecutive_failures: 0,
+                    version_probed_at_ms: None,
+                    inputs_stamp: None,
+                    profile: None,
+                    probe_error: None,
+                    login: None,
+                    probed_at_ms: 1,
+                    ok: true,
+                    account: Some(AgentAccount {
+                        metered: Some(true),
+                        ..Default::default()
+                    }),
+                },
+            )]),
+        },
+    );
+    let snapshot = snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    (dir, runtime, snapshot)
+}
+
+#[test]
+fn an_unsaved_claim_spawns_no_helper() {
+    let (_dir, runtime, snapshot) = metered_claude_room();
+    std::fs::create_dir(runtime.shared_credits_path()).unwrap();
+    let mut spawns = Vec::new();
+    for _ in 0..2 {
+        let mut spawned = 0;
+        refresh_account_usage_with(
+            &snapshot,
+            &runtime,
+            &RoomLoginSet::native(),
+            |_, _, _, _| {
+                spawned += 1;
+                true
+            },
+        );
+        spawns.push(spawned);
+    }
+    assert_eq!(
+        spawns,
+        [0, 0],
+        "each pass retries the claim and spawns nothing"
+    );
+}
+
+#[test]
+fn an_unsaved_renewal_skips_the_direct_probe() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let identity = AccountUsageIdentity {
+        scope: ProviderAccountScope::sub_provider("anthropic", "oauth"),
+        ..Default::default()
+    };
+    let claim = claim_provider_account_usage(&runtime, &key, Some(identity.clone()))
+        .saved()
+        .unwrap();
+    let mut probes = 0;
+    super::super::credits::fail_credits_writes(true);
+    let wrote = refresh_claimed_account_usage_with(
+        &runtime,
+        &key,
+        claim,
+        Some("anthropic"),
+        &RoomLoginSet::native(),
+        |_, _, _| None,
+        |_, _, _| {
+            probes += 1;
+            crate::agents::AccountUsageProbe::Found {
+                identity,
+                snapshot: AccountUsageSnapshot::default(),
+            }
+        },
+    );
+    super::super::credits::fail_credits_writes(false);
+    assert_eq!((wrote, probes), (false, 0));
+}
+
+#[test]
+fn an_unsaved_completion_publishes_no_windows() {
+    let (_dir, runtime) = owned_usage_runtime("owner-a");
+    let claim = claim(&runtime);
+    super::super::credits::fail_credits_writes(true);
+    let wrote = complete_direct_account_usage(
+        &runtime,
+        &LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+        claim,
+        crate::agents::AccountUsageProbe::Found {
+            identity: usage_identity(Some("owner-a")),
+            snapshot: AccountUsageSnapshot {
+                rate_limits: Some(usage_windows(12)),
+                ..Default::default()
+            },
+        },
+    );
+    super::super::credits::fail_credits_writes(false);
+    let used = windows(&runtime)
+        .iter()
+        .map(|window| window.used_percentage)
+        .collect::<Vec<_>>();
+    assert_eq!((wrote, used), (CreditsWrite::Failed, vec![Some(88)]));
+}
+
+fn plan_only() -> AccountUsageSnapshot {
+    AccountUsageSnapshot {
+        plan: Some("pro".to_owned()),
+        ..Default::default()
+    }
+}
+
+fn windows_only() -> AccountUsageSnapshot {
+    AccountUsageSnapshot {
+        rate_limits: Some(usage_windows(40)),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn an_unsaved_credits_merge_is_not_reported_as_published() {
+    let (_dir, runtime) = account_usage_runtime();
+    std::fs::create_dir(runtime.shared_credits_path()).unwrap();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    assert!(!publish_account_usage_snapshot(
+        &runtime,
+        &key,
+        AccountUsageIdentity::default(),
+        plan_only()
+    ));
+}
+
+#[test]
+fn publication_reports_only_a_saved_merge() {
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let mut published = Vec::new();
+    for (blocked, snapshot) in [
+        (true, windows_only()),
+        (false, windows_only()),
+        (false, plan_only()),
+    ] {
+        let (_dir, runtime) = account_usage_runtime();
+        if blocked {
+            std::fs::create_dir(RateLimitsCache::shared_path(&runtime)).unwrap();
+        }
+        published.push(publish_account_usage_snapshot(
+            &runtime,
+            &key,
+            AccountUsageIdentity::default(),
+            snapshot,
+        ));
+    }
+    assert_eq!(published, [false, true, true]);
 }

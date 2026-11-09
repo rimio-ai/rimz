@@ -2,9 +2,10 @@
 //!
 //! Sidebar producers claim due direct reads in `credits.json` before spawning a
 //! helper. Provider calls run outside cache locks; a matching nonce alone may
-//! publish the result. Realtime and direct readings share one snapshot shape
-//! and one cache-publication path, with window precedence resolved during
-//! per-frame fusion.
+//! publish the result, and only a saved claim, renewal, or completion lets the
+//! work behind it go ahead. Realtime and direct readings share one snapshot
+//! shape and one cache-publication path, with window precedence resolved
+//! during per-frame fusion.
 
 use std::time::{Duration, Instant};
 
@@ -22,9 +23,10 @@ use crate::store::snapshot::SidebarSnapshot;
 
 use super::accounts::cached_account_usage_hint;
 use super::credits::{
-    account_usage_claim_matches, cancel_provider_account_usage_claim, claim_idle_account_usage,
-    claim_provider_account_usage, complete_provider_account_usage, merge_provider_realtime_usage,
-    read_credits_cache, renew_provider_account_usage_claim, write_credits_cache,
+    CreditsWrite, account_usage_claim_matches, cancel_provider_account_usage_claim,
+    claim_idle_account_usage, claim_provider_account_usage, complete_provider_account_usage,
+    merge_provider_realtime_usage, read_credits_cache, renew_provider_account_usage_claim,
+    write_credits_cache,
 };
 use super::rate_limits::{drop_account_rate_limits, merge_account_rate_limits};
 use super::trace;
@@ -47,7 +49,8 @@ pub fn mark_entitlement_lapsed(runtime: &RuntimePaths, key: &LoginKey, at_ms: u6
     }
     entry.invalidate_oauth_read();
     cache.refreshed_at_ms = crate::utils::time::unix_now_ms();
-    write_credits_cache(&path, &cache);
+    // Best-effort: the writer logs a failure, and the next rejection marks again.
+    let _ = write_credits_cache(&path, &cache);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +130,7 @@ fn claim_and_spawn(
     started: Instant,
     sub_provider: Option<&str>,
     scope: Option<&ProviderAccountScope>,
-    claim: fn(&RuntimePaths, &LoginKey, Option<AccountUsageIdentity>) -> Option<Uuid>,
+    claim: fn(&RuntimePaths, &LoginKey, Option<AccountUsageIdentity>) -> CreditsWrite<Uuid>,
     spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, Uuid, Option<&str>) -> bool,
 ) {
     let kind = key.kind.as_str();
@@ -149,9 +152,16 @@ fn claim_and_spawn(
                     ..Default::default()
                 })
         });
-    let Some(claim_id) = claim(runtime, key, cached_hint) else {
-        trace_claim(runtime, kind, "not_due", started.elapsed());
-        return;
+    let claim_id = match claim(runtime, key, cached_hint) {
+        CreditsWrite::Saved(claim_id) => claim_id,
+        CreditsWrite::Skipped => {
+            trace_claim(runtime, kind, "not_due", started.elapsed());
+            return;
+        }
+        CreditsWrite::Failed => {
+            trace_claim(runtime, kind, "write_failed", started.elapsed());
+            return;
+        }
     };
     trace_claim(runtime, kind, "claimed", started.elapsed());
     let spawn_started = Instant::now();
@@ -291,10 +301,14 @@ fn refresh_claimed_account_usage_with(
     let direct_started = Instant::now();
     let direct_probe = probe(adapter, &login_env, sub_provider);
     let direct_ms = duration_ms(direct_started.elapsed());
-    let outcome = account_usage_outcome(&direct_probe);
+    let mut outcome = account_usage_outcome(&direct_probe);
     let publication_started = Instant::now();
-    wrote |= complete_direct_account_usage(runtime, key, claim_id, direct_probe);
+    let completed = complete_direct_account_usage(runtime, key, claim_id, direct_probe);
     cache_publication_ms += duration_ms(publication_started.elapsed());
+    if completed == CreditsWrite::Failed {
+        outcome = "write_failed";
+    }
+    wrote |= completed.is_saved();
     trace_usage_helper(
         runtime,
         kind,
@@ -433,7 +447,8 @@ fn merge_account_usage_if_due(
     {
         return false;
     }
-    let Some(claim_id) = claim_provider_account_usage(runtime, &key, cached_hint) else {
+    let CreditsWrite::Saved(claim_id) = claim_provider_account_usage(runtime, &key, cached_hint)
+    else {
         return false;
     };
     complete_direct_account_usage(
@@ -442,16 +457,21 @@ fn merge_account_usage_if_due(
         claim_id,
         adapter.probe_account_usage(&login_env),
     )
+    .is_saved()
 }
 
+/// Complete a claimed direct read, then publish its windows. Windows follow
+/// only a saved completion, so they never describe a read `credits.json` lacks.
 fn complete_direct_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     claim_id: Uuid,
     probe: crate::agents::AccountUsageProbe,
-) -> bool {
-    let Some(completion) = complete_provider_account_usage(runtime, key, claim_id, probe) else {
-        return false;
+) -> CreditsWrite<()> {
+    let completion = match complete_provider_account_usage(runtime, key, claim_id, probe) {
+        CreditsWrite::Saved(completion) => completion,
+        CreditsWrite::Skipped => return CreditsWrite::Skipped,
+        CreditsWrite::Failed => return CreditsWrite::Failed,
     };
     let windows = completion
         .snapshot
@@ -473,13 +493,15 @@ fn complete_direct_account_usage(
         }
     }
     publish_account_usage_windows(runtime, key, completion.identity, windows);
-    true
+    CreditsWrite::Saved(())
 }
 
 /// Publish one normalized realtime snapshot. Credits and optional windows keep
 /// their owning locks and no provider call runs while either lock is held.
 /// This is the one entry through which any caller publishes a normalized
-/// account-usage snapshot, harness-originated redemptions included.
+/// account-usage snapshot, harness-originated redemptions included. True when
+/// the credits merge or the windows merge was saved; a busy credits lock or a
+/// failed write counts as not saved.
 pub fn publish_account_usage_snapshot(
     runtime: &RuntimePaths,
     key: &LoginKey,
@@ -490,11 +512,10 @@ pub fn publish_account_usage_snapshot(
     let has_credits = snapshot.plan.is_some()
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some();
-    if has_credits {
-        merge_provider_realtime_usage(runtime, key, identity.clone(), snapshot);
-    }
-    let has_windows = publish_account_usage_windows(runtime, key, identity, windows);
-    has_credits || has_windows
+    let credits_saved =
+        has_credits && merge_provider_realtime_usage(runtime, key, identity.clone(), snapshot);
+    let windows_saved = publish_account_usage_windows(runtime, key, identity, windows);
+    credits_saved || windows_saved
 }
 
 fn publish_account_usage_windows(
@@ -506,8 +527,7 @@ fn publish_account_usage_windows(
     let Some(windows) = windows else {
         return false;
     };
-    merge_account_rate_limits(runtime, key, identity, windows);
-    true
+    merge_account_rate_limits(runtime, key, identity, windows)
 }
 
 fn spawn_usage_refresh(

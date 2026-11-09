@@ -189,23 +189,103 @@ pub(super) struct AccountUsageCompletion {
     pub account_changed: bool,
 }
 
-pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
-    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
+#[cfg(test)]
+thread_local! {
+    static FAIL_CREDITS_WRITES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Make this thread's credits writes fail, for a test that needs a readable
+/// claim and a lost write.
+#[cfg(test)]
+pub(super) fn fail_credits_writes(fail: bool) {
+    FAIL_CREDITS_WRITES.set(fail);
+}
+
+/// Publish `credits.json`. A failure is logged here and returned, and the
+/// prior cache stays in place.
+pub(super) fn write_credits_cache(
+    path: &Path,
+    cache: &CreditsCache,
+) -> Result<(), crate::disk::atomic::AtomicErr> {
+    #[cfg(test)]
+    let written = if FAIL_CREDITS_WRITES.get() {
+        Err(crate::disk::atomic::AtomicErr::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other("test credits write failure"),
+        })
+    } else {
+        crate::disk::atomic::write_temp_then_rename_cache(path, cache)
+    };
+    #[cfg(not(test))]
+    let written = crate::disk::atomic::write_temp_then_rename_cache(path, cache);
+    if let Err(err) = &written {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.credits_write",
-            error = &err as &dyn std::error::Error,
+            error = err as &dyn std::error::Error,
             "sidebar credits cache write failed",
         );
     }
+    written
 }
 
+/// What one credits transaction did. Only `Saved` reached `credits.json`.
+#[must_use]
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CreditsWrite<T> {
+    /// The lock was busy or the edit declined, so nothing was written.
+    Skipped,
+    /// The edit was made but its write failed; the prior cache stands.
+    Failed,
+    Saved(T),
+}
+
+impl<T> CreditsWrite<T> {
+    #[cfg(test)]
+    pub(super) fn saved(self) -> Option<T> {
+        match self {
+            Self::Saved(value) => Some(value),
+            Self::Skipped | Self::Failed => None,
+        }
+    }
+
+    pub(super) fn is_saved(&self) -> bool {
+        matches!(self, Self::Saved(_))
+    }
+}
+
+/// Edit `credits.json` under its lock without waiting for it. `edit` declines
+/// by returning `None`, and its value is returned only once the write is saved.
+fn edit_credits_cache<T>(
+    runtime: &RuntimePaths,
+    edit: impl FnOnce(&mut CreditsCache) -> Option<T>,
+) -> CreditsWrite<T> {
+    let path = runtime.shared_credits_path();
+    let Some(_guard) =
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+            .ok()
+            .flatten()
+    else {
+        return CreditsWrite::Skipped;
+    };
+    let mut cache = read_credits_cache(&path);
+    let Some(value) = edit(&mut cache) else {
+        return CreditsWrite::Skipped;
+    };
+    match write_credits_cache(&path, &cache) {
+        Ok(()) => CreditsWrite::Saved(value),
+        Err(_) => CreditsWrite::Failed,
+    }
+}
+
+/// Merge one realtime reading into `credits.json`, true once it is saved. A
+/// busy lock skips the merge.
 pub(super) fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     identity: AccountUsageIdentity,
     snapshot: AccountUsageSnapshot,
-) {
+) -> bool {
     let (plan, extra_credits, reset_credits) = account_usage_credit_fields(Some(&snapshot));
     let mut entry = ProviderCreditsEntry {
         scope: identity.scope,
@@ -218,41 +298,37 @@ pub(super) fn merge_provider_realtime_usage(
         reset_credits,
         ..Default::default()
     };
-    let path = runtime.shared_credits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-            .ok()
-            .flatten()
-    else {
-        return;
-    };
-    let mut cache = read_credits_cache(&path);
     let key = AccountUsageKey::new(key.clone(), entry.scope.clone());
-    if let Some(prior) = cache.get(&key).filter(|prior| prior.scope == entry.scope) {
-        entry.direct_query_claim = prior.direct_query_claim.clone();
-        if prior.account_key == entry.account_key {
-            entry.entitlement = prior.entitlement;
-            fill_missing_display_fields(&mut entry, prior);
-            // The last direct read describes the credentials it saw; new ones
-            // leave the entry unread, so the next claim re-reads them.
-            if prior.credentials_stamp == entry.credentials_stamp {
-                entry.oauth_read_at_ms = prior.oauth_read_at_ms;
-                entry.oauth_read_hint = prior.oauth_read_hint.clone();
-                entry.auth_settled = prior.auth_settled;
+    edit_credits_cache(runtime, |cache| {
+        if let Some(prior) = cache.get(&key).filter(|prior| prior.scope == entry.scope) {
+            entry.direct_query_claim = prior.direct_query_claim.clone();
+            if prior.account_key == entry.account_key {
+                entry.entitlement = prior.entitlement;
+                fill_missing_display_fields(&mut entry, prior);
+                // The last direct read describes the credentials it saw; new ones
+                // leave the entry unread, so the next claim re-reads them.
+                if prior.credentials_stamp == entry.credentials_stamp {
+                    entry.oauth_read_at_ms = prior.oauth_read_at_ms;
+                    entry.oauth_read_hint = prior.oauth_read_hint.clone();
+                    entry.auth_settled = prior.auth_settled;
+                }
             }
         }
-    }
-    cache.refreshed_at_ms = unix_now_ms();
-    *cache.entry_mut(&key) = entry;
-    write_credits_cache(&path, &cache);
+        cache.refreshed_at_ms = unix_now_ms();
+        *cache.entry_mut(&key) = entry;
+        Some(())
+    })
+    .is_saved()
 }
 
-/// Claim one due direct account-usage read under the shared credits lock.
+/// Claim one due direct account-usage read under the shared credits lock. Only
+/// a saved claim is granted: a busy lock or a read not yet due skips, and a
+/// failed write fails.
 pub(super) fn claim_provider_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     cached_hint: Option<AccountUsageIdentity>,
-) -> Option<Uuid> {
+) -> CreditsWrite<Uuid> {
     claim_provider_account_usage_with_hint_at(
         runtime,
         key,
@@ -268,7 +344,7 @@ fn claim_provider_account_usage_with_hint_at(
     cached_hint: Option<AccountUsageIdentity>,
     now_ms: u64,
     nonce: Uuid,
-) -> Option<Uuid> {
+) -> CreditsWrite<Uuid> {
     claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, cached_hint)
 }
 
@@ -278,7 +354,7 @@ pub(super) fn claim_idle_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     cached_hint: Option<AccountUsageIdentity>,
-) -> Option<Uuid> {
+) -> CreditsWrite<Uuid> {
     claim_idle_account_usage_at(runtime, key, cached_hint, unix_now_ms(), Uuid::now_v7())
 }
 
@@ -288,7 +364,7 @@ fn claim_idle_account_usage_at(
     cached_hint: Option<AccountUsageIdentity>,
     now_ms: u64,
     nonce: Uuid,
-) -> Option<Uuid> {
+) -> CreditsWrite<Uuid> {
     claim_provider_account_usage_locked(
         runtime,
         key,
@@ -306,7 +382,7 @@ fn claim_provider_account_usage_at(
     identity: AccountUsageIdentity,
     now_ms: u64,
     nonce: Uuid,
-) -> Option<Uuid> {
+) -> CreditsWrite<Uuid> {
     claim_provider_account_usage_with_hint_at(runtime, key, Some(identity), now_ms, nonce)
 }
 
@@ -317,12 +393,20 @@ fn claim_provider_account_usage_locked(
     nonce: Uuid,
     floor: Duration,
     cached_hint: Option<AccountUsageIdentity>,
+) -> CreditsWrite<Uuid> {
+    edit_credits_cache(runtime, |cache| {
+        claim_due_account_usage(cache, key, now_ms, nonce, floor, cached_hint)
+    })
+}
+
+fn claim_due_account_usage(
+    cache: &mut CreditsCache,
+    key: &LoginKey,
+    now_ms: u64,
+    nonce: Uuid,
+    floor: Duration,
+    cached_hint: Option<AccountUsageIdentity>,
 ) -> Option<Uuid> {
-    let path = runtime.shared_credits_path();
-    let _guard = crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-        .ok()
-        .flatten()?;
-    let mut cache = read_credits_cache(&path);
     let mut usage_key = AccountUsageKey::new(
         key.clone(),
         cached_hint
@@ -363,7 +447,6 @@ fn claim_provider_account_usage_locked(
         preflight_account_key: identity.account_key,
     });
     cache.refreshed_at_ms = now_ms;
-    write_credits_cache(&path, &cache);
     Some(nonce)
 }
 
@@ -425,7 +508,8 @@ fn claimed_usage_key(
 }
 
 /// Renew the matching live direct-query lease immediately before direct
-/// provider work. A replaced claim or contended credits lock cannot be renewed.
+/// provider work. A replaced claim, a contended credits lock, or a failed write
+/// renews nothing, and the lease keeps its old expiry.
 pub(super) fn renew_provider_account_usage_claim(
     runtime: &RuntimePaths,
     key: &LoginKey,
@@ -440,72 +524,62 @@ fn renew_provider_account_usage_claim_at(
     nonce: Uuid,
     now_ms: u64,
 ) -> bool {
-    let path = runtime.shared_credits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-            .ok()
-            .flatten()
-    else {
-        return false;
-    };
-    let mut cache = read_credits_cache(&path);
-    let Some(key) = claimed_usage_key(&cache, key, nonce) else {
-        return false;
-    };
-    let Some(claim) = cache
-        .entry_mut(&key)
-        .direct_query_claim
-        .as_mut()
-        .filter(|claim| claim.nonce == nonce)
-    else {
-        return false;
-    };
-    claim.claimed_at_ms = now_ms;
-    cache.refreshed_at_ms = now_ms;
-    write_credits_cache(&path, &cache);
-    true
+    edit_credits_cache(runtime, |cache| {
+        let key = claimed_usage_key(cache, key, nonce)?;
+        let claim = cache
+            .entry_mut(&key)
+            .direct_query_claim
+            .as_mut()
+            .filter(|claim| claim.nonce == nonce)?;
+        claim.claimed_at_ms = now_ms;
+        cache.refreshed_at_ms = now_ms;
+        Some(())
+    })
+    .is_saved()
 }
 
+/// Drop the matching claim, true once saved. An unsaved cancel leaves the
+/// claim to expire on its lease.
 pub(super) fn cancel_provider_account_usage_claim(
     runtime: &RuntimePaths,
     key: &LoginKey,
     nonce: Uuid,
 ) -> bool {
-    let path = runtime.shared_credits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-            .ok()
-            .flatten()
-    else {
-        return false;
-    };
-    let mut cache = read_credits_cache(&path);
-    let Some(key) = claimed_usage_key(&cache, key, nonce) else {
-        return false;
-    };
-    let entry = cache.entry_mut(&key);
-    if entry.direct_query_claim.as_ref().map(|claim| claim.nonce) != Some(nonce) {
-        return false;
-    }
-    entry.direct_query_claim = None;
-    cache.refreshed_at_ms = unix_now_ms();
-    write_credits_cache(&path, &cache);
-    true
+    edit_credits_cache(runtime, |cache| {
+        let key = claimed_usage_key(cache, key, nonce)?;
+        let entry = cache.entry_mut(&key);
+        if entry.direct_query_claim.as_ref().map(|claim| claim.nonce) != Some(nonce) {
+            return None;
+        }
+        entry.direct_query_claim = None;
+        cache.refreshed_at_ms = unix_now_ms();
+        Some(())
+    })
+    .is_saved()
 }
 
+/// Complete the matching claim with its probe. The completion is returned only
+/// once saved; a failed write keeps the claim and the prior reading.
 pub(super) fn complete_provider_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     nonce: Uuid,
     probe: AccountUsageProbe,
-) -> Option<AccountUsageCompletion> {
+) -> CreditsWrite<AccountUsageCompletion> {
     let now_ms = unix_now_ms();
-    let path = runtime.shared_credits_path();
-    let _guard = crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-        .ok()
-        .flatten()?;
-    let mut cache = read_credits_cache(&path);
-    let key = claimed_usage_key(&cache, key, nonce)?;
+    edit_credits_cache(runtime, |cache| {
+        complete_claimed_account_usage(cache, key, nonce, probe, now_ms)
+    })
+}
+
+fn complete_claimed_account_usage(
+    cache: &mut CreditsCache,
+    key: &LoginKey,
+    nonce: Uuid,
+    probe: AccountUsageProbe,
+    now_ms: u64,
+) -> Option<AccountUsageCompletion> {
+    let key = claimed_usage_key(cache, key, nonce)?;
     let prior = cache.get(&key).cloned()?;
     let (mut entry, mut completion) =
         prior
@@ -545,7 +619,6 @@ pub(super) fn complete_provider_account_usage(
         *cache.entry_mut(&key) = attempted;
     }
     *cache.entry_mut(&reading_key) = entry;
-    write_credits_cache(&path, &cache);
     Some(completion)
 }
 
@@ -560,22 +633,15 @@ fn account_usage_credit_fields(
     (plan, extra_credits, reset_credits)
 }
 
+/// Make the entry's next direct read due. Best-effort: an unsaved write leaves
+/// the old read's cadence in place.
 pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &AccountUsageKey) {
-    let path = runtime.shared_credits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-            .ok()
-            .flatten()
-    else {
-        return;
-    };
-    let mut cache = read_credits_cache(&path);
-    if cache.get(key).is_none() {
-        return;
-    }
-    cache.entry_mut(key).invalidate_oauth_read();
-    cache.refreshed_at_ms = unix_now_ms();
-    write_credits_cache(&path, &cache);
+    let _ = edit_credits_cache(runtime, |cache| {
+        cache.get(key)?;
+        cache.entry_mut(key).invalidate_oauth_read();
+        cache.refreshed_at_ms = unix_now_ms();
+        Some(())
+    });
 }
 
 fn oauth_read_is_fresh(

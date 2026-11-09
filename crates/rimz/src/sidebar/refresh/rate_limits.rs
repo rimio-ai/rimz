@@ -42,17 +42,22 @@ const RESET_ADVANCE_SECS: i64 = 60;
 const REFILL_FLOOR_PCT: u8 = 25;
 
 /// Publish the rate-limit window cache for every tab to read, atomically so a
-/// reader never observes a half-written file. Best-effort: a write failure logs
-/// and leaves the prior cache in place.
-fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
-    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
+/// reader never observes a half-written file. A write failure logs, is
+/// returned, and leaves the prior cache in place.
+fn write_rate_limits_cache(
+    path: &Path,
+    cache: &RateLimitsCache,
+) -> Result<(), crate::disk::atomic::AtomicErr> {
+    let written = crate::disk::atomic::write_temp_then_rename_cache(path, cache);
+    if let Err(err) = &written {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.rate_limits_write",
-            error = &err as &dyn std::error::Error,
+            error = err as &dyn std::error::Error,
             "sidebar rate-limits cache write failed",
         );
     }
+    written
 }
 
 struct WindowIndex {
@@ -166,19 +171,20 @@ fn reset_spotted(
 /// Detached authoritative writers wait for the producer's short critical
 /// section so an accepted OAuth observation is published before its five-minute
 /// attempt throttle advances. Used by the detached `rimz agents refresh-usage`
-/// helper, never on the per-tick path.
+/// helper, never on the per-tick path. True once the merge is saved; a lock
+/// failure or a failed write is false.
 pub(super) fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     key: &LoginKey,
     identity: AccountUsageIdentity,
     windows: AgentRateLimits,
-) {
+) -> bool {
     let path = RateLimitsCache::shared_path(runtime);
     let Some(_guard) = acquire_rate_limits_cache_lock(
         &RateLimitsCache::shared_lock(runtime),
         "cache.rate_limits_merge_lock",
     ) else {
-        return;
+        return false;
     };
     let mut cache = read_rate_limits_cache(&path);
     cache.refreshed_at_ms = unix_now_ms();
@@ -220,7 +226,7 @@ pub(super) fn merge_account_rate_limits(
             unknown_since_ms,
         },
     );
-    write_rate_limits_cache(&path, &cache);
+    write_rate_limits_cache(&path, &cache).is_ok()
 }
 
 /// Drop one credential's windows after the local OAuth account key
@@ -239,7 +245,8 @@ pub(super) fn drop_account_rate_limits(runtime: &RuntimePaths, key: &AccountUsag
         return;
     }
     cache.refreshed_at_ms = unix_now_ms();
-    write_rate_limits_cache(&path, &cache);
+    // Best-effort: the writer logs a failure, and nothing reads this outcome.
+    let _ = write_rate_limits_cache(&path, &cache);
 }
 
 /// Whether the cached account reading has aged past its longest freshness
@@ -328,7 +335,8 @@ pub(super) fn refresh_rate_limits(
         let (next, reset_kinds) =
             project_rate_limits(snapshot, &cached, logins, true, trace.as_deref());
         if let Some(next) = next {
-            write_rate_limits_cache(&path, &next);
+            // Best-effort: the writer logs a failure, and the next pass fuses again.
+            let _ = write_rate_limits_cache(&path, &next);
         }
         reset_kinds
     };

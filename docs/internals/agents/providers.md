@@ -255,7 +255,7 @@ Completion compares owners symmetrically. `None` to `Some`, `Some` to `None`, tw
 
 ## Refresh cadences
 
-The producer keeps each metered credential current between turns when its spec declares `direct_account_usage`, whether or not a session is live. It spawns one hidden `rimz agents refresh-usage` helper per credential (login and scope), and only after `credits.json` grants that credential a durable direct-query claim. The account fold admits helpers from the panels it just built, so a newly discovered login with no live session starts its first read in the same heavy pass.
+The producer keeps each metered credential current between turns when its spec declares `direct_account_usage`, whether or not a session is live. It spawns one hidden `rimz agents refresh-usage` helper per credential (login and scope), and only after `credits.json` grants that credential a durable direct-query claim. The account fold admits helpers from the panels it just built, so a newly discovered login with no live session starts its first read in the same heavy pass. A claim whose `credits.json` write fails grants nothing: the pass spawns no helper (traced as `write_failed`), and the next pass retries.
 
 | Clock | Value | Governs |
 | --- | --- | --- |
@@ -278,7 +278,7 @@ The first segment is the realtime leg, and it runs only for the room-default log
 
 The credits merge takes that identity whole. The entry's account key and stamp come from the reading, and the prior entry's entitlement and missing display fields carry over only for the same account, so an unbound reading never inherits another account's plan. The direct read's freshness (`oauth_read_at_ms`, `oauth_read_hint`, settled auth) carries over only when the stamp is unchanged too, so a credentials rewrite still reopens the claim.
 
-The second segment runs the direct query and publishes again. A missing, replaced, or lock-contended claim cannot renew, and the direct segment does not start. Completion re-checks the nonce, so a superseded writer is rejected. Both segments publish an `AccountUsageSnapshot`: windows go through `fuse_window`, and plan, paid usage, and reset credits go through one cache conversion. Direct-query windows are authoritative and merge after the realtime fold, so a fresh credential read replaces a stale realtime process. A detached writer waits on the bounded rate-cache lock and publishes before returning. The producer's per-frame path falls back to a non-blocking read under contention.
+The second segment runs the direct query and publishes again. A missing, replaced, or lock-contended claim cannot renew, nor can one whose renewal write fails, and the direct segment does not start; the unextended claim expires on `ACCOUNT_USAGE_CLAIM_TTL`. Completion re-checks the nonce, so a superseded writer is rejected. A completion whose credits write fails publishes no windows either (traced as `write_failed`): the claim and the prior reading stay in `credits.json` until the claim expires, so windows and credits never describe different reads. Both segments publish an `AccountUsageSnapshot`: windows go through `fuse_window`, and plan, paid usage, and reset credits go through one cache conversion. Direct-query windows are authoritative and merge after the realtime fold, so a fresh credential read replaces a stale realtime process. A detached writer waits on the bounded rate-cache lock and publishes before returning. The producer's per-frame path falls back to a non-blocking read under contention.
 
 ### Reads that fusion pulls forward
 
