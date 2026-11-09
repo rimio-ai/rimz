@@ -70,7 +70,7 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use self::animation::ResolvedAnimations;
@@ -122,16 +122,7 @@ fn draw_into(
     view.note_layout(&composed);
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
-    ui.sections = composed
-        .lines
-        .iter()
-        .zip(&composed.sections)
-        .flat_map(|(line, label)| {
-            let rows = frame_rows::wrapped_line_height(line, area.width);
-            std::iter::repeat_n(label.clone(), rows)
-        })
-        .take(usize::from(area.height))
-        .collect();
+    ui.sections = composed.sections;
     ui.sections
         .resize(usize::from(area.height), SectionLabel::default());
     ui.painted_roster = view
@@ -162,7 +153,9 @@ fn draw_into(
     view.reveal_row = None;
     view.focus_placement = None;
     view.own_input_reveal = false;
-    let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
+    // Never wrapped: composed line `i` is buffer row `i` for every map stored above, and a line
+    // wider than the pane is cut at its edge.
+    let paragraph = Paragraph::new(Text::from(composed.lines));
     frame.render_widget(paragraph, area);
     paint_hyperlinks(frame, &ui.interactions, area);
     if view.help_visible

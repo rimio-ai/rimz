@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::layout::text_width;
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
@@ -307,6 +308,39 @@ fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
         rendered.contains("$12.34") && rendered.contains("$56.78"),
         "global store week/month stay visible:\n{rendered}"
     );
+}
+
+#[test]
+fn cockpit_summary_narrows_its_breakdown_where_the_full_one_stops_fitting() {
+    let theme = Theme::fixed(false);
+    let headline = crate::SpendWindow {
+        sessions: 3,
+        tokens: 12_000,
+        input: 4_000,
+        output: 2_000,
+        cache_read: 6_000,
+        ..Default::default()
+    };
+    let summary = |width| {
+        let line = crate::sidebar_pane::render::sections::cockpit_summary_line(
+            &theme,
+            3,
+            Some(&headline),
+            width,
+        );
+        line_texts(&[line]).pop().unwrap()
+    };
+    let full = text_width("◎ 3") + 1 + text_width("◇ 12k ↘ 4k ↗ 2k ◌ 6k");
+    for (width, full_detail) in [(full - 1, false), (full, true), (full + 1, true)] {
+        let text = summary(width);
+        assert_eq!(text_width(&text), width, "{width}: {text:?}");
+        assert_eq!(text.contains('↘'), full_detail, "{width}: {text:?}");
+        assert!(
+            text.starts_with("◎ 3") && text.contains("◇ 12k"),
+            "{width}: {text:?}"
+        );
+        assert!(text.ends_with("◌ 6k"), "{width}: {text:?}");
+    }
 }
 
 #[test]

@@ -47,7 +47,7 @@ The cockpit and the dashboard hold fixed positions, so the numbers you glance at
 The top block reads the whole room in four core lines:
 
 - The first line names the workspace and its path, so a glance confirms which project this room is.
-- The second counts the agent sessions that have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read.
+- The second counts the agent sessions that have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read. A narrow sidebar keeps only total and cache-read there.
 - The third counts the agents alive right now and adds the open-PR count `⑃ N`, stacked PRs included. The room's dollar spend pins right, rolling up live as agents work. The PR count takes the first matching colour: red for failing CI or a pull request the merge queue removed, amber-orange for a conflict, yellow while CI runs, green when every open pull request's CI passes, and its plain blue otherwise.
 - The fourth is the make-up line, work by state: a team within one worktree group counts once, and a solo agent counts once. Any teammate can add attention (`?` waiting, `!` failed, `⏸` paused). For a staged team, the stage owner decides whether work is running, sleeping, or idle; a board at `Done` counts as done. Without a usable stage owner, a team counts working first, otherwise sleeping, idle, or done. A calm bucket appears beside attention only while working. Only done excludes inactive groups. A working team with idle teammates therefore reads `⢿ 1`, `○ 0`; `¤` still counts every agent.
 

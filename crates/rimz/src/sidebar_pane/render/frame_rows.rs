@@ -3,19 +3,8 @@
 use std::io::{self, Write};
 
 use ratatui::buffer::{Buffer, Cell};
-use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Wrap};
 
 use super::{UiState, ansi};
-
-pub(super) fn wrapped_line_height(line: &Line<'_>, width: u16) -> usize {
-    if line.width() <= usize::from(width) && width > 0 {
-        return 1;
-    }
-    Paragraph::new(line.clone())
-        .wrap(Wrap { trim: false })
-        .line_count(width)
-}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct SectionLabel(pub(super) String);

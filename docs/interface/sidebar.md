@@ -222,7 +222,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | line | shows |
 |------|-------|
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
-| 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
+| 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. When the full breakdown does not fit beside the sessions count, only `◇` total and `◌` cache-read show. |
 | 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
@@ -1003,6 +1003,8 @@ After recovery the alert stays as a dim notice until you press `x`, so a failure
 ```
  ⚠ last alert 8s ago: snapshot failed: store not found  ·  x dismiss
 ```
+
+A notice or alert wider than the pane continues on the rows below it, broken between words and indented one cell like its first row; a single word longer than a row is cut across rows.
 
 If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sidebar-degraded-banner).
 

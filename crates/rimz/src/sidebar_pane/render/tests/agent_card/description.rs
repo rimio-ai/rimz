@@ -71,13 +71,17 @@ fn waiting_question_count_keeps_two_full_width_lines() {
     assert!(!screen.contains('…'), "{screen}");
 }
 
-#[test]
-fn waiting_question_count_fits_a_narrow_card() {
+fn narrow_asker_snapshot() -> SidebarSnapshot {
     let mut asker = waiting_asker();
     let ask = asker.open_ask.as_mut().unwrap();
     ask.detail = Some("漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字?".to_owned());
     ask.extra_questions = 2;
-    let snapshot = snapshot_with(vec![asker]);
+    snapshot_with(vec![asker])
+}
+
+#[test]
+fn waiting_question_count_fits_a_narrow_card() {
+    let snapshot = narrow_asker_snapshot();
     let theme = Theme::fixed(false);
     for width in [16, 17, 18] {
         let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width));
@@ -88,6 +92,37 @@ fn waiting_question_count_fits_a_narrow_card() {
     assert_snapshot(
         "waiting_question_count_narrow",
         snapshot_to_screen(&snapshot, 16, 22),
+    );
+}
+
+#[test]
+fn a_narrow_frame_resolves_clicks_on_the_rows_it_painted() {
+    let snapshot = narrow_asker_snapshot();
+    let mut view = selected_ui();
+    let mut ui = fixed_theme_ui(&snapshot, &UiState::default());
+    let theme = ui.theme(&snapshot.theme);
+    let composed = compose_lines(&snapshot, None, &view, &ui, theme.as_ref(), 16, 22);
+    let mut terminal = Terminal::new(TestBackend::new(16, 22)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut ui).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let rows = ui
+        .frame_rows(&buffer)
+        .map(|row| row.plain_text())
+        .collect::<Vec<_>>();
+    for (index, row) in rows.iter().enumerate() {
+        let card = row.starts_with(['▌', '▎']);
+        let target = ui.interactions.target_at(1, u16::try_from(index).unwrap());
+        assert_eq!(
+            target == Some(HitTarget::Row(0)),
+            card,
+            "row {index} {row:?} resolves to {target:?}\n{rows:#?}"
+        );
+    }
+    let last = line_texts(&composed.lines).pop().unwrap();
+    assert_eq!(
+        rows.last().unwrap().trim_end(),
+        last.trim_end(),
+        "{rows:#?}"
     );
 }
 
