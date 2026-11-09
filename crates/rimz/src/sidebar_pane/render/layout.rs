@@ -240,4 +240,33 @@ mod tests {
         assert_eq!(clipped, "a漢…");
         assert_eq!(text_width(&clipped), 4);
     }
+
+    #[test]
+    fn wrap_line_breaks_between_words_keeping_span_and_line_styles() {
+        use ratatui::style::Modifier;
+
+        let first = Style::new().add_modifier(Modifier::BOLD);
+        let second = Style::new().add_modifier(Modifier::DIM);
+        let whole = Style::new().add_modifier(Modifier::ITALIC);
+        let line = Line::from(vec![
+            Span::styled("  ab c", first),
+            Span::styled("d efghi漢jk", second),
+        ])
+        .style(whole);
+        let row = |spans: Vec<Span<'static>>| Line::from(spans).style(whole);
+
+        // The leading gap stays, the gap at each break is dropped, a word that straddles the two
+        // styles keeps both, and the over-long word is cut before the wide character, which moves
+        // whole to the next row rather than splitting at the edge.
+        assert_eq!(
+            wrap_line(line.clone(), 6),
+            vec![
+                row(vec![Span::styled("  ab", first)]),
+                row(vec![Span::styled("c", first), Span::styled("d", second)]),
+                row(vec![Span::styled("efghi", second)]),
+                row(vec![Span::styled("漢jk", second)]),
+            ]
+        );
+        assert_eq!(wrap_line(line.clone(), 18), vec![line]);
+    }
 }
