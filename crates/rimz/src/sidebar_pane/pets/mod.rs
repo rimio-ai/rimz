@@ -35,6 +35,7 @@ pub use preview::{
 };
 
 use crate::sidebar_pane::pixel::{PixelRenderCaps, encode_png};
+use crate::sidebar_pane::render::FrameTime;
 use asset::PetSource;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +69,7 @@ pub struct PetGridSize {
 pub(super) struct PetViewFrame {
     pub(super) action: PetAction,
     pub(super) phase: u64,
+    pub(super) frame_ms: FrameTime,
     pub(super) refresh_ms: u16,
     pub(super) body: Option<PetRenderTier>,
     pub(super) pixel_id_base: u32,
@@ -123,7 +125,7 @@ pub fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
 pub(super) struct PetAssets {
     load_state: PetLoadState,
     previous_action: Option<PetAction>,
-    jump_started_phase: Option<u64>,
+    jump_started_ms: Option<FrameTime>,
     previous_unread_rows: BTreeSet<String>,
     caption: Option<String>,
 }
@@ -142,7 +144,7 @@ enum PetLoadState {
     },
     Failed {
         request: PetLoadRequest,
-        failed_at_phase: u64,
+        failed_at_ms: FrameTime,
         retry_receiver: Option<Receiver<LoadResult>>,
     },
 }
@@ -188,20 +190,11 @@ struct PetLoadRequest {
 /// every frame.
 const RETRY_COOLDOWN_MS: u64 = 20_000;
 
-/// Whether enough phases have elapsed since `failed_at_phase` to re-attempt a
-/// load. `phase` is the monotonic wall-clock animation phase, so the cooldown
-/// tracks real time at whatever cadence the serve loop wakes.
-fn retry_due(failed_at_phase: u64, phase: u64, refresh_ms: u16) -> bool {
-    let cooldown_phases = (RETRY_COOLDOWN_MS / u64::from(refresh_ms.max(1))).max(1);
-    phase.saturating_sub(failed_at_phase) >= cooldown_phases
-}
-
-fn phase_elapsed(started_phase: u64, phase: u64, refresh_ms: u16) -> std::time::Duration {
-    std::time::Duration::from_millis(
-        phase
-            .saturating_sub(started_phase)
-            .saturating_mul(u64::from(refresh_ms.max(1))),
-    )
+/// Cooldown in base frames on the current grid, with the sample and failure
+/// stamps rescaled together so a refresh change cannot subtract different grids.
+fn retry_due(failed_at_ms: FrameTime, now: FrameTime, refresh_ms: u16) -> bool {
+    let cooldown_frames = (RETRY_COOLDOWN_MS / u64::from(refresh_ms.max(1))).max(1);
+    now.elapsed_frames_since(failed_at_ms, refresh_ms) >= cooldown_frames
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -302,6 +295,7 @@ struct TrackSelection {
     previous_action: Option<PetAction>,
     action: PetAction,
     phase: u64,
+    frame_ms: FrameTime,
     refresh_ms: u16,
     motion_enabled: bool,
     jump_duration: Option<std::time::Duration>,
@@ -321,7 +315,7 @@ impl PetAssets {
             PetLoadState::Failed { .. } => return false,
             PetLoadState::Empty | PetLoadState::Loaded { .. } => return true,
         };
-        self.finish_load(request, result, 0);
+        self.finish_load(request, result, FrameTime::default());
         matches!(self.load_state, PetLoadState::Loaded { .. })
     }
 
@@ -363,7 +357,7 @@ impl PetAssets {
     fn reset_runtime_state(&mut self) {
         self.load_state = PetLoadState::Empty;
         self.previous_action = None;
-        self.jump_started_phase = None;
+        self.jump_started_ms = None;
         self.caption = None;
     }
 
@@ -371,6 +365,7 @@ impl PetAssets {
         let PetViewFrame {
             action,
             phase,
+            frame_ms,
             refresh_ms,
             body: body_tier,
             pixel_id_base,
@@ -400,10 +395,10 @@ impl PetAssets {
 
         let preparation =
             body_tier.map(|tier| PreparationKey::new(tier, dashboard_pet_size(tier), cell_aspect));
-        self.poll_loader(phase);
+        self.poll_loader(frame_ms);
         self.clear_mismatched_pet(id, preparation);
         if let Some(key) = preparation {
-            self.ensure_loading(&source, key, phase, refresh_ms);
+            self.ensure_loading(&source, key, frame_ms, refresh_ms);
         }
         self.observe_action(action, config.voice, phase);
 
@@ -482,7 +477,7 @@ impl PetAssets {
         self.previous_action = Some(action);
     }
 
-    fn poll_loader(&mut self, phase: u64) {
+    fn poll_loader(&mut self, frame_ms: FrameTime) {
         let (request, result) = match &self.load_state {
             PetLoadState::Loading { request, receiver }
             | PetLoadState::Failed {
@@ -504,20 +499,20 @@ impl PetAssets {
                 ..
             } => return,
         };
-        self.finish_load(request, result, phase);
+        self.finish_load(request, result, frame_ms);
     }
 
-    fn finish_load(&mut self, request: PetLoadRequest, result: LoadResult, phase: u64) {
+    fn finish_load(&mut self, request: PetLoadRequest, result: LoadResult, frame_ms: FrameTime) {
         match result {
             Ok(asset) => {
                 self.load_state = PetLoadState::Loaded { request, asset };
             }
             Err(err) => {
                 tracing::debug!(pet = %request.id, error = %err, "pet asset unavailable");
-                self.jump_started_phase = None;
+                self.jump_started_ms = None;
                 self.load_state = PetLoadState::Failed {
                     request,
-                    failed_at_phase: phase,
+                    failed_at_ms: frame_ms,
                     retry_receiver: None,
                 };
             }
@@ -530,7 +525,7 @@ impl PetAssets {
         });
         if mismatched {
             if matches!(&self.load_state, PetLoadState::Loaded { .. }) {
-                self.jump_started_phase = None;
+                self.jump_started_ms = None;
             }
             self.load_state = PetLoadState::Empty;
         }
@@ -540,17 +535,17 @@ impl PetAssets {
         &mut self,
         source: &PetSource,
         key: PreparationKey,
-        phase: u64,
+        frame_ms: FrameTime,
         refresh_ms: u16,
     ) {
-        self.ensure_loading_with(source, key, phase, refresh_ms, load_prepared_pet);
+        self.ensure_loading_with(source, key, frame_ms, refresh_ms, load_prepared_pet);
     }
 
     fn ensure_loading_with<P>(
         &mut self,
         source: &PetSource,
         key: PreparationKey,
-        phase: u64,
+        frame_ms: FrameTime,
         refresh_ms: u16,
         prepare: P,
     ) where
@@ -573,13 +568,13 @@ impl PetAssets {
         let retrying = match &self.load_state {
             PetLoadState::Failed {
                 request,
-                failed_at_phase,
+                failed_at_ms,
                 retry_receiver,
             } if request.id == id && request.key == key => {
-                if retry_receiver.is_some() || !retry_due(*failed_at_phase, phase, refresh_ms) {
+                if retry_receiver.is_some() || !retry_due(*failed_at_ms, frame_ms, refresh_ms) {
                     return;
                 }
-                Some(*failed_at_phase)
+                Some(*failed_at_ms)
             }
             _ => None,
         };
@@ -623,9 +618,9 @@ impl PetAssets {
         match spawned {
             Ok(_) => {
                 self.load_state = match retrying {
-                    Some(failed_at_phase) => PetLoadState::Failed {
+                    Some(failed_at_ms) => PetLoadState::Failed {
                         request,
-                        failed_at_phase,
+                        failed_at_ms,
                         retry_receiver: Some(receiver),
                     },
                     None => PetLoadState::Loading { request, receiver },
@@ -634,7 +629,7 @@ impl PetAssets {
             Err(err) => {
                 self.load_state = PetLoadState::Failed {
                     request,
-                    failed_at_phase: phase,
+                    failed_at_ms: frame_ms,
                     retry_receiver: None,
                 };
                 tracing::debug!(pet = %id, error = %err, "pet asset loader failed");
@@ -686,6 +681,7 @@ impl PetAssets {
             previous_action,
             action: frame.action,
             phase: frame.phase,
+            frame_ms: frame.frame_ms,
             refresh_ms: frame.refresh_ms,
             motion_enabled: frame.motion_enabled,
             jump_duration,
@@ -716,6 +712,7 @@ impl PetAssets {
             previous_action,
             action,
             phase,
+            frame_ms,
             refresh_ms,
             motion_enabled,
             jump_duration,
@@ -723,23 +720,27 @@ impl PetAssets {
         } = selection;
         let steady = model::action_track(action);
         if !motion_enabled {
-            self.jump_started_phase = None;
+            self.jump_started_ms = None;
             return SelectedTrack {
                 track: steady,
                 phase,
             };
         }
         if model::action_changed(previous_action, action) || unread_triggered {
-            self.jump_started_phase = jump_duration.map(|_| phase);
+            self.jump_started_ms = jump_duration.map(|_| frame_ms);
         }
-        if let (Some(started), Some(duration)) = (self.jump_started_phase, jump_duration) {
-            if phase_elapsed(started, phase, refresh_ms) < duration {
+        if let (Some(started), Some(duration)) = (self.jump_started_ms, jump_duration) {
+            let elapsed_frames = frame_ms.elapsed_frames_since(started, refresh_ms);
+            let elapsed = std::time::Duration::from_millis(
+                elapsed_frames.saturating_mul(u64::from(refresh_ms.max(1))),
+            );
+            if elapsed < duration {
                 return SelectedTrack {
                     track: model::PetTrack::Jumping,
-                    phase: phase.saturating_sub(started),
+                    phase: elapsed_frames,
                 };
             }
-            self.jump_started_phase = None;
+            self.jump_started_ms = None;
         }
         SelectedTrack {
             track: steady,

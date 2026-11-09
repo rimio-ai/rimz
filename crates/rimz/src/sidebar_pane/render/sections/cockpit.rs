@@ -7,10 +7,10 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::config::GlyphRole;
-use crate::sidebar_pane::render::TallyAnim;
 use crate::sidebar_pane::render::fmt::{compact_count, dollars_cap, dollars2};
 use crate::sidebar_pane::render::labels::{TokenColumns, TokenDetail, token_breakdown_spans};
 use crate::sidebar_pane::render::theme::{Component, Theme};
+use crate::sidebar_pane::render::{FrameTime, TallyAnim};
 
 use super::{metric_spans, pin_right, spans_width};
 
@@ -85,11 +85,11 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     badges: CockpitBadges,
     spend: (f64, Option<&DailyBudgetView>),
     anim: &TallyAnim,
-    phase: u64,
+    (now, refresh_ms): (FrameTime, u16),
     width: usize,
 ) -> (Line<'static>, Option<(u16, u16)>) {
     let (today_usd, daily_budget) = spend;
-    let usd = anim.today_usd.display(today_usd, phase);
+    let usd = anim.today_usd.display(today_usd, now, refresh_ms);
     let (label, style) = match daily_budget {
         Some(budget) => (
             format!("{} of {}/day", dollars2(usd), dollars_cap(budget.cap_usd)),
@@ -97,7 +97,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         ),
         None => (
             dollars2(usd),
-            if anim.today_usd.flashing(phase) {
+            if anim.today_usd.flashing(now, refresh_ms) {
                 theme.value_flash()
             } else {
                 theme.money_style(Modifier::BOLD)

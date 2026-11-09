@@ -2403,7 +2403,7 @@ fn only_own_input_ends_the_wheel_peek_on_selection_change() {
         handle_scroll(true, &mut ui, &mut pane_ui);
     }
     paint(&mut ui, &mut pane_ui, &snapshot, 14);
-    ui.frame_ms += 100;
+    ui.frame_ms = crate::sidebar_pane::render::FrameTime::from_millis(100);
     paint(&mut ui, &mut pane_ui, &snapshot, 14);
     let offset = ui.scroll_offset;
 

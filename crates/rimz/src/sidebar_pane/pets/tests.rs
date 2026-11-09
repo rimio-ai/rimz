@@ -5,6 +5,10 @@ use std::sync::{Barrier, Condvar};
 
 const REFRESH_MS: u16 = 100;
 
+fn ms(elapsed_ms: u64) -> FrameTime {
+    FrameTime::from_millis(elapsed_ms)
+}
+
 #[test]
 fn playback_settles_offline_disconnected_and_timed_out_loads_without_retrying() {
     for failure in ["offline", "disconnected", "timeout"] {
@@ -66,7 +70,7 @@ fn finish_load(assets: &mut PetAssets) {
     let (sender, pending) = mpsc::channel();
     assert!(sender.send(result).is_ok());
     *receiver = pending;
-    assets.poll_loader(0);
+    assets.poll_loader(ms(0));
 }
 
 fn loaded_asset(assets: &PetAssets) -> &Arc<LoadedPetAsset> {
@@ -120,23 +124,29 @@ fn start_held_pet_loads(
                                 id: source.id().into_owned(),
                                 key: cell_key(),
                             },
-                            failed_at_phase: 0,
+                            failed_at_ms: ms(0),
                             retry_receiver: None,
                         };
                     }
                     start.wait();
-                    assets.ensure_loading_with(source, cell_key(), 200, REFRESH_MS, move |_, _| {
-                        load.wait();
-                        prepare()
-                    });
+                    assets.ensure_loading_with(
+                        source,
+                        cell_key(),
+                        ms(20000),
+                        REFRESH_MS,
+                        move |_, _| {
+                            load.wait();
+                            prepare()
+                        },
+                    );
                     if index % 2 != 0 {
                         assert!(matches!(
                             assets.load_state,
                             PetLoadState::Failed {
-                                failed_at_phase: 0,
+                                failed_at_ms,
                                 retry_receiver: Some(_),
                                 ..
-                            }
+                            } if failed_at_ms == FrameTime::default()
                         ));
                     }
                     assets
@@ -173,12 +183,12 @@ fn concurrent_pet_requests_prepare_once_and_share_the_cached_result() {
                 id: id.to_owned(),
                 key: cell_key(),
             },
-            failed_at_phase: 0,
+            failed_at_ms: ms(0),
             retry_receiver: None,
         },
         ..Default::default()
     };
-    cooling.ensure_loading_with(&source, cell_key(), 199, REFRESH_MS, |_, _| {
+    cooling.ensure_loading_with(&source, cell_key(), ms(19900), REFRESH_MS, |_, _| {
         panic!("cooldown must not join or prepare")
     });
     assert!(!cooling.load_state.is_loading());
@@ -197,15 +207,15 @@ fn concurrent_pet_requests_prepare_once_and_share_the_cached_result() {
     assert!(results.iter().all(|asset| Arc::ptr_eq(asset, &results[0])));
 
     let mut late = PetAssets::default();
-    late.ensure_loading_with(&source, cell_key(), 200, REFRESH_MS, |_, _| {
+    late.ensure_loading_with(&source, cell_key(), ms(20000), REFRESH_MS, |_, _| {
         panic!("a live cache hit must not prepare again")
     });
     assert!(Arc::ptr_eq(loaded_asset(&late), &results[0]));
-    cooling.ensure_loading_with(&source, cell_key(), 199, REFRESH_MS, |_, _| {
+    cooling.ensure_loading_with(&source, cell_key(), ms(19900), REFRESH_MS, |_, _| {
         panic!("cooldown must hold even with a live cache hit")
     });
     assert!(matches!(cooling.load_state, PetLoadState::Failed { .. }));
-    cooling.ensure_loading_with(&source, cell_key(), 200, REFRESH_MS, |_, _| {
+    cooling.ensure_loading_with(&source, cell_key(), ms(20000), REFRESH_MS, |_, _| {
         panic!("a due retry must use the live cache hit")
     });
     assert!(Arc::ptr_eq(loaded_asset(&cooling), &results[0]));
@@ -234,7 +244,7 @@ fn failed_pet_preparation_releases_every_waiter_and_allows_retry() {
     retry.ensure_loading_with(
         &PetSource::Petdex(id.to_owned()),
         cell_key(),
-        200,
+        ms(20000),
         REFRESH_MS,
         move |_, _| {
             retried_load.wait();
@@ -260,14 +270,14 @@ fn panicked_pet_preparation_disconnects_every_waiter_and_allows_retry() {
             held_pet_receiver(pane).recv_timeout(std::time::Duration::from_secs(20)),
             Err(mpsc::RecvTimeoutError::Disconnected)
         ));
-        pane.poll_loader(200);
+        pane.poll_loader(ms(20000));
         assert!(matches!(
             pane.load_state,
             PetLoadState::Failed {
-                failed_at_phase: 200,
+                failed_at_ms,
                 retry_receiver: None,
                 ..
-            }
+            } if failed_at_ms == ms(20_000)
         ));
     }
     assert_eq!(
@@ -281,7 +291,7 @@ fn panicked_pet_preparation_disconnects_every_waiter_and_allows_retry() {
     retry.ensure_loading_with(
         &PetSource::Petdex(id.to_owned()),
         cell_key(),
-        200,
+        ms(20000),
         REFRESH_MS,
         move |_, _| {
             retried_load.wait();
@@ -386,6 +396,7 @@ fn frame(
     PetViewFrame {
         action,
         phase,
+        frame_ms: ms(phase * u64::from(refresh_ms)),
         refresh_ms,
         body,
         pixel_id_base: 0x120000,
@@ -450,7 +461,7 @@ fn disabled_config_clears_runtime_state() {
             receiver,
         },
         previous_action: Some(PetAction::Running),
-        jump_started_phase: Some(1),
+        jump_started_ms: Some(ms(100)),
         previous_unread_rows: BTreeSet::from(["agent-1".to_owned()]),
         caption: Some("x".to_owned()),
     };
@@ -460,7 +471,7 @@ fn disabled_config_clears_runtime_state() {
             .is_none()
     );
     assert_eq!(assets.previous_action, None);
-    assert_eq!(assets.jump_started_phase, None);
+    assert_eq!(assets.jump_started_ms, None);
     assert!(assets.previous_unread_rows.is_empty());
     assert_eq!(assets.caption, None);
     assert!(matches!(assets.load_state, PetLoadState::Empty));
@@ -469,7 +480,7 @@ fn disabled_config_clears_runtime_state() {
 #[test]
 fn empty_pet_selector_rests_with_no_pet() {
     let mut assets = loaded_cell_assets(Some(PetAction::Running));
-    assets.jump_started_phase = Some(3);
+    assets.jump_started_ms = Some(ms(300));
     assets.previous_unread_rows = BTreeSet::from(["agent-1".to_owned()]);
     assets.caption = Some("running".to_owned());
     assets.load_state = PetLoadState::Failed {
@@ -477,7 +488,7 @@ fn empty_pet_selector_rests_with_no_pet() {
             id: "codex".to_owned(),
             key: cell_key(),
         },
-        failed_at_phase: 0,
+        failed_at_ms: ms(0),
         retry_receiver: None,
     };
     let view = assets
@@ -490,7 +501,7 @@ fn empty_pet_selector_rests_with_no_pet() {
         "an empty selector loads nothing"
     );
     assert_eq!(assets.previous_action, None);
-    assert_eq!(assets.jump_started_phase, None);
+    assert_eq!(assets.jump_started_ms, None);
     assert_eq!(
         assets.previous_unread_rows,
         BTreeSet::from(["agent-1".to_owned()])
@@ -594,14 +605,14 @@ fn failed_loader_settles_without_immediate_retry() {
 
 #[test]
 fn retry_due_waits_for_cooldown_then_clears() {
-    // 20s cooldown at 100ms refresh is 200 phases.
-    assert!(!retry_due(0, 0, 100));
-    assert!(!retry_due(0, 199, 100));
-    assert!(retry_due(0, 200, 100));
-    assert!(retry_due(0, 5_000, 100));
+    // 20s cooldown at 100ms refresh is 200 base frames.
+    assert!(!retry_due(ms(0), ms(0), 100));
+    assert!(!retry_due(ms(0), ms(19900), 100));
+    assert!(retry_due(ms(0), ms(20000), 100));
+    assert!(retry_due(ms(0), ms((5_000) * 100), 100));
     // The window tracks the failure point, not the origin.
-    assert!(!retry_due(1_000, 1_100, 100));
-    assert!(retry_due(1_000, 1_200, 100));
+    assert!(!retry_due(ms((1_000) * 100), ms((1_100) * 100), 100));
+    assert!(retry_due(ms((1_000) * 100), ms((1_200) * 100), 100));
 }
 
 #[test]
@@ -643,7 +654,7 @@ fn jump_plays_once_per_trigger_then_settles() {
                 REFRESH_MS
             ))
         );
-        assert_eq!(assets.jump_started_phase, Some(10));
+        assert_eq!(assets.jump_started_ms, Some(ms(1000)));
 
         let jump = model::animations().get(model::PetTrack::Jumping);
         let phases = jump
@@ -657,7 +668,7 @@ fn jump_plays_once_per_trigger_then_settles() {
             view.frame_interval,
             Some(model::track_frame_duration(steady_track, REFRESH_MS))
         );
-        assert_eq!(assets.jump_started_phase, None);
+        assert_eq!(assets.jump_started_ms, None);
     }
 }
 
@@ -679,7 +690,7 @@ fn static_mode_skips_transition_jump() {
         .expect("enabled pets produce a view");
 
     assert_eq!(view.frame_interval, None);
-    assert_eq!(assets.jump_started_phase, None);
+    assert_eq!(assets.jump_started_ms, None);
 }
 
 #[test]
@@ -843,5 +854,119 @@ fn loaded_pixel_assets(previous_action: Option<PetAction>) -> PetAssets {
         },
         previous_action,
         ..PetAssets::default()
+    }
+}
+
+fn effect_time(elapsed_ms: u64, _refresh_ms: u16) -> FrameTime {
+    ms(elapsed_ms)
+}
+
+fn frame_at(action: PetAction, elapsed_ms: u64, refresh_ms: u16) -> PetViewFrame {
+    let mut sample = frame(
+        action,
+        elapsed_ms / u64::from(refresh_ms),
+        refresh_ms,
+        Some(PetRenderTier::Cell),
+        true,
+        false,
+    );
+    sample.frame_ms = effect_time(elapsed_ms, refresh_ms);
+    sample
+}
+
+#[test]
+fn failed_load_retries_after_a_long_uptime_grid_raise() {
+    let source = PetSource::Petdex("grid-raise-retry".to_owned());
+    let mut assets = PetAssets::default();
+    assets.finish_load(
+        PetLoadRequest {
+            id: source.id().into_owned(),
+            key: cell_key(),
+        },
+        Err("offline".into()),
+        effect_time(3_600_000, 100),
+    );
+    for elapsed in [3_619_800, 3_620_000] {
+        assets.ensure_loading_with(
+            &source,
+            cell_key(),
+            effect_time(elapsed, 200),
+            200,
+            |_, _| Ok(Arc::new(LoadedPetAsset::Cell(Vec::new()))),
+        );
+        assert_eq!(
+            assets.load_state.is_loading(),
+            elapsed == 3_620_000,
+            "retry at {elapsed} ms"
+        );
+    }
+    let result = held_pet_receiver(&assets)
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    assert!(result.is_ok(), "the retry actually prepared the asset");
+}
+
+#[test]
+fn jump_ends_after_a_long_uptime_grid_raise() {
+    let mut assets = loaded_cell_assets(Some(PetAction::Running));
+    let config = enabled_config();
+    assets
+        .view(&config, frame_at(PetAction::Idle, 3_600_000, 100))
+        .unwrap();
+    let duration = model::animations()
+        .get(model::PetTrack::Jumping)
+        .loop_duration(200);
+    let end = 3_600_000 + duration.as_millis().div_ceil(200) as u64 * 200;
+    let view = assets
+        .view(&config, frame_at(PetAction::Idle, end, 200))
+        .unwrap();
+    assert_eq!(
+        view.frame_interval,
+        Some(model::track_frame_duration(model::PetTrack::Idle, 200)),
+        "jump returns to the steady track"
+    );
+    assert_eq!(assets.jump_started_ms, None);
+}
+
+#[test]
+fn backwards_sample_holds_the_failed_load_cooldown() {
+    let source = PetSource::Petdex("backwards-sample-retry".to_owned());
+    let mut assets = PetAssets::default();
+    assets.finish_load(
+        PetLoadRequest {
+            id: source.id().into_owned(),
+            key: cell_key(),
+        },
+        Err("offline".into()),
+        effect_time(1_001, 100),
+    );
+    for elapsed in [1_001, 999] {
+        assets.ensure_loading_with(
+            &source,
+            cell_key(),
+            effect_time(elapsed, 100),
+            100,
+            |_, _| panic!("a backwards sample cannot retry"),
+        );
+        assert!(!assets.load_state.is_loading());
+    }
+}
+
+#[test]
+fn backwards_sample_holds_the_jump() {
+    let mut assets = loaded_cell_assets(Some(PetAction::Running));
+    let config = enabled_config();
+    assets
+        .view(&config, frame_at(PetAction::Idle, 1_001, 100))
+        .unwrap();
+    for elapsed in [1_001, 999] {
+        let view = assets
+            .view(&config, frame_at(PetAction::Idle, elapsed, 100))
+            .unwrap();
+        assert_eq!(
+            view.frame_interval,
+            Some(model::track_frame_duration(model::PetTrack::Jumping, 100))
+        );
+        assert_eq!(assets.jump_started_ms, Some(effect_time(1_001, 100)));
     }
 }

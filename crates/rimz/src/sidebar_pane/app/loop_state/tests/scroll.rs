@@ -2197,6 +2197,15 @@ fn visible(rig: &Rig) -> usize {
         .inspect_view(|ui, _| ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms))
 }
 
+fn fixture_frame_ms(rig: &mut Rig) -> u64 {
+    duration_millis(
+        rig.view()
+            .ui()
+            .frame_ms
+            .elapsed_since(render::FrameTime::default()),
+    )
+}
+
 fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
     rig.view().ctx().anim_start = rig.state.pane.clock.now() - Duration::from_millis(elapsed_ms);
     rig.state.pane.next_frame = rig.state.pane.clock.now();
@@ -3090,7 +3099,7 @@ fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     play_clock(&mut rig);
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.view().ui().frame_ms;
+    let started = fixture_frame_ms(&mut rig);
     paint_at(&mut rig, started + 40);
     assert!(rig.view().ui().scroll_ease.in_flight());
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
@@ -3126,7 +3135,7 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     assert_eq!(visible(&rig), 0);
     assert_eq!(paints(&output), 1);
     assert!(rig.frame_active());
-    let started = rig.view().ui().frame_ms;
+    let started = fixture_frame_ms(&mut rig);
     paint_at(&mut rig, started + 100);
     assert_eq!(visible(&rig), 9);
     assert!(!rig.view().ui().scroll_ease.in_flight());
@@ -3135,7 +3144,7 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
         let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = guard.pair();
         assert_eq!(
-            render::animation_interval(&context.current, ui, &pane.ui, ui.animation_phase, false),
+            render::animation_interval(&context.current, ui, &pane.ui, ui.frame_ms, false),
             Some(animation_frame(&context.current))
         );
     }
@@ -3164,7 +3173,7 @@ fn wheel_glide_brackets_moving_frames_but_not_still_animation() {
     paint_at(&mut rig, 0);
     let mut inbox = queued([Wakeup::Scroll { down: true }]);
     dispatch(&mut rig, &mut inbox);
-    let started = rig.view().ui().frame_ms;
+    let started = fixture_frame_ms(&mut rig);
     let mut previous = visible(&rig);
     let mut moving = Vec::new();
     let mut frames = Vec::new();
@@ -3196,7 +3205,7 @@ fn click_after_wheel_ease_hits_the_settled_frame() {
     let (mut rig, _) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.view().ui().frame_ms;
+    let started = fixture_frame_ms(&mut rig);
     for elapsed in [16, 48, 100] {
         paint_at(&mut rig, started + elapsed);
     }
@@ -3237,7 +3246,7 @@ fn late_wheel_frame_matches_regular_playback() {
     for rig in [&mut regular, &mut late] {
         let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
         dispatch(rig, &mut inbox);
-        starts.push(rig.view().ui().frame_ms);
+        starts.push(fixture_frame_ms(rig));
     }
     for elapsed in [16, 32, 48, 64] {
         paint_at(&mut regular, starts[0] + elapsed);

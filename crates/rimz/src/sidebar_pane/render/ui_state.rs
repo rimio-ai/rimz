@@ -56,6 +56,29 @@ pub(in crate::sidebar_pane) enum EntryCursor {
     Older,
 }
 
+/// Driver-clock milliseconds since the view context's animation start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct FrameTime(u64);
+
+impl FrameTime {
+    pub(in crate::sidebar_pane) const fn from_millis(elapsed_ms: u64) -> Self {
+        Self(elapsed_ms)
+    }
+
+    pub(in crate::sidebar_pane) fn elapsed_since(self, earlier: Self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.0.saturating_sub(earlier.0))
+    }
+
+    pub(in crate::sidebar_pane) fn elapsed_frames_since(
+        self,
+        earlier: Self,
+        refresh_ms: u16,
+    ) -> u64 {
+        let grid = u64::from(refresh_ms.max(1));
+        (self.0 / grid).saturating_sub(earlier.0 / grid)
+    }
+}
+
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
@@ -67,7 +90,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Last agreed working-pane focus, finer-grained than the owning card baseline.
     pub(in crate::sidebar_pane) entry_focus: Option<PaneId>,
     pub(in crate::sidebar_pane) help_visible: bool,
-    /// Driver-clock phase for effects, money rolls, scrollbar fade, and pets.
+    /// Driver-clock phase for cyclic sampling only.
     /// Frame-sequence heads read `head_step` instead, so late paints never skip frames.
     pub(in crate::sidebar_pane) animation_phase: u64,
     /// Frame-sequence step, advanced only by routed composition, once per new phase.
@@ -76,14 +99,15 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Phase and `refresh_ms` at the last head advance, or at the first composition
     /// or grid change; absent before painting.
     pub(in crate::sidebar_pane) head_anchor: Option<(u64, u16)>,
-    /// Playback pins cosmetic cycles and head steps outside motion windows,
-    /// leaving money rolls on `animation_phase`.
+    /// Playback pins cosmetic cycles, head steps, and pet frame time outside motion windows,
+    /// leaving money rolls and scrollbar fade on the unpinned frame clock.
     pub(in crate::sidebar_pane) cosmetic_phase: Option<u64>,
-    /// Elapsed milliseconds since the loop's monotonic base, stamped beside the phase.
-    pub(in crate::sidebar_pane) frame_ms: u64,
+    /// The one clock for effect lifetimes: elapsed driver milliseconds since the view's
+    /// animation start, stamped beside the cyclic phase.
+    pub(in crate::sidebar_pane) frame_ms: FrameTime,
     /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
-    /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
+    /// renderer at `frame_ms`; the serve loop keeps the fast tick alive
     /// while a roll is in flight. Crate-internal: an implementation detail of the
     /// renderer, not part of the public `ViewState` surface.
     pub(in crate::sidebar_pane) tally: TallyAnim,
@@ -94,7 +118,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// keyed by the row's durable id so a reorder or refresh re-anchors a
     /// climb to its agent. Folded next to `tally` on each data refresh
     /// (`CostRolls::observe`, which also prunes departed rows) and read by the
-    /// card at `animation_phase`; ORed into the serve loop's animation gate
+    /// card at `frame_ms`; ORed into the serve loop's animation gate
     /// beside the tally. Crate-internal, like `tally`.
     pub(in crate::sidebar_pane) cost_rolls: CostRolls,
     /// The pane the highlight is pinned to — selection keyed by identity, not

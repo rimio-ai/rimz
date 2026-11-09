@@ -105,7 +105,7 @@ fn write_back(ui: &mut ViewState, pane_ui: &mut UiState, frame: compose::Compose
     pane_ui.interactions = frame.interactions;
     ui.scrollbar.shift(frame.correction);
     ui.scrollbar
-        .observe(frame.visible_scroll_offset, ui.animation_phase);
+        .observe(frame.visible_scroll_offset, ui.frame_ms);
     ui.scroll_ease = frame.scroll_ease;
     ui.scroll_ease.observe(frame.scroll_offset, ui.frame_ms);
     ui.scroll_offset = frame.scroll_offset;
@@ -180,7 +180,7 @@ proptest! {
         let mut ui = ViewState::default();
         let mut pane_ui = UiState::default();
         for (step, (action, value)) in steps.into_iter().enumerate() {
-            ui.frame_ms += 40;
+            ui.frame_ms = ms((step as u64 + 1) * 40);
             ui.animation_phase += 1;
             match action {
                 0 => {

@@ -607,3 +607,49 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"))
     );
 }
+
+#[test]
+fn coviewer_backwards_sample_holds_money_and_fade() {
+    let views = views();
+    let mut first = shared_rig(views.clone(), 0, 2);
+    let mut second = shared_rig(views, 0, 2);
+    let clock = LoopClock::play(Timestamp::now());
+    let start = clock.now();
+    for rig in [&mut first, &mut second] {
+        rig.state.pane.clock = clock.clone();
+        rig.view().ctx().anim_start = start;
+        rig.state
+            .draw_frame(&mut rig.terminal, start, false)
+            .unwrap();
+    }
+    clock.advance(Duration::from_millis(1_001));
+    first.state.with_view_for_test(Route::READ, |pane, v| {
+        for usd in [1.0, 5.0] {
+            v.context.current.today_spend_live_usd = Some(usd);
+            v.context.fold_spend_rolls(v.state, &pane.clock);
+        }
+        v.state.scrollbar.observe(1, v.state.frame_ms);
+        v.state.scrollbar.observe(0, v.state.frame_ms);
+    });
+    for (pane, elapsed) in [(0, 1_001), (1, 999), (0, 1_001)] {
+        let rig = if pane == 0 { &mut first } else { &mut second };
+        rig.state
+            .draw_frame(
+                &mut rig.terminal,
+                start + Duration::from_millis(elapsed),
+                false,
+            )
+            .unwrap();
+        rig.state.inspect_view(|ui, context| {
+            let refresh_ms = context.current.theme.display.resolved_refresh_ms();
+            assert_eq!(
+                ui.tally.today_usd.display(5.0, ui.frame_ms, refresh_ms),
+                1.0
+            );
+            assert!(ui.tally.any_rolling(ui.frame_ms, refresh_ms));
+            assert!(!ui.tally.today_usd.flashing(ui.frame_ms, refresh_ms));
+            assert!(ui.scrollbar.visible(ui.frame_ms, refresh_ms));
+            assert!(ui.scrollbar.fading(ui.frame_ms, refresh_ms));
+        });
+    }
+}

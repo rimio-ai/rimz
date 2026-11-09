@@ -529,9 +529,10 @@ impl LoopState {
     #[cfg(feature = "testkit")]
     pub(super) fn play_frame_settled(&self) -> bool {
         !self.pane.dirty
-            && self.inspect_view(|ui, _| {
-                !ui.tally.any_rolling(ui.animation_phase)
-                    && !ui.cost_rolls.any_rolling(ui.animation_phase)
+            && self.inspect_view(|ui, context| {
+                let refresh_ms = context.current.theme.display.resolved_refresh_ms();
+                !ui.tally.any_rolling(ui.frame_ms, refresh_ms)
+                    && !ui.cost_rolls.any_rolling(ui.frame_ms, refresh_ms)
                     && !ui.scroll_ease.in_flight()
             })
     }
@@ -1936,7 +1937,7 @@ impl LoopState {
                     &v.context.current,
                     v.state,
                     &state.ui,
-                    v.state.animation_phase,
+                    v.state.frame_ms,
                     alert_active(v.context),
                 )
                 .unwrap_or(animation_frame(&v.context.current));
@@ -2349,7 +2350,7 @@ impl LoopState {
                 &v.context.current,
                 v.state,
                 &state.ui,
-                v.state.animation_phase,
+                v.state.frame_ms,
                 alert_active(v.context),
             );
             (
@@ -2541,7 +2542,7 @@ impl PaneState {
                 &v.context.current,
                 v.state,
                 &self.ui,
-                clock.phase,
+                clock.frame_ms(),
                 alert_active,
             )
             .is_some();

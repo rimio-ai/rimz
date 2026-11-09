@@ -19,7 +19,7 @@ fn compacting_non_actionable_rows_request_the_fast_grid() {
                 "{status:?}"
             );
             assert_eq!(
-                animation_interval(&snapshot, &view, &pane_ui, 0, false),
+                animation_interval(&snapshot, &view, &pane_ui, ms(0), false),
                 Some(Duration::from_millis(u64::from(refresh_ms))),
                 "{status:?}, refresh {refresh_ms}"
             );
@@ -41,7 +41,7 @@ fn compacting_actionable_rows_keep_the_status_head_and_cadence() {
         let view = selected_ui();
         let mut pane_ui = UiState::default();
         let theme = pane_ui.theme(&snapshot.theme);
-        let interval = animation_interval(&snapshot, &view, &pane_ui, 0, false);
+        let interval = animation_interval(&snapshot, &view, &pane_ui, ms(0), false);
         snapshot
             .rows_mut()
             .next()
@@ -54,7 +54,7 @@ fn compacting_actionable_rows_keep_the_status_head_and_cadence() {
             AnimationCadence::Fast
         );
         assert_eq!(
-            animation_interval(&snapshot, &view, &pane_ui, 0, false),
+            animation_interval(&snapshot, &view, &pane_ui, ms(0), false),
             interval
         );
         let screen = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
@@ -78,12 +78,12 @@ fn wheel_ease_overrides_fast_pet_help_and_fade_grids() {
     let mut ui = selected_ui();
     let mut pane_ui = UiState::default();
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(9, 0);
+    ui.scroll_ease.observe(9, ms(0));
     for refresh_ms in [16, 100, 1000] {
         snapshot.theme.display.refresh_ms = refresh_ms;
         pane_ui.theme(&snapshot.theme);
         assert_eq!(
-            animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+            animation_interval(&snapshot, &ui, &pane_ui, ms(0), false),
             Some(scroll_ease::SCROLL_EASE_FRAME)
         );
     }
@@ -101,14 +101,14 @@ fn wheel_ease_overrides_fast_pet_help_and_fade_grids() {
     });
     pane_ui.theme(&snapshot.theme);
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(0), false),
         Some(scroll_ease::SCROLL_EASE_FRAME)
     );
-    ui.scrollbar.observe(0, 0);
-    ui.scrollbar.observe(1, 1);
+    ui.scrollbar.observe(0, ms(0));
+    ui.scrollbar.observe(1, ms(100));
     ui.help_visible = true;
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 1, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(100), false),
         Some(scroll_ease::SCROLL_EASE_FRAME)
     );
 }
@@ -120,55 +120,57 @@ fn settling_draw_returns_to_fade_grid_then_idle() {
     let mut ui = selected_ui();
     let mut pane_ui = UiState::default();
     pane_ui.theme(&snapshot.theme);
-    ui.scrollbar.observe(0, 0);
+    ui.scrollbar.observe(0, ms(0));
     ui.scroll_ease.arm();
-    ui.scroll_ease.observe(9, 0);
-    // An overdue flight still needs its final paint, even when the observed phase is ahead.
+    ui.scroll_ease.observe(9, ms(0));
+    // An overdue flight still needs its final paint, even when the observed frame time is ahead.
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 100, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false),
         Some(scroll_ease::SCROLL_EASE_FRAME)
     );
-    ui.scroll_ease.observe(9, 100);
-    ui.scrollbar.observe(9, 1);
+    ui.scroll_ease.observe(9, ms(100));
+    ui.scrollbar.observe(9, ms(100));
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 1, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(100), false),
         Some(Duration::from_millis(100))
     );
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 100, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false),
         None
     );
 }
 
 #[test]
-fn animation_gate_uses_observed_phase_for_money_and_scrollbar() {
+fn animation_gate_uses_observed_frame_time_for_money_and_scrollbar() {
     let ws = workspace();
     let snapshot = snapshot(&ws);
     let mut ui = selected_ui();
     let mut pane_ui = UiState::default();
     pane_ui.theme(&snapshot.theme);
-    ui.tally.observe(1.0, 0);
-    ui.tally.observe(5.0, 1);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 1, false).is_some());
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 100, false).is_none());
+    ui.tally.observe(1.0, ms(0), 100);
+    ui.tally.observe(5.0, ms(100), 100);
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(100), false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false).is_none());
     ui.animation_phase = 100;
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 1, false).is_some());
+    ui.frame_ms = ms(10000);
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(100), false).is_some());
 
     ui.tally = Default::default();
     ui.cost_rolls
-        .observe(std::iter::once(("agent".to_owned(), 1.0)), 0);
+        .observe(std::iter::once(("agent".to_owned(), 1.0)), ms(0), 100);
     ui.cost_rolls
-        .observe(std::iter::once(("agent".to_owned(), 5.0)), 1);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 1, false).is_some());
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 100, false).is_none());
+        .observe(std::iter::once(("agent".to_owned(), 5.0)), ms(100), 100);
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(100), false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false).is_none());
 
     ui.cost_rolls = Default::default();
-    ui.scrollbar.observe(0, 0);
-    ui.scrollbar.observe(1, 1);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 1, false).is_some());
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 100, false).is_none());
+    ui.scrollbar.observe(0, ms(0));
+    ui.scrollbar.observe(1, ms(100));
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(100), false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false).is_none());
     ui.animation_phase = 0;
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 100, false).is_none());
+    ui.frame_ms = ms(0);
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(10000), false).is_none());
 }
 
 #[test]
@@ -198,7 +200,7 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     };
     pane_ui.theme(&snapshot.theme);
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         Duration::from_millis(625)
     );
     std::sync::Arc::make_mut(
@@ -208,7 +210,7 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     .unwrap()
     .status = crate::agents::AgentStatus::Running;
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
     );
     std::sync::Arc::make_mut(
@@ -217,9 +219,10 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     .as_agent_mut()
     .unwrap()
     .status = crate::agents::AgentStatus::Waiting;
-    ui.tally.observe(1.0, 0);
-    ui.tally.observe(5.0, 1);
+    ui.tally.observe(1.0, ms(0), 100);
+    ui.tally.observe(5.0, ms(100), 100);
     ui.animation_phase = 1;
+    ui.frame_ms = ms(100);
     let money = crate::sidebar::timing::money_animation_frame(
         snapshot.theme.display.resolved_refresh_ms(),
         CLICK_PHASES,
@@ -227,8 +230,7 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     for pet in [Duration::from_millis(625), Duration::from_millis(50)] {
         pane_ui.pet.as_mut().unwrap().frame_interval = Some(pet);
         assert_eq!(
-            animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false)
-                .expect("animated"),
+            animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
             pet.min(money)
         );
     }
@@ -295,9 +297,10 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         pr_url: None,
     }]
     .into();
-    assert!(animation_interval(&slow, &selected_ui(), &UiState::default(), 0, false).is_some());
+    assert!(animation_interval(&slow, &selected_ui(), &UiState::default(), ms(0), false).is_some());
     assert_eq!(
-        animation_interval(&slow, &selected_ui(), &UiState::default(), 0, false).expect("animated"),
+        animation_interval(&slow, &selected_ui(), &UiState::default(), ms(0), false)
+            .expect("animated"),
         crate::sidebar::timing::animation_frame(
             crate::config::DisplayConfig::default().resolved_refresh_ms()
         ),
@@ -309,7 +312,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     pane_ui.theme(&slow.theme);
 
     assert_eq!(
-        animation_interval(&slow, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&slow, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         crate::sidebar::timing::BREATH_ANIMATION_FRAME
     );
 
@@ -318,7 +321,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         .unwrap()
         .status = crate::agents::AgentStatus::Running;
     assert_eq!(
-        animation_interval(&slow, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&slow, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         crate::sidebar::timing::animation_frame(
             crate::config::DisplayConfig::default().resolved_refresh_ms()
         )
@@ -351,7 +354,7 @@ fn held_card_with_running_child_keeps_the_fast_grid() {
     ui.held_expansions.insert("parent".into());
     pane_ui.theme(&snapshot.theme);
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(0), false),
         Some(crate::sidebar::timing::animation_frame(
             snapshot.theme.display.resolved_refresh_ms()
         ))
@@ -384,12 +387,12 @@ fn held_fresh_teammate_does_not_keep_the_breath_grid() {
     pane_ui.theme(&snapshot.theme);
     ui.held_expansions.insert("parent".into());
     assert_ne!(
-        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(0), false),
         Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
     );
     ui.held_expansions.insert("teammate".into());
     assert_ne!(
-        animation_interval(&snapshot, &ui, &pane_ui, 0, false),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(0), false),
         Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
     );
 }
@@ -420,8 +423,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     let mut ui = selected_ui();
     let mut pane_ui = UiState::default();
     pane_ui.theme(&snapshot.theme);
-    let fast =
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false).expect("animated");
+    let fast = animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated");
     assert_eq!(
         animation_cadence(
             &snapshot,
@@ -429,19 +431,19 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         ),
         AnimationCadence::None
     );
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
     assert_eq!(
         fast,
         crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
     );
 
     ui.delegation_overrides.insert(row_id.clone(), false);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
     ui.delegation_overrides.clear();
     ui.selected_index = Some(usize::MAX);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
     ui.delegation_overrides.insert(row_id.clone(), true);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
 
     // A read done card quiet past the stale threshold: the click-open section
     // keeps the full card and its motion; closed, the stale line draws no
@@ -453,7 +455,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     row.unread = false;
     row.last_activity = snapshot.now - std::time::Duration::from_secs(86_401);
     row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Success;
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
     let theme = Theme::fixed(false);
     let rolls = CostRolls::default();
     let mut ctx = test_row_ctx(&snapshot, &theme, 70, usize::MAX, 0, &rolls);
@@ -463,7 +465,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             .join("\n");
     assert!(open.contains("cargo test"), "{open}");
     ui.delegation_overrides.remove(&row_id);
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
     ui.delegation_overrides.insert(row_id, true);
     let row = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -538,7 +540,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             armed_at: None,
         }];
         assert_eq!(
-            animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some(),
+            animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some(),
             moves
         );
     }
@@ -557,7 +559,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         }))
         .unwrap(),
     ];
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
     // Only a running child's head moves on the fast grid; a live child resting
     // in any other status, like a finished one, leaves the open section cold.
     for status in [
@@ -575,7 +577,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         .sub_agents[0]
             .status = status;
         assert!(
-            animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none(),
+            animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none(),
             "{status:?}"
         );
     }
@@ -598,7 +600,7 @@ fn selected_blank_idle_agent_does_not_request_the_breath_grid() {
     let mut pane_selected = UiState::default();
     pane_selected.theme(&snapshot.theme);
     assert_eq!(
-        animation_interval(&snapshot, &selected, &pane_selected, 0, false),
+        animation_interval(&snapshot, &selected, &pane_selected, ms(0), false),
         None
     );
 
@@ -608,7 +610,9 @@ fn selected_blank_idle_agent_does_not_request_the_breath_grid() {
     };
     let mut pane_off_selection = UiState::default();
     pane_off_selection.theme(&snapshot.theme);
-    assert!(animation_interval(&snapshot, &off_selection, &pane_off_selection, 0, false).is_none());
+    assert!(
+        animation_interval(&snapshot, &off_selection, &pane_off_selection, ms(0), false).is_none()
+    );
 
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -617,7 +621,7 @@ fn selected_blank_idle_agent_does_not_request_the_breath_grid() {
     .unwrap()
     .task = Some("warm up".to_owned());
     pane_selected.theme(&snapshot.theme);
-    assert!(animation_interval(&snapshot, &selected, &pane_selected, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &selected, &pane_selected, ms(0), false).is_none());
 }
 
 #[test]
@@ -644,7 +648,7 @@ fn unselected_blank_team_member_does_not_keep_breath_grid_awake() {
     let mut pane_ui = UiState::default();
     pane_ui.theme(&snapshot.theme);
 
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
 }
 
 #[test]
@@ -659,9 +663,9 @@ fn help_popup_keeps_animation_grid_hot() {
     let mut pane_ui = UiState::default();
     pane_ui.theme(&snapshot.theme);
 
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         crate::sidebar::timing::animation_frame(
             crate::config::DisplayConfig::default().resolved_refresh_ms()
         )
@@ -693,9 +697,9 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     };
     pane_ui.theme(&snapshot.theme);
 
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false).expect("animated"),
+        animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
         Duration::from_millis(625)
     );
 
@@ -707,7 +711,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
             &snapshot,
             &jumping_ui,
             &pane_jumping_ui,
-            jumping_ui.animation_phase,
+            jumping_ui.frame_ms,
             false
         )
         .expect("animated"),
@@ -718,13 +722,13 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
     pane_ui.theme(&snapshot.theme);
     pane_ui.pet.as_mut().expect("pet").frame_interval = None;
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
 
     snapshot.theme.animations.thinking =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
     pane_ui.theme(&snapshot.theme);
     assert!(
-        animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_none(),
+        animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none(),
         "a static effect with omitted frames quiets spinner-role pets too"
     );
 }
@@ -757,9 +761,9 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
 
     assert!(dashboard_present(&snapshot, false));
     assert!(!dashboard_present(&snapshot, alert_active));
-    assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, alert_active).is_none());
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), alert_active).is_none());
     assert_eq!(
-        animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, alert_active).unwrap_or(
+        animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, alert_active).unwrap_or(
             crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
         ),
         crate::sidebar::timing::animation_frame(
@@ -772,10 +776,9 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
         .unwrap()
         .pet_body_enabled()
     {
-        assert!(animation_interval(&snapshot, &ui, &pane_ui, 0, false).is_some());
+        assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
         assert_eq!(
-            animation_interval(&snapshot, &ui, &pane_ui, ui.animation_phase, false)
-                .expect("animated"),
+            animation_interval(&snapshot, &ui, &pane_ui, ui.frame_ms, false).expect("animated"),
             Duration::from_millis(625)
         );
     }
@@ -980,7 +983,7 @@ fn fresh_cards_never_request_the_breath_grid() {
             held.clone(),
         ]
         .map(|ui| {
-            animation_interval(snapshot, &ui, &pane_ui, 0, false)
+            animation_interval(snapshot, &ui, &pane_ui, ms(0), false)
                 == Some(crate::sidebar::timing::BREATH_ANIMATION_FRAME)
         })
     });
@@ -1393,12 +1396,13 @@ fn render_card_cost_ticks_toward_the_target() {
     let mut ui = ui_at_phase(0);
     let pane_ui = UiState::default();
     ui.cost_rolls
-        .observe(vec![("claude-1".to_owned(), 1.0)].into_iter(), 0);
+        .observe(vec![("claude-1".to_owned(), 1.0)].into_iter(), ms(0), 100);
     ui.cost_rolls
-        .observe(vec![("claude-1".to_owned(), 1.27)].into_iter(), 0);
+        .observe(vec![("claude-1".to_owned(), 1.27)].into_iter(), ms(0), 100);
 
     // One full click in — the roll sweeps every second animation phase.
     ui.animation_phase = 2;
+    ui.frame_ms = ms(200);
     let mid = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 44, 20);
     assert!(
         mid.contains("$1.11"),
@@ -1406,6 +1410,7 @@ fn render_card_cost_ticks_toward_the_target() {
     );
 
     ui.animation_phase = 60;
+    ui.frame_ms = ms(6000);
     let settled = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 44, 20);
     assert!(
         settled.contains("$1.27"),

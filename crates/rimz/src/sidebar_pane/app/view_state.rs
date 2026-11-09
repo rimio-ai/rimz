@@ -724,12 +724,8 @@ impl ViewContext {
     }
 
     pub(super) fn fold_spend_rolls(&self, ui: &mut ViewState, clock: &LoopClock) {
-        frame_clock(
-            clock.now(),
-            self.anim_start,
-            self.current.theme.display.resolved_refresh_ms(),
-        )
-        .stamp(ui);
+        let refresh_ms = self.current.theme.display.resolved_refresh_ms();
+        frame_clock(clock.now(), self.anim_start, refresh_ms).stamp(ui);
         // Fold the fresh headline spend into the count-up: a higher figure starts a
         // stepped roll that the next frames paint, a reset or first value snaps,
         // and an unchanged one is a no-op that leaves a climb in flight. The live
@@ -740,7 +736,7 @@ impl ViewContext {
         // folded state on its next frame boundary; this path never draws.
         if let Some((usd, epoch)) = render::cockpit_spend_target(&self.current) {
             let shown = ui.spend_ratchet.observe(epoch, usd);
-            ui.tally.observe(shown, ui.animation_phase);
+            ui.tally.observe(shown, ui.frame_ms, refresh_ms);
         }
         // The per-card cost rolls fold beside it: live cards observe session cost,
         // while a finished cohort observes each durable seat's lifetime cost.
@@ -753,7 +749,8 @@ impl ViewContext {
                     render::agent_card_cost_usd(group, row).map(|usd| (row.id.clone(), usd))
                 })
             }),
-            ui.animation_phase,
+            ui.frame_ms,
+            refresh_ms,
         );
     }
 }

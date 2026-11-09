@@ -1,9 +1,9 @@
-//! Driver-clock phase stamps and frame grids, with receive and focus-resume timing bounds.
+//! Driver-clock frame stamps and frame grids, with receive and focus-resume timing bounds.
 //! Frame-sequence heads step separately, only when a routed frame is composed.
 
 use std::time::{Duration, Instant};
 
-use crate::sidebar_pane::render::ViewState;
+use crate::sidebar_pane::render::{FrameTime, ViewState};
 use crate::store::snapshot::SidebarSnapshot;
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
@@ -35,9 +35,13 @@ pub(super) struct FrameClock {
 }
 
 impl FrameClock {
+    pub(super) fn frame_ms(&self) -> FrameTime {
+        FrameTime::from_millis(self.elapsed_ms)
+    }
+
     pub(super) fn stamp(&self, ui: &mut ViewState) {
         ui.animation_phase = self.phase;
-        ui.frame_ms = self.elapsed_ms;
+        ui.frame_ms = self.frame_ms();
     }
 }
 
