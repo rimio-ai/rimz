@@ -830,6 +830,7 @@ fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
         sample(&mut views, &clock, &[(1, 10), (2, 10)]);
         let source = views.input(&pane(10), clock.now());
         source
+            .toggles
             .expanded_groups
             .insert(snapshot.worktree_groups[0].key.clone());
         source.selected_index = Some(12);

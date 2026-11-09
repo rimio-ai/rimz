@@ -1,24 +1,25 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use std::time::Duration;
 
 #[test]
 fn needs_you_toggle_and_empty_auto_clear_keep_the_query() {
     let mut snapshot = filtered_team_snapshot();
     let mut ui = ViewState::default();
-    ui.make_up_filter.query = Some("team".into());
+    ui.toggles.make_up_filter.query = Some("team".into());
     assert!(toggle_make_up_filter(
         &mut ui,
         &snapshot,
         BodyFilter::NeedsYou
     ));
-    assert_eq!(ui.make_up_filter.filter, Some(BodyFilter::NeedsYou));
+    assert_eq!(ui.toggles.make_up_filter.filter, Some(BodyFilter::NeedsYou));
     assert_eq!(ui.visible_roster(&snapshot).len(), 2);
     assert!(toggle_make_up_filter(
         &mut ui,
         &snapshot,
         BodyFilter::NeedsYou
     ));
-    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
     assert!(toggle_make_up_filter(
         &mut ui,
         &snapshot,
@@ -30,8 +31,8 @@ fn needs_you_toggle_and_empty_auto_clear_keep_the_query() {
         }
     }
     reconcile_selection(&mut ui, &snapshot, None);
-    assert_eq!(ui.make_up_filter.filter, None);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("team"));
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("team"));
     assert!(!toggle_make_up_filter(
         &mut ui,
         &snapshot,
@@ -268,7 +269,7 @@ fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
             true,
         );
         assert_eq!(outcome, expected, "active-alert key {ch}");
-        assert_eq!(ui.search_draft, None);
+        assert_eq!(ui.toggles.search_draft, None);
     }
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
@@ -282,7 +283,10 @@ fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
         "Esc with nothing else to peel dismisses the alert"
     );
     let mut ui = render::ViewState {
-        help_visible: true,
+        toggles: PresentationToggles {
+            help_visible: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -297,8 +301,8 @@ fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
         ),
         InputOutcome::redraw(),
     );
-    assert!(!ui.help_visible);
-    assert_eq!(ui.search_draft, None);
+    assert!(!ui.toggles.help_visible);
+    assert_eq!(ui.toggles.search_draft, None);
 }
 
 #[test]
@@ -308,7 +312,7 @@ fn search_typing_swallows_commands_and_rebound_chords() {
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('/'));
-    assert_eq!(ui.search_draft.as_deref(), Some(""));
+    assert_eq!(ui.toggles.search_draft.as_deref(), Some(""));
     for ch in "njqr?A1é".chars() {
         let outcome = search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char(ch));
         assert!(outcome.effects.is_empty(), "typing {ch} must not act");
@@ -320,15 +324,15 @@ fn search_typing_swallows_commands_and_rebound_chords() {
         KeyCode::Char('b'),
         KeyModifiers::CONTROL,
     );
-    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1é"));
-    assert!(!ui.help_visible);
+    assert_eq!(ui.toggles.search_draft.as_deref(), Some("njqr?A1é"));
+    assert!(!ui.toggles.help_visible);
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::default(),
         "draft is not committed"
     );
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Backspace);
-    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1"));
+    assert_eq!(ui.toggles.search_draft.as_deref(), Some("njqr?A1"));
 }
 
 #[test]
@@ -362,7 +366,7 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
         "fold must preserve the draft selection"
     );
     let outcome = search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Enter);
-    assert_eq!(ui.search_draft, None);
+    assert_eq!(ui.toggles.search_draft, None);
     assert_eq!(
         outcome.effects,
         vec![
@@ -528,7 +532,7 @@ fn search_draft_composes_with_an_active_status_pick() {
     }
     assert_eq!(ui.visible_roster(&snapshot).len(), 1);
     assert_search_selection(&ui, &snapshot);
-    assert_eq!(ui.make_up_filter.query, None, "draft stays local");
+    assert_eq!(ui.toggles.make_up_filter.query, None, "draft stays local");
     assert_eq!(
         ui.selected_pane,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"))
@@ -540,8 +544,11 @@ fn pick_click_toggle_preserves_committed_query() {
     use crate::agents::AgentStatus;
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            query: Some("main".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                query: Some("main".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -563,7 +570,7 @@ fn pick_click_toggle_preserves_committed_query() {
             filter,
             query: Some("main".to_owned()),
         };
-        assert_eq!(ui.make_up_filter, lens);
+        assert_eq!(ui.toggles.make_up_filter, lens);
         assert_eq!(outcome.effects, vec![InputEffect::SyncFilter(lens)]);
     }
 }
@@ -574,28 +581,31 @@ fn search_escape_keeps_the_query_and_empty_exits_clear_only_it() {
     let snapshot = clickable_block_snapshot(&workspace());
     for exit in [KeyCode::Esc, KeyCode::Backspace, KeyCode::Enter] {
         let mut ui = render::ViewState {
-            make_up_filter: BodyLens {
-                filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-                query: Some("cla".to_owned()),
+            toggles: PresentationToggles {
+                make_up_filter: BodyLens {
+                    filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+                    query: Some("cla".to_owned()),
+                },
+                ..Default::default()
             },
             ..Default::default()
         };
         let mut pane_ui = UiState::default();
         search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('/'));
-        assert_eq!(ui.search_draft.as_deref(), Some("cla"));
+        assert_eq!(ui.toggles.search_draft.as_deref(), Some("cla"));
         if exit != KeyCode::Esc {
             for _ in 0..3 {
                 search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Backspace);
             }
         }
         let outcome = search_key(&mut ui, &mut pane_ui, &snapshot, exit);
-        assert_eq!(ui.search_draft, None);
+        assert_eq!(ui.toggles.search_draft, None);
         if exit == KeyCode::Esc {
-            assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+            assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("cla"));
             assert_eq!(outcome, InputOutcome::redraw(), "Esc drops only the draft");
             continue;
         }
-        assert_eq!(ui.make_up_filter.query, None);
+        assert_eq!(ui.toggles.make_up_filter.query, None);
         assert_eq!(
             outcome.effects,
             vec![InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
@@ -616,9 +626,12 @@ fn normal_escape_peels_the_query_before_the_alert_even_during_an_alert() {
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
     for alert_active in [false, true] {
         let mut ui = render::ViewState {
-            make_up_filter: BodyLens {
-                filter: Some(filter),
-                query: Some("no match".to_owned()),
+            toggles: PresentationToggles {
+                make_up_filter: BodyLens {
+                    filter: Some(filter),
+                    query: Some("no match".to_owned()),
+                },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -641,7 +654,7 @@ fn normal_escape_peels_the_query_before_the_alert_even_during_an_alert() {
                 alert_active,
             );
             assert_eq!(outcome, expected);
-            assert_eq!(ui.make_up_filter, BodyLens::from(filter));
+            assert_eq!(ui.toggles.make_up_filter, BodyLens::from(filter));
             assert_eq!(ui.selected_pane, Some(baseline.clone()));
             assert_eq!(ui.selected_index, Some(0));
         }
@@ -671,18 +684,21 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
     ] {
         for query in [None, Some("cla".to_owned())] {
             let mut ui = render::ViewState {
-                make_up_filter: BodyLens {
-                    query: query.clone(),
+                toggles: PresentationToggles {
+                    make_up_filter: BodyLens {
+                        query: query.clone(),
+                        ..Default::default()
+                    },
+                    search_draft: Some(
+                        if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
+                            "zsh"
+                        } else {
+                            "cla"
+                        }
+                        .to_owned(),
+                    ),
                     ..Default::default()
                 },
-                search_draft: Some(
-                    if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
-                        "zsh"
-                    } else {
-                        "cla"
-                    }
-                    .to_owned(),
-                ),
                 ..Default::default()
             };
             let mut pane_ui = UiState::default();
@@ -709,8 +725,8 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
                 &keymap,
                 false,
             );
-            assert_eq!(ui.search_draft, None);
-            assert_eq!(ui.make_up_filter.query, None);
+            assert_eq!(ui.toggles.search_draft, None);
+            assert_eq!(ui.toggles.make_up_filter.query, None);
             let mut effects = Vec::new();
             if query.is_some() {
                 effects.push(InputEffect::SyncFilter(BodyLens::default()));
@@ -733,7 +749,10 @@ fn departed_painted_row_click_does_not_commit_a_search() {
     use super::super::super::loop_state::handle_wakeup;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = render::ViewState {
-        search_draft: Some("cla".to_owned()),
+        toggles: PresentationToggles {
+            search_draft: Some("cla".to_owned()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState {
@@ -751,7 +770,7 @@ fn departed_painted_row_click_does_not_commit_a_search() {
         false,
     );
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.search_draft.as_deref(), Some("cla"));
+    assert_eq!(ui.toggles.search_draft.as_deref(), Some("cla"));
     assert_eq!(ui.selected_pane, None);
 }
 
@@ -770,7 +789,10 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
         HitTarget::ToggleGroup("/repo/main".into()),
     ] {
         let mut ui = render::ViewState {
-            search_draft: Some("cla".to_owned()),
+            toggles: PresentationToggles {
+                search_draft: Some("cla".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut pane_ui = UiState {
@@ -798,8 +820,8 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
             expected.filter = Some(filter);
             effects.push(InputEffect::SyncFilter(expected.clone()));
         }
-        assert_eq!(ui.search_draft, None);
-        assert_eq!(ui.make_up_filter, expected);
+        assert_eq!(ui.toggles.search_draft, None);
+        assert_eq!(ui.toggles.make_up_filter, expected);
         assert_eq!(outcome.effects, effects);
     }
 
@@ -829,7 +851,7 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
             ))]
         }
     );
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("zsh"));
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("zsh"));
 }
 
 #[test]
@@ -877,7 +899,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
         &crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]),
         false,
     );
-    assert_eq!(ui.search_draft.as_deref(), Some("c"));
+    assert_eq!(ui.toggles.search_draft.as_deref(), Some("c"));
     pane_ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
     remember_roster(&mut ui, &mut pane_ui, &snapshot);
     let outcome = super::super::super::loop_state::handle_wakeup(
@@ -888,7 +910,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
         &crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]),
         false,
     );
-    assert_eq!(ui.search_draft, None);
+    assert_eq!(ui.toggles.search_draft, None);
     assert_eq!(
         outcome.effects,
         vec![InputEffect::Focus(PaneId::from_parts(
@@ -899,7 +921,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('/'));
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('!'));
     let outcome = search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Enter);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("!"));
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("!"));
     assert_eq!(
         outcome.effects.len(),
         1,
@@ -928,7 +950,7 @@ fn n_walks_the_searched_roster_and_the_inbox_without_a_search() {
         search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char(ch));
     }
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Enter);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("cla"));
     let panes: Vec<PaneId> = ui
         .visible_roster(&snapshot)
         .rows()
@@ -954,9 +976,9 @@ fn n_walks_the_searched_roster_and_the_inbox_without_a_search() {
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('f'));
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('w'));
     assert_eq!(ui.visible_roster(&snapshot).len(), 1);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("cla"));
     search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('F'));
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
     let inbox = [PaneId::from_parts(MuxName::Zellij, "terminal_11"), outside];
     let outcome = search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Char('n'));
     assert!(
@@ -970,12 +992,15 @@ fn escape_peels_the_draft_then_the_search_then_the_notice() {
     use ratatui::crossterm::event::KeyCode;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            query: Some("cla".to_owned()),
+        notice: Some("sidebar last: no previous card".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                query: Some("cla".to_owned()),
+                ..Default::default()
+            },
+            search_draft: Some("clax".to_owned()),
             ..Default::default()
         },
-        search_draft: Some("clax".to_owned()),
-        notice: Some("sidebar last: no previous card".to_owned()),
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -983,14 +1008,14 @@ fn escape_peels_the_draft_then_the_search_then_the_notice() {
         search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Esc),
         InputOutcome::redraw()
     );
-    assert_eq!(ui.search_draft, None);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+    assert_eq!(ui.toggles.search_draft, None);
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("cla"));
     assert!(ui.notice.is_some());
     assert_eq!(
         search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Esc),
         InputOutcome::sync_filter(BodyLens::default())
     );
-    assert_eq!(ui.make_up_filter.query, None);
+    assert_eq!(ui.toggles.make_up_filter.query, None);
     assert!(ui.notice.is_some());
     assert_eq!(
         search_key(&mut ui, &mut pane_ui, &snapshot, KeyCode::Esc),
@@ -1009,8 +1034,11 @@ fn n_over_an_empty_search_shows_the_walk_refusal() {
     use ratatui::crossterm::event::KeyCode;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            query: Some("no match".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                query: Some("no match".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -1028,15 +1056,18 @@ fn n_over_an_empty_search_shows_the_walk_refusal() {
 fn show_all_clears_both_pick_and_query() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            filter: Some(BodyFilter::Unread),
-            query: Some("auth".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                filter: Some(BodyFilter::Unread),
+                query: Some("auth".to_owned()),
+            },
+            ..Default::default()
         },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &mut pane_ui, &snapshot);
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
     assert_eq!(
         outcome.effects,
         vec![InputEffect::SyncFilter(BodyLens::default())]
@@ -1047,30 +1078,39 @@ fn show_all_clears_both_pick_and_query() {
 fn empty_pick_auto_clear_preserves_the_query() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
-            query: Some("auth".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
+                query: Some("auth".to_owned()),
+            },
+            ..Default::default()
         },
         ..Default::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
-    assert_eq!(ui.make_up_filter.filter, None);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("auth"));
+    assert_eq!(ui.toggles.make_up_filter.filter, None);
+    assert_eq!(ui.toggles.make_up_filter.query.as_deref(), Some("auth"));
 }
 
 #[test]
 fn zero_match_query_stays_set_with_an_empty_roster() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens {
-            query: Some("no such row".to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                query: Some("no such row".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         ..Default::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.visible_roster(&snapshot).len(), 0);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("no such row"));
+    assert_eq!(
+        ui.toggles.make_up_filter.query.as_deref(),
+        Some("no such row")
+    );
 }
 
 #[test]
@@ -1082,7 +1122,10 @@ fn worktree_keys_respect_the_make_up_filter() {
     let mut ui = render::ViewState {
         selected_index: Some(0),
         selected_pane: Some(failed),
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1096,7 +1139,7 @@ fn worktree_keys_respect_the_make_up_filter() {
         "only one group remains under the failed filter"
     );
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 }
@@ -1137,26 +1180,26 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
         }
     );
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
     // A click on another bucket switches the pick in place.
     handle_mouse_click(28, 5, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Running))
     );
 
     // A second click on the active bucket clears back to show-all.
     handle_mouse_click(28, 5, &mut ui, &mut pane_ui, &snapshot);
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     // The hit range is half-open: the cell past the bucket falls through to
     // the row hit-test (and lands nowhere on this chrome line).
     let outcome = handle_mouse_click(8, 5, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 }
 #[test]
 fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
@@ -1177,7 +1220,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         InputOutcome::sync_filter(BodyLens::from(BodyFilter::Status(AgentStatus::Failed)))
     );
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
@@ -1189,7 +1232,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     );
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::default(),
         "the active key toggles to all"
     );
@@ -1205,7 +1248,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         InputOutcome::default(),
         "zero-count buckets are inert from keys too"
     );
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     handle_key(
         KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Running))),
@@ -1214,7 +1257,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         &snapshot,
     );
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Running))
     );
 
@@ -1223,7 +1266,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         outcome.effects,
         vec![InputEffect::SyncFilter(BodyLens::default())]
     );
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
@@ -1289,7 +1332,7 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
         )))]
     );
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 }
@@ -1339,7 +1382,10 @@ fn pr_count_click_toggles_the_open_pr_lens() {
         outcome,
         InputOutcome::sync_filter(BodyLens::from(BodyFilter::OpenPr))
     );
-    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::OpenPr));
+    assert_eq!(
+        ui.toggles.make_up_filter,
+        BodyLens::from(BodyFilter::OpenPr)
+    );
 
     let theme = pane_ui.theme(&snapshot.theme);
     let picked = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
@@ -1367,7 +1413,7 @@ fn pr_count_click_toggles_the_open_pr_lens() {
 
     let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state = None;
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_number = None;
@@ -1409,7 +1455,7 @@ fn pr_count_click_keeps_a_rowless_workflow_lens_open() {
         &mut pane_ui,
         &snapshot,
     );
-    assert_eq!(ui.make_up_filter, BodyFilter::OpenPr.into());
+    assert_eq!(ui.toggles.make_up_filter, BodyFilter::OpenPr.into());
     let theme = pane_ui.theme(&snapshot.theme);
     let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
     assert!(
@@ -1448,24 +1494,27 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
     // The waiting bucket reads 0 in this room, so a stale waiting filter ends
     // on the fold — the body's twin of a tab pick whose panel left.
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     // A filter whose bucket still counts holds through the fold.
-    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Failed));
+    ui.toggles.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Failed));
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
-    ui.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
+    ui.toggles.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::default(),
         "a stale open PR lens clears after its last PR resolves"
     );
@@ -1481,7 +1530,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
         group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     }
     groups[1].inactive = Some(crate::store::snapshot::SidebarInactive::Landed);
-    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Success));
+    ui.toggles.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Success));
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
         ui.visible_roster(&snapshot).len(),
@@ -1492,7 +1541,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
         Some(crate::store::snapshot::SidebarInactive::Landed);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::default(),
         "landing the last review result clears the pick"
     );
@@ -1522,7 +1571,10 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
     );
 
     let ui = render::ViewState {
-        make_up_filter: filter.clone(),
+        toggles: PresentationToggles {
+            make_up_filter: filter.clone(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1599,7 +1651,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &snapshot,
     );
     assert_eq!(outcome, InputOutcome::sync_filter(filter.clone()));
-    assert_eq!(ui.make_up_filter, filter);
+    assert_eq!(ui.toggles.make_up_filter, filter);
 
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -1618,7 +1670,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &snapshot,
     );
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 
     for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
@@ -1633,7 +1685,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &snapshot,
     );
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
 }
 
 #[test]
@@ -1844,7 +1896,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     // body membership — holds through every fold.
     toggle_make_up_filter(&mut ui, &snapshot, BodyFilter::Status(AgentStatus::Failed));
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
     assert_eq!(ui.selected_pane, None);
@@ -1855,7 +1907,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
 
     // Clearing the filter re-seats the highlight on the held baseline.
     toggle_make_up_filter(&mut ui, &snapshot, BodyFilter::Status(AgentStatus::Failed));
-    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(ui.toggles.make_up_filter, BodyLens::default());
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.selected_pane, Some(running));
     assert_eq!(ui.selected_index, Some(0));
@@ -1869,7 +1921,10 @@ fn focus_jumps_keep_the_make_up_filter() {
 
     // A birth slot selects and focuses its card without changing the active lens.
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1877,22 +1932,25 @@ fn focus_jumps_keep_the_make_up_filter() {
     assert_eq!(outcome.effects, vec![InputEffect::Focus(failed.clone())]);
     assert_eq!(ui.selected_pane, Some(failed.clone()));
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
     // Enter focuses the highlighted filtered row with the same pure effect.
     let mut ui = render::ViewState {
         selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         selected_pane: Some(failed.clone()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
     let outcome = handle_key(KeyAction::Enter, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(failed));
     assert_eq!(
-        ui.make_up_filter,
+        ui.toggles.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
     assert_eq!(
@@ -1938,7 +1996,10 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
     let mut ui = render::ViewState {
         selected_index: Some(0),
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-        make_up_filter: filter.clone(),
+        toggles: PresentationToggles {
+            make_up_filter: filter.clone(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1948,14 +2009,14 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
         forward,
         InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
     );
-    assert_eq!(ui.make_up_filter, filter);
+    assert_eq!(ui.toggles.make_up_filter, filter);
 
     let backward = handle_key(KeyAction::SearchPrev, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         backward,
         InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
     );
-    assert_eq!(ui.make_up_filter, filter);
+    assert_eq!(ui.toggles.make_up_filter, filter);
 }
 
 #[test]
@@ -2012,7 +2073,10 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
             ))]
         }
     );
-    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
+    assert_eq!(
+        ui.toggles.make_up_filter,
+        BodyLens::from(BodyFilter::Unread)
+    );
 
     let second = handle_mouse_click(0, second_row, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
@@ -2025,5 +2089,8 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
             ))]
         }
     );
-    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
+    assert_eq!(
+        ui.toggles.make_up_filter,
+        BodyLens::from(BodyFilter::Unread)
+    );
 }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
 use crate::sidebar_pane::render;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::{MuxName, WorkspaceId};
 use jiff::Timestamp;
 
@@ -275,8 +276,11 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 fn interactions_for(snapshot: &SidebarSnapshot, selected: usize) -> render::FrameInteractions {
     let ui = render::ViewState {
         selected_index: Some(selected),
-        help_visible: false,
         animation_phase: 0,
+        toggles: PresentationToggles {
+            help_visible: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();

@@ -345,10 +345,11 @@ pub(super) fn search_line(
     cells: usize,
 ) -> Option<Line<'static>> {
     let query = ui
+        .toggles
         .search_draft
         .as_ref()
-        .or(ui.make_up_filter.query.as_ref())?;
-    let typing = ui.search_draft.is_some();
+        .or(ui.toggles.make_up_filter.query.as_ref())?;
+    let typing = ui.toggles.search_draft.is_some();
     let inner = super::sections::content_width(cells);
     let lead = format!("{} ", theme.glyph(GlyphRole::ChromeSearch));
     let left = if typing {

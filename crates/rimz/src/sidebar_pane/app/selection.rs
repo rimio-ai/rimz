@@ -253,7 +253,7 @@ pub(super) fn handle_key(
     let notice_cleared = !matches!(action, KeyAction::Cancel | KeyAction::CancelSearch)
         && view.notice.take().is_some();
     view.validate_entry_cursor(snapshot);
-    if view.search_draft.is_some()
+    if view.toggles.search_draft.is_some()
         || matches!(
             action,
             KeyAction::Search
@@ -293,12 +293,18 @@ fn key_outcome(
 ) -> InputOutcome {
     match action {
         KeyAction::Search => {
-            view.search_draft = Some(view.make_up_filter.query.clone().unwrap_or_default());
+            view.toggles.search_draft = Some(
+                view.toggles
+                    .make_up_filter
+                    .query
+                    .clone()
+                    .unwrap_or_default(),
+            );
             select_first_search_match(view, snapshot);
             InputOutcome::redraw()
         }
         KeyAction::QueryChar(ch) => {
-            if let Some(draft) = &mut view.search_draft {
+            if let Some(draft) = &mut view.toggles.search_draft {
                 draft.push(ch);
                 select_first_search_match(view, snapshot);
                 return InputOutcome::redraw();
@@ -306,7 +312,7 @@ fn key_outcome(
             InputOutcome::default()
         }
         KeyAction::Backspace => {
-            let Some(draft) = &mut view.search_draft else {
+            let Some(draft) = &mut view.toggles.search_draft else {
                 return InputOutcome::default();
             };
             if draft.pop().is_none() {
@@ -315,18 +321,18 @@ fn key_outcome(
             select_first_search_match(view, snapshot);
             InputOutcome::redraw()
         }
-        KeyAction::CancelSearch if view.search_draft.take().is_some() => {
+        KeyAction::CancelSearch if view.toggles.search_draft.take().is_some() => {
             // The committed lens never saw the draft, so it stands as it was.
             reconcile_selection(view, snapshot, None);
             anchor_selection(view, snapshot);
             InputOutcome::redraw()
         }
         KeyAction::CancelSearch | KeyAction::Cancel => {
-            let mut lens = view.make_up_filter.clone();
+            let mut lens = view.toggles.make_up_filter.clone();
             if lens.query.take().is_some() {
                 set_make_up_filter(view, snapshot, lens);
                 reconcile_selection(view, snapshot, None);
-                return InputOutcome::sync_filter(view.make_up_filter.clone());
+                return InputOutcome::sync_filter(view.toggles.make_up_filter.clone());
             }
             if view.notice.take().is_some() {
                 return InputOutcome::redraw();
@@ -339,8 +345,8 @@ fn key_outcome(
             effects: vec![InputEffect::Reload],
             ..InputOutcome::default()
         },
-        KeyAction::Up if view.search_draft.is_none() => step_entry(view, snapshot, false),
-        KeyAction::Down if view.search_draft.is_none() => step_entry(view, snapshot, true),
+        KeyAction::Up if view.toggles.search_draft.is_none() => step_entry(view, snapshot, false),
+        KeyAction::Down if view.toggles.search_draft.is_none() => step_entry(view, snapshot, true),
         KeyAction::Up => select_to_index(
             view,
             snapshot,
@@ -365,7 +371,7 @@ fn key_outcome(
         KeyAction::ScreenMiddle => select_screen_row(view, ui, snapshot, ScreenRow::Middle),
         KeyAction::ScreenBottom => select_screen_row(view, ui, snapshot, ScreenRow::Bottom),
         KeyAction::Enter => {
-            if let Some(draft) = &view.search_draft {
+            if let Some(draft) = &view.toggles.search_draft {
                 let pane = (!draft.is_empty())
                     .then(|| view.selected_pane.clone())
                     .flatten();
@@ -427,17 +433,17 @@ fn key_outcome(
                 .worktree_groups
                 .iter()
                 .map(|group| group.key.clone());
-            let before = view.expanded_groups.len();
-            view.expanded_groups.extend(keys);
+            let before = view.toggles.expanded_groups.len();
+            view.toggles.expanded_groups.extend(keys);
             fold_groups(view, snapshot, before)
         }
         KeyAction::FoldCloseAll => {
-            let before = view.expanded_groups.len();
-            view.expanded_groups.clear();
+            let before = view.toggles.expanded_groups.len();
+            view.toggles.expanded_groups.clear();
             fold_groups(view, snapshot, before)
         }
         KeyAction::Help => {
-            view.help_visible = true;
+            view.toggles.help_visible = true;
             InputOutcome::redraw()
         }
         KeyAction::Filter(filter) => {
@@ -446,7 +452,7 @@ fn key_outcome(
                 Some(filter) => toggle_make_up_filter(view, snapshot, filter),
             };
             if changed {
-                InputOutcome::sync_filter(view.make_up_filter.clone())
+                InputOutcome::sync_filter(view.toggles.make_up_filter.clone())
             } else {
                 InputOutcome::default()
             }
@@ -519,7 +525,7 @@ fn search_jump(
     snapshot: &SidebarSnapshot,
     direction: CardDirection,
 ) -> InputOutcome {
-    if view.search_draft.is_none() && view.make_up_filter.query.is_some() {
+    if view.toggles.search_draft.is_none() && view.toggles.make_up_filter.query.is_some() {
         let walk = CardRequest::Walk {
             direction,
             worktree: false,
@@ -531,7 +537,7 @@ fn search_jump(
 
 /// Settle a fold or unfold of every group; `before` is the unfolded count.
 fn fold_groups(view: &mut ViewState, snapshot: &SidebarSnapshot, before: usize) -> InputOutcome {
-    if view.expanded_groups.len() == before {
+    if view.toggles.expanded_groups.len() == before {
         return InputOutcome::default();
     }
     anchor_selection(view, snapshot);
@@ -584,10 +590,10 @@ pub(super) fn finish_search(
     snapshot: &SidebarSnapshot,
     commit: bool,
 ) -> InputOutcome {
-    let Some(draft) = ui.search_draft.take() else {
+    let Some(draft) = ui.toggles.search_draft.take() else {
         return InputOutcome::default();
     };
-    let mut lens = ui.make_up_filter.clone();
+    let mut lens = ui.toggles.make_up_filter.clone();
     lens.query = (commit && !draft.is_empty()).then_some(draft);
     let changed = set_make_up_filter(ui, snapshot, lens);
     if !commit {
@@ -598,7 +604,7 @@ pub(super) fn finish_search(
         anchor_selection(ui, snapshot);
         return InputOutcome::redraw();
     }
-    InputOutcome::sync_filter(ui.make_up_filter.clone())
+    InputOutcome::sync_filter(ui.toggles.make_up_filter.clone())
 }
 
 /// Step the dashboard's tab `step` entries left or right of the currently
@@ -630,11 +636,11 @@ fn cycle_dashboard_tab(
 /// pick only moves the tab, so a browse through the tabs keeps one anchor and
 /// a genuine selection change still ends it (the [`Browse`] discipline).
 fn pick_dashboard_tab(ui: &mut ViewState, snapshot: &SidebarSnapshot, login: crate::ids::LoginKey) {
-    let derived_at_start = match ui.dashboard_tab.take() {
+    let derived_at_start = match ui.toggles.dashboard_tab.take() {
         Some(tab) => tab.derived_at_start,
         None => selected_agent_kind(snapshot, ui),
     };
-    ui.dashboard_tab = Some(DashboardTab {
+    ui.toggles.dashboard_tab = Some(DashboardTab {
         login,
         derived_at_start,
     });
@@ -658,7 +664,7 @@ pub(super) fn handle_mouse_click(
         }
         Some(HitTarget::BodyFilter(filter)) => {
             if toggle_make_up_filter(view, snapshot, filter) {
-                InputOutcome::sync_filter(view.make_up_filter.clone())
+                InputOutcome::sync_filter(view.toggles.make_up_filter.clone())
             } else {
                 InputOutcome::default()
             }
@@ -689,7 +695,7 @@ pub(super) fn handle_mouse_click(
             InputOutcome::redraw()
         }
         Some(HitTarget::ExpandGroup { key, row }) => {
-            view.expanded_groups.insert(key);
+            view.toggles.expanded_groups.insert(key);
             anchor_selection(view, snapshot);
             view.offset_authoritative = true;
             view.scroll_ease.cancel();
@@ -698,7 +704,7 @@ pub(super) fn handle_mouse_click(
         }
         Some(HitTarget::ToggleInactive) => toggle_inactive(view, snapshot),
         Some(HitTarget::MoreInactive) => {
-            let Some(peek) = &mut view.inactive_peek else {
+            let Some(peek) = &mut view.toggles.inactive_peek else {
                 return InputOutcome::default();
             };
             peek.pages = peek.pages.saturating_add(1);
@@ -806,16 +812,16 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
 }
 
 pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
-    if view.inactive_peek.take().is_some() {
+    if view.toggles.inactive_peek.take().is_some() {
         for group in snapshot
             .worktree_groups
             .iter()
             .filter(|group| group.inactive.is_some())
         {
-            view.expanded_groups.remove(&group.key);
+            view.toggles.expanded_groups.remove(&group.key);
         }
     } else {
-        view.inactive_peek = Some(Default::default());
+        view.toggles.inactive_peek = Some(Default::default());
     }
     view.inactive_reveal = true;
     anchor_selection(view, snapshot);
@@ -825,13 +831,13 @@ pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) 
 }
 
 fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_key: String) {
-    if !ui.expanded_groups.remove(&group_key)
+    if !ui.toggles.expanded_groups.remove(&group_key)
         && !snapshot
             .worktree_groups
             .iter()
             .any(|group| group.key == group_key && group.collapses())
     {
-        ui.expanded_groups.insert(group_key);
+        ui.toggles.expanded_groups.insert(group_key);
     }
     anchor_selection(ui, snapshot);
     ui.offset_authoritative = true;
@@ -842,9 +848,9 @@ fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_k
 /// close also folds the `+K older` history, so reopening starts from the bands.
 fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String, open: bool) {
     if !open {
-        ui.delegation_history.remove(&row_id);
+        ui.toggles.delegation_history.remove(&row_id);
     }
-    ui.delegation_overrides.insert(row_id, open);
+    ui.toggles.delegation_overrides.insert(row_id, open);
     anchor_selection(ui, snapshot);
     ui.offset_authoritative = true;
     ui.scroll_ease.cancel();
@@ -860,8 +866,9 @@ fn toggle_delegation_history(ui: &mut ViewState, snapshot: &SidebarSnapshot, row
     else {
         return;
     };
-    if ui.delegation_history.remove(&row_id) != Some(agent.user_turn_started_at) {
-        ui.delegation_history
+    if ui.toggles.delegation_history.remove(&row_id) != Some(agent.user_turn_started_at) {
+        ui.toggles
+            .delegation_history
             .insert(row_id, agent.user_turn_started_at);
     }
     anchor_selection(ui, snapshot);
@@ -879,14 +886,14 @@ fn toggle_make_up_filter(
     snapshot: &SidebarSnapshot,
     filter: BodyFilter,
 ) -> bool {
-    let target = if ui.make_up_filter.filter == Some(filter) {
+    let target = if ui.toggles.make_up_filter.filter == Some(filter) {
         None
     } else if filter.total(&snapshot.worktree_groups) > 0 {
         Some(filter)
     } else {
         return false;
     };
-    let mut lens = ui.make_up_filter.clone();
+    let mut lens = ui.toggles.make_up_filter.clone();
     lens.filter = target;
     set_make_up_filter(ui, snapshot, lens)
 }
@@ -896,10 +903,10 @@ pub(super) fn set_make_up_filter(
     snapshot: &SidebarSnapshot,
     lens: BodyLens,
 ) -> bool {
-    if ui.make_up_filter == lens {
+    if ui.toggles.make_up_filter == lens {
         return false;
     }
-    ui.make_up_filter = lens;
+    ui.toggles.make_up_filter = lens;
     anchor_selection(ui, snapshot);
     true
 }
@@ -933,7 +940,7 @@ pub(super) fn select_row_in(ui: &mut ViewState, roster: &VisibleRoster<'_>, inde
     ui.entry_cursor = None;
     ui.selected_pane = roster.pane_at_ordinal(index);
     ui.selected_index = (ui.selected_pane.is_some()
-        || (ui.search_draft.is_some() && index < roster.len()))
+        || (ui.toggles.search_draft.is_some() && index < roster.len()))
     .then_some(index);
 }
 
@@ -1086,7 +1093,7 @@ fn reconcile_filter_and_baseline(
     derived: Option<PaneId>,
     previous: Option<&SidebarSnapshot>,
 ) {
-    if let Some(filter) = ui.make_up_filter.filter
+    if let Some(filter) = ui.toggles.make_up_filter.filter
         && filter.total(&snapshot.worktree_groups) == 0
     {
         let held_total = previous
@@ -1103,7 +1110,7 @@ fn reconcile_filter_and_baseline(
                 filter.total(&held.worktree_groups)
             });
         if held_total == 0 {
-            ui.make_up_filter.filter = None;
+            ui.toggles.make_up_filter.filter = None;
         }
     }
     if let Some(pane) = derived {
@@ -1128,7 +1135,7 @@ fn reconcile_browse_and_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot
         browse_pinned = true;
     }
     if !browse_pinned
-        && ui.search_draft.is_none()
+        && ui.toggles.search_draft.is_none()
         && let Some(pane) = ui.baseline_pane.clone()
     {
         ui.selected_pane = Some(pane);
@@ -1171,11 +1178,11 @@ fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     {
         ui.last_sub_providers.insert(kind, provider.to_owned());
     }
-    if let Some(tab) = &ui.dashboard_tab {
+    if let Some(tab) = &ui.toggles.dashboard_tab {
         let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
         let tab_gone = !dashboard_tabs(snapshot).contains(&tab.login);
         if derived_moved || tab_gone {
-            ui.dashboard_tab = None;
+            ui.toggles.dashboard_tab = None;
         }
     }
 }
@@ -1211,7 +1218,7 @@ fn anchor_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
         }
         ui.selected_pane = None;
     }
-    if ui.search_draft.is_none() {
+    if ui.toggles.search_draft.is_none() {
         ui.selected_index = None;
         return;
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::layout::text_width;
 use crate::sidebar_pane::render::theme::Component;
 
@@ -6,7 +7,10 @@ use crate::sidebar_pane::render::theme::Component;
 fn needs_you_header_names_asks_and_failures_together() {
     let snapshot = make_up_snapshot();
     let view = ViewState {
-        make_up_filter: BodyFilter::NeedsYou.into(),
+        toggles: PresentationToggles {
+            make_up_filter: BodyFilter::NeedsYou.into(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let screen =
@@ -1158,7 +1162,7 @@ fn render_cockpit_conflict_tone_and_picked_chip() {
     for picked in [false, true] {
         let mut view = ViewState::default();
         if picked {
-            view.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
+            view.toggles.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
         }
         let top = super::super::compose::top_lines(&snapshot, &view, 38, &theme);
         let line = top
@@ -1254,7 +1258,7 @@ fn unread_banner_points_below_or_to_the_filter_hidden_lead() {
     assert!(screen.contains("↓ 1 need you"), "{screen}");
     assert_snapshot("unread_banner_below", screen);
 
-    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
+    ui.toggles.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(screen.contains("↑ 1 need you"), "{screen}");
 }
@@ -1292,7 +1296,10 @@ fn render_make_up_filter_narrows_the_body() {
     });
     let ui = ViewState {
         selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1331,7 +1338,10 @@ fn render_unread_filter_narrows_the_body() {
     failed.unread = true;
     let ui = ViewState {
         selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Unread),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Unread),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();

@@ -861,8 +861,8 @@ fn card_expired_request_does_not_drain_a_pending_fold() {
 #[test]
 fn card_empty_filter_writes_nothing_and_no_history_notice_preserves_active_faults() {
     let (mut rig, _) = command_rig();
-    rig.view().ui().make_up_filter.query = Some("main".into());
-    let lens = rig.view().ui().make_up_filter.clone();
+    rig.view().ui().toggles.make_up_filter.query = Some("main".into());
+    let lens = rig.view().ui().toggles.make_up_filter.clone();
     crate::sidebar::body_filter::write(&rig.runtime, &lens).unwrap();
     let before = std::fs::read(rig.runtime.sidebar_filter_path()).unwrap();
     assert!(matches!(

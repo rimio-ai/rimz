@@ -299,7 +299,8 @@ impl ViewAccess {
             }
             if entry.context.is_none() {
                 entry.context = Some(ViewContext::new(self.scratch_context.current.clone(), now));
-                entry.state.make_up_filter = self.scratch_state.make_up_filter.clone();
+                entry.state.toggles.make_up_filter =
+                    self.scratch_state.toggles.make_up_filter.clone();
             }
             // Presentation initialization above guarantees the portable context exists.
             let context = entry.context.as_mut().expect("initialized view context");

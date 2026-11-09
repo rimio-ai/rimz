@@ -100,7 +100,7 @@ fn hidden_mirror_draws_an_open_inactive_peek_without_changing_its_source() {
             rows[0].name = "old-agent".into();
             rows[0].pane = None;
             Arc::make_mut(&mut v.context.current.worktree_groups).push(old);
-            v.state.inactive_peek = Some(Default::default());
+            v.state.toggles.inactive_peek = Some(Default::default());
             v.state.scroll_offset = 0;
         });
         repaint_source(&mut pair);
@@ -128,7 +128,7 @@ fn hidden_mirror_draws_an_open_inactive_peek_without_changing_its_source() {
             text.contains("inactive-work") && text.contains("old-agent"),
             "{mux:?}: {text}"
         );
-        assert!(pair.view(0).inactive_peek.is_some());
+        assert!(pair.view(0).toggles.inactive_peek.is_some());
     }
 }
 
@@ -232,7 +232,7 @@ fn structural_publications_are_prompt_at_rest_but_wait_during_input() {
             }
             let before = pair.plane.views.read().mirror_target;
             pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                v.state.expanded_groups.clear();
+                v.state.toggles.expanded_groups.clear();
             });
             repaint_source(&mut pair);
             assert_ne!(pair.plane.views.read().mirror_target, before);
@@ -264,7 +264,10 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
             let mut pair = mirror_pair(mux);
             if change == "close" {
                 pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                    v.state.delegation_overrides.insert("agent-0".into(), true);
+                    v.state
+                        .toggles
+                        .delegation_overrides
+                        .insert("agent-0".into(), true);
                 });
                 repaint_source(&mut pair);
             }
@@ -302,6 +305,7 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
                 }
                 _ => pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
                     v.state
+                        .toggles
                         .delegation_overrides
                         .insert("agent-0".into(), change == "open");
                 }),
@@ -439,7 +443,10 @@ fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
         }
         pair.sample(&[(1, 0)]);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.delegation_overrides.insert("agent-1".into(), true);
+            v.state
+                .toggles
+                .delegation_overrides
+                .insert("agent-1".into(), true);
         });
         repaint_source(&mut pair);
         assert_eq!(
@@ -657,7 +664,7 @@ fn the_mirror_driver_offers_only_unmapped_subscribers() {
             receivers.push(receive);
         }
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.expanded_groups.clear();
+            v.state.toggles.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         assert!(
@@ -887,7 +894,7 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
         rig.terminal.backend_mut().play_output(output.clone());
         pair.sample(&[(1, 0)]);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.expanded_groups.clear();
+            v.state.toggles.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));
@@ -1040,7 +1047,7 @@ fn hidden_mirror_retries_after_the_jump_fence_releases() {
                 pair.clock.now(),
             );
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state.expanded_groups.clear();
+            v.state.toggles.expanded_groups.clear();
         });
         repaint_source(&mut pair);
         pair.clock.advance(animation_frame(&pair.snapshot));

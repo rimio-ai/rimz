@@ -393,10 +393,17 @@ mod tests {
         };
         live.advance(Duration::from_secs(1), 34).unwrap();
         live.column.input(Wakeup::Key(KeyAction::Help)).unwrap();
-        assert!(live.column.state.inspect_view(|ui, _| ui.help_visible));
+        assert!(
+            live.column
+                .state
+                .inspect_view(|ui, _| ui.toggles.help_visible)
+        );
         live.advance(Duration::from_secs(5), 34).unwrap();
         assert!(
-            !live.column.state.inspect_view(|ui, _| ui.help_visible),
+            !live
+                .column
+                .state
+                .inspect_view(|ui, _| ui.toggles.help_visible),
             "wraps reset UI even when local time increases"
         );
         assert_eq!(live.column.at, Duration::from_secs(2));

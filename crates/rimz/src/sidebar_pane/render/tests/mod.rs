@@ -6,6 +6,7 @@ use crate::agents::{
 use crate::config::{AnimationSpec, GlyphRole, ScrollbarMode};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::store::snapshot::{SidebarProviderPanel, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;
@@ -350,11 +351,14 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
     let pane_ui = fixed_theme_ui(&measured_snapshot, &UiState::default());
     let ui = ViewState {
         selected_index: Some(0),
-        expanded_groups: measured_snapshot
-            .worktree_groups
-            .iter()
-            .map(|group| group.key.clone())
-            .collect(),
+        toggles: PresentationToggles {
+            expanded_groups: measured_snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.key.clone())
+                .collect(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let theme = pane_ui
@@ -546,10 +550,13 @@ fn codex_context(now: Timestamp) -> AgentContext {
 fn ui_at_phase(phase: u64) -> ViewState {
     ViewState {
         selected_index: Some(0),
-        help_visible: false,
         animation_phase: phase,
         frame_ms: ms(phase * 100),
         head_step: phase,
+        toggles: PresentationToggles {
+            help_visible: false,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

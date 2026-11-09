@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::fmt::dollars2;
 use std::collections::{BTreeMap, HashSet};
 
@@ -460,7 +461,10 @@ fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
         &snapshot,
         None,
         &ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -491,8 +495,11 @@ fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
         None,
         &ViewState {
             selected_index: Some(0),
-            expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -509,7 +516,10 @@ fn body_keeps_collapsed_inactive_group_until_filter_empties_it() {
         None,
         &ViewState {
             selected_index: Some(0),
-            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+            toggles: PresentationToggles {
+                make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),

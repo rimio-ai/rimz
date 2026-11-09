@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::compose::scroll_lines;
 use crate::store::snapshot::{SidebarInactive, SidebarWorktreeKind, WorktreePrState};
 use std::collections::BTreeSet;
@@ -134,9 +135,12 @@ fn closed_inactive_line_replaces_receipts_after_external() {
 fn opening_a_bottom_peek_scrolls_only_to_the_first_receipt() {
     let snapshot = inactive_snapshot();
     let view = ViewState {
-        inactive_peek: Some(Default::default()),
         offset_authoritative: true,
         inactive_reveal: true,
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -180,7 +184,10 @@ fn open_inactive_line_lists_collapsed_receipts_with_group_gaps() {
     let block = body(
         &snapshot,
         &ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -204,7 +211,10 @@ fn open_inactive_line_lists_collapsed_receipts_with_group_gaps() {
             &snapshot,
             None,
             &ViewState {
-                inactive_peek: Some(Default::default()),
+                toggles: PresentationToggles {
+                    inactive_peek: Some(Default::default()),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             &UiState::default(),
@@ -238,7 +248,10 @@ fn closed_inactive_line_keeps_focused_held_and_expanded_groups() {
         &body(
             &snapshot,
             &ViewState {
-                expanded_groups: BTreeSet::from([key.clone()]),
+                toggles: PresentationToggles {
+                    expanded_groups: BTreeSet::from([key.clone()]),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             &UiState::default(),
@@ -291,7 +304,10 @@ fn lenses_and_queries_reach_matching_inactive_rows_without_the_fold() {
             &body(
                 &snapshot,
                 &ViewState {
-                    make_up_filter: lens,
+                    toggles: PresentationToggles {
+                        make_up_filter: lens,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 &UiState::default(),
@@ -310,8 +326,11 @@ fn lenses_and_queries_reach_matching_inactive_rows_without_the_fold() {
         &body(
             &snapshot,
             &ViewState {
-                make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
-                inactive_peek: Some(Default::default()),
+                toggles: PresentationToggles {
+                    make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
+                    inactive_peek: Some(Default::default()),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             &UiState::default(),
@@ -325,7 +344,10 @@ fn lenses_and_queries_reach_matching_inactive_rows_without_the_fold() {
         &body(
             &snapshot,
             &ViewState {
-                search_draft: Some("inactive-a".to_owned()),
+                toggles: PresentationToggles {
+                    search_draft: Some("inactive-a".to_owned()),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             &UiState::default(),
@@ -553,7 +575,10 @@ fn inactive_chip_is_one_target_in_both_states() {
     mark_one_unlanded(&mut snapshot);
     for open in [false, true] {
         let view = ViewState {
-            inactive_peek: open.then(Default::default),
+            toggles: PresentationToggles {
+                inactive_peek: open.then(Default::default),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let block = body(&snapshot, &view, &UiState::default(), 54);
@@ -617,7 +642,7 @@ fn inactive_peek_pages_receipts_without_ordinals() {
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     for pages in [0, 1, 2, 3] {
-        view.inactive_peek = (pages > 0).then(|| super::super::ui_state::InactivePeek {
+        view.toggles.inactive_peek = (pages > 0).then(|| super::super::ui_state::InactivePeek {
             pages: pages.try_into().unwrap(),
         });
         let block = body(&snapshot, &view, &UiState::default(), 54);
@@ -669,7 +694,10 @@ fn inactive_peek_pages_receipts_without_ordinals() {
 fn inactive_first_page_is_newest_first_with_a_muted_older_tail() {
     let snapshot = paged_snapshot();
     let view = ViewState {
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let block = body(&snapshot, &view, &UiState::default(), 54);
@@ -719,11 +747,14 @@ fn inactive_page_keeps_focused_held_and_expanded_groups_beyond_its_cut() {
             snapshot.focused_pane = Some(old.rows[0].pane.as_ref().unwrap().pane_id.clone());
         }
         let view = ViewState {
-            inactive_peek: Some(Default::default()),
-            expanded_groups: if reveal == "expanded" {
-                BTreeSet::from([key])
-            } else {
-                BTreeSet::new()
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                expanded_groups: if reveal == "expanded" {
+                    BTreeSet::from([key])
+                } else {
+                    BTreeSet::new()
+                },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -731,7 +762,7 @@ fn inactive_page_keeps_focused_held_and_expanded_groups_beyond_its_cut() {
         let roster = VisibleRoster::new(
             &snapshot,
             &BodyLens::default(),
-            &view.expanded_groups,
+            &view.toggles.expanded_groups,
             held.as_ref(),
         );
         assert!(roster.ordinal_of_id(&row).is_some(), "{reveal}");

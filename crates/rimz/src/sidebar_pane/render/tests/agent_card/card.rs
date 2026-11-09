@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::PresentationToggles;
 
 #[test]
 fn card_slot_yields_before_the_handle_at_exact_widths() {
@@ -742,8 +743,11 @@ fn render_enriched_selected_agent_card() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),

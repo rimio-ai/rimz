@@ -482,7 +482,7 @@ impl ViewContext {
             .as_ref()
             .is_some_and(render::Alert::is_active)
         {
-            ui.search_draft = None;
+            ui.toggles.search_draft = None;
         }
         (previous, rejected, diagnostics)
     }
@@ -639,7 +639,7 @@ impl ViewContext {
         if let Some(filter) = filter {
             set_make_up_filter(ui, &self.current, filter);
         }
-        let previous_filter = ui.make_up_filter.filter;
+        let previous_filter = ui.toggles.make_up_filter.filter;
         let pending_pick = self
             .pending_input_focus
             .as_ref()
@@ -710,16 +710,16 @@ impl ViewContext {
             super::selection::anchor_selection(ui, &self.current);
         }
         if ui.freeze.is_none()
-            && let Some(filter) = ui.make_up_filter.filter
+            && let Some(filter) = ui.toggles.make_up_filter.filter
             && filter.total(&self.current.worktree_groups) == 0
         {
-            ui.make_up_filter.filter = None;
+            ui.toggles.make_up_filter.filter = None;
             reconcile_selection(ui, &self.current, focused);
         }
         let persist_filter = authoritative_filter_fold
             && !self.current.worktree_groups.is_empty()
             && previous_filter.is_some()
-            && ui.make_up_filter.filter.is_none();
+            && ui.toggles.make_up_filter.filter.is_none();
         (persist_filter, held && ui.freeze.is_none())
     }
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::mux::WidthAdjust;
+use crate::sidebar_pane::render::PresentationToggles;
 use std::time::Duration;
 
 #[test]
@@ -147,7 +148,7 @@ fn search_draft_seats_the_first_match_without_a_baseline() {
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
     handle_key(KeyAction::Search, &mut ui, &mut pane_ui, &snapshot);
-    assert!(ui.search_draft.is_some());
+    assert!(ui.toggles.search_draft.is_some());
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
     assert_eq!(ui.selected_index, Some(0));
 
@@ -242,7 +243,8 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         .unwrap();
         card.sub_agents[1].pane = Some(child.clone());
         let mut view = ViewState::default();
-        view.delegation_history
+        view.toggles
+            .delegation_history
             .insert(row_id, card.user_turn_started_at);
         let mut ui = UiState::default();
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
@@ -267,7 +269,7 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
                 };
             }
             "cap" => card.status = crate::agents::AgentStatus::Idle,
-            _ => view.make_up_filter.query = Some("no-such-card".to_owned()),
+            _ => view.toggles.make_up_filter.query = Some("no-such-card".to_owned()),
         }
         if cause == "cap" {
             snapshot.focused_pane = None;
@@ -354,7 +356,10 @@ fn j_and_k_walk_live_children_but_skip_paneless_entries() {
     let next = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
     let mut view = ViewState {
-        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+        toggles: PresentationToggles {
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut ui = UiState::default();
@@ -415,10 +420,14 @@ fn older_entry_enter_matches_its_click() {
     assert_eq!(
         (
             entered,
-            &keyboard.delegation_history,
+            &keyboard.toggles.delegation_history,
             keyboard.selected_pane
         ),
-        (clicked, &mouse.delegation_history, mouse.selected_pane)
+        (
+            clicked,
+            &mouse.toggles.delegation_history,
+            mouse.selected_pane
+        )
     );
 }
 
@@ -545,7 +554,7 @@ fn losing_the_entry_pane_or_closing_its_section_returns_to_the_parent() {
         if close_pane {
             snapshot.remove_pane_rows(&child);
         } else {
-            view.delegation_overrides.insert(row_id, false);
+            view.toggles.delegation_overrides.insert(row_id, false);
         }
         reconcile_selection(&mut view, &snapshot, None);
         actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
@@ -574,7 +583,10 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     let mut ui = render::ViewState {
         selected_pane: Some(other.clone()),
         selected_index: Some(1),
-        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+        toggles: PresentationToggles {
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -664,8 +676,11 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     own_card.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
     rows.push(own_card);
     let mut ui = render::ViewState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-        delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+            delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -846,7 +861,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
         &row_id,
         false,
     );
-    assert!(!ui.delegation_history.contains_key(&row_id));
+    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
 }
 
 #[test]
@@ -879,9 +894,9 @@ fn delegation_click_without_a_parent_pane_only_toggles() {
         assert_eq!(ui.selected_pane, Some(other.clone()));
         match target {
             HitTarget::ToggleDelegation { .. } => {
-                assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true))
+                assert_eq!(ui.toggles.delegation_overrides.get(&row_id), Some(&true))
             }
-            _ => assert!(ui.delegation_history.contains_key(&row_id)),
+            _ => assert!(ui.toggles.delegation_history.contains_key(&row_id)),
         }
     }
 }
@@ -896,7 +911,7 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
     render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(ui.delegation_history.contains_key(&row_id));
+    assert!(ui.toggles.delegation_history.contains_key(&row_id));
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
@@ -913,14 +928,14 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
         "stale history is inert before pruning"
     );
     render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(!ui.delegation_history.contains_key(&row_id));
-    assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true));
+    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
+    assert_eq!(ui.toggles.delegation_overrides.get(&row_id), Some(&true));
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .remove(0);
     render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(!ui.delegation_history.contains_key(&row_id));
-    assert!(!ui.delegation_overrides.contains_key(&row_id));
+    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
+    assert!(!ui.toggles.delegation_overrides.contains_key(&row_id));
 }
 
 #[test]
@@ -1120,7 +1135,7 @@ fn inactive_chip_count_breakdown_and_glyph_toggle_without_hiding_active_cards() 
             "{text}"
         );
         assert_eq!(text.contains("done"), open, "{text}");
-        assert!(view.make_up_filter.is_empty());
+        assert!(view.toggles.make_up_filter.is_empty());
     }
 }
 
@@ -1151,7 +1166,7 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
     assert_eq!(action, KeyAction::ToggleInactive);
     for open in [true, false] {
         handle_key(action, &mut view, &mut ui, &snapshot);
-        assert_eq!(view.inactive_peek.is_some(), open);
+        assert_eq!(view.toggles.inactive_peek.is_some(), open);
         assert!(view.inactive_reveal);
         paint(&mut view, &mut ui, &snapshot, 24);
         if open {
@@ -1215,7 +1230,7 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
             handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome::redraw()
         );
-        assert_eq!(ui.inactive_peek.is_some(), open);
+        assert_eq!(ui.toggles.inactive_peek.is_some(), open);
         paint(&mut ui, &mut pane_ui, &snapshot, 24);
         assert_eq!(ui.scroll_offset, offset + if open { 4 } else { 0 });
         assert_eq!(Some(ui.scroll_offset), pane_ui.drawn_scroll_max);
@@ -1237,7 +1252,7 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
             row_ids
         );
     }
-    ui.inactive_peek = Some(Default::default());
+    ui.toggles.inactive_peek = Some(Default::default());
     ui.scroll_offset = usize::MAX;
     ui.offset_authoritative = true;
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
@@ -1258,14 +1273,14 @@ fn inactive_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals
             ))],
         }
     );
-    assert!(ui.expanded_groups.contains("inactive"));
+    assert!(ui.toggles.expanded_groups.contains("inactive"));
     paint(&mut ui, &mut pane_ui, &snapshot, 24);
     let (_, header) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup("inactive".to_owned()))
         .unwrap();
     handle_mouse_click(0, header, &mut ui, &mut pane_ui, &snapshot);
-    assert!(!ui.expanded_groups.contains("inactive"));
+    assert!(!ui.toggles.expanded_groups.contains("inactive"));
 }
 
 fn inactive_expansion_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
@@ -1289,7 +1304,10 @@ fn inactive_expansion_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) 
 fn inactive_receipt_unfold_survives_focus_entering_and_leaving_the_group() {
     let (mut snapshot, selected) = inactive_expansion_snapshot(0);
     let mut view = ViewState {
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut ui = UiState::default();
@@ -1307,13 +1325,13 @@ fn inactive_receipt_unfold_survives_focus_entering_and_leaving_the_group() {
     snapshot.focused_pane = Some(focused);
     paint(&mut view, &mut ui, &snapshot, 64);
     assert!(
-        view.expanded_groups.contains("inactive"),
+        view.toggles.expanded_groups.contains("inactive"),
         "the user's unfold must survive the click's own focus change"
     );
 
     snapshot.focused_pane = Some(selected);
     paint(&mut view, &mut ui, &snapshot, 64);
-    assert!(view.expanded_groups.contains("inactive"));
+    assert!(view.toggles.expanded_groups.contains("inactive"));
     assert!(ui.interactions.line_for_target(&receipt).is_none());
     let roster = view.visible_roster(&snapshot);
     for id in ["done", "second"] {
@@ -1327,7 +1345,10 @@ fn revealed_inactive_header_never_creates_an_expansion() {
     for reveal in ["focus", "hold", "lens"] {
         let (mut snapshot, _) = inactive_expansion_snapshot(0);
         let mut view = ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         match reveal {
@@ -1344,7 +1365,7 @@ fn revealed_inactive_header_never_creates_an_expansion() {
                 });
             }
             "lens" => {
-                view.make_up_filter.query = Some("inactive-click".into());
+                view.toggles.make_up_filter.query = Some("inactive-click".into());
             }
             _ => unreachable!(),
         }
@@ -1354,11 +1375,11 @@ fn revealed_inactive_header_never_creates_an_expansion() {
             .interactions
             .line_for_target(&HitTarget::ToggleGroup("inactive".into()))
             .unwrap();
-        assert!(!view.expanded_groups.contains("inactive"));
+        assert!(!view.toggles.expanded_groups.contains("inactive"));
         let outcome = handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
         assert!(outcome.effects.is_empty());
         assert!(
-            !view.expanded_groups.contains("inactive"),
+            !view.toggles.expanded_groups.contains("inactive"),
             "{reveal} must not create a hidden unfold"
         );
     }
@@ -1369,13 +1390,16 @@ fn inactive_unfold_drops_when_the_group_leaves_or_has_nothing_left_to_fold() {
     for removed in [true, false] {
         let (mut snapshot, _) = inactive_expansion_snapshot(0);
         let mut view = ViewState {
-            inactive_peek: Some(Default::default()),
-            expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut ui = UiState::default();
         paint(&mut view, &mut ui, &snapshot, 64);
-        assert!(view.expanded_groups.contains("inactive"));
+        assert!(view.toggles.expanded_groups.contains("inactive"));
         let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
         if removed {
             groups.pop();
@@ -1384,7 +1408,7 @@ fn inactive_unfold_drops_when_the_group_leaves_or_has_nothing_left_to_fold() {
         }
         paint(&mut view, &mut ui, &snapshot, 64);
         assert!(
-            !view.expanded_groups.contains("inactive"),
+            !view.toggles.expanded_groups.contains("inactive"),
             "removed={removed}"
         );
     }
@@ -1394,12 +1418,15 @@ fn inactive_unfold_drops_when_the_group_leaves_or_has_nothing_left_to_fold() {
 fn closed_inactive_section_drops_a_key_carried_from_an_active_group() {
     let (snapshot, _) = inactive_expansion_snapshot(0);
     let mut view = ViewState {
-        expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+        toggles: PresentationToggles {
+            expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut ui = UiState::default();
     paint(&mut view, &mut ui, &snapshot, 64);
-    assert!(!view.expanded_groups.contains("inactive"));
+    assert!(!view.toggles.expanded_groups.contains("inactive"));
     let roster = view.visible_roster(&snapshot);
     for id in ["done", "second"] {
         assert!(
@@ -1494,7 +1521,10 @@ fn inactive_pages_keep_the_viewport_and_reset_on_close() {
 fn closing_inactive_from_the_bottom_drops_its_expansions_and_reveals_the_chip() {
     let (snapshot, selected) = inactive_pages_snapshot();
     let mut view = ViewState {
-        expanded_groups: std::collections::BTreeSet::from(["old-25".into()]),
+        toggles: PresentationToggles {
+            expanded_groups: std::collections::BTreeSet::from(["old-25".into()]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut ui = UiState::default();
@@ -1516,7 +1546,7 @@ fn closing_inactive_from_the_bottom_drops_its_expansions_and_reveals_the_chip() 
             .line_for_target(&HitTarget::ToggleInactive)
             .is_some()
     );
-    assert!(!view.expanded_groups.contains("old-25"));
+    assert!(!view.toggles.expanded_groups.contains("old-25"));
     assert_eq!(view.selected_pane, Some(selected));
     assert!(view.scroll_offset <= ui.drawn_scroll_max.unwrap());
 }
@@ -1526,7 +1556,10 @@ fn folded_inactive_header_and_receipt_lines_expand_and_focus_first_member() {
     let mut results = Vec::new();
     for line_offset in 0..3 {
         let mut ui = render::ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut pane_ui = UiState::default();
@@ -1549,7 +1582,7 @@ fn folded_inactive_header_and_receipt_lines_expand_and_focus_first_member() {
             &mut pane_ui,
             &snapshot,
         );
-        assert!(ui.expanded_groups.contains("inactive"));
+        assert!(ui.toggles.expanded_groups.contains("inactive"));
         results.push((
             outcome,
             ui.selected_pane.clone(),
@@ -1586,7 +1619,10 @@ fn folded_inactive_receipt_member_and_separator_clicks_focus_their_targets() {
     );
     for (column, member) in [(13, "second"), (12, "done")] {
         let mut ui = render::ViewState {
-            inactive_peek: Some(Default::default()),
+            toggles: PresentationToggles {
+                inactive_peek: Some(Default::default()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut pane_ui = UiState::default();
@@ -1609,10 +1645,10 @@ fn folded_inactive_receipt_member_and_separator_clicks_focus_their_targets() {
                 effects: vec![InputEffect::Focus(expected.clone())],
             }
         );
-        assert!(ui.expanded_groups.contains("inactive"));
+        assert!(ui.toggles.expanded_groups.contains("inactive"));
         assert_eq!(ui.selected_pane, Some(expected));
         assert_eq!(ui.reveal_row.as_deref(), Some(member));
-        assert!(ui.inactive_peek.is_some());
+        assert!(ui.toggles.inactive_peek.is_some());
     }
 }
 
@@ -1627,7 +1663,10 @@ fn folded_inactive_receipt_member_without_a_pane_expands_without_focus() {
     )[1]
     .pane = None;
     let mut ui = render::ViewState {
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1645,10 +1684,10 @@ fn folded_inactive_receipt_member_without_a_pane_expands_without_focus() {
         handle_mouse_click(13, receipt as u16, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
-    assert!(ui.expanded_groups.contains("inactive"));
+    assert!(ui.toggles.expanded_groups.contains("inactive"));
     assert_eq!(ui.selected_pane, Some(selected));
     assert_eq!(ui.reveal_row, None);
-    assert!(ui.inactive_peek.is_some());
+    assert!(ui.toggles.inactive_peek.is_some());
 }
 
 #[test]
@@ -1662,7 +1701,10 @@ fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
     )[0]
     .pane = None;
     let mut ui = render::ViewState {
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1681,7 +1723,7 @@ fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
         handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
-    assert!(ui.expanded_groups.contains("inactive"));
+    assert!(ui.toggles.expanded_groups.contains("inactive"));
     assert_eq!(ui.selected_pane, Some(selected));
     assert_eq!(ui.reveal_row, None);
 }
@@ -1690,7 +1732,10 @@ fn folded_inactive_click_without_first_members_pane_expands_without_focus() {
 fn stale_folded_target_keeps_an_already_expanded_group_open() {
     let (snapshot, _) = inactive_expansion_snapshot(0);
     let mut ui = render::ViewState {
-        expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+        toggles: PresentationToggles {
+            expanded_groups: std::collections::BTreeSet::from(["inactive".into()]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState {
@@ -1716,15 +1761,18 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
             ))],
         }
     );
-    assert!(ui.expanded_groups.contains("inactive"));
+    assert!(ui.toggles.expanded_groups.contains("inactive"));
 }
 
 #[test]
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let (snapshot, selected) = inactive_expansion_snapshot(6);
     let mut ui = render::ViewState {
-        inactive_peek: Some(Default::default()),
         offset_authoritative: true,
+        toggles: PresentationToggles {
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -1822,7 +1870,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     pane_ui.interactions = composed.interactions;
     assert_eq!(
-        roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
+        roster_len(&snapshot, &BodyLens::default(), &ui.toggles.expanded_groups),
         6,
         "collapsed body exposes the capped row ordinals"
     );
@@ -1834,10 +1882,10 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let outcome = handle_mouse_click(0, more_line, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(ui.expanded_groups.contains(&group_key));
+    assert!(ui.toggles.expanded_groups.contains(&group_key));
     assert_eq!(ui.scroll_offset, 0);
     assert_eq!(
-        roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
+        roster_len(&snapshot, &BodyLens::default(), &ui.toggles.expanded_groups),
         9,
         "expanded body exposes every row ordinal"
     );
@@ -1857,7 +1905,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
         .expect("less hit");
     let outcome = handle_mouse_click(0, less_line, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(!ui.expanded_groups.contains(&group_key));
+    assert!(!ui.toggles.expanded_groups.contains(&group_key));
 }
 
 #[test]
@@ -1877,13 +1925,13 @@ fn more_unfold_survives_focus_entering_and_leaving_the_capped_tail() {
     snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_6"));
     paint(&mut view, &mut ui, &snapshot, 64);
     assert!(
-        view.expanded_groups.contains(&group_key),
+        view.toggles.expanded_groups.contains(&group_key),
         "focus on the only calm overflow row must not erase an unfold"
     );
 
     snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_0"));
     paint(&mut view, &mut ui, &snapshot, 64);
-    assert!(view.expanded_groups.contains(&group_key));
+    assert!(view.toggles.expanded_groups.contains(&group_key));
     assert_eq!(view.visible_roster(&snapshot).len(), 7);
     for ordinal in 0..7 {
         assert!(ui.interactions.line_for_row(ordinal).is_some());
@@ -1909,7 +1957,7 @@ fn process_only_inactive_group_keeps_its_more_unfold_below_the_closed_chip() {
     handle_mouse_click(column, line, &mut view, &mut ui, &snapshot);
 
     paint(&mut view, &mut ui, &snapshot, 64);
-    assert!(view.expanded_groups.contains(&group_key));
+    assert!(view.toggles.expanded_groups.contains(&group_key));
     let text = inactive_frame(&view, &mut ui, &snapshot, 64).join("\n");
     assert!(text.contains("− less"), "{text}");
 }
@@ -1923,12 +1971,15 @@ fn more_unfold_drops_when_the_tail_is_unread_or_non_idle() {
         let mut snapshot = snapshot_with_panes(&workspace(), panes);
         let group_key = snapshot.worktree_groups[0].key.clone();
         let mut view = ViewState {
-            expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+            toggles: PresentationToggles {
+                expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut ui = UiState::default();
         paint(&mut view, &mut ui, &snapshot, 64);
-        assert!(view.expanded_groups.contains(&group_key));
+        assert!(view.toggles.expanded_groups.contains(&group_key));
         let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
         let tail = &mut std::sync::Arc::make_mut(&mut group.rows)[6];
         tail.unread = unread;
@@ -1938,7 +1989,7 @@ fn more_unfold_drops_when_the_tail_is_unread_or_non_idle() {
         }
         paint(&mut view, &mut ui, &snapshot, 64);
         assert!(
-            !view.expanded_groups.contains(&group_key),
+            !view.toggles.expanded_groups.contains(&group_key),
             "unread={unread}"
         );
     }
@@ -1968,7 +2019,7 @@ fn group_toggle_preserves_the_wheel_offset() {
 
     handle_mouse_click(0, more_line, &mut ui, &mut pane_ui, &snapshot);
 
-    assert!(ui.expanded_groups.contains(&group_key));
+    assert!(ui.toggles.expanded_groups.contains(&group_key));
     assert_eq!(ui.scroll_offset, offset);
     paint(&mut ui, &mut pane_ui, &snapshot, 13);
     assert_eq!(
@@ -2029,7 +2080,10 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     let mut ui = render::ViewState {
         baseline_pane: Some(selected.clone()),
         browse: Some(browse(&selected, Some(&selected))),
-        expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+        toggles: PresentationToggles {
+            expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -2048,7 +2102,7 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
         InputOutcome::redraw()
     );
 
-    assert!(!ui.expanded_groups.contains(&group_key));
+    assert!(!ui.toggles.expanded_groups.contains(&group_key));
     assert_eq!(ui.selected_pane, None);
     paint(&mut ui, &mut pane_ui, &snapshot, 64);
     assert_eq!(ui.scroll_offset, 0);
@@ -2072,8 +2126,11 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
 
     let mut ui = render::ViewState {
         selected_index: Some(0),
-        help_visible: false,
         animation_phase: 0,
+        toggles: PresentationToggles {
+            help_visible: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState {
@@ -2106,7 +2163,7 @@ fn slot_and_last_keys_select_through_the_reducer_and_refuse_into_the_notice() {
     let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
     std::sync::Arc::make_mut(&mut groups[0].rows).reverse();
     let mut ui = ViewState::default();
-    ui.make_up_filter.query = Some("no matches".into());
+    ui.toggles.make_up_filter.query = Some("no matches".into());
     let mut pane_ui = UiState::default();
     let outcome = handle_key(KeyAction::Slot(2), &mut ui, &mut pane_ui, &snapshot);
     assert!(outcome.redraw);
@@ -2144,8 +2201,11 @@ fn slot_and_last_keys_select_through_the_reducer_and_refuse_into_the_notice() {
     let mut ui = render::ViewState {
         selected_index: Some(1),
         selected_pane: Some(target.clone()),
-        help_visible: false,
         animation_phase: 0,
+        toggles: PresentationToggles {
+            help_visible: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -2218,8 +2278,11 @@ fn arrow_key_reports_immediate_ui_change() {
     );
     let mut ui = render::ViewState {
         selected_index: Some(0),
-        help_visible: false,
         animation_phase: 0,
+        toggles: PresentationToggles {
+            help_visible: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -2369,7 +2432,8 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
-    ui.expanded_groups
+    ui.toggles
+        .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
     paint(&mut ui, &mut pane_ui, &snapshot, 18);
@@ -2391,7 +2455,8 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     assert_eq!(ui.selected_pane, Some(selected.clone()));
     assert_eq!(ui.reveal_row, None, "one draw consumes the reveal");
 
-    ui.make_up_filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running));
+    ui.toggles.make_up_filter =
+        BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running));
     paint(&mut ui, &mut pane_ui, &snapshot, 18);
     let (column, row) = pane_ui
         .interactions
@@ -2423,7 +2488,8 @@ fn only_own_input_ends_the_wheel_peek_on_selection_change() {
     );
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
-    ui.expanded_groups
+    ui.toggles
+        .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     reconcile_selection(&mut ui, &snapshot, Some(first.clone()));
     paint(&mut ui, &mut pane_ui, &snapshot, 14);
@@ -2490,7 +2556,7 @@ fn help_key_opens_without_touching_the_viewport() {
 
     handle_key(KeyAction::Help, &mut ui, &mut pane_ui, &snapshot);
 
-    assert!(ui.help_visible);
+    assert!(ui.toggles.help_visible);
     assert_eq!(ui.scroll_offset, 6);
 }
 
@@ -2555,7 +2621,8 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
         offset_authoritative: true,
         ..Default::default()
     };
-    ui.expanded_groups
+    ui.toggles
+        .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     let mut pane_ui = UiState::default();
     paint(&mut ui, &mut pane_ui, &snapshot, 20);
@@ -2859,6 +2926,7 @@ fn fold_keys_toggle_the_selected_cards_entries_and_every_group() {
         let outcome = handle_key(action, &mut view, &mut ui, &snapshot);
         assert_eq!(outcome, InputOutcome::redraw());
         let open = view
+            .toggles
             .expanded_groups
             .iter()
             .cloned()
@@ -2967,10 +3035,14 @@ fn reveal_step_snapshot() -> SidebarSnapshot {
 fn revealing_view(snapshot: &SidebarSnapshot) -> (ViewState, UiState) {
     let parent = snapshot.worktree_groups[0].rows[1].id.clone();
     let mut view = ViewState {
-        delegation_overrides: std::collections::BTreeMap::from([(parent, true)]),
+        toggles: PresentationToggles {
+            delegation_overrides: std::collections::BTreeMap::from([(parent, true)]),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    view.expanded_groups
+    view.toggles
+        .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     let mut ui = UiState::default();
     reconcile_selection(&mut view, snapshot, Some(pane_of(snapshot, 1)));

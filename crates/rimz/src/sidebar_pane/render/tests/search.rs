@@ -1,11 +1,15 @@
 use super::*;
 use crate::ids::LinkTier;
+use crate::sidebar_pane::render::PresentationToggles;
 
 fn search_ui(query: &str) -> ViewState {
     ViewState {
         selected_index: Some(0),
-        make_up_filter: BodyLens {
-            query: Some(query.to_owned()),
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens {
+                query: Some(query.to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -55,7 +59,7 @@ fn assert_search_style(typing: bool, no_color: bool) {
     let theme = Theme::fixed(no_color);
     let mut ui = search_ui("auth");
     let mut pane_ui = UiState::default();
-    ui.search_draft = typing.then(|| "auth".to_owned());
+    ui.toggles.search_draft = typing.then(|| "auth".to_owned());
     let block = bottom(&snapshot, &ui, &pane_ui, &theme, 36);
     let line = &block.lines[0];
     assert!(line.to_string().starts_with(" / auth"), "{line}");
@@ -180,8 +184,8 @@ fn search_line_count_uses_all_rows_and_live_projection() {
     ] {
         let mut ui = search_ui("not-the-draft");
         let pane_ui = UiState::default();
-        ui.search_draft = Some(query.to_owned());
-        ui.make_up_filter.filter = filter;
+        ui.toggles.search_draft = Some(query.to_owned());
+        ui.toggles.make_up_filter.filter = filter;
         assert_eq!(ui.visible_roster(&snapshot).len(), matches);
         let block = bottom(&snapshot, &ui, &pane_ui, &theme, 40);
         assert!(
@@ -201,7 +205,7 @@ fn search_line_empty_draft_has_cursor_without_count() {
     let theme = Theme::fixed(false);
     let mut ui = search_ui("old-query");
     let pane_ui = UiState::default();
-    ui.search_draft = Some(String::new());
+    ui.toggles.search_draft = Some(String::new());
     let block = bottom(&snapshot, &ui, &pane_ui, &theme, 36);
     let line = &block.lines[0];
     assert!(line.to_string().starts_with(" / "), "{line}");
@@ -217,7 +221,7 @@ fn search_line_drops_count_before_clipping_and_preserves_cursor() {
     for typing in [false, true] {
         let mut ui = search_ui("auth");
         let pane_ui = UiState::default();
-        ui.search_draft = typing.then(|| "auth".to_owned());
+        ui.toggles.search_draft = typing.then(|| "auth".to_owned());
         let threshold = if typing { 13 } else { 12 };
         for cells in [threshold - 1, threshold, threshold + 1] {
             let block = bottom(&snapshot, &ui, &pane_ui, &theme, cells);
@@ -242,8 +246,8 @@ fn search_line_drops_count_before_clipping_and_preserves_cursor() {
             );
         }
         for query in ["auth", "界界"] {
-            ui.make_up_filter.query = Some(query.to_owned());
-            ui.search_draft = typing.then(|| query.to_owned());
+            ui.toggles.make_up_filter.query = Some(query.to_owned());
+            ui.toggles.search_draft = typing.then(|| query.to_owned());
             for cells in 1..=15 {
                 let block = bottom(&snapshot, &ui, &pane_ui, &theme, cells);
                 let line = &block.lines[0];
@@ -270,7 +274,7 @@ fn search_line_reuses_dashboard_separator_and_leaves_folded_footer() {
         };
         let mut baseline_ui = ui.clone();
         let pane_baseline_ui = pane_ui.clone();
-        baseline_ui.make_up_filter.query = None;
+        baseline_ui.toggles.make_up_filter.query = None;
         let block = bottom(&snapshot, &ui, &pane_ui, &theme, 54);
         assert!(block.lines[0].to_string().contains("/ not-a-match"));
         assert!(
@@ -345,7 +349,7 @@ fn search_line_without_dashboard_reserves_one_row_and_help_stays_above() {
         42,
         24,
     );
-    ui.help_visible = true;
+    ui.toggles.help_visible = true;
     let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 42, 24);
     assert_eq!(composed.bottom_height, baseline.bottom_height + 1);
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 42, 24);
@@ -388,7 +392,7 @@ fn search_line_keeps_plain_and_folded_footer_badge_admission() {
         };
         let mut baseline_ui = ui.clone();
         let pane_baseline_ui = pane_ui.clone();
-        baseline_ui.make_up_filter.query = None;
+        baseline_ui.toggles.make_up_filter.query = None;
         let widths: &[usize] = if folded {
             &[44, 45, 46, 53, 54, 55]
         } else {

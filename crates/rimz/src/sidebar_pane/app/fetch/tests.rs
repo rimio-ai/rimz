@@ -704,7 +704,7 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
             .views
             .lock()
             .peek(&PaneId::from_parts(MuxName::Zellij, "sidebar_1"))
-            .is_some_and(|(state, _)| state.help_visible),
+            .is_some_and(|(state, _)| state.toggles.help_visible),
         "the fixture must carry the client's presentation, not independent pane copies"
     );
 }

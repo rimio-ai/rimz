@@ -42,7 +42,7 @@ fn shared_rig(views: Arc<ViewsHandle>, index: usize, rows: usize) -> Rig {
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state.with_view_for_test(Route::READ, |_, v| {
         let group = v.context.current.worktree_groups[0].key.clone();
-        v.state.expanded_groups.insert(group);
+        v.state.toggles.expanded_groups.insert(group);
     });
     rig
 }

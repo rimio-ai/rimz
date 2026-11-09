@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::pixel::meter::MeterRaster;
+use crate::sidebar_pane::render::PresentationToggles;
 use crate::sidebar_pane::render::theme::Component;
 use crate::store::snapshot::CacheClock;
 use ratatui::text::Span;
@@ -1277,8 +1278,11 @@ fn selected_agent_without_context_keeps_bare_token_total() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -1330,8 +1334,11 @@ fn codex_card_renders_the_per_call_composition() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -1472,8 +1479,11 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -1767,8 +1777,11 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),
@@ -2225,8 +2238,11 @@ fn codex_app_server_context_links_to_rich_card() {
         None,
         &ViewState {
             selected_index: Some(0),
-            help_visible: false,
             animation_phase: 0,
+            toggles: PresentationToggles {
+                help_visible: false,
+                ..Default::default()
+            },
             ..Default::default()
         },
         &UiState::default(),

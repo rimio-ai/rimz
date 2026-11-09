@@ -55,8 +55,8 @@ pub(super) fn reduce(
     // A pane-named close is routed to any ready view, not the presser's, so
     // it leaves that view's help and search draft as they are.
     if !matches!(request, CardRequest::CloseTarget { pane: Some(_) }) {
-        outcome.redraw = std::mem::take(&mut view.help_visible);
-        if view.search_draft.take().is_some() {
+        outcome.redraw = std::mem::take(&mut view.toggles.help_visible);
+        if view.toggles.search_draft.take().is_some() {
             anchor_selection(view, snapshot);
             outcome.redraw = true;
         }
@@ -138,10 +138,10 @@ pub(super) fn reduce(
             Some(previous.clone())
         }
         CardRequest::FilterNeedsYou { toggle } => {
-            if !*toggle && view.make_up_filter.filter == Some(BodyFilter::NeedsYou) {
+            if !*toggle && view.toggles.make_up_filter.filter == Some(BodyFilter::NeedsYou) {
                 return (outcome, request.refused("already showing needs-you"));
             }
-            let mut lens = view.make_up_filter.clone();
+            let mut lens = view.toggles.make_up_filter.clone();
             if *toggle && lens.filter == Some(BodyFilter::NeedsYou) {
                 lens.filter = None;
             } else if BodyFilter::NeedsYou.total(&snapshot.worktree_groups) == 0 {
@@ -153,7 +153,7 @@ pub(super) fn reduce(
                 outcome.redraw = true;
                 outcome
                     .effects
-                    .push(InputEffect::SyncFilter(view.make_up_filter.clone()));
+                    .push(InputEffect::SyncFilter(view.toggles.make_up_filter.clone()));
             }
             return (outcome, CardReply::Done);
         }

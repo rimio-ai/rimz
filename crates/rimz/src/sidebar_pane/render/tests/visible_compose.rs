@@ -1,3 +1,4 @@
+use crate::sidebar_pane::render::PresentationToggles;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -202,16 +203,16 @@ proptest! {
                 6 => ui.freeze = None,
                 7 => {
                     let key = snapshot.worktree_groups[0].key.clone();
-                    if !ui.expanded_groups.remove(&key) { ui.expanded_groups.insert(key); }
+                    if !ui.toggles.expanded_groups.remove(&key) { ui.toggles.expanded_groups.insert(key); }
                 }
                 8 => width = 20 + value % 61,
-                9 => ui.inactive_peek = ui.inactive_peek.is_none().then(Default::default),
-                10 => ui.search_draft =
+                9 => ui.toggles.inactive_peek = ui.toggles.inactive_peek.is_none().then(Default::default),
+                10 => ui.toggles.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
                 _ => {
                     let row = snapshot.worktree_groups[0].rows[0].id.clone();
-                    ui.delegation_overrides.insert(row.clone(), value % 2 == 0);
-                    ui.delegation_history.insert(row, None);
+                    ui.toggles.delegation_overrides.insert(row.clone(), value % 2 == 0);
+                    ui.toggles.delegation_history.insert(row, None);
                 }
             }
             let before = ui.clone();
@@ -253,12 +254,15 @@ fn assert_painted(ui: &UiState, expected: BTreeSet<usize>) {
 fn paint_scope_tracks_window_epoch_and_selection() {
     let mut snapshot = fleet(124);
     let mut ui = ViewState {
-        expanded_groups: snapshot
-            .worktree_groups
-            .iter()
-            .map(|g| g.key.clone())
-            .collect(),
-        inactive_peek: Some(Default::default()),
+        toggles: PresentationToggles {
+            expanded_groups: snapshot
+                .worktree_groups
+                .iter()
+                .map(|g| g.key.clone())
+                .collect(),
+            inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
