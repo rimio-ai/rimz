@@ -30,10 +30,10 @@ use crate::mux::{
     CommandSpec, CompanionAppendErr, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr,
     PaneCapture, PaneListOptions, PaneListing, ReconcileAddErr, ReconcileAddOutcome, ReconcilePane,
     ReconcilePaneRole, ReconcileScope, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed,
-    SessionHealth, SessionLiveness, SessionOptions, SidebarLivenessSource, SidebarPaneOptions,
-    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
-    confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
-    memoized_version,
+    SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness, SidebarLivenessSource,
+    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions, ViewSidebars, confirm_resume_tab_shapes, ensure_pane_backend,
+    execute_close_plan, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::mux::{PaneRect, ViewGeometry};
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
@@ -1611,16 +1611,12 @@ impl MuxBackend for ZellijBackend {
         live: &dyn SidebarLivenessSource,
         scope: ReconcileScope,
     ) -> Result<SidebarRecovery> {
-        let client_view = self
-            .client_view(ClientFocusOptions {
-                session_name: Some(opts.session_name.clone()),
-                command_timeout: Some(RECONCILE_LIST_TIMEOUT),
-            })
-            .unwrap_or_default();
-        let mut panes = self
-            .structural_geometry_listing(&opts.session_name, &opts.workspace_id, &HashSet::new())?
-            .panes;
-        let live = live.sample();
+        let SidebarListing {
+            client_view,
+            mut panes,
+            live,
+            views,
+        } = self.sidebar_listing(&opts.session_name, &opts.workspace_id, live)?;
         let viewed_tabs: HashSet<u64> = client_view
             .clients
             .iter()
@@ -1638,7 +1634,6 @@ impl MuxBackend for ZellijBackend {
                 .is_some_and(|id| viewed_tabs.contains(&id));
         }
         let restoration = client_restoration_target(&panes, &client_view);
-        let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
         let plan = super::super::plan_reconcile(&views, &live, scope);
         let planned_closes = plan.close_panes();
         let off_spec =
@@ -1749,7 +1744,13 @@ impl MuxBackend for ZellijBackend {
             );
         }
         if let Some(restoration) = restoration
-            && let Err(error) = restore_client_view(self, opts, restoration, &viewed_tabs)
+            && let Err(error) = restore_client_view(
+                self,
+                &opts.session_name,
+                &opts.workspace_id,
+                restoration,
+                &viewed_tabs,
+            )
         {
             post_execution_error.get_or_insert(error);
         }
@@ -1760,6 +1761,55 @@ impl MuxBackend for ZellijBackend {
                 tags.operation = "zellij.reconcile.post_execution",
                 error = &error as &dyn std::error::Error,
                 "sidebar repair encountered a post-execution read failure",
+            );
+        }
+        Ok(report)
+    }
+
+    fn close_duplicate_sidebars(
+        &self,
+        session_name: &str,
+        workspace_id: &WorkspaceId,
+        live: &dyn SidebarLivenessSource,
+    ) -> Result<SidebarRecovery> {
+        let listing = self.sidebar_listing(session_name, workspace_id, live)?;
+        let plan = super::super::plan_reconcile(
+            &listing.views,
+            &listing.live,
+            ReconcileScope::CloseDuplicates,
+        );
+        let mut report = SidebarRecovery::default();
+        if plan.is_empty() {
+            return Ok(report);
+        }
+        // Closing the pane a client views moves its focus, which may land on
+        // the surviving sidebar; return it to the tab's work pane afterwards.
+        let restoration = client_restoration_target(&listing.panes, &listing.client_view);
+        if let Some(failure) = execute_close_plan(plan, &mut report, |pane| {
+            self.close_pane(session_name, pane)
+        }) {
+            tracing::warn!(
+                session = %session_name,
+                view = %failure.view,
+                tags.operation = "zellij.reconcile.close_duplicates",
+                error = &failure.error as &dyn std::error::Error,
+                "duplicate sidebar close aborted; leaving remaining views unchanged",
+            );
+        }
+        if let Some(restoration) = restoration
+            && let Err(error) = restore_client_view(
+                self,
+                session_name,
+                workspace_id,
+                restoration,
+                &HashSet::new(),
+            )
+        {
+            tracing::warn!(
+                session = %session_name,
+                tags.operation = "zellij.reconcile.close_duplicates.restore",
+                error = &error as &dyn std::error::Error,
+                "could not restore the client view after closing duplicate sidebars",
             );
         }
         Ok(report)
@@ -2069,6 +2119,42 @@ pub(super) fn moves_to_place_after(anchor_position: u64, tab_count: u64) -> u64 
         .saturating_sub(anchor_position.saturating_add(1))
 }
 
+/// One authoritative listing for the sidebar planner: the client view read
+/// before it, and `live` sampled once after it.
+struct SidebarListing {
+    client_view: ClientView,
+    panes: Vec<PaneTopologyPane>,
+    live: SidebarLiveness,
+    views: Vec<ViewSidebars>,
+}
+
+impl ZellijBackend {
+    fn sidebar_listing(
+        &self,
+        session_name: &str,
+        workspace_id: &WorkspaceId,
+        live: &dyn SidebarLivenessSource,
+    ) -> Result<SidebarListing> {
+        let client_view = self
+            .client_view(ClientFocusOptions {
+                session_name: Some(session_name.to_owned()),
+                command_timeout: Some(RECONCILE_LIST_TIMEOUT),
+            })
+            .unwrap_or_default();
+        let panes = self
+            .structural_geometry_listing(session_name, workspace_id, &HashSet::new())?
+            .panes;
+        let live = live.sample();
+        let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
+        Ok(SidebarListing {
+            client_view,
+            panes,
+            live,
+            views,
+        })
+    }
+}
+
 pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
     if !pane.is_terminal() {
         return None;
@@ -2157,12 +2243,13 @@ fn client_restoration_target(
 
 fn restore_client_view(
     backend: &ZellijBackend,
-    opts: &SidebarPaneOptions,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
     restoration: (u64, Option<u64>),
     viewed_tabs: &HashSet<u64>,
 ) -> Result<()> {
     let panes = backend
-        .structural_geometry_listing(&opts.session_name, &opts.workspace_id, viewed_tabs)?
+        .structural_geometry_listing(session_name, workspace_id, viewed_tabs)?
         .panes;
     let (tab_id, preferred) = restoration;
     let Some(tab_position) = panes
@@ -2185,14 +2272,14 @@ fn restore_client_view(
     let Some(work) = work else {
         return Ok(());
     };
-    let Ok(runtime) = backend.runtime_paths_for_workspace(opts.workspace_id.clone()) else {
+    let Ok(runtime) = backend.runtime_paths_for_workspace(workspace_id.clone()) else {
         return Ok(());
     };
     let pane = PaneId::from(ZellijPaneId::Terminal(work));
     let _ = execute_focus_restoration(
         backend,
         &runtime,
-        &opts.session_name,
+        session_name,
         &pane,
         Some(tab_position),
         crate::mux::focus_anchor::FocusDispatchRetries {

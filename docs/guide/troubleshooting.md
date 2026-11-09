@@ -303,7 +303,7 @@ Closing the sidebar pane costs you nothing durable: every agent keeps working, a
 rimz sidebar repair    # remount a missing, duplicate, wedged, or mis-docked sidebar
 ```
 
-`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. The room's line says `no sidebar reporting in`, with `fix: rimz reload --repair` in the closing block. `rimz reload --repair` upgrades and repairs before reporting the resulting room state.
+`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. The room's line says `no sidebar reporting in`, with `fix: rimz reload --repair` in the closing block. `rimz reload --repair` upgrades and repairs before reporting the resulting room state. A second sidebar in one window or tab needs no command: RimZ closes the extra one on its own about 10 to 20 seconds after it appears, and keeps the other sidebar and every working pane.
 
 On Zellij, a silent or stale presence-plugin warning does not stop repair: it uses Zellij's live pane list. Run `rimz doctor`, then reattach or restart to reload the plugin. A detached session defers pane changes until you attach; a busy repair asks you to re-run after the other pass finishes. The command exits 1 if repair is incomplete, even when other rooms were repaired successfully ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
 
@@ -345,7 +345,7 @@ rimz reload --repair    # run those two independent operations in order
 rimz doctor --clear     # dismiss diagnostics, incidents, and log records from before the upgrade
 ```
 
-`rimz reload` is the pane-preserving fix: it re-execs each sidebar in place and leaves every other pane alone, it runs from anywhere, and it leaves stopped sessions stopped. `rimz start` and `rimz attach` print the same warning when a live room still runs a different sidebar build. A sidebar that misses the command's reporting window is `settling, retries on its own` from the durable room record, so run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes.
+`rimz reload` is the pane-preserving fix: it re-execs each sidebar in place and leaves every other pane alone, it runs from anywhere, and it leaves stopped sessions stopped. `rimz start` and `rimz attach` print the same warning when a live room still runs a different sidebar build. A sidebar that misses the command's reporting window is `settling, retries on its own` from the durable room record, so run `rimz sidebar repair` only for structural damage RimZ does not fix on its own (it closes a duplicate sidebar by itself); a replacement mounts and proves a current-build heartbeat before the old pane closes.
 
 Reload exits 1 after the full report when its closing block names anything that needs you; settling and pending settings do not fail it. With `--repair`, an incomplete structural repair appears in that block; the preceding build upgrade stays committed ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
 

@@ -314,6 +314,25 @@ where
     None
 }
 
+/// Execute a close-only plan, as [`ReconcileScope::CloseDuplicates`] plans:
+/// such a plan holds no add, so none is ever attempted.
+pub(super) fn execute_close_plan<Close>(
+    plan: ReconcilePlan,
+    report: &mut SidebarRecovery,
+    close: Close,
+) -> Option<ReconcileFailure>
+where
+    Close: FnMut(&PaneId) -> crate::mux::Result<()>,
+{
+    let refuse_add = |view: &str, _: &[PaneId]| {
+        Err(ReconcileAddErr::from(crate::mux::MuxErr::Output {
+            program: "rimz".to_owned(),
+            reason: format!("a close-only sidebar pass planned an add in view `{view}`"),
+        }))
+    };
+    execute_reconcile_plan(plan, report, false, refuse_add, close)
+}
+
 fn execute_reconcile_verdict<Add, Close>(
     verdict: &ViewVerdict,
     report: &mut SidebarRecovery,

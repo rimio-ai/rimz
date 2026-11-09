@@ -4100,3 +4100,135 @@ fn a_full_wake_channel_does_not_block_failure_publication_or_peer_completion() {
         FetchUpdate::Failed { .. }
     ));
 }
+
+fn heal_frame(sidebars: &[&str], observed_at_ms: u64) -> PaneFrame {
+    let mut panes = vec![pane("terminal_1", "tab_1", false)];
+    panes.extend(sidebars.iter().map(|raw| crate::pane::PaneRef {
+        command: Some(crate::pane::SIDEBAR_CHROME_TITLE.to_owned()),
+        ..pane(raw, "tab_1", false)
+    }));
+    let mut frame = crate::sidebar::frame::assemble_frame(panes, observed_at_ms, "rimz-test");
+    frame.observed_at_ms = observed_at_ms;
+    frame
+}
+
+#[test]
+fn heal_waits_out_the_dwell_on_observation_stamps_then_rests() {
+    let grace = crate::sidebar::FRESH_PANE_GRACE.as_millis() as u64;
+    let now = Instant::now();
+    let mut gate = heal::HealGate::default();
+
+    assert!(gate.start_if_due(&heal_frame(&["s1"], 0), now).is_none());
+    assert!(
+        gate.start_if_due(&heal_frame(&["s1"], grace * 3), now)
+            .is_none(),
+        "one sidebar per view is no duplicate, however long it lasts",
+    );
+    let duplicate = |at| heal_frame(&["s1", "s2"], at);
+    assert!(
+        gate.start_if_due(&duplicate(1_000), now).is_none(),
+        "seen once"
+    );
+    assert!(
+        gate.start_if_due(&duplicate(1_000), now).is_none(),
+        "a repeated observation is no dwell",
+    );
+    assert!(
+        gate.start_if_due(&duplicate(1_000 + grace - 1), now)
+            .is_none()
+    );
+    let done = gate
+        .start_if_due(&duplicate(1_000 + grace), now)
+        .expect("frames a grace apart start a pass");
+    assert!(
+        gate.start_if_due(&duplicate(1_000 + 3 * grace), now)
+            .is_none(),
+        "one pass in flight at a time",
+    );
+
+    drop(done);
+    let finished = Instant::now();
+    assert!(
+        gate.start_if_due(&duplicate(1_000 + 4 * grace), finished)
+            .is_none(),
+        "the next pass rests a grace after the last one finished",
+    );
+    assert!(
+        gate.start_if_due(
+            &duplicate(1_000 + 4 * grace),
+            finished + crate::sidebar::FRESH_PANE_GRACE,
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn heal_dwell_restarts_when_the_duplicate_disappears() {
+    let grace = crate::sidebar::FRESH_PANE_GRACE.as_millis() as u64;
+    let now = Instant::now();
+    let mut gate = heal::HealGate::default();
+
+    assert!(
+        gate.start_if_due(&heal_frame(&["s1", "s2"], 0), now)
+            .is_none()
+    );
+    assert!(
+        gate.start_if_due(&heal_frame(&["s1"], grace / 2), now)
+            .is_none()
+    );
+    assert!(
+        gate.start_if_due(&heal_frame(&["s1", "s2"], grace), now)
+            .is_none(),
+        "a duplicate that left and returned starts its dwell again",
+    );
+    assert!(
+        gate.start_if_due(&heal_frame(&["s1", "s2"], 2 * grace), now)
+            .is_some()
+    );
+}
+
+thread_local! {
+    static HEAL_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn produced_frames_start_one_heal_pass_and_cached_folds_none() {
+    let grace = crate::sidebar::FRESH_PANE_GRACE.as_millis() as u64;
+    let fixture = FetchFixture::new();
+    let subscribers = Subscribers::default();
+    let mut worker = fixture.worker();
+    worker.spawn_heal = |pass| {
+        HEAL_PASSES.set(HEAL_PASSES.get() + 1);
+        drop(pass);
+    };
+    let now = Instant::now();
+    worker.heal_duplicate_sidebars(&heal_frame(&["s1", "s2"], 0), &subscribers, now);
+    assert_eq!(HEAL_PASSES.get(), 0);
+    worker.heal_duplicate_sidebars(&heal_frame(&["s1", "s2"], grace), &subscribers, now);
+    assert_eq!(HEAL_PASSES.get(), 1);
+    worker.heal_duplicate_sidebars(&heal_frame(&["s1", "s2"], 2 * grace), &subscribers, now);
+    assert_eq!(HEAL_PASSES.get(), 1, "no second pass within a grace");
+
+    // A dwell already met: only a produced frame may act on it.
+    let mut worker = fixture.worker();
+    worker.spawn_heal = |_| panic!("a cached fold must not heal");
+    assert!(
+        worker
+            .heal
+            .start_if_due(&heal_frame(&["s1", "s2"], 0), now)
+            .is_none()
+    );
+    fixture.host_data.lock().unwrap().inputs =
+        Some(HostInputs::from_frame(heal_frame(&["s1", "s2"], 3 * grace)));
+    let outcomes = fixture.run_with(FetchRequest::default(), &mut worker);
+    assert!(
+        outcomes.iter().all(|update| !matches!(
+            update,
+            FetchUpdate::Snapshot {
+                source: SnapshotSource::Produced,
+                ..
+            }
+        )),
+        "the cycle stayed cached",
+    );
+}

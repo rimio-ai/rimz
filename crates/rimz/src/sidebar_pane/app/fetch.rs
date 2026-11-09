@@ -34,6 +34,7 @@ use super::timing::{fold_interval, tick_for};
 
 #[cfg(feature = "testkit")]
 mod concurrent;
+mod heal;
 #[cfg(feature = "testkit")]
 pub use concurrent::{ConcurrentFanout, FanoutThread};
 
@@ -490,6 +491,8 @@ struct FetchWorker {
     meter: TickMeter,
     window: FetchWindow,
     tab_name_memo: TabNameMemo,
+    heal: heal::HealGate,
+    spawn_heal: fn(heal::HealPass),
     session_listed: fn(crate::MuxName, &str) -> bool,
     read_stall: fn() -> Vec<SidebarStallItem>,
     #[cfg(test)]
@@ -802,6 +805,8 @@ impl FetchWorker {
             meter,
             window: FetchWindow::default(),
             tab_name_memo: TabNameMemo::default(),
+            heal: heal::HealGate::default(),
+            spawn_heal: heal::HealPass::spawn,
             session_listed: |mux, session| {
                 crate::mux::backend_for(mux).session_accepts_agent_close(session)
             },
@@ -987,6 +992,7 @@ impl FetchWorker {
                     frame: Some(frame.clone()),
                 };
                 self.update_tab_names(fold.workspace.snapshot(), &frame);
+                self.heal_duplicate_sidebars(&frame, &sink.subscribers, Instant::now());
                 self.publish_fold(
                     state,
                     fold,
@@ -997,6 +1003,29 @@ impl FetchWorker {
             }
             Err(error) => sink.publish(Err(error)),
         }
+    }
+
+    /// Start one close-only pass, on its own thread, once a view has shown two
+    /// sidebars across produced frames [`crate::sidebar::FRESH_PANE_GRACE`]
+    /// apart. Steady state is the frame scan alone.
+    fn heal_duplicate_sidebars(
+        &mut self,
+        frame: &PaneFrame,
+        subscribers: &Subscribers,
+        now: Instant,
+    ) {
+        let Some(done) = self.heal.start_if_due(frame, now) else {
+            return;
+        };
+        (self.spawn_heal)(heal::HealPass {
+            mux: self.config.mux,
+            session_name: self.config.session_name.clone(),
+            workspace_id: self.config.workspace_id.clone(),
+            runtime: self.runtime.clone(),
+            subscribers: subscribers.clone(),
+            diag: self.diag.clone(),
+            done,
+        });
     }
 
     fn update_tab_names(

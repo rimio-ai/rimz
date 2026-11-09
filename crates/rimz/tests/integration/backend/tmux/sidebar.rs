@@ -1164,6 +1164,121 @@ fn stale_heartbeat_launch_adds_only_where_a_tmux_window_has_no_sidebar() {
 }
 
 #[test]
+fn host_closes_a_planted_duplicate_tmux_sidebar_on_its_own() {
+    require_tmux!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let session = "heal-duplicate";
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            env.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((160, 32)),
+        ))
+        .expect("ensure session");
+    for (name, value) in [
+        ("RIMZ_HOME", env.rimz_home()),
+        ("XDG_STATE_HOME", env.state_root()),
+        ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("XDG_CONFIG_HOME", env.config_root()),
+        ("HOME", env.home_root.clone()),
+        ("RIMZ_BIN", env.rimz_bin().to_path_buf()),
+    ] {
+        server.tmux(&[
+            "set-environment",
+            "-t",
+            session,
+            name,
+            value.to_str().expect("utf8 test path"),
+        ]);
+    }
+    let opts = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
+        workspace_id: env.workspace_id.clone(),
+        project_root: env.project_root.clone(),
+        cwd: env.project_root.clone(),
+        ..sidebar_opts(
+            server._tempdir.path(),
+            session,
+            env.rimz_bin().to_owned(),
+            Some(160),
+        )
+    };
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open sidebar");
+    let home = wait_for_sidebar_pane(&server, session, None);
+    let panes = list_session_panes(&server, session);
+    let window = panes
+        .iter()
+        .find(|pane| pane.pane_id == home)
+        .and_then(|pane| pane.view_id.clone())
+        .expect("sidebar window");
+    let work = panes
+        .iter()
+        .find(|pane| pane.view_id.as_ref() == Some(&window) && !pane.is_rimz_sidebar())
+        .expect("work pane")
+        .pane_id
+        .clone();
+    wait_for_sidebar_heartbeat(&env);
+
+    // A second serve for the same session, as a blind split once left beside a live one.
+    let serve = server.display(home.raw(), "#{pane_start_command}");
+    server.tmux(&["split-window", "-d", "-h", "-t", work.raw(), &serve]);
+    let sidebars = || sidebar_pane_ids(&server, session, Some(window.as_str())).len();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sidebars() < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "the planted sidebar never came up"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while sidebars() > 1 {
+        assert!(
+            Instant::now() < deadline,
+            "the duplicate sidebar was not closed within 30 s: {:?}",
+            list_session_panes(&server, session),
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let remaining = list_session_panes(&server, session);
+    assert_eq!(sidebars(), 1, "one sidebar remains: {remaining:?}");
+    assert!(
+        remaining.iter().any(|pane| pane.pane_id == work),
+        "the working pane survives: {remaining:?}",
+    );
+
+    let state = env.state_path_for(&env.project_root);
+    let diag = rimz::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        session,
+        None,
+    );
+    let records =
+        std::fs::read_to_string(diag.log_path().expect("diagnostic path")).unwrap_or_default();
+    let repaired = records
+        .lines()
+        .filter_map(|line| serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line).ok())
+        .any(|record| {
+            matches!(
+                record.event,
+                rimz::diag::record::DiagEvent::SidebarViewRepaired { ref view, ref closed, .. }
+                    if *view == window && closed.len() == 1
+            )
+        });
+    assert!(repaired, "the close is recorded: {records}");
+}
+
+#[test]
 fn fresh_foreign_producer_still_repairs_tmux_session_view() {
     require_tmux!();
     let server = TmuxServer::new();

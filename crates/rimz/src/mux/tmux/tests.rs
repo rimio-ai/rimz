@@ -1922,6 +1922,84 @@ fi
     assert_eq!(report, crate::mux::SidebarRecovery::default());
 }
 
+#[cfg(unix)]
+#[test]
+fn close_duplicates_kills_only_unkept_sidebars_and_records_a_failed_close() {
+    use crate::mux::{SidebarLiveness, SidebarRepairFailure};
+
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+shift 3
+printf '%s\n' "$*" >> "$dir/argv"
+case "$1" in
+  list-panes)
+    printf '%s\n' \
+      'rimz-test,@0,%1,rimz,/,1,work,rimz-sidebar,0' \
+      'rimz-test,@0,%2,sh,/,2,work,shell,0' \
+      'rimz-test,@0,%3,rimz,/,3,work,rimz-sidebar,0' \
+      'rimz-test,@1,%4,rimz,/,4,solo,rimz-sidebar,0' \
+      'rimz-test,@1,%5,sh,/,5,solo,shell,0' \
+      'rimz-test,@2,%6,rimz,/,6,stuck,rimz-sidebar,0' \
+      'rimz-test,@2,%7,rimz,/,7,stuck,rimz-sidebar,0' \
+      'rimz-test,@2,%8,sh,/,8,stuck,shell,0' \
+      'rimz-test,@3,%9,rimz,/,9,unclaimed,rimz-sidebar,0' \
+      'rimz-test,@3,%10,rimz,/,10,unclaimed,rimz-sidebar,0' \
+      'rimz-test,@3,%11,sh,/,11,unclaimed,shell,0'
+    ;;
+  kill-pane)
+    [ "$3" = %7 ] && { echo 'refused' >&2; exit 1; }
+    ;;
+esac
+exit 0
+"#,
+    );
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    let tmux = |raw: &str| crate::PaneId::from_parts(MuxName::Tmux, raw);
+    let live = SidebarLiveness {
+        claimed_panes: ["%3", "%1", "%4", "%6"].map(tmux).into(),
+        ..SidebarLiveness::default()
+    };
+    let workspace_id = crate::WorkspaceId::from_project_root(temp.path());
+
+    let report = backend
+        .close_duplicate_sidebars("rimz-test", &workspace_id, &live)
+        .unwrap();
+
+    let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    let lines: Vec<_> = log.lines().collect();
+    assert!(lines[0].starts_with("list-panes -s -t rimz-test"), "{log}");
+    assert_eq!(
+        lines[1..],
+        ["kill-pane -t %3", "kill-pane -t %7"],
+        "one listing, then closes only: no hook, width, split, or geometry read",
+    );
+    assert_eq!(report.closed, 1);
+    assert_eq!(report.failed, 1, "the failed close stops the pass");
+    assert_eq!(report.recovered, 0);
+    assert_eq!(
+        report.repairs,
+        [crate::mux::SidebarViewRepair {
+            view: "@0".to_owned(),
+            closed: vec![tmux("%3")],
+            added: None,
+        }],
+    );
+    assert_eq!(report.failures.len(), 1);
+    let SidebarRepairFailure {
+        view, step, pane, ..
+    } = &report.failures[0];
+    assert_eq!(
+        (view.as_str(), *step, pane.clone()),
+        (
+            "@2",
+            crate::diag::record::SidebarRepairStep::Close,
+            Some(tmux("%7"))
+        ),
+    );
+}
+
 #[test]
 fn client_view_uses_a_printable_field_separator() {
     let spec = TmuxBackend::default().client_view_command(Some("rimz-room"));

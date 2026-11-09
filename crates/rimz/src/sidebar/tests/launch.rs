@@ -37,6 +37,7 @@ fn pristine_opts(harness: &Harness) -> SidebarPaneOptions {
 struct FakeSidebarMux {
     open_calls: Mutex<usize>,
     reconcile_scopes: Mutex<Vec<ReconcileScope>>,
+    heal_calls: Mutex<usize>,
     fail_open: bool,
     publish_before_sample: bool,
     fail_reconcile: bool,
@@ -127,6 +128,16 @@ impl SidebarMux for FakeSidebarMux {
                 "the source must see a heartbeat published after entering the backend"
             );
         }
+        Ok(self.recovery.clone())
+    }
+
+    fn close_duplicate_sidebars(
+        &self,
+        _session_name: &str,
+        _workspace_id: &crate::ids::WorkspaceId,
+        _live: &dyn SidebarLivenessSource,
+    ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
+        *self.heal_calls.lock().expect("heal calls") += 1;
         Ok(self.recovery.clone())
     }
 }
@@ -310,6 +321,45 @@ fn fresh_sidebar_launch_skips_reconcile_while_session_lock_is_held() {
     assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
     assert_eq!(backend.open_calls(), 0);
     assert_eq!(backend.reconcile_calls(), 0, "the holder excludes attach");
+}
+
+#[test]
+fn heal_skips_a_held_session_lock_without_waiting() {
+    let h = Harness::new();
+    h.ensure_runtime();
+    let backend = FakeSidebarMux {
+        recovery: crate::mux::SidebarRecovery {
+            closed: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let heal = || {
+        heal_session(
+            &backend,
+            &h.runtime,
+            "session",
+            &h.workspace_id,
+            &crate::mux::SidebarLiveness::default(),
+            || panic!("a report without repairs or failures requests no sink"),
+        )
+        .expect("heal pass")
+    };
+    let guard = crate::disk::lock::WorkspaceLock::acquire(
+        &h.runtime.sidebar_reconcile_lock(backend.name(), "session"),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(heal(), None, "a held lock skips the pass");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "and never waits"
+    );
+    assert_eq!(*backend.heal_calls.lock().unwrap(), 0);
+
+    drop(guard);
+    assert_eq!(heal().map(|report| report.closed), Some(1));
+    assert_eq!(*backend.heal_calls.lock().unwrap(), 1);
 }
 
 #[test]
