@@ -1021,7 +1021,8 @@ fn target_assembly_reuses_origins_but_reads_head_fresh() {
             &paths,
             &DiffStatsCache::default(),
             &mut state,
-        );
+        )
+        .targets;
         counts.push(crate::proc::testkit::spawn_count() - before);
         targets
     };
@@ -1052,7 +1053,7 @@ fn target_assembly_reuses_origins_but_reads_head_fresh() {
             .iter()
             .map(|path| (path.clone(), BTreeSet::from(["feature/shared".to_owned()]))),
     );
-    let targets = build_targets(&demand, &paths, &DiffStatsCache::default(), &mut state);
+    let targets = build_targets(&demand, &paths, &DiffStatsCache::default(), &mut state).targets;
     let branches = targets
         .iter()
         .filter(|target| target.branch_only)
@@ -1105,6 +1106,7 @@ fn target_assembly_retries_failed_origin_reads() {
             &DiffStatsCache::default(),
             &mut state
         )
+        .targets
         .is_empty()
     );
     // Repair the transient failure without changing the memo's config identity.
@@ -1116,6 +1118,7 @@ fn target_assembly_retries_failed_origin_reads() {
             &DiffStatsCache::default(),
             &mut state
         )
+        .targets
         .len(),
         1,
         "failed origin reads must be retried without a config stamp change"
@@ -1129,6 +1132,7 @@ fn target_assembly_retries_failed_origin_reads() {
             &DiffStatsCache::default(),
             &mut state
         )
+        .targets
         .is_empty()
     );
     assert!(
@@ -1138,6 +1142,7 @@ fn target_assembly_retries_failed_origin_reads() {
             &DiffStatsCache::default(),
             &mut state
         )
+        .targets
         .is_empty()
     );
     assert_eq!(
@@ -1148,35 +1153,215 @@ fn target_assembly_retries_failed_origin_reads() {
 }
 
 #[test]
-fn origin_memo_keeps_only_the_repositories_the_last_pass_reached() {
-    let repos = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
-    for (index, repo) in repos.iter().enumerate() {
-        let url = format!("https://github.com/org/repo{index}.git");
-        for args in [
-            &["init", "-q", "-b", "main"][..],
-            &["remote", "add", "origin", &url],
-            &[
-                "-c",
-                "user.name=test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "--allow-empty",
-                "-qm",
-                "base",
-            ],
-        ] {
-            assert!(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(repo.path())
-                    .args(args)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        }
+fn retryable_discovery_keeps_prior_truth_and_backs_off_on_the_fast_path() {
+    const REPO: &str = "gh:github.com:org/repo";
+    let repo = git_checkout("https://github.com/org/repo.git");
+    let path = repo.path().display().to_string();
+    let needed = vec![path.clone()];
+    let included = repo.path().join("included.config");
+    git_in(
+        repo.path(),
+        &["config", "include.path", included.to_str().unwrap()],
+    );
+    let diff = DiffStatsCache {
+        entries: BTreeMap::from([(
+            path.clone(),
+            DiffStatsCacheEntry {
+                head_sha: Some("new".to_owned()),
+                ..DiffStatsCacheEntry::default()
+            },
+        )]),
+    };
+    let link = target(&path, "feature").pr_link(WorktreePrState::Open, 7, None, None, None);
+    let bound = PrStateCache {
+        states: BTreeMap::from([(path.clone(), link.clone())]),
+        head_seen: BTreeMap::from([(path.clone(), "old".to_owned())]),
+        path_repos: BTreeMap::from([(path.clone(), REPO.to_owned())]),
+        repos: BTreeMap::from([(REPO.to_owned(), RepoProbe::default())]),
+        ..PrStateCache::default()
+    };
+    let now = 1_000;
+    let retry_ms = PR_STATE_RETRY_TTL.as_millis() as u64;
+    for prior in [bound, PrStateCache::default()] {
+        let first_sight = prior.states.is_empty();
+        std::fs::write(&included, "[invalid\n").unwrap();
+        let mut state = super::super::ProducerRefreshState::default();
+        let discovered = build_targets(&BTreeMap::new(), &needed, &diff, &mut state);
+        let groups = group_targets(discovered.targets);
+        let retry = |cache: &PrStateCache, now| {
+            DiscoveryRetry::new(
+                cache,
+                &discovered.retryable,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                now,
+            )
+        };
+        let paths = current_target_paths(&groups);
+        let (cache, _) = probe_due_repos(
+            &groups,
+            &BTreeSet::new(),
+            &retry(&prior, now),
+            &prior,
+            &needed,
+            &diff,
+            now,
+        );
+
+        assert_eq!(cache.path_repos.get(&path), prior.path_repos.get(&path));
+        assert_eq!(cache.states, prior.states);
+        assert_eq!(cache.head_seen, prior.head_seen);
+        assert_eq!(cache.repos.contains_key(REPO), !first_sight);
+        let entry = &cache.discovery_failures[&path];
+        assert_eq!(
+            (entry.ok, entry.refreshed_at_ms, entry.consecutive_failures),
+            (false, now, 1)
+        );
+        let fast = |now| {
+            cached_due_repo_keys(
+                &BTreeMap::new(),
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                now,
+            )
+        };
+        assert_eq!(fast(now + retry_ms), Some(BTreeSet::new()));
+        assert_eq!(fast(now + retry_ms + 1), None);
+        assert!(
+            !needs_target_reconcile(&cache, &needed, &diff, &paths, &retry(&cache, now + 1)),
+            "a failing path must not rewrite the record before its retry is due"
+        );
+        let (bumped, _) = probe_due_repos(
+            &groups,
+            &BTreeSet::new(),
+            &retry(&cache, now + retry_ms + 1),
+            &cache,
+            &needed,
+            &diff,
+            now + retry_ms + 1,
+        );
+        assert_eq!(bumped.discovery_failures[&path].consecutive_failures, 2);
+
+        std::fs::write(&included, "").unwrap();
+        let discovered = build_targets(&BTreeMap::new(), &needed, &diff, &mut state);
+        assert!(discovered.retryable.is_empty());
+        let groups = group_targets(discovered.targets);
+        let paths = current_target_paths(&groups);
+        let retry = DiscoveryRetry::default();
+        assert!(needs_target_reconcile(
+            &bumped, &needed, &diff, &paths, &retry
+        ));
+        let (repaired, _) = probe_due_repos(
+            &groups,
+            &BTreeSet::new(),
+            &retry,
+            &bumped,
+            &needed,
+            &diff,
+            now + retry_ms + 2,
+        );
+        assert!(repaired.discovery_failures.is_empty());
+        assert_eq!(
+            groups[REPO].targets[0].path, path,
+            "the repaired checkout rebinds to its repository"
+        );
+        assert_eq!(repaired.states, prior.states);
     }
+}
+
+#[test]
+fn definitive_discovery_absences_stay_unsupported() {
+    let detached = git_checkout("https://github.com/org/repo.git");
+    git_in(detached.path(), &["checkout", "-q", "--detach"]);
+    let unsupported = git_checkout("https://forge.example.test/org/repo.git");
+    let needed = [&detached, &unsupported].map(|repo| repo.path().display().to_string());
+    let discovered = build_targets(
+        &BTreeMap::new(),
+        &needed,
+        &DiffStatsCache::default(),
+        &mut super::super::ProducerRefreshState::default(),
+    );
+    assert!(discovered.targets.is_empty() && discovered.retryable.is_empty());
+
+    let cache = reconcile_target_bookkeeping(
+        PrStateCache::default(),
+        &needed,
+        &DiffStatsCache::default(),
+        &BTreeSet::new(),
+        &DiscoveryRetry::new(
+            &PrStateCache::default(),
+            &discovered.retryable,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1_000,
+        ),
+        1_000,
+    );
+    for path in &needed {
+        assert_eq!(cache.path_repos[path], UNSUPPORTED_REPO_KEY);
+    }
+    assert!(cache.discovery_failures.is_empty());
+}
+
+#[test]
+fn an_unreadable_head_is_a_retryable_discovery_failure() {
+    let repo = git_checkout("https://github.com/org/repo.git");
+    std::fs::write(repo.path().join(".git/HEAD"), "garbage\n").unwrap();
+    let path = repo.path().display().to_string();
+    let discovered = build_targets(
+        &BTreeMap::new(),
+        std::slice::from_ref(&path),
+        &DiffStatsCache::default(),
+        &mut super::super::ProducerRefreshState::default(),
+    );
+    assert!(discovered.targets.is_empty());
+    assert_eq!(discovered.retryable, BTreeSet::from([path]));
+}
+
+/// A checkout on branch `feature` with one commit and `origin` at `url`.
+fn git_checkout(url: &str) -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    for args in [
+        &["init", "-q", "-b", "feature"][..],
+        &["remote", "add", "origin", url],
+        &[
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+    ] {
+        git_in(repo.path(), args);
+    }
+    repo
+}
+
+fn git_in(repo: &Path, args: &[&str]) {
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .unwrap()
+            .success(),
+        "git {args:?}"
+    );
+}
+
+#[test]
+fn origin_memo_keeps_only_the_repositories_the_last_pass_reached() {
+    let repos =
+        [0, 1].map(|index| git_checkout(&format!("https://github.com/org/repo{index}.git")));
     let paths = repos
         .iter()
         .map(|repo| repo.path().display().to_string())
@@ -1189,6 +1374,7 @@ fn origin_memo_keeps_only_the_repositories_the_last_pass_reached() {
             &DiffStatsCache::default(),
             &mut state,
         )
+        .targets
         .len()
     };
     assert_eq!(assemble(&paths), 2);
@@ -1233,7 +1419,8 @@ fn target_assembly_falls_back_for_symbolic_branch_refs() {
         &paths,
         &DiffStatsCache::default(),
         &mut super::super::ProducerRefreshState::default(),
-    );
+    )
+    .targets;
     assert_eq!(
         targets.len(),
         1,
@@ -1246,7 +1433,7 @@ fn target_assembly_falls_back_for_symbolic_branch_refs() {
 fn build_targets_marks_main_and_the_resolved_trunk() {
     let mut state = super::super::ProducerRefreshState::default();
     let mut build_targets = |needed: &[String], diff: &DiffStatsCache| {
-        super::build_targets(&BTreeMap::new(), needed, diff, &mut state)
+        super::build_targets(&BTreeMap::new(), needed, diff, &mut state).targets
     };
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
@@ -1291,7 +1478,7 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
         branch: "feature".to_owned(),
         base_branch: Some("main".to_owned()),
         from_pr: Some(91),
-        base_ref: git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap(),
+        base_ref: super::super::git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap(),
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
         created_at: marker_created_at,
@@ -1867,14 +2054,16 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
     );
     let target_paths = BTreeSet::new();
 
+    let retry = DiscoveryRetry::default();
     assert!(needs_target_reconcile(
         &cache,
         &needed,
         &diff,
-        &target_paths
+        &target_paths,
+        &retry
     ));
 
-    let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths, 1_000);
+    let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths, &retry, 1_000);
 
     assert!(!cache.states.contains_key("/repo/a"));
     assert!(!cache.branch_ci.contains_key("/repo/a"));
@@ -1897,7 +2086,8 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
         &cache,
         &needed,
         &diff,
-        &target_paths
+        &target_paths,
+        &retry
     ));
 }
 
@@ -1916,6 +2106,7 @@ fn reconcile_prunes_stale_branch_ci_paths() {
         &["/repo/a".to_owned()],
         &DiffStatsCache::default(),
         &BTreeSet::from(["/repo/a".to_owned()]),
+        &DiscoveryRetry::default(),
         1_000,
     );
 
@@ -1944,6 +2135,7 @@ fn condition_scope_without_pane_survives_reconcile() {
         &needed,
         &DiffStatsCache::default(),
         &BTreeSet::from([path.clone()]),
+        &DiscoveryRetry::default(),
         1_000,
     );
     assert_eq!(cache.branch_ci.get(&path), Some(&WorktreeCi::Passing));
@@ -1952,6 +2144,7 @@ fn condition_scope_without_pane_survives_reconcile() {
         &[],
         &DiffStatsCache::default(),
         &BTreeSet::new(),
+        &DiscoveryRetry::default(),
         2_000,
     );
     assert!(cache.branch_ci.is_empty());
@@ -2038,6 +2231,7 @@ fn repo_bookkeeping_prunes_stale_repo_stamps() {
     let (cache, _) = probe_due_repos(
         &groups,
         &BTreeSet::new(),
+        &DiscoveryRetry::default(),
         &prior,
         &needed,
         &DiffStatsCache::default(),
@@ -2165,7 +2359,11 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
         2000,
     );
     assert_eq!(cache.branches, prior.branches);
-    reconcile_branch_rows(&mut cache, &group_targets(vec![checkout]));
+    reconcile_branch_rows(
+        &mut cache,
+        &group_targets(vec![checkout]),
+        &DiscoveryRetry::default(),
+    );
     assert!(cache.branches.is_empty());
 }
 
