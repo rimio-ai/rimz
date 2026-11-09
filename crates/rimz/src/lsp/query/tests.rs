@@ -1612,7 +1612,7 @@ fn incomplete_position_requires_a_column() {
         Target::parse(Verb::Def, "src/lib.rs:12")
             .unwrap_err()
             .to_string(),
-        "src/lib.rs:12 has no column; use path:line:col with 1-based line and column"
+        "src/lib.rs:12 has no column; use path:line:col with 1-based line and column, or path:line:name"
     );
 }
 
@@ -1635,7 +1635,7 @@ fn missing_column_names_only_an_items_selection_line() {
         assert_eq!(
             missing_column(Path::new("/checkout"), Path::new("src/lib.rs"), 10, outline)
                 .to_string(),
-            "src/lib.rs:10 has no column; use path:line:col with 1-based line and column"
+            "src/lib.rs:10 has no column; use path:line:col with 1-based line and column, or path:line:name"
         );
     }
 }
@@ -3052,6 +3052,145 @@ fn file_qualified_targets_split_at_the_first_separator() {
         Target::parse(Verb::Def, "src/lib.rs:2:3").unwrap(),
         Target::Position { .. }
     ));
+}
+
+fn named_checkout(text: &str) -> tempfile::TempDir {
+    let checkout = tempfile::tempdir().unwrap();
+    std::fs::write(checkout.path().join("lib.rs"), text).unwrap();
+    checkout
+}
+
+fn locate_err(checkout: &tempfile::TempDir, raw: &str) -> (i32, String) {
+    let error = QueryErr::from(
+        Target::locate(Verb::Hover, raw, checkout.path(), Path::new("")).unwrap_err(),
+    );
+    (error.exit_code(), error.to_string())
+}
+
+fn located(line: u32, character: u32) -> Target {
+    Target::Position {
+        path: "lib.rs".into(),
+        position: Position { line, character },
+    }
+}
+
+#[test]
+fn line_names_resolve_to_utf16_columns() {
+    let checkout = named_checkout("fn other() {}\n\t/* 🦀 é */ let batch = 1;\n");
+    assert_eq!(
+        Target::locate(Verb::Def, "lib.rs:2:batch", checkout.path(), Path::new("")).unwrap(),
+        located(1, 16)
+    );
+}
+
+#[test]
+fn line_names_match_whole_identifiers_only() {
+    let checkout = named_checkout("batched rebatch r#batch\n");
+    assert_eq!(
+        locate_err(&checkout, "lib.rs:1:batch").0,
+        5,
+        "a longer identifier or a raw identifier is not the name"
+    );
+}
+
+#[test]
+fn line_names_list_every_occurrence_when_repeated() {
+    let checkout = named_checkout("let batch = batch + 1;\n");
+    let (exit, message) = locate_err(&checkout, "lib.rs:1:batch");
+    assert_eq!(
+        (exit, message.as_str()),
+        (
+            6,
+            "ambiguous: batch appears 2 times on lib.rs:1; rerun with one of these targets:\n\
+             lib.rs:1:5\nlib.rs:1:13"
+        )
+    );
+    let parsed: Vec<_> = message
+        .lines()
+        .skip(1)
+        .map(|target| Target::locate(Verb::Def, target, checkout.path(), Path::new("")).unwrap())
+        .collect();
+    assert_eq!(parsed, [located(0, 4), located(0, 12)]);
+}
+
+#[test]
+fn line_names_absent_from_the_line_show_it() {
+    let checkout = named_checkout("fn first() {}\n    let other = 1;   \n");
+    assert_eq!(
+        locate_err(&checkout, "lib.rs:2:batch"),
+        (
+            5,
+            "not found: batch on lib.rs:2, which reads: let other = 1;".to_owned()
+        )
+    );
+}
+
+#[test]
+fn line_names_outside_the_file_fail_with_its_line_count() {
+    let checkout = named_checkout("one\ntwo\n");
+    assert_eq!(
+        [
+            locate_err(&checkout, "lib.rs:0:batch"),
+            locate_err(&checkout, "lib.rs:3:batch")
+        ],
+        [
+            (
+                1,
+                "lib.rs:0 is not a line; lines count from 1 and lib.rs has 2".to_owned()
+            ),
+            (
+                1,
+                "lib.rs:3 is past the end of lib.rs, which has 2 lines".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn line_names_read_crlf_lines_as_lf_lines() {
+    let lf = named_checkout("fn a() {}\nlet batch = 1;\n");
+    let crlf = named_checkout("fn a() {}\r\nlet batch = 1;\r\n");
+    let [lf, crlf] = [&lf, &crlf].map(|checkout| {
+        Target::locate(Verb::Def, "lib.rs:2:batch", checkout.path(), Path::new("")).unwrap()
+    });
+    assert_eq!((lf, crlf), (located(1, 4), located(1, 4)));
+}
+
+#[test]
+fn line_names_leave_digits_a_column() {
+    let checkout = named_checkout("fn example() {}\n");
+    assert_eq!(
+        Target::locate(Verb::Def, "lib.rs:1:4", checkout.path(), Path::new("")).unwrap(),
+        located(0, 3)
+    );
+}
+
+#[test]
+fn line_names_refuse_a_qualified_tail() {
+    let checkout = named_checkout("impl Store { fn open() {} }\n");
+    assert_eq!(
+        locate_err(&checkout, "lib.rs:1:Store::open"),
+        (
+            1,
+            "lib.rs:1:Store::open names a qualified symbol; path:line:name takes one \
+             identifier: use lib.rs:1:open"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn line_names_keep_the_invalid_position_error_for_other_text() {
+    let checkout = named_checkout("fn example() {}\n");
+    assert_eq!(
+        locate_err(&checkout, "lib.rs:12:1abc"),
+        (
+            1,
+            "language-server protocol: invalid position lib.rs:12:1abc; use path:line:col with \
+             1-based line and column, or path:line:name"
+                .to_owned()
+        )
+    );
 }
 
 #[test]

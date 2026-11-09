@@ -127,7 +127,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct Query {
-    /// Targets: path:line:col (1-based, column required), path::Symbol, or a name.
+    /// Targets: path:line:col (1-based, column required), path:line:name, path::Symbol, or a name.
     #[arg(value_name = "TARGET", required = true)]
     targets: Vec<String>,
     /// Select a configured or registered server by name.
@@ -332,8 +332,8 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = render::out();
     for (index, target) in args.targets.iter().enumerate() {
         let result = (|| {
-            let target = match query::Target::parse(verb, target) {
-                Ok(target) => target.resolve_path(root, &folder)?,
+            let target = match query::Target::locate(verb, target, root, &folder) {
+                Ok(target) => target,
                 Err(rimz::lsp::LspErr::MissingColumn { path, line, .. }) => {
                     let path = query::typed_path(root, &folder, &path)?;
                     let outline = query::select(

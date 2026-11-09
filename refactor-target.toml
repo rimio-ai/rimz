@@ -135,7 +135,7 @@ path = "crates/rimz/src/lsp"
 # share one room-scoped usage snapshot across CLI inspection (+7).
 # usage::Log::record shares outcome classification across verb and outline queries (+1).
 # retire, retire::run, and retire::Outcome expose one machine-wide reload pass and counts (+3).
-# query::typed_path and Target::resolve_path share typed input readings with the CLI (+2).
+# query::typed_path and Target::locate share typed input readings with the CLI.
 surface-budget = 109
 
 [[module]]
