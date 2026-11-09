@@ -730,15 +730,24 @@ impl Host {
     }
 }
 
-/// Input words share the attach stream; EOF still releases the pane.
+/// Input words share the attach stream; EOF still releases the pane. Every whole word ends in
+/// `\n`, so a tail without one at EOF is a word the supervisor tore and is never decoded.
 fn read_input(stream: &UnixStream, close: CloseHandle) {
     let Ok(stream) = stream.try_clone() else {
         return;
     };
     std::thread::spawn(move || {
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
-            let wake = decode_wakeup(line.as_bytes());
+        let mut reader = BufReader::new(stream);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if !matches!(reader.read_until(b'\n', &mut line), Ok(read) if read > 0) {
+                break;
+            }
+            let Some(word) = line.strip_suffix(b"\n") else {
+                break;
+            };
+            let wake = decode_wakeup(word);
             if matches!(wake, Wakeup::Tick | Wakeup::Event(_)) {
                 continue;
             }

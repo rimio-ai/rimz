@@ -147,7 +147,7 @@ The host listens on a stream socket in the runtime `sock/` directory, named by a
 
 The host seeds the baseline before the first fold and compares it once per loop turn, counting the hello's value as already reported. Old hosts ignore the optional hello field, and old supervisors ignore an unknown control.
 
-The input words are `resize`, `press:<mods>:<code>`, `mouse:left:<col>:<row>`, `scroll:up`, and `scroll:down`. The host ignores unknown lines and sends decoded input to the attachment's channel. EOF or a read error detaches. A supervisor write times out after the forwarder's 250 ms stop poll and drops that word.
+The input words are `resize`, `press:<mods>:<code>`, `mouse:left:<col>:<row>`, `scroll:up`, and `scroll:down`. The host decodes only `\n`-terminated lines, ignores unknown ones, and sends decoded input to the attachment's channel. EOF or a read error detaches, and a final chunk without `\n` at EOF is discarded undecoded: it can only be a torn word's fragment. A supervisor write times out after the forwarder's 250 ms stop poll. Each word reaches the stream whole or not at all: a timeout before its first byte drops that word and forwarding continues, while a timeout or error after any of its bytes, the initial `resize` included, ends the forwarder as a stream failure, so the round ends as a [lost host](#host-unavailable) rather than joining a fragment to the next word.
 
 A connection that closes without a hello is dropped silently, which is what the socket GC's liveness probe looks like.
 
