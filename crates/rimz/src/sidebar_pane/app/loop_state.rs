@@ -16,7 +16,7 @@ use crate::diag::focus_trace::{FocusTraceEvent, PushBlock, PushVerdict};
 use crate::diag::record::{
     AnomalyKind, ClickedRowDisplacementCause, SidebarWidthControlTrigger as WidthControlTrigger,
 };
-use crate::ids::PaneId;
+use crate::ids::{MuxClientId, PaneId};
 use crate::mux::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
@@ -56,6 +56,7 @@ use super::focus_push::{FocusPeers, FocusPush};
 use super::gate::{GateState, gate_remaining};
 use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
+use super::key_spawn;
 use super::layout_freeze;
 use super::lifecycle::{PaintHold, SelfCloseState, grow_beyond_legit, resize_grew};
 use super::notify::{BellNotice, emit_terminal_notification};
@@ -382,7 +383,8 @@ pub(super) fn handle_wakeup(
         | Wakeup::Snapshot
         | Wakeup::FocusFailed { .. }
         | Wakeup::FocusSuperseded { .. }
-        | Wakeup::FocusDispatched { .. } => InputOutcome::default(),
+        | Wakeup::FocusDispatched { .. }
+        | Wakeup::Notice(_) => InputOutcome::default(),
     };
     outcome.redraw |= pending_moved;
     outcome
@@ -985,6 +987,13 @@ impl LoopState {
             }
             Wakeup::Snapshot => {
                 self.on_snapshot();
+                Ok(())
+            }
+            Wakeup::Notice(reason) => {
+                self.views.with(&mut self.pane, Route::READ, |state, v| {
+                    v.state.notice = Some(reason);
+                    state.dirty = true;
+                });
                 Ok(())
             }
             Wakeup::Event(envelope) => {
@@ -1807,10 +1816,44 @@ impl LoopState {
                     let _ = command.reply.try_send(reply);
                 }
                 InputEffect::Reload => (self.pane.request_reload)(),
-                InputEffect::DismissAlert => {}
+                InputEffect::Close(pane) => {
+                    let room = &self.pane.config.room.session_name;
+                    let argv = key_spawn::close_argv(&pane, room, self.pane.config.room.mux);
+                    self.spawn_rimz(argv);
+                }
+                InputEffect::Palette { args, from_pane } => {
+                    let own = &self.pane.config.own_pane;
+                    let client = match self.views.registry.lock().sole_viewer(own) {
+                        Some(MuxClientId::Tmux(name)) => Some(name.clone()),
+                        _ => None,
+                    };
+                    let argv = key_spawn::palette_argv(
+                        &args,
+                        &self.pane.config.room.session_name,
+                        self.pane.config.room.mux,
+                        from_pane.as_ref(),
+                        client.as_deref(),
+                    );
+                    self.spawn_rimz(argv);
+                }
+                InputEffect::WidthReset => self.pane.width_control.reset(),
+                InputEffect::Repaint | InputEffect::DismissAlert => {}
             }
         }
         Ok(())
+    }
+
+    /// The pane `q` returns to, from the room frame as it stands now.
+    fn return_pane(&self) -> Option<PaneId> {
+        let fold = self.views.registry.lock().fold.clone()?;
+        super::views::toggle_back(fold.frame.as_deref()?, &self.pane.config.own_pane)
+    }
+
+    /// Run a key's `rimz` command off the loop; play clocks run none.
+    fn spawn_rimz(&self, argv: Vec<String>) {
+        if self.pane.clock.effects_enabled() {
+            key_spawn::spawn_rimz(&self.pane.runtime, argv, self.pane.wake.clone());
+        }
     }
 
     fn persist_body_filter(&mut self, filter: BodyLens) {
@@ -1876,6 +1919,16 @@ impl LoopState {
                 });
             }
         }
+        // A raw press resolves to its action only under the views lock, where the
+        // frame read cannot run, so every press reads the return pane ahead of it.
+        if wakeups.iter().any(|wakeup| {
+            matches!(
+                wakeup,
+                Wakeup::Key(KeyAction::PaneReturn) | Wakeup::Press { .. }
+            )
+        }) {
+            self.pane.ui.return_pane = self.return_pane();
+        }
         let user_input = wakeups
             .iter()
             .any(|wakeup| !matches!(wakeup, Wakeup::Resize));
@@ -1909,6 +1962,7 @@ impl LoopState {
                     });
             }
         }
+        self.pane.ui.clear_pending |= outcome.effects.contains(&InputEffect::Repaint);
         if outcome.redraw {
             if !self.watched() {
                 self.pane.dirty = true;

@@ -773,3 +773,23 @@ fn a_rebound_sequence_resolves_and_its_old_default_waits_no_more() {
         ]
     );
 }
+
+#[test]
+fn the_effect_defaults_reach_their_actions() {
+    let keymap = default_keymap();
+    assert_eq!(
+        press_all(&keymap, &[ch('d'), ch('d')]),
+        [KeyAction::Other, KeyAction::Close]
+    );
+    for (key, action) in [
+        (ch(':'), KeyAction::Palette),
+        (ch('q'), KeyAction::PaneReturn),
+        (ch('='), KeyAction::WidthReset),
+        (
+            (KeyCode::Char('l'), KeyModifiers::CONTROL),
+            KeyAction::Redraw,
+        ),
+    ] {
+        assert_eq!(press_all(&keymap, &[key]), [action], "{key:?}");
+    }
+}

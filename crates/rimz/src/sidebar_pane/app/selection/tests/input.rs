@@ -2872,3 +2872,53 @@ fn fold_keys_toggle_the_selected_cards_entries_and_every_group() {
         );
     }
 }
+
+#[test]
+fn effect_keys_carry_the_selected_rows_pane_or_their_own_effect() {
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let close = handle_key(KeyAction::Close, &mut ui, &mut pane_ui, &snapshot);
+    assert!(close.effects.is_empty(), "no row is selected");
+    assert_eq!(
+        ui.notice.as_deref(),
+        Some("sidebar close: no highlighted card")
+    );
+    ui.selected_index = Some(1);
+    ui.selected_pane = Some(pane_of(&snapshot, 1));
+    let row_pane = pane_of(&snapshot, 1);
+    assert_eq!(
+        handle_key(KeyAction::Close, &mut ui, &mut pane_ui, &snapshot).effects,
+        vec![InputEffect::Close(row_pane.clone())]
+    );
+    assert_eq!(
+        handle_key(KeyAction::Palette, &mut ui, &mut pane_ui, &snapshot).effects,
+        vec![InputEffect::Palette {
+            args: vec!["--mode".into(), "commands".into()],
+            from_pane: Some(row_pane),
+        }]
+    );
+    assert_eq!(
+        handle_key(KeyAction::WidthReset, &mut ui, &mut pane_ui, &snapshot).effects,
+        vec![InputEffect::WidthReset]
+    );
+    let back = pane_of(&snapshot, 0);
+    pane_ui.return_pane = Some(back.clone());
+    assert_eq!(
+        handle_key(KeyAction::PaneReturn, &mut ui, &mut pane_ui, &snapshot).effects,
+        vec![InputEffect::Focus(back)]
+    );
+    assert!(
+        handle_key(KeyAction::PaneReturn, &mut ui, &mut pane_ui, &snapshot)
+            .effects
+            .is_empty(),
+        "the return pane is read once per press"
+    );
+    assert_eq!(
+        ui.notice.as_deref(),
+        Some("pane return: no work pane in this tab")
+    );
+    let redraw = handle_key(KeyAction::Redraw, &mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(redraw.effects, vec![InputEffect::Repaint]);
+    assert!(redraw.redraw, "a repaint paints at once");
+}

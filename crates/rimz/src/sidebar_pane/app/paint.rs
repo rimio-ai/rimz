@@ -228,6 +228,9 @@ impl FramePainter {
         let mut graphics = Vec::new();
         let mut bracket = false;
         let body_result = (|| {
+            if std::mem::take(&mut ui.clear_pending) {
+                terminal.clear()?;
+            }
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
                 .saturating_mul(view.animation_phase);
             let transmit_pixels = !self.pixel_wrap || matches!(kind, PaintKind::Routed);

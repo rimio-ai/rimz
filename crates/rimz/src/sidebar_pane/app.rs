@@ -28,6 +28,7 @@ mod health;
 mod hidden_views;
 mod inbox;
 mod input;
+mod key_spawn;
 mod layout_freeze;
 mod lifecycle;
 mod loop_state;

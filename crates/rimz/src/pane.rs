@@ -457,6 +457,24 @@ pub fn select_sidebar_pane<'a>(
     panes.iter().find(|pane| pane.is_rimz_sidebar())
 }
 
+/// The pane a sidebar toggle returns to: the first pane in listing order that
+/// shares the sidebar's view, other than the sidebar and any RimZ sidebar. Each
+/// pane is `(id, view, is_sidebar)`; a sidebar with no view returns to any pane.
+pub fn toggle_back_pane<'a>(
+    panes: &[(&'a PaneId, Option<&str>, bool)],
+    sidebar: &PaneId,
+) -> Option<&'a PaneId> {
+    let sidebar_view = panes
+        .iter()
+        .find(|(pane, ..)| *pane == sidebar)
+        .and_then(|(_, view, _)| *view);
+    panes
+        .iter()
+        .filter(|(pane, _, is_sidebar)| *pane != sidebar && !is_sidebar)
+        .find(|(_, view, _)| sidebar_view.is_none() || *view == sidebar_view)
+        .map(|(pane, ..)| *pane)
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }

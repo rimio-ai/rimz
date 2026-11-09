@@ -35,7 +35,11 @@ pub enum CardRequest {
     FilterNeedsYou {
         toggle: bool,
     },
-    CloseTarget,
+    CloseTarget {
+        /// The pane whose card to close; without it, the acting view's highlight.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane: Option<PaneId>,
+    },
 }
 
 impl CardRequest {
@@ -45,7 +49,7 @@ impl CardRequest {
             Self::Slot { .. } => "slot",
             Self::Last => "last",
             Self::FilterNeedsYou { .. } => "filter needs-you",
-            Self::CloseTarget => "close",
+            Self::CloseTarget { .. } => "close",
         };
         CardReply::Refused {
             reason: format!("sidebar {command}: {reason}"),
@@ -159,6 +163,26 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
     use std::time::Instant;
+
+    #[test]
+    fn close_keeps_its_bare_wire_and_carries_an_optional_pane() {
+        let bare = serde_json::json!({"command": "close_target"});
+        assert_eq!(
+            serde_json::to_value(CardRequest::CloseTarget { pane: None }).unwrap(),
+            bare
+        );
+        assert_eq!(
+            serde_json::from_value::<CardRequest>(bare).unwrap(),
+            CardRequest::CloseTarget { pane: None }
+        );
+        let pane = PaneId::from_parts(MuxName::Tmux, "%7");
+        let scoped = CardRequest::CloseTarget {
+            pane: Some(pane.clone()),
+        };
+        let wire = serde_json::to_value(&scoped).unwrap();
+        assert_eq!(wire["pane"], serde_json::json!(pane));
+        assert_eq!(serde_json::from_value::<CardRequest>(wire).unwrap(), scoped);
+    }
 
     #[test]
     fn card_client_exchanges_one_tagged_request_and_reply() {

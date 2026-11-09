@@ -6,7 +6,7 @@ use crate::sidebar_pane::{CardReply, CardRequest, CardTarget};
 fn request(room: &Room) -> CardReply {
     let stream = room.connect();
     stream.set_read_timeout(Some(SETTLE)).unwrap();
-    attach::write_line(&stream, &CardRequest::CloseTarget).unwrap();
+    attach::write_line(&stream, &CardRequest::CloseTarget { pane: None }).unwrap();
     let reply = attach::read_line::<CardReply>(&mut BufReader::new(stream)).unwrap();
     assert!(
         reply.is_some(),
@@ -124,7 +124,11 @@ fn unresponsive_view() -> (Room, Pane, Pty, Attachment) {
         let (reply, _) = std::sync::mpsc::sync_channel(1);
         room.host
             .plane
-            .card_input(CardRequest::CloseTarget, reply, Instant::now() + SETTLE)
+            .card_input(
+                CardRequest::CloseTarget { pane: None },
+                reply,
+                Instant::now() + SETTLE,
+            )
             .is_ok()
     });
     let mut greeting = hello(&attached.instance_id);
@@ -148,7 +152,7 @@ fn assert_host_refusal(room: &Room, reason: &str) {
     let worker = std::thread::spawn(move || {
         host.serve_card(
             &server,
-            CardRequest::CloseTarget,
+            CardRequest::CloseTarget { pane: None },
             Duration::from_millis(100),
         );
     });
@@ -157,7 +161,7 @@ fn assert_host_refusal(room: &Room, reason: &str) {
     let reply = attach::read_line::<CardReply>(&mut replies).unwrap();
     assert_eq!(
         reply,
-        Some(CardRequest::CloseTarget.refused(reason)),
+        Some(CardRequest::CloseTarget { pane: None }.refused(reason)),
         "a transient host refusal must be a reply, not EOF"
     );
     assert_eq!(attach::read_line::<CardReply>(&mut replies).unwrap(), None);
@@ -188,7 +192,7 @@ fn card_host_reply_deadline_replies_with_a_refusal() {
     };
     assert_eq!(
         *command.answer.lock().unwrap(),
-        Some(CardRequest::CloseTarget.refused("sidebar busy; try again")),
+        Some(CardRequest::CloseTarget { pane: None }.refused("sidebar busy; try again")),
         "the deadline must answer the queued input before returning its refusal"
     );
 }

@@ -112,7 +112,7 @@ impl DataPlane {
         expires: std::time::Instant,
     ) -> Result<(crate::ids::PaneId, Arc<super::card_commands::CardInput>), &'static str> {
         let views = self.views.lock();
-        let (view, pane) = views.command_target()?;
+        let (view, pane) = views.command_target_for(&request)?;
         Ok((
             pane.clone(),
             Arc::new(super::card_commands::CardInput {

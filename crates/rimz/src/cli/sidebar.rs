@@ -73,6 +73,9 @@ enum SidebarSubcmd {
     },
     /// Close the highlighted card's pane, stopping an agent's children first.
     Close {
+        /// Close the card that owns this pane instead of the highlighted one.
+        #[arg(long)]
+        pane: Option<PaneId>,
         #[arg(long)]
         session_name: Option<String>,
     },
@@ -484,8 +487,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             CardRequest::FilterNeedsYou { toggle },
         ),
-        SidebarSubcmd::Close { session_name } => {
-            cards::request(globals, session_name, CardRequest::CloseTarget)
+        SidebarSubcmd::Close { pane, session_name } => {
+            cards::request(globals, session_name, CardRequest::CloseTarget { pane })
         }
         SidebarSubcmd::Reopen { session_name } => cards::reopen(globals, session_name),
         SidebarSubcmd::Snapshot {
@@ -1394,17 +1397,18 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
     let target = if toggle && on_sidebar {
         // The toggle-back target is a deterministic working sibling on both backends.
-        let sidebar_view = listing
+        let panes: Vec<_> = listing
             .panes
             .iter()
-            .find(|pane| pane.pane_id == sidebar)
-            .and_then(|pane| pane.view_id.as_ref());
-        listing
-            .panes
-            .iter()
-            .filter(|pane| pane.pane_id != sidebar && !pane.is_rimz_sidebar())
-            .find(|pane| sidebar_view.is_none() || pane.view_id.as_ref() == sidebar_view)
-            .map(|pane| pane.pane_id.clone())
+            .map(|pane| {
+                (
+                    &pane.pane_id,
+                    pane.view_id.as_deref(),
+                    pane.is_rimz_sidebar(),
+                )
+            })
+            .collect();
+        rimz::pane::toggle_back_pane(&panes, &sidebar).cloned()
     } else {
         Some(sidebar)
     };

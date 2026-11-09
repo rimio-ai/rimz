@@ -13,6 +13,7 @@ use crate::ids::{MuxClientId, PaneId};
 #[cfg(test)]
 use crate::pane::ClientPaneView;
 use crate::sidebar::frame::PaneFrame;
+use crate::sidebar_pane::commands::CardRequest;
 use crate::sidebar_pane::render::ViewState;
 #[cfg(test)]
 use crate::store::snapshot::SidebarSnapshot;
@@ -169,6 +170,27 @@ impl ViewsRecord {
     pub(super) fn observed(&self, pane: &PaneId) -> Option<bool> {
         observed(self.fold.as_deref(), pane)
     }
+}
+
+/// The pane `q` returns to from `sidebar`: the CLI's toggle-back rule
+/// ([`crate::pane::toggle_back_pane`]) over the frame's tabs, whose panes keep
+/// the backend's listing order.
+pub(super) fn toggle_back(frame: &PaneFrame, sidebar: &PaneId) -> Option<PaneId> {
+    let panes: Vec<_> = frame
+        .tabs
+        .iter()
+        .flat_map(|tab| {
+            tab.panes.iter().map(|pane| {
+                let chrome = pane
+                    .current
+                    .command
+                    .as_deref()
+                    .is_some_and(crate::pane::command_is_sidebar_chrome);
+                (&pane.pane_id, Some(tab.view_id.as_str()), chrome)
+            })
+        })
+        .collect();
+    crate::pane::toggle_back_pane(&panes, sidebar).cloned()
 }
 
 fn observed(fold: Option<&WorkspaceFold>, pane: &PaneId) -> Option<bool> {
@@ -405,6 +427,41 @@ impl Views {
             return Err("sidebar view is not ready; try again");
         }
         Ok((first.view, pane))
+    }
+
+    /// The acting view for `request`. A close that names its pane resolves its
+    /// row by that pane, so any ready client's view acts and clients may view
+    /// different tabs.
+    pub(super) fn command_target_for(
+        &self,
+        request: &CardRequest,
+    ) -> Result<(ViewId, &PaneId), &'static str> {
+        if !matches!(request, CardRequest::CloseTarget { pane: Some(_) }) {
+            return self.command_target();
+        }
+        let mut clients = self.live_clients().peekable();
+        clients.peek().ok_or("no attached clients")?;
+        clients
+            .find_map(|(_, client)| {
+                let pane = client.pane.as_ref()?;
+                (self.panes.get(pane) == Some(&client.view)).then_some((client.view, pane))
+            })
+            .ok_or("sidebar view is not ready; try again")
+    }
+
+    /// The one live client viewing the sidebar `pane`, if exactly one does.
+    pub(super) fn sole_viewer(&self, pane: &PaneId) -> Option<&MuxClientId> {
+        let mut viewers = self
+            .live_clients()
+            .filter(|(_, client)| client.pane.as_ref() == Some(pane));
+        let (id, _) = viewers.next()?;
+        viewers.next().is_none().then_some(id)
+    }
+
+    fn live_clients(&self) -> impl Iterator<Item = (&MuxClientId, &Client)> {
+        self.clients
+            .iter()
+            .filter(|(_, client)| client.departed.is_none())
     }
 
     pub(super) fn mapped(&self, pane: &PaneId) -> bool {

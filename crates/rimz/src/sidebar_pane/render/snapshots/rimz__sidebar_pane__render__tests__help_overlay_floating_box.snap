@@ -15,32 +15,32 @@ expression: screen
 ▌  ▢ ──────────────────────────────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                                         ▐
 ▎⣾ codex 2                                                                     🮇
-▎  task-1                                                                      🮇
-▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
-▎⣾ codex 3                                                                     🮇
-▎  task-2                           ╭ help ────────────────────────────────────╮
-▎  ▢ ───────────────────────────────│ keys                                     │
-                                    │   /    search         ✕ Esc   clear      │
- ⑂ beta                             │ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
- ⣾ codex 4                          │ ↕ gg/G ends           ↕ ^f/^b page       │
-   task-3                           │ ⏎ 1-9  direct         ↕ ^d/^u half page  │
-   ▢ ───────────────────────────────│ ␣ n/N  next/prev      ↕ H/M/L screen     │
- ⣾ codex 5                          │ ⏎ Tab  last card      ⏎ Enter focus/open │
-   task-4                           │ ✉ m    read/unread    ✉ U     read all   │
-   ▢ ───────────────────────────────│ ↔ ←/→  account tabs   ⟳ R     reload     │
- ⣾ codex 6                          │   zi   inactive fold  ↕ </>   width      │
-   task-5                           │   za   card fold        zR/zM all groups │
-   ▢ ───────────────────────────────│                                          │
-                                    │ filter                                   │
-                                    │ ? f?   waiting        ! f!    attention  │
-                                    │ ⏸︎ fp   paused         ✓ fd    done       │
-                                    │ ⢿ fw   working        ○ fi    idle       │
-                                    │ ☾ fz   sleeping       ␣ fn    needs you  │
-                                    │ ● fu   unread         ≡ F     all        │
-                                    │                                          │
-                                    │ ▐ alt p sidebar                          │
-                                    │   alt g zoom                             │
-                                    ╰──────────── any key to close ────────────╯
+▎  task-1                          ╭ help ─────────────────────────────────────╮
+▎  ▢ ──────────────────────────────│ keys                                      │
+▎⣾ codex 3                         │   /    search         ✕ Esc   clear       │
+▎  task-2                          │ ↕ j/k  cards/entries  ↕ J/K   worktrees   │
+▎  ▢ ──────────────────────────────│ ↕ gg/G ends           ↕ ^f/^b page        │
+                                   │ ⏎ 1-9  direct         ↕ ^d/^u half page   │
+ ⑂ beta                            │ ␣ n/N  next/prev      ↕ H/M/L screen      │
+ ⣾ codex 4                         │ ⏎ Tab  last card      ⏎ Enter focus/open  │
+   task-3                          │ ✉ m    read/unread    ✉ U     read all    │
+   ▢ ──────────────────────────────│ ↔ ←/→  account tabs   ⟳ R     reload      │
+ ⣾ codex 5                         │   zi   inactive fold  ↕ </>   width       │
+   task-4                          │   za   card fold        zR/zM all groups  │
+   ▢ ──────────────────────────────│   dd   close            :     commands    │
+ ⣾ codex 6                         │ ⏎ q    return         ↕ =     reset width │
+   task-5                          │   ^l   redraw                             │
+   ▢ ──────────────────────────────│                                           │
+                                   │ filter                                    │
+                                   │ ? f?   waiting        ! f!    attention   │
+                                   │ ⏸︎ fp   paused         ✓ fd    done        │
+                                   │ ⢿ fw   working        ○ fi    idle        │
+                                   │ ☾ fz   sleeping       ␣ fn    needs you   │
+                                   │ ● fu   unread         ≡ F     all         │
+                                   │                                           │
+                                   │ ▐ alt p sidebar                           │
+                                   │   alt g zoom                              │
+                                   ╰──────────── any key to close ─────────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

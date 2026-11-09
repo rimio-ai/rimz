@@ -2843,3 +2843,30 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
         "mark-all schedules a convergence refetch"
     );
 }
+
+#[test]
+fn pane_return_focuses_the_work_pane_the_room_frame_lists_beside_the_sidebar() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let mut rig = Rig::new();
+    let mut snapshot = process_snapshot(&rig.ws, 1);
+    snapshot.own_view = Some(own_view());
+    let own = rig.state.pane.config.own_pane.clone();
+    let fold = super::super::super::fixtures::fold(snapshot.clone(), Some(&own), Vec::new());
+    rig.views.lock().fold = Some(Arc::new(fold));
+    rig.view().ctx().current = snapshot;
+    let focus = vec![InputEffect::Focus(
+        pane("terminal_9", "tab_0", false).pane_id,
+    )];
+    // The attach wire delivers the raw press; the key resolves only inside the reducer.
+    let press = Wakeup::Press {
+        code: KeyCode::Char('q'),
+        mods: KeyModifiers::NONE,
+    };
+    let applied = rig.state.apply_input([press], &mut rig.terminal).unwrap();
+    assert_eq!(applied.effects, focus, "a pressed q");
+    let applied = rig
+        .state
+        .apply_input([Wakeup::Key(KeyAction::PaneReturn)], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(applied.effects, focus, "a resolved pane return");
+}

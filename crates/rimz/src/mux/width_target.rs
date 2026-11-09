@@ -139,6 +139,24 @@ pub(crate) fn pin(
     Ok(permille)
 }
 
+/// Reset the room target to the unpinned width `width` resolves for a view
+/// of `view_cols`, and broadcast it so every renderer re-reads it.
+pub(crate) fn reset(
+    runtime: &RuntimePaths,
+    width: SidebarWidth,
+    view_cols: Option<NonZeroU16>,
+) -> atomic::Result<crate::mux::SidebarTarget> {
+    let target = resolve_loaded(None, width, view_cols);
+    write_and_broadcast(
+        runtime,
+        WidthTargetFile {
+            permille: target.share,
+            pinned: false,
+        },
+    )?;
+    Ok(target)
+}
+
 fn write_and_broadcast(runtime: &RuntimePaths, file: WidthTargetFile) -> atomic::Result<()> {
     atomic::write_temp_then_rename_cache(&runtime.sidebar_width_path(), &file)?;
     if let Err(err) = crate::wakeup::broadcast(
@@ -380,5 +398,23 @@ mod tests {
         clear(&runtime).expect("clear target");
         assert_eq!(load_file(&runtime), None);
         clear(&runtime).expect("clear missing target");
+    }
+
+    #[test]
+    fn reset_unpins_to_the_configured_target_for_the_view() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        let width = SidebarWidth::default();
+        pin(&runtime, width, NonZeroU16::new(81).expect("nonzero"), 200).expect("pin target");
+        let view_cols = NonZeroU16::new(200);
+        let target = reset(&runtime, width, view_cols).expect("reset target");
+        assert_eq!(target, resolve_loaded(None, width, view_cols));
+        assert_eq!(
+            load_file(&runtime),
+            Some(WidthTargetFile {
+                permille: target.share,
+                pinned: false,
+            })
+        );
     }
 }

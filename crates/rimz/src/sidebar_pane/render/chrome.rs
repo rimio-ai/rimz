@@ -782,6 +782,20 @@ fn help_body_rows(
                 "all groups",
             )),
         ),
+        (
+            key_entry(theme, None, key(A::CardClose), "close"),
+            Some(key_entry(theme, None, key(A::PaletteCommands), "commands")),
+        ),
+        (
+            key_entry(
+                theme,
+                icon(GlyphRole::KeysFocus),
+                key(A::PaneReturn),
+                "return",
+            ),
+            Some(movement(key(A::WidthReset), "reset width")),
+        ),
+        (key_entry(theme, None, key(A::ViewRedraw), "redraw"), None),
     ];
     let filter_section = vec![
         (

@@ -578,6 +578,27 @@ impl WidthController {
         }
     }
 
+    /// `=`: drop a pending key burst and write the configured, unpinned room
+    /// target; its broadcast retargets every pane, this one included.
+    pub(super) fn reset(&mut self) {
+        if self.pane.is_none() {
+            return;
+        }
+        self.key_burst = None;
+        self.classification_deadline = None;
+        self.classification_resize_at_ms = None;
+        let view_cols = self.current_view_cols.and_then(NonZeroU16::new);
+        match crate::mux::width_target::reset(&self.runtime, self.width, view_cols) {
+            Ok(target) => {
+                if let Some(view_cols) = view_cols {
+                    let target = self.render_target(target, view_cols);
+                    self.convergence.retarget(Some(target));
+                }
+            }
+            Err(err) => warn!(error = %err, "sidebar width target reset failed"),
+        }
+    }
+
     fn commit_key_burst(&mut self, diag: &DiagSink) {
         let _ = self.refresh_target(None, false);
         let Some(mut burst) = self.key_burst.take() else {
