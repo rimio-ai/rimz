@@ -587,11 +587,11 @@ impl CachedEntry {
     }
 }
 
-fn is_false(value: &bool) -> bool {
+pub(super) fn is_false(value: &bool) -> bool {
     !*value
 }
 
-fn is_zero(value: &u64) -> bool {
+pub(super) fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 

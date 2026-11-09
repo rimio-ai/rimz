@@ -236,17 +236,15 @@ pub(super) fn fold(
                 std::iter::once((role.placement(kind.as_str()), credit)).chain(owner)
             {
                 let effort = &mut tallies.entry(placement).effort;
-                if second >= window_starts.year {
-                    effort.year.merge(credit);
-                }
-                if second >= window_starts.month {
-                    effort.month.merge(credit);
-                }
-                if second >= window_starts.week {
-                    effort.week.merge(credit);
-                }
-                if second >= window_starts.day {
-                    effort.day.merge(credit);
+                for (start, window) in [
+                    (window_starts.year, &mut effort.year),
+                    (window_starts.month, &mut effort.month),
+                    (window_starts.week, &mut effort.week),
+                    (window_starts.day, &mut effort.day),
+                ] {
+                    if second >= start {
+                        window.merge(credit);
+                    }
                 }
             }
         }
