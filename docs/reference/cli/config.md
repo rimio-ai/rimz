@@ -13,8 +13,6 @@ rimz list-pets [--json]
 
 A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-codes); the [global flags](../cli.md#global-flags) are defined there too.
 
-Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`), sign-in overrides through `rimz config set harness.prompt_cache_ttl.codex.api-key 20m`, and the fallback through `rimz config set harness.prompt_cache_ttl.fallback off`. The provider kind must be built-in or installed as a plugin; split tables accept only `subscription` and `api-key`, not named accounts. A split edit over a plain provider value refuses because that value is not a table. Durations must exceed `harness.prompt_cache_margin` (default `1m`), which sets how long before a cache expires pings and idle compaction fire. An agent's observed cache write overrides these settings, even `off`. `rimz config set harness.cache_keepalive false` disables all cache pings; `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) caps subsequent pings after the agent's last request of its own, leaving the first sleeping ping uncapped; the same value is how far off a [limit-parked subagent's](./subagents.md#a-child-paused-on-a-provider-limit) reset may be for its run to be held (`6h` when `off`), even with pings disabled. Defaults, precedence, and timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
-
 ## The config files
 
 The directory is `$RIMZ_HOME`, or `~/.rimz/` when `RIMZ_HOME` is unset; [`rimz paths`](./paths.md) prints it with every other location. A dotted key's first segment decides which file `rimz config set` writes.
@@ -36,7 +34,7 @@ rimz config init           # write all three files
 rimz config init --print   # print the templates, write nothing
 ```
 
-`init` writes the shipped template for each of the three files and prints `wrote <path>` for each. Every template line is commented, so a fresh file follows the defaults; `rimz config init --print` is the complete, current list of keys and defaults.
+`init` writes the shipped template for each of the three files and prints `wrote <path>` for each, in the order `config.toml`, `theme.toml`, `loop.toml`. Every template setting is commented, so a fresh file follows the defaults; `rimz config init --print` is the complete, current list of keys and defaults.
 
 | Flag | Effect |
 | --- | --- |
@@ -48,7 +46,7 @@ rimz config init --print   # print the templates, write nothing
 
 ## Print the config path
 
-`rimz config path` prints the resolved path of `config.toml`, whether or not the file exists. The other three files sit beside it.
+`rimz config path` prints the resolved path of `config.toml`, whether or not the file exists. `theme.toml` and `loop.toml` sit beside it.
 
 ```console
 $ rimz config path
@@ -76,11 +74,16 @@ A key RimZ knows but that has no stored value and no printed default fails with 
 
 ## Set a value
 
-`rimz config set <KEY> <VALUE>` changes one key in its owning file and prints a plain-text value receipt on stdout: `set <full key> = <TOML value>  (<previous value>)`. Shorthands print the expanded key, such as `theme.scheme`. Values omit comments and surrounding whitespace. Tables print inline, and multiline strings use escaped line breaks to keep the receipt on one line. The parenthesis is `was <old TOML>` when the key was present in the file, `was <default TOML>, the default` when it was absent but had a built-in default, or `was unset`. A value semantically equal to the previous value, including an absent key set to its default, prints `unchanged` instead.
+`rimz config set <KEY> <VALUE>` changes one key in its owning file and prints a plain-text value receipt on stdout: `set <full key> = <TOML value>  (<previous value>)`. Shorthands print the expanded key, such as `theme.scheme`. Values omit comments and surrounding whitespace. Tables print inline, and multiline strings use escaped line breaks to keep the receipt on one line. The parenthesis is `was <old TOML>` when the key was present in the file, `was <default TOML>, the default` when it was absent but had a built-in default, or `was unset`. A value semantically equal to the previous value, including an absent key set to its default, prints `unchanged` instead. The file is written in that case too.
+
+```console
+$ rimz config set theme "Catppuccin Mocha"
+set theme.scheme = "Catppuccin Mocha"  (was unset)
+```
 
 It runs these steps, and stops without writing at the first one that fails:
 
-1. Parses the value (rules below) and rejects a key RimZ does not know, so a typo never lands in the file.
+1. Parses the value (rules below) and rejects a key RimZ does not know or does not let `set` write, so a typo never lands in the file.
 2. Reads the owning file, or starts from its template when the file does not exist.
 3. Checks the value against the key's type and format.
 4. Sets the key in place: it uncomments the file's commented line for the key when there is one and otherwise adds the key. An inline table on the key's path becomes a standard `[table]` block, keeping its comments; every other line stays as it was.
@@ -100,56 +103,73 @@ To undo a change, set the old value again, or delete the line from the file to r
 
 A value that parses as a TOML value is written as that value (`80`, `true`, `["a", "b"]`, an inline table); anything else is written as a string (`fresh`, `Catppuccin Mocha`). Quote a string that would otherwise parse as another type, such as `'"true"'`.
 
-These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` needs no extra quoting:
+These keys always take a string: a value that parses as another TOML type is written as its text, so `200k`, `50/day`, `3`, or a theme named `0x96f` needs no extra quoting.
 
 | Keys | Value |
 | --- | --- |
 | `theme.scheme`, and the shorthand `theme` | a bundled theme name or a path to an Alacritty TOML file |
 | `theme.glyphs.set` and the shorthand `theme.glyphs`; `theme.glyphs.<set>.<namespace>.<role>` | a glyph set name or glyph string |
+| `models.<kind>.<alias>` | the concrete model name a fresh launch pins for that alias |
 | `harness.auto_compact` | `off` or a token count from `100k` through `1M` (default `272k`); see [native auto-compaction](../../guide/configuration.md#native-auto-compaction) |
 | `harness.smart_compact` | `off`, a token count (`258k`, the default), or a percentage (`70%`); fallback for [mid-turn soft compaction and compact-first delivery](../../guide/configuration.md#smart-compaction), overridden per role or profile |
-| `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
+| `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); unset by default; see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
-| `harness.typing_hold` | a non-zero duration (default `30s`), or `off`; holds message writes after counted pane input on Linux, including after leaving the pane, or a current viewing client's input on other platforms; [input timing](../../guide/messaging.md#park-steer-interrupt-or-schedule); invalid values warn at entry and use built-in defaults |
 | `harness.idle_compact` | `off` or a token floor such as `100k` (default); see [idle compaction](../../guide/configuration.md#idle-compaction) |
-| `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every static prompt-cache lifetime (settings, defaults, fallback) and `harness.cache_keepalive_max`; observed writes may be shorter; see [idle compaction](../../guide/configuration.md#idle-compaction) |
-| `harness.prompt_cache_ttl.<kind>[.<subscription\|api-key>]` | `off` or a duration longer than the margin; plain or split provider settings |
+| `harness.prompt_cache_ttl.<kind>` | `off` or a non-zero duration longer than `harness.prompt_cache_margin`, such as `5m`; `<kind>` is a built-in or installed plugin kind |
+| `harness.prompt_cache_ttl.<kind>.<sign-in>` | the same, for one sign-in: `<sign-in>` is `subscription` or `api-key`, never an account name; refused with `` `<kind>` is not a table `` when `<kind>` already holds a plain value |
 | `harness.prompt_cache_ttl.fallback` | `off` or a duration longer than the margin (default `1h`) |
+| `harness.cache_keepalive_max` | `off` or a non-zero duration longer than the margin (default `6h`); stops keepalive pings that would start this long after the agent's last request of its own. The same value is how far off a [limit-parked subagent's](./subagents.md#a-child-paused-on-a-provider-limit) reset may be for its run to be held (`6h` when `off`), even with `harness.cache_keepalive` set to `false` |
 | `harness.keep_warm` | `off` (default) or a duration such as `2h`; global idle keep-warm maximum, overridden by profiles, teams, or roles; no block form; see [keep-warm](../../guide/configuration.md#keep-warm) |
-| `harness.keep_warm_min_ttl` | `off` or a duration such as `30m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
+| `harness.keep_warm_min_ttl` | `off` or a duration (default `30m`); see [keep-warm](../../guide/configuration.md#keep-warm) |
 | `harness.budget` | an amount ending in `/day` |
+| `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `accounts.budget.<kind>` | an amount ending in `/day` or `/month`; monthly caps count API-key billing, not subscriptions |
 | `accounts.<kind>.<name>.budget` | an amount ending in `/day` or `/month`, overriding the kind cap; requires `history = "standalone"` |
-| `accounts.use.<kind>` | an account name or `default`; declaration is checked when a room resolves that provider's account for start or launch, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use), which preflights a named account before selecting it. The container and deeper paths are not settable. |
-| `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
-| `accounts.<kind>.<name>.label` | A display-only string following the [account label rules](./accounts.md#kinds-names-and-homes). `set` validates it and declares the account when `<name>` is not yet declared, so check the name; clear with `rimz accounts add <kind> <name> --label ''`. |
-| `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
+| `accounts.use.<kind>` | an account name or `default`; declaration is checked when a room resolves that provider's account for start or launch, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use), which preflights a named account before selecting it. `accounts.use` itself and deeper paths are not settable. |
+| `accounts.<kind>.<name>.label` | a display-only string following the [account label rules](./accounts.md#kinds-names-and-homes). `set` validates it and declares the account when `<name>` is not yet declared, so check the name; clear with `rimz accounts add <kind> <name> --label ''`. |
 | `resume.auto_redeem_min_gain` | a duration |
-| `resume.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
-| `gc.older_than` | a duration such as `8h` or `3d` |
+| `gc.older_than` | a duration such as `8h` or `3d` (default `7d`) |
+| `gc.tmp_grace` | a positive duration (`s`, `m`, `h`, `d`); default `1d`, separate from owned-state retention |
 | `gc.transcript_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); governs transcript and message history together |
 | `gc.team_notes_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); removes whole closed team-note runs by their newest recursive entry modification |
 | `gc.automation_notes_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); independent retention for closed workflow and loop notes |
-| `gc.tmp_grace` | positive duration (`s`, `m`, `h`, `d`); default `1d`, separate from owned-state retention |
-| `gc.tmp_floor_percent` | integer from 0 to 100; default 10 |
-| `gc.tmp_floor_min` | byte size (`B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, or decimal `K`/`M`/`G`); default `10GiB` |
+| `gc.tmp_floor_min` | a byte size (`B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, or decimal `K`/`M`/`G`); default `10GiB` |
 
-The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`.
+The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`. Each refuses a value that is not a string.
 
-`harness.stall_nudge` is a boolean, default `false`: `rimz config set harness.stall_nudge true` enables one [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge) per stage visit after 55 minutes. `agents.attention.stalled_after_secs` must be below `3300`; otherwise room entry warns and the nudge stays off.
+These keys follow the general rule, and `set` checks their format:
+
+| Keys | Value |
+| --- | --- |
+| `harness.typing_hold` | a non-zero duration (default `30s`), or `off`; holds message writes after counted pane input on Linux, including after leaving the pane, or a current viewing client's input on other platforms; see [input timing](../../guide/messaging.md#park-steer-interrupt-or-schedule) |
+| `harness.prompt_cache_margin` | a non-zero duration (default `1m`): how long before a prompt cache expires that cache pings and idle compaction fire. It must be shorter than every static prompt-cache lifetime (settings, provider defaults, fallback) and than `harness.cache_keepalive_max`. An agent's observed cache write overrides the static lifetimes, even `off`, and may be shorter; see [idle compaction](../../guide/configuration.md#idle-compaction) |
+| `harness.cache_keepalive` | a boolean, default `true`; `false` disables all cache pings |
+| `harness.stall_nudge` | a boolean, default `false`; `true` enables one [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge) per stage visit after 55 minutes. When `agents.attention.stalled_after_secs` is `3300` or more, room entry warns and the nudge stays off. |
+| `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
+| `resume.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
+| `gc.tmp_floor_percent` | an integer from `0` to `100`; default `10` |
+| `keys.keymap` | `rimz` only |
+| `keys.prefix` | a modified chord such as `Alt+p`; a terminal key alias is refused |
 
 ### What set refuses
 
 | Attempt | Error |
 | --- | --- |
-| Profile or team definition keys | Refused with the Markdown source path; edit that file and run `rimz agents validate`. |
+| `agents.profiles.*`, `agents.teams.*`, `subagents.profiles.*` | `edit <path>`, naming the Markdown definition file (`agents/<name>.md`, `teams/<name>.md`, or `subagents/<name>.md` under the definitions root); edit that file and run `rimz agents validate`. |
 | A key RimZ does not know | `` unknown config key `KEY` `` |
-| A whole table, such as `theme.display` or `loop.tasks.<name>` | `` unknown config key `KEY` ``. Set one field inside it, or edit the table in the file. |
+| A whole table, such as `theme.display`, `accounts.use`, or `loop.tasks.<name>`, and any key under `keys.bind` | `` unknown config key `KEY` ``. Set one field inside the table, or edit it in the file. |
 | `notifications.handler` and its fields | `` config key `KEY` is an array of tables; edit <path to config.toml> `` |
+| A key with an empty segment | `config keys use non-empty dotted segments` |
 | A value of the wrong type or format | `` invalid value VALUE for `KEY`: ... ``, or a key-specific message such as `harness.idle_compact must be off or a positive token floor in digits or k, such as 100k or 1000k` |
+| A key under a path segment that holds a plain value | `` `SEGMENT` is not a table `` |
 | Any key, when the owning file already has a TOML or validation error | `` cannot set `KEY`: the existing config is invalid `` (or `cannot edit <path> — the file has a TOML error`). Fix the file first. |
 
-Strict configuration loads reject the retired idle-compaction timer key and any `idle_compact` value that is not `off` or a token floor (`auto`, `always`, `on`, or any duration such as `25m` or `2h`) with a removed-key error directing you to `rimz setup`, or to remove the timer and set `harness.idle_compact` to `100k` or `off`. The retired timer is no longer a `get` or `set` key. See [setup's repair](../../guide/setup.md) for preserving current preferences. Lenient runtime loads retain the usual whole-file fallback to built-in defaults when the file is invalid.
+Strict loads (`get`, and the validation inside `set`) refuse a `config.toml` that holds a retired setting, and name the fix:
+
+- `harness.idle_compact_after`, or an `idle_compact` value that is not `off` or a token floor (`auto`, `always`, `on`, or a duration such as `25m`): run `rimz setup`, or run `rimz config set harness.idle_compact 100k` and delete `idle_compact_after`. See [setup's repair](../../guide/setup.md) for keeping current preferences.
+- A `[agents.profiles]`, `[agents.teams]`, `[subagents.profiles]`, or `[profiles]` table: move each entry into its Markdown definition file.
+
+Lenient runtime loads keep the whole-file fallback to built-in defaults when a file is invalid.
 
 ### Keys that do more than write
 
@@ -182,9 +202,9 @@ Custom scheme files and color slots are in the [theming guide](../../guide/theme
 
 ## List pets
 
-`rimz list-pets` lists every pet id you can give `theme.pets.pet`: the built-in pets first, then each pet installed under `~/.codex/pets/` (a directory holding `pet.json`), sorted by directory name. An installed pet's id is that directory name.
+`rimz list-pets` lists every pet id you can give `theme.pets.pet`: the built-in pets first, then each pet installed under `$HOME/.codex/pets/` (a directory holding `pet.json`), sorted by directory name. An installed pet's id is that directory name.
 
-A built-in id wins a collision: install a petdex pet named `rocky` and `theme.pets.pet = "rocky"` still selects the built-in, so reach the installed one by its directory path instead. RimZ resolves the setting in order: a built-in id, then an `http://` or `https://` selector as a remote sprite sheet, then a selector containing `/` or `.` or starting with `~` as a local path, and anything else as an installed pet's directory name.
+A built-in id wins a collision: install a petdex pet named `rocky` and the list prints `rocky` twice, but `theme.pets.pet = "rocky"` still selects the built-in, so reach the installed one by its directory path instead. RimZ resolves the setting in order: a built-in id, then an `http://` or `https://` selector as a remote sprite sheet (an `http://` sheet fails to load, since remote sheets must be HTTPS), then a selector containing `/` or `.` or starting with `~` as a local path, and anything else as an installed pet's directory name.
 
 | Output | Shape |
 | --- | --- |
