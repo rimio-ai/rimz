@@ -57,7 +57,7 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &PaletteState, theme: &Palett
     let body = theme.style(theme.palette.body());
     let muted = theme.style(theme.palette.muted());
     frame.render_widget(
-        Paragraph::new(format!("palette: {}", state.query)).style(body),
+        Paragraph::new(state.input_line()).style(body),
         Rect::new(area.x, area.y, area.width, 1),
     );
     let mut top = area.y.saturating_add(1);

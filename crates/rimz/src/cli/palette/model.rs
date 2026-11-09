@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use rimz::address::{
     AddressContext, ChannelOrigin, addressable_agents, agent_handle, resolve_many,
@@ -14,6 +15,7 @@ use rimz::store::snapshot::{
 };
 
 use super::Mode;
+use super::launch::{LaunchFlow, LaunchSetup, Place, Step, launch_args, places};
 
 #[derive(Clone, Debug)]
 pub(super) struct Candidate {
@@ -31,12 +33,15 @@ pub(super) struct Candidate {
     pub(super) branch: String,
     pub(super) pr: Option<u64>,
     pub(super) group_key: String,
+    /// The checkout the card's agent runs in, which a launch from its pane starts beside.
+    pub(super) checkout: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Effect {
     Act,
     Show,
+    Launch,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +226,7 @@ fn row_card(
         branch: row.worktree_branch.clone().unwrap_or_default(),
         pr: group.pr_number,
         group_key: group.key.clone(),
+        checkout: row.lane_path().map(PathBuf::from),
     }
 }
 
@@ -286,6 +292,10 @@ fn child_card(
         pr: home.and_then(|home| home.pr_number),
         group_key: home.map_or_else(|| format!("lane:{worktree}"), |home| home.key.clone()),
         worktree,
+        checkout: state
+            .and_then(AgentState::lane_path)
+            .or(row.lane_path())
+            .map(PathBuf::from),
     }
 }
 
@@ -379,6 +389,22 @@ pub(super) fn command_entries(target: Option<&Candidate>, session: &str) -> Vec<
     entries
 }
 
+/// Entries matching `query` over their label, meta and detail, best first, ties in order.
+fn ranked(query: &str, entries: impl IntoIterator<Item = Entry>) -> Vec<Entry> {
+    let mut ranked = entries
+        .into_iter()
+        .filter_map(|entry| {
+            fuzzy_score(
+                query,
+                &format!("{} {} {}", entry.label, entry.meta, entry.detail),
+            )
+            .map(|score| (score, entry))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by_key(|(score, _)| Reverse(*score));
+    ranked.into_iter().map(|(_, entry)| entry).collect()
+}
+
 fn card_entry(card: &Candidate) -> Entry {
     let mut details = vec![
         card.name.clone(),
@@ -434,6 +460,7 @@ fn same_card(previous: &[Candidate], cards: &[Candidate], id: &str) -> Option<St
         .map(|card| card.id.clone())
 }
 
+#[derive(Clone)]
 pub(super) struct PaletteState {
     pub(super) query: String,
     pub(super) selected: usize,
@@ -444,6 +471,8 @@ pub(super) struct PaletteState {
     session: String,
     card_target: Option<String>,
     published: bool,
+    launch: LaunchSetup,
+    flow: Option<LaunchFlow>,
 }
 
 impl PaletteState {
@@ -458,6 +487,222 @@ impl PaletteState {
             session: session.to_owned(),
             card_target: None,
             published: false,
+            launch: LaunchSetup::default(),
+            flow: None,
+        }
+    }
+
+    pub(super) fn with_launch(mut self, launch: LaunchSetup) -> Self {
+        self.launch = launch;
+        self
+    }
+
+    /// The `+` step past the profile, which the query no longer drives; `None` on the profile
+    /// step and in every other mode.
+    #[cfg(test)]
+    pub(super) fn launch_step(&self) -> Option<Step> {
+        self.flow.as_ref().map(|flow| flow.step)
+    }
+
+    pub(super) fn input_line(&self) -> String {
+        let Some(flow) = &self.flow else {
+            return format!("palette: {}", self.query);
+        };
+        let step = match flow.step {
+            Step::Where => "where",
+            Step::Name => "name",
+            Step::Prompt => "prompt",
+        };
+        format!("palette: +{} › {step}: {}", flow.profile, flow.field_text())
+    }
+
+    pub(super) fn type_char(&mut self, character: char) {
+        let Some(flow) = &mut self.flow else {
+            let mut query = self.query.clone();
+            query.push(character);
+            return self.set_query(query);
+        };
+        flow.field().push(character);
+        self.selected = 0;
+        self.notice = None;
+    }
+
+    /// Erases the field's last character; on an empty field, returns to the previous step.
+    pub(super) fn backspace(&mut self) {
+        let Some(flow) = &mut self.flow else {
+            let mut query = self.query.clone();
+            query.pop();
+            return self.set_query(query);
+        };
+        self.notice = None;
+        if flow.field().pop().is_some() {
+            self.selected = 0;
+            return;
+        }
+        match flow.step {
+            Step::Prompt if flow.place == Some(Place::New) => flow.step = Step::Name,
+            Step::Prompt | Step::Name => {
+                flow.step = Step::Where;
+                let place = flow.place.as_ref().map(Place::id);
+                self.select(place);
+            }
+            Step::Where => {
+                let profile = format!("profile:{}", flow.profile);
+                let query = format!("+{}", flow.profile_query());
+                self.set_query(query);
+                self.select(Some(profile));
+            }
+        }
+    }
+
+    fn select(&mut self, id: Option<String>) {
+        self.selected = self
+            .entries()
+            .iter()
+            .position(|entry| Some(&entry.id) == id.as_ref())
+            .unwrap_or(0);
+    }
+
+    /// Enter: whether to run the selection now rather than move to the next `+` step.
+    pub(super) fn advance(&mut self) -> bool {
+        if self.mode() != Mode::New {
+            return true;
+        }
+        let Some(id) = self
+            .entries()
+            .get(self.selected)
+            .filter(|entry| entry.action.is_some())
+            .map(|entry| entry.id.clone())
+        else {
+            return false;
+        };
+        let current = self.current_checkout();
+        let Some(flow) = &mut self.flow else {
+            let profile = id.strip_prefix("profile:").unwrap_or(&id).to_owned();
+            let query = self.query.strip_prefix('+').unwrap_or_default().to_owned();
+            self.flow = Some(LaunchFlow::new(profile, query));
+            let places = places(&self.launch, current.as_deref());
+            self.selected = self.launch.default_place(&places);
+            return false;
+        };
+        match flow.step {
+            Step::Where => {
+                let place = places(&self.launch, current.as_deref())
+                    .into_iter()
+                    .map(|(place, ..)| place)
+                    .find(|place| place.id() == id);
+                flow.step = if place == Some(Place::New) {
+                    Step::Name
+                } else {
+                    Step::Prompt
+                };
+                flow.place = place;
+            }
+            Step::Name => flow.step = Step::Prompt,
+            Step::Prompt => return true,
+        }
+        self.selected = 0;
+        false
+    }
+
+    fn current_checkout(&self) -> Option<PathBuf> {
+        let opener = self.opener.as_ref()?;
+        self.cards
+            .iter()
+            .find(|card| card.pane == *opener)
+            .and_then(|card| card.checkout.clone())
+    }
+
+    fn launch_entries(&self, query: &str) -> Vec<Entry> {
+        if let Some(reason) = &self.launch.unavailable {
+            return vec![Entry {
+                id: "launch:unavailable".to_owned(),
+                label: reason.clone(),
+                meta: String::new(),
+                detail: String::new(),
+                kind: None,
+                action: None,
+            }];
+        }
+        let current = self.current_checkout();
+        let places = places(&self.launch, current.as_deref());
+        let launch = |args| {
+            Some(Action {
+                args,
+                effect: Effect::Launch,
+            })
+        };
+        let Some(flow) = &self.flow else {
+            let place = &places[self.launch.default_place(&places)].0;
+            let entries = self.launch.profiles.iter().map(|profile| Entry {
+                id: format!("profile:{}", profile.name),
+                label: profile.name.clone(),
+                meta: profile.model.clone(),
+                detail: profile.description.clone(),
+                kind: None,
+                action: launch(launch_args(&profile.name, place, "", "")),
+            });
+            return ranked(query, entries);
+        };
+        let place = flow.place.clone().unwrap_or(Place::Root);
+        match flow.step {
+            Step::Where => {
+                let entries =
+                    places
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (place, label, detail))| Entry {
+                            id: place.id(),
+                            label,
+                            meta: if index == 0 && place != Place::New {
+                                "current".to_owned()
+                            } else {
+                                String::new()
+                            },
+                            detail,
+                            kind: None,
+                            action: launch(launch_args(&flow.profile, &place, "", "")),
+                        });
+                ranked(&flow.filter, entries)
+            }
+            Step::Name => {
+                let name = flow.name.trim();
+                let refusal = self.launch.name_refusal(name);
+                vec![Entry {
+                    id: "launch:name".to_owned(),
+                    label: refusal.clone().unwrap_or_else(|| {
+                        if name.is_empty() {
+                            "generated name".to_owned()
+                        } else {
+                            name.to_owned()
+                        }
+                    }),
+                    meta: "new worktree from trunk".to_owned(),
+                    detail: String::new(),
+                    kind: None,
+                    action: refusal
+                        .is_none()
+                        .then(|| launch(launch_args(&flow.profile, &place, name, "")))
+                        .flatten(),
+                }]
+            }
+            Step::Prompt => vec![Entry {
+                id: "launch:prompt".to_owned(),
+                label: format!("launch {}", flow.profile),
+                meta: String::new(),
+                detail: if flow.prompt.trim().is_empty() {
+                    "no prompt".to_owned()
+                } else {
+                    flow.prompt.clone()
+                },
+                kind: None,
+                action: launch(launch_args(
+                    &flow.profile,
+                    &place,
+                    flow.name.trim(),
+                    &flow.prompt,
+                )),
+            }],
         }
     }
 
@@ -466,6 +711,7 @@ impl PaletteState {
     }
 
     pub(super) fn set_query(&mut self, query: String) {
+        self.flow = None;
         self.query = query;
         self.selected = 0;
         self.notice = None;
@@ -504,29 +750,9 @@ impl PaletteState {
             Mode::Cards => return self.card_entries(query),
             Mode::Commands => command_entries(self.target(), &self.session),
             Mode::Worktrees => self.worktree_entries(),
-            Mode::New => {
-                return vec![Entry {
-                    id: "new".to_owned(),
-                    label: "New agent arrives in a later release".to_owned(),
-                    meta: String::new(),
-                    detail: String::new(),
-                    kind: None,
-                    action: None,
-                }];
-            }
+            Mode::New => return self.launch_entries(query),
         };
-        let mut ranked = entries
-            .into_iter()
-            .filter_map(|entry| {
-                fuzzy_score(
-                    query,
-                    &format!("{} {} {}", entry.label, entry.meta, entry.detail),
-                )
-                .map(|score| (score, entry))
-            })
-            .collect::<Vec<_>>();
-        ranked.sort_by_key(|(score, _)| Reverse(*score));
-        ranked.into_iter().map(|(_, entry)| entry).collect()
+        ranked(query, entries)
     }
 
     fn card_entries(&self, query: &str) -> Vec<Entry> {
@@ -610,7 +836,7 @@ impl PaletteState {
             ChildOutcome::Success => self.closed = true,
             ChildOutcome::Failure(error) => {
                 self.notice = Some(error.lines().next().unwrap_or_default().to_owned());
-                self.closed = action.effect == Effect::Show;
+                self.closed = matches!(action.effect, Effect::Show | Effect::Launch);
             }
         }
     }
