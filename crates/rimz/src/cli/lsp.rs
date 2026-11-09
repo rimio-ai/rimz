@@ -394,6 +394,16 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             }
             Ok((entry, output)) => {
                 code = query_exit(code, output.exit_code());
+                let output = match output {
+                    query::Output::Answer {
+                        result,
+                        document_uri,
+                    } if args.json => query::Output::Answer {
+                        result: query::json_targets(verb, root, document_uri.as_deref(), result)?,
+                        document_uri,
+                    },
+                    output => output,
+                };
                 if multiple && args.json {
                     let mut value = query::outcome_json(root, &output)?;
                     value["target"] = target.clone().into();

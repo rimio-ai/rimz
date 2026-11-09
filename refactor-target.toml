@@ -136,7 +136,8 @@ path = "crates/rimz/src/lsp"
 # usage::Log::record shares outcome classification across verb and outline queries (+1).
 # retire, retire::run, and retire::Outcome expose one machine-wide reload pass and counts (+3).
 # query::typed_path and Target::locate share typed input readings with the CLI.
-surface-budget = 109
+# query::json_targets annotates JSON answers with the positions the text prints (+1).
+surface-budget = 110
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -10843,6 +10844,11 @@ reason = "Queries, anchor checks, and source reads share the same per-server fai
 kind = "item"
 key = "lsp::query::missing_column"
 reason = "The CLI enriches a target error from an optional outline using the query renderer's kinds and names."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::json_targets"
+reason = "The CLI adds each printed position's target to JSON answers through the text renderer's formatter."
 
 [[verdict]]
 kind = "item"

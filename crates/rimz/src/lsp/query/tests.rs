@@ -1237,10 +1237,12 @@ fn rust_target_candidates_list_reusable_names_in_text_and_json() {
             json!([
                 {
                     "name": "integration::resume::agent_ref::x", "kind": "function",
-                    "position": "crates/rimz/tests/integration/resume.rs:2:3"
+                    "position": "crates/rimz/tests/integration/resume.rs:2:3",
+                    "target": "crates/rimz/tests/integration/resume.rs:2:3"
                 },
                 {
-                    "name": "other::x", "kind": "function", "position": "src/other.rs:2:3"
+                    "name": "other::x", "kind": "function", "position": "src/other.rs:2:3",
+                    "target": "src/other.rs:2:3"
                 }
             ])
         );
@@ -1285,7 +1287,10 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
     assert_eq!(json["outcome"], "not-found");
     assert_eq!(
         json["candidates"][0],
-        json!({"name": "Container::read", "kind": "function", "position": "/outside/lib.rs:2:3"})
+        json!({
+            "name": "Container::read", "kind": "function", "position": "/outside/lib.rs:2:3",
+            "target": "/outside/lib.rs:2:3"
+        })
     );
     for candidate in json["candidates"].as_array().unwrap() {
         assert!(matches!(
@@ -2621,6 +2626,155 @@ fn verb_text_renderers() {
     assert_eq!(
         show(Verb::Symbols, json!([symbol])),
         show(Verb::Find, json!([symbol]))
+    );
+}
+
+fn at(line: u32, character: u32) -> Value {
+    json!({"start": {"line": line, "character": character},
+           "end": {"line": line, "character": character + 4}})
+}
+
+/// Every `path:line:col` the text output prints, with grouped `line:col` rows joined to their
+/// path header.
+fn text_positions(text: &str) -> Vec<String> {
+    let position = |token: &str| {
+        let mut parts = token.rsplitn(3, ':');
+        let numeric = |part: Option<&str>| {
+            part.is_some_and(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        };
+        numeric(parts.next()) && numeric(parts.next()) && parts.next().is_some()
+    };
+    let mut header = String::new();
+    let mut positions = Vec::new();
+    for line in text.lines() {
+        let first = line.split_whitespace().next().unwrap_or_default();
+        if line.starts_with("  ") && position(&format!("x:{first}")) {
+            positions.push(format!("{header}:{first}"));
+        } else if let Some(token) = line.split_whitespace().find(|token| position(token)) {
+            positions.push(token.to_owned());
+        } else if line != "tests:" {
+            header = line.to_owned();
+        }
+    }
+    positions.sort();
+    positions
+}
+
+fn json_target_values(value: &Value, targets: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| json_target_values(item, targets)),
+        Value::Object(object) => {
+            if let Some(Value::String(target)) = object.get("target") {
+                targets.push(target.clone());
+            }
+            object
+                .values()
+                .for_each(|item| json_target_values(item, targets));
+        }
+        _ => {}
+    }
+}
+
+fn without_targets(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(without_targets).collect()),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| *key != "target")
+                .map(|(key, value)| (key.clone(), without_targets(value)))
+                .collect(),
+        ),
+        value => value.clone(),
+    }
+}
+
+#[test]
+fn json_targets_equal_the_text_positions_and_strip_to_the_raw_answer() {
+    let root = Path::new("/checkout");
+    let uri = "file:///checkout/src/lib.rs";
+    let other = "file:///other/lib.rs";
+    let location = |uri: &str, line| json!({"uri": uri, "range": at(line, 4)});
+    let link = |uri: &str, line| json!({"targetUri": uri, "targetRange": at(line - 1, 0), "targetSelectionRange": at(line, 7)});
+    let symbol = |name: &str, uri: &str, line| json!({"name": name, "kind": 12, "location": location(uri, line)});
+    let item = |name: &str, uri: &str, line| {
+        json!({"name": name, "kind": 12, "uri": uri, "range": at(line - 1, 0),
+               "selectionRange": at(line, 3)})
+    };
+    let calls = |key: &str| {
+        json!([
+            {key: item("first", uri, 3), "fromRanges": [at(30, 1)]},
+            {key: item("second", other, 9), "fromRanges": [at(31, 2), at(32, 3)]}
+        ])
+    };
+    let leaf = json!({"name": "inner", "kind": 13, "range": at(6, 0), "selectionRange": at(6, 8)});
+    let child = json!({"name": "work", "kind": 12, "range": at(4, 0), "selectionRange": at(5, 7),
+                       "children": [leaf]});
+    let tree = json!([
+        {"name": "Engine", "kind": 23, "range": at(1, 0), "selectionRange": at(2, 7),
+         "children": [child]},
+        {"name": "other", "kind": 12, "range": at(8, 0), "selectionRange": at(9, 3)}
+    ]);
+    let shapes = [
+        (Verb::Def, location(uri, 2)),
+        (Verb::Def, json!([location(uri, 2), location(other, 5)])),
+        (Verb::Def, json!([link(uri, 2), link(other, 5)])),
+        (
+            Verb::Refs,
+            json!([location(uri, 2), location(uri, 7), location(other, 5)]),
+        ),
+        (Verb::Impl, json!([location(uri, 2), link(other, 5)])),
+        (
+            Verb::Find,
+            json!([symbol("work", uri, 2), symbol("work", other, 5)]),
+        ),
+        (
+            Verb::Symbols,
+            json!([symbol("work", uri, 2), symbol("rest", uri, 5)]),
+        ),
+        (Verb::Symbols, tree),
+        (Verb::Callers, calls("from")),
+        (Verb::Callees, calls("to")),
+    ];
+    for (verb, raw) in shapes {
+        let text = render_with_source(
+            verb,
+            root,
+            Some(uri),
+            raw.clone(),
+            Scope::External.into(),
+            &BTreeSet::new(),
+            |_, _| Ok("fn work() {}".into()),
+            |_| Ok(json!([])),
+        )
+        .unwrap();
+        let annotated = json_targets(verb, root, Some(uri), raw.clone()).unwrap();
+        let mut targets = Vec::new();
+        json_target_values(&annotated, &mut targets);
+        targets.sort();
+        let printed = text_positions(&text);
+        assert!(!printed.is_empty(), "{verb:?}: {text}");
+        assert_eq!(targets, printed, "{verb:?}: {text}");
+        assert_eq!(without_targets(&annotated), raw, "{verb:?}");
+        if matches!(verb, Verb::Callers | Verb::Callees) {
+            for (annotated, raw) in annotated
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(raw.as_array().unwrap())
+            {
+                assert_eq!(annotated["fromRanges"], raw["fromRanges"], "{verb:?}");
+            }
+        }
+    }
+    let hover = json!({"contents": {"kind": "markdown", "value": "**work**"},
+                       "range": at(2, 4)});
+    assert_eq!(
+        serde_json::to_vec(&json_targets(Verb::Hover, root, Some(uri), hover.clone()).unwrap())
+            .unwrap(),
+        serde_json::to_vec(&hover).unwrap()
     );
 }
 
