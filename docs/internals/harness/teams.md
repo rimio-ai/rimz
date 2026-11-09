@@ -35,21 +35,23 @@ A staged team's board and notes live in room state, under `team-notes/<yyyymmdd>
 
 It canonicalizes the checkout and takes the [board lock](#the-board-lock) before it inspects or replaces the link. An existing link counts only when it resolves to a dated run directory or a legacy flat run directory in this room's `team-notes/` and that directory's `run.json` names the same team. A missing, unreadable, or invalid manifest is never a match. Then the mode decides:
 
-- `Fresh` reuses the linked run unless its board reads `Done`, and otherwise creates a new run. It never searches unlinked archives.
+- `Fresh` reuses the linked run unless its board reads `Done`, and otherwise creates a new run. A missing board counts as open, and an unreadable one refuses (`Io`). It never searches unlinked archives.
 - `Resume` reuses the linked run whatever its stage. Without one, it relinks the newest run by `created_at` whose manifest names this team and this canonical checkout, and creates a run only when none does.
 
 A new run is named `<UTC %Y%m%d>/<%H%M%SZ>-<team>-<checkout basename>`. Each name component keeps its first 80 characters, maps every character outside `[A-Za-z0-9_-]` to `-`, trims `-`, and falls back to `run`. A collision appends `-2`, `-3`, and so on. `run.json` is written once: `version: 2`, `kind: "team"`, `team`, `created_at`, `checkout`, and, for a RimZ worktree, its marker's `name`, `branch`, `base_branch`, `from_pr`, and `repo_root`. A version 1 manifest without `kind` reads as a team. The link is then replaced atomically with the run's canonical absolute path. Replacing a link never changes the run it pointed at.
 
-Before creating a new room session, birth migrates legacy flat `<%Y%m%dT%H%M%SZ>-<rest>` runs to `<%Y%m%d>/<%H%M%SZ>-<rest>`, taking the date and time from the old name and preserving the manifest and contents. It uses the same collision suffix as allocation. Only a checkout link that resolved to the moved run is repointed; other links and removed checkouts are untouched. Unparseable names or manifests remain in place, and rerunning migration changes nothing. Live room attachment never migrates: agents may still hold grants on the old canonical path. A crash between the move and link rewrite can leave a dangling link; `rimz teams resume` finds the moved run through its manifest and relinks it.
+Before creating a new room session, birth migrates legacy flat `<%Y%m%dT%H%M%SZ>-<rest>` team runs to `<%Y%m%d>/<%H%M%SZ>-<rest>` under the workspace lock (`team_notes::migrate`, called from `room::birth`), taking the date and time from the old name and preserving the manifest and contents. It uses the same collision suffix as allocation. A migration error warns and birth continues, since every reader accepts both layouts. Only a checkout link that resolved to the moved run is repointed; other links and removed checkouts are untouched. Unparseable names, unreadable manifests, and non-team manifests remain in place, and rerunning migration changes nothing. Live room attachment never migrates: agents may still hold grants on the old canonical path. A crash between the move and link rewrite can leave a dangling link; `rimz teams resume` finds the moved run through its manifest and relinks it.
 
-`register` refuses, with the path and the fix, in four cases (`RegisterErr`):
+`register` refuses with a `RegisterErr`. `Lock` and `Worktree` pass the underlying error through, and every other variant names the path and the fix:
 
 | Variant | Condition |
 |---|---|
 | `Occupied` | A real file or directory sits at `.rimz/team` |
 | `SharedRimz` | The checkout's `.rimz` is itself a symlink: seed it through `.worktreeinclude` instead of `.worktreelink`, or make it a directory |
 | `RimzHome` | The checkout's `.rimz` is the RimZ home (`disk::paths::holds_rimz_home`). A home nested below `.rimz` is allowed. |
-| `Io`, `Atomic` | Creating the directory, the manifest, or the link failed |
+| `Io`, `Atomic` | Canonicalizing the checkout, reading the `.rimz`, link, or board metadata, or creating the directory, the manifest, or the link failed |
+| `Lock` | The board lock could not be taken |
+| `Worktree` | The RimZ worktree marker a new run's manifest copies could not be read |
 
 A refusal stops that launch or that restored tab.
 
@@ -87,7 +89,7 @@ The board is `blackboard.md` in the run directory, reached as `<checkout>/.rimz/
 
 ### The board lock
 
-`RuntimePaths::board_lock` is one lock file per canonical worktree, under the shared runtime root (`board-write/<sha256 of the path>.lock`), so it serializes writers across rooms. Registration, `record`, `flip`, and both re-wake producers take it. `LockedBoard` holds it until it is dropped, so a flip keeps it through the signal append, owner delivery, and flip compaction, and releases it before the CLI settles the team report.
+`RuntimePaths::board_lock` is one lock file per canonical worktree, under the shared runtime root (`board-write/<sha256 of the path>.lock`), so it serializes writers across rooms. Registration, `record`, `flip`, both re-wake producers, the stall-nudge helper's recheck and enqueue (`crates/rimz/src/harness/stall_nudge/helper.rs::queue`), and GC's removal of a team run (keyed on the manifest's `checkout`) take it. `LockedBoard` holds it until it is dropped, so a flip keeps it through the signal append, owner delivery, and flip compaction, and releases it before the CLI settles the team report.
 
 ### Readers
 
@@ -100,6 +102,11 @@ The board is `blackboard.md` in the run directory, reached as `<checkout>/.rimz/
 | The launcher's owed wake and `Team` pending wait | The stage of each open team run's worktree. `Done` ends both ([Launcher debt and the team wait](#launcher-debt-and-the-team-wait)) |
 | `scratch::holding_team` | Automatic worktree removal ([worktrees.md § Protection facts](./worktrees.md#protection-facts)) |
 | `resume::inspect_team_hold` | A fresh launch's one-team-per-checkout rule ([fleet.md § One team per checkout](./fleet.md#one-team-per-checkout)) |
+| `launch_context` | A member's launch identity: the pipeline with the live stage bracketed, or the board already at `Done` |
+| `teams stop` (`crates/rimz/src/cli/teams/cohort.rs::stop`) | A board short of `Done` prints that the checkout stays held, with the resume and release commands |
+| `idle_stop::decide` | A pending idle stop of a team seat holds (`Hold::Board`) until the seat's board reads `Done` ([loops.md § Idle stop](./loops.md#idle-stop)) |
+| A loop condition's `team.stage` term (`crates/rimz/src/harness/schedule/when.rs::evaluate`) | The stage at the task's scope ([loops.md § Condition planning](./loops.md#condition-planning)) |
+| The stall-nudge helper | The open visit's stage and start, through `scratch::parse_board_run` under the board lock |
 
 `teams list` and `teams show` share one instance build. Beside the board stage it carries the pipeline (the team's declared `stages`, else the owned stages in role order, then the implicit `Done`), and each armed signal subscription's newest acting run-log record and newest heard signal ([loops.md § The display commands](./loops.md#the-display-commands)). Its PR and CI line comes from the published sidebar projection (the snapshot's `worktree_groups`) with no forge call of its own, so an absent PR line is not proof that no PR exists.
 
@@ -127,18 +134,18 @@ A ledger line is `- <stamp> @<by>: <from> -> <to> — <note>`, or `opened <to>` 
 - Without one, the worktree is `RIMZ_WORKTREE_PATH`, or else the nearest directory between the cwd and the Git root whose team link resolves (`nearest_team_checkout`). Its live cohort is selected, falling back to `resume::inspect_team_hold`.
 - Several live cohorts of one team in the worktree refuse with a `rimz teams stop` hint. Cohorts of different teams refuse and ask for `--team`.
 
-`flip` needs a live or held cohort. `record` without an address needs neither, only a linked run with a named owner: an unscoped human entry accepts that owner, and a member writes as its own team.
+`flip` needs a live or held cohort. `record` with an address resolves it the same way. `record` without an address needs neither, only a linked run with a named owner: an unscoped human entry accepts that owner, and a member writes as its own team. A member whose cohort works in another worktree is refused.
 
-The caller is a member (`Flipper::Member`) when it belongs to the selected cohort, and the user (`Flipper::User`) otherwise. An agent from another cohort is refused. `flip` loads the team definition and checks its trust. `record` loads neither. A held cohort flips with no members, as the user. A flip to `Done` ends its board-stage hold (the receipt prints `checkout released`) without removing the checkout. Stop and restart have already settled such a cohort's team run, so the report step finds nothing to send.
+The caller is a member (`Flipper::Member`) when it belongs to the selected cohort, and the user (`Flipper::User`) otherwise. An agent from another cohort is refused. `flip` loads the team definition and checks its trust. `record` loads neither. A held cohort flips with no members, as the user. A flip to `Done` ends its board-stage hold (the receipt prints `checkout released`) without removing the checkout. Stop, restart, and the death backstop settle such a cohort's team run, so the report step usually finds nothing to send. A run the backstop has not yet reached still reports completed to a live launcher.
 
 `team_stage::flip` then runs six steps:
 
-1. **Resolve the owner.** The team must have a role that owns a stage (`NoOwners`). The destination must be a declared pipeline stage or `Done` (`UnknownStage`), and a stage other than `Done` must have an owning role (`UnownedStage`).
-2. **Lock and read.** `LockedBoard::open` takes the board lock and resolves the link to this room's run. A missing or foreign link refuses (`BoardErr::Unlinked`, `BoardErr::WrongTeam`) with the link, the owner, and the fix: stop and resume the writing team. A missing board inside a matching run reads as empty. The current stage is the flip's `from`.
+1. **Resolve the owner.** The team's stage declarations must validate (`spec::validate_team_stages`, `Config`), and a role must own a stage (`NoOwners`). The destination must be a declared pipeline stage or `Done` (`UnknownStage`), and a stage other than `Done` must have an owning role (`UnownedStage`).
+2. **Lock and read.** `LockedBoard::open` takes the board lock and resolves the link to this room's run. A missing link refuses with `BoardErr::Unlinked` and tells the user to relaunch or resume the team. A link to another team's run, or to a run whose manifest names no team, refuses with `BoardErr::WrongTeam`, naming the link, the owner, and the fix: `rimz teams stop <team>`, then `rimz teams resume <team>`. A missing board inside a matching run reads as empty. The current stage is the flip's `from`.
 3. **Check a hand-off.** A hand-off is a member leaving a stage its role owns for one it does not own, `Done` included. Before any write it requires `git status --porcelain=v1 --untracked-files=all` over the checkout, with `:(exclude).rimz/team`, to be empty, and refuses with the dirty paths (`DirtyWorktree`). The link is exempt even when exclude registration failed, and ignored files never appear. A worktree outside Git has nothing to commit and passes. Any other `git` failure, dubious ownership included, refuses (`GitStatus`).
 4. **Rewrite the board.** The first `Stage:` line becomes `Stage: <to> (@<owner>)`, or `Stage: Done`. Without one, the line goes after a leading `# ` heading or at the top. The ledger line goes at the end of the Progress section, which is created when absent. Newlines in the note become spaces. The board is published atomically.
 5. **Open the stage.** The flip appends the `team.stage` signal and fires its subscriptions, then delivers a `STAGE` message to the owner at the `done` boundary ([loops.md § Team signals](./loops.md#team-signals)). `Done` stops the shared language servers of the locked checkout instead (`lsp::registry::stop_checkout`), and a self-owned stage or an owner with no live seat sends nothing. A failed signal append or owner dispatch returns `PartialFlip`, which names what completed and prints the flip command to re-run. A failed subscription fire or language-server stop only logs.
-6. **Compact the flipper.** On a member's hand-off to a stage another role owns, the flipper's pane gets its compaction command once its context reaches the threshold. The threshold is the role's `flip-compact`, else `[harness] flip_compact`, else the built-in default (`config::Team::flip_compact`). This is best-effort enrichment recorded in the assist log (`Assist::FlipCompact`), and it never fails the flip. A flip to `Done` never compacts, because no member works after it. [Idle compaction](./messaging.md#idle-compaction) is separate and reads no board.
+6. **Compact the flipper.** On a member's hand-off to a stage another role owns, the flipper's pane gets its compaction command when its context has reached the threshold. The threshold is the role's `flip-compact`, else `[harness] flip_compact`, else 120k tokens for a role that owns `Plan` and 180k otherwise (`config::Team::flip_compact`). `off` at either level disables it, and a user flip never compacts. Each attempt over the threshold appends an `Assist::FlipCompact` record, whether it sent, queued, or was refused. It is best-effort enrichment and never fails the flip. A flip to `Done` never compacts, because no member works after it. [Idle compaction](./messaging.md#idle-compaction) is separate and reads no board.
 
 After `flip` returns, the CLI settles the team report ([Team reports](#team-reports)). A report failure prints a `report` line and leaves the landed flip standing.
 
@@ -146,11 +153,11 @@ After `flip` returns, the CLI settles the team report ([Team reports](#team-repo
 
 A re-wake opens the board's current stage again for its owner: it appends `team.stage` with `from == to` and `by = "rimz"`, and delivers a `STAGE` notice telling the owner to continue from the board's last Progress line. It reads the board under the lock but never edits it, never checks the worktree, and never compacts. `stage_flips`, which `rimz transcript` renders, skips re-wakes.
 
-`team_stage::with_rewake` holds the shared rule. It acts only for a root member whose role owns the board's current stage, and only when that stage is not `Done`. A missing or foreign link makes it a no-op. Two producers call it:
+`team_stage::with_rewake` holds the shared rule. It acts only for a root member whose role owns the board's current stage, and only when that stage is not `Done`. A team with no owned stages, a missing or foreign link, or a board without a `Stage:` line makes it a no-op. Two producers call it:
 
 | Producer | When | Notices that already cover the member |
 |---|---|---|
-| `team_stage::rewake_resumed`, from the exec wrapper | Every `Resume` action that runs through `rimz agents exec`: cohort resume, lane restore, the partial-live lane split, `agents restart`, `teams restart`, and rebirth. It runs after the wrapper stamps `rimz.agent-resumed`, which revives the ended card ([model.md](../agents/model.md)), and binds the pane. The wrapper triggers queued-head delivery after the re-wake. A re-wake that returns a receipt also stands in for the continue an `agents restart` request asked for (`continue_session`). | One still queued, or one delivered at or after the cutoff the wrapper takes just before the resume stamp, which precedes the provider |
+| `team_stage::rewake_resumed`, from the exec wrapper | Every `Resume` action that runs through `rimz agents exec`: cohort resume, lane restore, the partial-live lane split, `agents restart`, `teams restart`, and rebirth. It runs after the wrapper stamps `rimz.agent-resumed`, which revives the ended card ([model.md](../agents/model.md)), spawns the provider, and binds the pane. The wrapper triggers queued-head delivery after the re-wake. A re-wake that returns a receipt also stands in for the continue an `agents restart` request asked for (`continue_session`). | One still queued, or one delivered at or after the cutoff the wrapper takes just before the resume stamp, which precedes the provider |
 | The registration branch of `team_stage::react_lifecycle` | A root member registers: a resume, a fresh launch into an open stage, or `/clear`, since a registration does not say which it is | One still queued, or one delivered within one prompt delivery window before the registration |
 
 The wrapper is the trigger for providers whose definition sets `registers_lazily` (built-ins and plugins that declare `registers-lazily`), which emit no registration until their first turn, or never. A lazy provider's notice is typed as soon as the pane is bound, in the same paste as a prompt queued ahead of it. A non-lazy provider's notice is held as provider start pending until it registers or one delivery window passes. A fresh lazy launch into an open stage is re-woken only at its first registration.
@@ -173,7 +180,7 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
 | `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/cli/agents_cmd/stop.rs::stop_run`) | None |
-| Restart or rebirth of the leader | Failed (`run::fail_peer_run`) | None |
+| Restart or rebirth of the leader, or a failed leader launch | Failed (`run::fail_peer_run`, which falls back to the open team run) | None |
 | The launcher or the leader row is gone at settlement | Completed or failed by the board | None |
 
 Only one flip sees a transition into `Done`, because the board lock serializes flips. The report is queued before the terminal write, so a crash between the two re-reports at the next `Done` rather than losing this one. `settle_team_run` is a compare-and-set: a reporter that loses it cancels its own message, so the flip and the death backstop never both report.
