@@ -13,7 +13,7 @@ use crate::forge;
 use super::{
     Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
     WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output, git_run,
-    git_stdout, is_ancestor, merge_tree, parse_worktree_list, read_marker_for_worktree,
+    git_stdout, is_ancestor, list_worktrees, merge_tree, read_marker_for_worktree,
     resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref, write_marker,
 };
 
@@ -689,7 +689,7 @@ fn local_branch_tip(repo_root: &Path, branch: &str) -> Option<String> {
 }
 
 fn branch_worktree(repo_root: &Path, branch: &str) -> Result<Option<(PathBuf, bool)>> {
-    let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+    let rows = list_worktrees(repo_root)?;
     Ok(rows
         .into_iter()
         .enumerate()
