@@ -282,6 +282,14 @@ fn handoff_termination(
     }
 }
 
+/// Launch one supervised run and drive its attempts until it settles, or hand
+/// it off when `request.background`. `Ok(None)` is a launch the launcher
+/// declined or found already open. `Err` comes after the pane opened as well as
+/// before: an `await_terminal` error, a verify command that could not run (a
+/// spawn or cwd error; a non-zero exit settles as a failed record), or a failed
+/// re-prompt. `BudgetExceeded` is checked before every attempt, so a retry can
+/// return it after an earlier attempt ran and failed. A caller that must know
+/// whether a launch happened decides at hand-off, not from this result.
 pub(in crate::cli) fn run_supervised(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
