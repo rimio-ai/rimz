@@ -1549,7 +1549,7 @@ fn lsp_editors_receive_negotiated_shapes_and_agents_keep_links() {
     let locations: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         locations,
-        json!([{"targetUri":uri,"targetRange":{"start":{"line":0,"character":0},"end":{"line":2,"character":1}},"targetSelectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}}])
+        json!([{"targetUri":uri,"targetRange":{"start":{"line":0,"character":0},"end":{"line":2,"character":1}},"targetSelectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"target":"lib.rs:1:1"}])
     );
     env.rimz()
         .args(["lsp", "def", "lib.rs:1:4"])
@@ -1904,9 +1904,10 @@ fn lsp_queries_prefer_written_containers_and_list_reusable_twins() {
         json!({
             "outcome":"not-found", "name":"nosuch::child", "total":2, "truncated":false,
             "candidates":[
-                {"name":"scope::show::child", "kind":"function", "position":"scope/show.rs:208:4"},
+                {"name":"scope::show::child", "kind":"function", "position":"scope/show.rs:208:4",
+                    "target":"scope/show.rs:208:4"},
                 {"name":"scope::show::tests::child", "kind":"function",
-                    "position":"scope/show.rs:210:4"}
+                    "position":"scope/show.rs:210:4", "target":"scope/show.rs:210:4"}
             ]
         })
     );
@@ -3327,7 +3328,8 @@ fn recovered_definition(target: &str, file: &str, line: u32, modes: &[&str]) -> 
         result,
         json!([{
             "uri":format!("file://{}/{file}", env.project_root.display()),
-            "range":{"start":position,"end":position}
+            "range":{"start":position,"end":position},
+            "target":format!("{file}:{}:8", line + 1)
         }])
     );
     let trace = editor_query(&directory, "requests");
@@ -3660,8 +3662,10 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
             6,
             "ambiguous",
             json!([
-                {"name": "a::twin", "kind": "function", "position": "src/a.rs:1:1"},
-                {"name": "b::twin", "kind": "function", "position": "src/b.rs:1:1"}
+                {"name": "a::twin", "kind": "function", "position": "src/a.rs:1:1",
+                    "target": "src/a.rs:1:1"},
+                {"name": "b::twin", "kind": "function", "position": "src/b.rs:1:1",
+                    "target": "src/b.rs:1:1"}
             ]),
         ),
     ] {

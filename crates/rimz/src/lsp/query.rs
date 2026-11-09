@@ -1058,6 +1058,7 @@ struct Candidate {
     name: String,
     kind: &'static str,
     position: String,
+    target: String,
 }
 
 impl Candidate {
@@ -1091,10 +1092,12 @@ impl Candidate {
             .chain([symbol.name.clone()])
             .collect::<Vec<_>>()
             .join("::");
+        let position = position_text(root, &symbol.location.uri, symbol.location.range.start)?;
         Ok(Self {
             name,
             kind: kind_name(symbol.kind),
-            position: position_text(root, &symbol.location.uri, symbol.location.range.start)?,
+            target: position.clone(),
+            position,
         })
     }
 
@@ -1258,6 +1261,78 @@ pub fn outcome_json(root: &Path, output: &Output) -> Result<Value> {
         "name": name, "candidates": candidates,
         "total": total, "truncated": unresolved > 0,
     }))
+}
+
+/// Add a 1-based `target` beside every position the text output prints for `verb`'s answer.
+pub fn json_targets(
+    verb: Verb,
+    root: &Path,
+    document_uri: Option<&str>,
+    result: Value,
+) -> Result<Value> {
+    let mut result = result;
+    match (verb, &mut result) {
+        (Verb::Hover, _) | (_, Value::Null) => {}
+        (Verb::Def | Verb::Refs | Verb::Impl, Value::Array(items)) => {
+            for item in items {
+                add_location_target(root, item)?;
+            }
+        }
+        (Verb::Def | Verb::Refs | Verb::Impl, item) => add_location_target(root, item)?,
+        (Verb::Callers | Verb::Callees, Value::Array(calls)) => {
+            let key = if verb == Verb::Callers { "from" } else { "to" };
+            for call in calls {
+                if let Some(item) = call.get_mut(key) {
+                    add_target(root, item, "uri", "selectionRange")?;
+                }
+            }
+        }
+        (Verb::Find | Verb::Symbols, Value::Array(items)) => {
+            let mut pending: Vec<&mut Value> = items.iter_mut().collect();
+            while let Some(item) = pending.pop() {
+                if let Some(location) = item.get_mut("location") {
+                    add_target(root, location, "uri", "range")?;
+                    continue;
+                }
+                let uri = document_uri
+                    .ok_or_else(|| LspErr::Protocol("document symbols need a file URI".into()))?;
+                let start = start_of(item, "selectionRange")?;
+                let Value::Object(node) = item else {
+                    continue;
+                };
+                node.insert("target".into(), position_text(root, uri, start)?.into());
+                if let Some(Value::Array(children)) = node.get_mut("children") {
+                    pending.extend(children.iter_mut());
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(result)
+}
+
+fn add_location_target(root: &Path, item: &mut Value) -> Result<()> {
+    if item.get("targetUri").is_some() {
+        add_target(root, item, "targetUri", "targetSelectionRange")
+    } else {
+        add_target(root, item, "uri", "range")
+    }
+}
+
+fn start_of(item: &Value, range: &str) -> Result<Position> {
+    Ok(serde_json::from_value::<Range>(item[range].clone())?.start)
+}
+
+fn add_target(root: &Path, item: &mut Value, uri: &str, range: &str) -> Result<()> {
+    let start = start_of(item, range)?;
+    let Some(uri) = item[uri].as_str() else {
+        return Err(LspErr::Protocol(format!("answer item has no {uri}")));
+    };
+    let target = position_text(root, uri, start)?;
+    if let Value::Object(item) = item {
+        item.insert("target".into(), target.into());
+    }
+    Ok(())
 }
 
 pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String> {
