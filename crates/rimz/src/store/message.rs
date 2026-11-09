@@ -1417,14 +1417,11 @@ pub fn prompt_is_keepalive_only(prompt: &str) -> bool {
 /// How the lifecycle reads an observation: a state snapshot first, then a
 /// keepalive-only prompt's edge, else an ordinary edge.
 pub(super) fn transition_mode(observation: &AgentLifecycleObservation) -> TransitionMode {
-    let keepalive = observation
-        .prompt
-        .as_deref()
-        .is_some_and(prompt_is_keepalive_only);
-    match (observation.is_state_snapshot(), keepalive) {
+    let prompt = observation.prompt.as_deref();
+    match (observation.is_state_snapshot(), prompt) {
         (true, _) => TransitionMode::Snapshot,
-        (false, true) => TransitionMode::KeepaliveEdge,
-        (false, false) => TransitionMode::Edge,
+        (false, Some(prompt)) if prompt_is_keepalive_only(prompt) => TransitionMode::KeepaliveEdge,
+        _ => TransitionMode::Edge,
     }
 }
 
