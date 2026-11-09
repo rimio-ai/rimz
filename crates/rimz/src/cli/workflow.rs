@@ -439,7 +439,11 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     let path = entry
                         .with_context(|| format!("reading {}", home.display()))?
                         .path();
-                    if path.is_dir() {
+                    // A dot directory is no workflow name: `loop eject` stages in `.eject/`.
+                    let hidden = path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with('.'));
+                    if path.is_dir() && !hidden {
                         dirs.push(path);
                     }
                 }

@@ -1685,6 +1685,10 @@ fn validate_json_shape_errors_and_exit_status() {
         format!("{HEADER}[checks.pr]\nshell='printf shell'\non={{pass='@done',fail='@failed'}}\n"),
     )
     .unwrap();
+    // A crashed `loop eject` leaves its staging copy under a dot directory.
+    let staging = env.rimz_home().join("workflows/.eject/review");
+    fs::create_dir_all(&staging).unwrap();
+    fs::copy(dir.join("workflow.toml"), staging.join("workflow.toml")).unwrap();
     let report: Value =
         serde_json::from_str(&success(command(&env, &["workflow", "validate", "--json"]))).unwrap();
     assert_eq!(

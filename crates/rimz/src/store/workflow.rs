@@ -573,6 +573,11 @@ pub struct RunRecord {
     /// `project_root`, through [`RunRecord::firing_checkout`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fire_tree: bool,
+    /// When a loop fire's default capacity wait gives up: a second before the task's next clock
+    /// fire, never past its deadline. An agent step that sets no `capacity-wait` holds until
+    /// then, however late in the run its first hold comes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_until: Option<Timestamp>,
     pub project_root: PathBuf,
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -854,14 +859,10 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
     Ok(record)
 }
 
-/// Write an inline definition's text and assets into the run's definition root, before
-/// `initialize` publishes the record. Each asset name is a relative path inside that root.
-pub fn seal_definition(
-    paths: &WorkflowPaths,
-    text: &str,
-    assets: &BTreeMap<String, Vec<u8>>,
-) -> Result<()> {
-    let root = &paths.definition;
+/// Write an inline definition's text and assets into a definition root: a run's own, before
+/// `initialize` publishes the record, or an ejected task's staging directory. Each asset name
+/// is a relative path inside that root.
+pub fn seal_definition(root: &Path, text: &str, assets: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     std::fs::create_dir_all(root).map_err(WorkflowStoreErr::io(root))?;
     crate::disk::atomic::write_bytes_atomically(
         &crate::disk::paths::workflow_spec_file(root),

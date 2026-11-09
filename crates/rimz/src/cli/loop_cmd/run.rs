@@ -94,6 +94,12 @@ pub(super) fn run_one(
     let loaded = loaded
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
+    if keep && entry.workflow.is_some() {
+        anyhow::bail!(
+            "workflow task `{name}` cannot use --keep; set `keep = true` on the workflow's agent \
+             `[steps.<name>]`"
+        );
+    }
     let checkout = resident_checkout(&entry, mode, args.cwd)?;
     let source = loaded.source();
     if !args.drain {

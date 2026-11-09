@@ -336,6 +336,9 @@ pub struct TaskEntry {
     pub max_attempts: Option<u32>,
     #[serde(rename = "max-strikes", skip_serializing_if = "Option::is_none")]
     pub max_strikes: Option<u32>,
+    /// Whether the task launches at most once per checkout; absent derives it from the row.
+    #[serde(rename = "once-per-checkout", skip_serializing_if = "Option::is_none")]
+    pub once_per_checkout: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
@@ -429,7 +432,8 @@ pub struct Guard<'a> {
 
 impl TaskEntry {
     pub fn dedupes_checkout(&self) -> bool {
-        self.stay || self.is_condition_workflow()
+        self.once_per_checkout
+            .unwrap_or(self.stay || self.is_condition_workflow())
     }
 
     pub fn is_condition_workflow(&self) -> bool {

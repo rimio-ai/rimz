@@ -217,7 +217,7 @@ fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
             let extra = match (prompt, origin) {
                 (false, _) => "",
                 (true, "run") => " The text given with `--prompt` to `rimz workflow run` ends it.",
-                _ => " The loop task's prompt ends it.",
+                _ => " The loop fire's prompt ends it: the task's prompt, what fired it, or both.",
             };
             let expected = format!(
                 "{first} Your prompt is the step's fixed text, not a message someone just typed.{extra}"

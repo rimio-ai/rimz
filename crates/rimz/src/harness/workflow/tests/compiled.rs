@@ -6,6 +6,7 @@ use crate::disk::paths::StatePaths;
 use crate::harness::schedule::catalog::{LoadedTask, TaskSource};
 use crate::harness::schedule::compile::{CompiledAction, InlineTask, TaskWorkflow};
 use crate::harness::schedule::run_log::LoopRunResult;
+use crate::harness::schedule::signal::Signal;
 use crate::store::workflow::{self as records, JournalEvent, RunRecord, RunState};
 use serde_json::{Value, json};
 
@@ -364,6 +365,7 @@ fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
             task: "nightly".into(),
             definition: definition("nightly", &task),
             fire_tree: false,
+            capacity_until: None,
         },
         ScopeRoots {
             checkout: home.into(),
@@ -599,6 +601,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
                 assets: Default::default(),
             },
             fire_tree: false,
+            capacity_until: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -1138,5 +1141,356 @@ fn a_clock_tasks_judge_decline_without_a_recheck_holds_its_run_untimed() {
         route(&spec, "judge-1", "fail"),
         "@done",
         "a zero recheck ends the run, so the next fire asks again"
+    );
+}
+
+/// A trusted project whose store holds one `nightly` row; returns the store's text. Unit tests
+/// share one RimZ home, so they never write the machine store.
+fn project_task(root: &std::path::Path, row: &str) -> String {
+    let text = format!("# project tasks\n\n[tasks.nightly]\n{row}");
+    fs::create_dir_all(root.join(".rimz")).unwrap();
+    fs::write(root.join(".rimz/config.toml"), &text).unwrap();
+    crate::trust::grant(root).unwrap();
+    text
+}
+
+fn project_catalog(root: &std::path::Path) -> crate::harness::schedule::catalog::TaskCatalog {
+    crate::harness::schedule::catalog::TaskCatalog::load(Some(root)).unwrap()
+}
+
+/// A workflow name no other test in this run's shared home takes.
+fn workflow_name() -> String {
+    format!("ejected-{}", uuid::Uuid::now_v7().simple())
+}
+
+fn eject_nightly(root: &std::path::Path, workflow: &str) -> std::path::PathBuf {
+    project_catalog(root)
+        .eject(
+            "nightly",
+            workflow,
+            &MachineConfig::default(),
+            &LoadedDefinitions::default(),
+        )
+        .unwrap()
+}
+
+/// Every node with its resolved edges, in a comparable form.
+fn graph(spec: &WorkflowSpec) -> Vec<(String, Value)> {
+    spec.checks
+        .keys()
+        .chain(spec.steps.keys())
+        .map(|node| {
+            let edges = serde_json::to_value(spec.resolved_edges(node).unwrap()).unwrap();
+            (node.clone(), edges)
+        })
+        .collect()
+}
+
+/// Every file under `dir`, by path relative to it.
+fn files(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let name = path.strip_prefix(dir).unwrap().display().to_string();
+                found.insert(name, fs::read(path).unwrap());
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn an_ejected_task_keeps_its_graph_and_its_row_keeps_only_timing_and_admission() {
+    let rows = [
+        "agent='claude'\nprompt='fix it'\nevery='1h'\ncheck='true'\non='fail'\njudge=[{agent='claude',prompt='a'},{agent='claude',prompt='b',timeout='2m'}]\nbudget='$2'\nbudget-per-day='$8'\nmax-strikes=4\noverlap='queue'\noverlap-limit=3\n",
+        "agent='claude'\nprompt='fix it'\nevery='1h'\nverify='make test'\nmax-attempts=2\ntimeout='20m'\nmode='yolo'\neffort='high'\nfast=true\naccount='work'\nthrottle='off'\ncapacity-wait='10m'\nnotes=false\nsurplus='1.5x'\n",
+        "agent='claude'\nprompt='settle'\nworktree='review'\nsignal='ci.failed'\nmatch={branch='main'}\ncheck='true'\non='success'\njudge={agent='claude',prompt='ready?',recheck='1h'}\n",
+        "check='true'\ncheck-timeout='30s'\ncron='0 * * * *'\n",
+    ];
+    for row in rows {
+        let root = tempfile::tempdir().unwrap();
+        project_task(root.path(), row);
+        let catalog = project_catalog(root.path());
+        let task = catalog.visible()["nightly"].clone();
+        let before = task.entry().clone();
+        let inline = definition("nightly", &task);
+        let workflow = workflow_name();
+        let dir = eject_nightly(root.path(), &workflow);
+        assert_eq!(dir, crate::disk::paths::workflows_dir().join(&workflow));
+        let ejected = load(&dir).unwrap();
+        assert_eq!(
+            graph(&ejected),
+            graph(&spec::parse(&inline.text).unwrap()),
+            "{row}"
+        );
+        let mut expected = inline.assets.clone();
+        expected.insert(
+            "workflow.toml".into(),
+            fs::read(dir.join("workflow.toml")).unwrap(),
+        );
+        assert_eq!(files(&dir), expected, "{row}");
+
+        let after = project_catalog(root.path()).visible()["nightly"].clone();
+        assert_eq!(
+            after.compiled().unwrap(),
+            &CompiledAction::Workflow(TaskWorkflow::Named(workflow.clone())),
+            "{row}"
+        );
+        let kept = TaskEntry {
+            workflow: Some(workflow),
+            root: before.root.clone(),
+            dir: before.dir.clone(),
+            label: before.label.clone(),
+            each_worktree: before.each_worktree,
+            max_strikes: before.max_strikes,
+            budget_per_day: before.budget_per_day.clone(),
+            surplus: before.surplus.clone(),
+            surplus_after: before.surplus_after.clone(),
+            every: before.every.clone(),
+            cron: before.cron.clone(),
+            signal: before.signal.clone(),
+            matches: before.matches.clone(),
+            overlap: before.overlap,
+            overlap_limit: before.overlap_limit,
+            once_per_checkout: Some(before.dedupes_checkout()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(after.entry(), &kept, "{row}");
+        assert!(
+            fs::read_to_string(root.path().join(".rimz/config.toml"))
+                .unwrap()
+                .starts_with("# project tasks\n"),
+            "the store keeps what surrounds the row"
+        );
+    }
+}
+
+/// What one drive of a watchdog run shows: the node that re-prompts, the final state, each
+/// launch's prompt, the push count, and the routes taken.
+type Drive = (String, RunState, Vec<String>, usize, Vec<String>);
+
+fn drive(state: &StatePaths, record: &RunRecord, checkout: &std::path::Path) -> Drive {
+    let host = FakeHost::new();
+    step(state, record, &host);
+    turn_end(&host, 1);
+    let pushed = step(state, record, &host);
+    fs::write(checkout.join("passed"), "").unwrap();
+    turn_end(&host, 2);
+    let done = step(state, record, &host);
+    let prompts = host
+        .launched
+        .borrow()
+        .iter()
+        .map(|launch| launch.prompt.clone())
+        .collect::<Vec<_>>();
+    (
+        pushed.node,
+        done.state,
+        prompts,
+        host.push_calls.borrow().len(),
+        routed(state, record),
+    )
+}
+
+/// A fire of `task` for `signal`, which composes the prompts its run starts with.
+fn task_fire<'a>(
+    task: &LoadedTask,
+    catalog: &'a crate::harness::schedule::catalog::TaskCatalog,
+    signal: Option<Signal>,
+) -> crate::harness::schedule::runner::TaskFire<'a> {
+    crate::harness::schedule::runner::TaskFire::new(
+        "nightly",
+        task.clone(),
+        catalog,
+        crate::harness::schedule::run_log::LoopRunMode::Scheduled,
+        false,
+        jiff::Timestamp::now(),
+        std::sync::Arc::new(MachineConfig::default()),
+        signal,
+        std::time::Instant::now(),
+    )
+    .unwrap()
+}
+
+/// Row `row`'s inline graph and the workflow `dir` it was ejected into from `root`, each fired for `signal` and driven
+/// through the same stubs.
+fn inline_and_ejected(
+    row: &str,
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    signal: Option<Signal>,
+) -> (Drive, Drive) {
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load(None).unwrap();
+    let inline_home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(inline_home.path(), inline_home.path()).unwrap();
+    open_room(&state, inline_home.path());
+    let task = loaded(
+        "nightly",
+        &format!("{row}throttle='off'\n"),
+        inline_home.path(),
+    );
+    let record = create(
+        &state,
+        DefinitionSource::Inline {
+            task: "nightly".into(),
+            definition: task_fire(&task, &catalog, signal.clone())
+                .inline_definition(inline(&task))
+                .unwrap(),
+            fire_tree: false,
+            capacity_until: None,
+        },
+        ScopeRoots {
+            checkout: inline_home.path().into(),
+            project: inline_home.path().into(),
+        },
+        || Ok(None),
+        false,
+    )
+    .unwrap();
+    let inline = drive(&state, &record, inline_home.path());
+
+    let ejected_home = tempfile::tempdir().unwrap();
+    let state =
+        StatePaths::for_project_root_under(ejected_home.path(), ejected_home.path()).unwrap();
+    open_room(&state, ejected_home.path());
+    let projects = project_catalog(root);
+    let ejected = &projects.visible()["nightly"];
+    let prompt = task_fire(ejected, &projects, signal).run_prompt().unwrap();
+    let record = create(
+        &state,
+        DefinitionSource::Deployed {
+            dir,
+            task: Some("nightly".into()),
+        },
+        ScopeRoots {
+            checkout: ejected_home.path().into(),
+            project: ejected_home.path().into(),
+        },
+        || Ok(prompt),
+        false,
+    )
+    .unwrap();
+    (inline, drive(&state, &record, ejected_home.path()))
+}
+
+#[test]
+fn an_ejected_watchdog_runs_like_its_inline_graph_and_a_rerun_finishes_a_crashed_eject() {
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\nverify='test -e passed'\n";
+    let root = tempfile::tempdir().unwrap();
+    let original = project_task(root.path(), &format!("{row}throttle='off'\n"));
+    let workflow = workflow_name();
+    let dir = eject_nightly(root.path(), &workflow);
+    let published = files(&dir);
+    // A crash after publishing and before the row rewrite: the store still holds the row.
+    fs::write(root.path().join(".rimz/config.toml"), &original).unwrap();
+    assert_eq!(
+        eject_nightly(root.path(), &workflow),
+        dir,
+        "the rerun finishes the eject"
+    );
+    assert_eq!(
+        files(&dir),
+        published,
+        "the rerun leaves the directory as published"
+    );
+    assert_eq!(
+        project_catalog(root.path()).visible()["nightly"]
+            .compiled()
+            .unwrap(),
+        &CompiledAction::Workflow(TaskWorkflow::Named(workflow))
+    );
+    let (inline, ejected) = inline_and_ejected(row, root.path(), &dir, None);
+    assert_eq!(ejected, inline);
+    assert_eq!(inline.1, RunState::Done, "{inline:?}");
+}
+
+#[test]
+fn an_ejected_signal_task_still_hands_its_agent_the_signal_that_fired_it() {
+    let row = "agent='claude'\nprompt='fix it'\nsignal='deploy.finished'\n\
+               match={env='prod'}\nverify='test -e passed'\n";
+    let root = tempfile::tempdir().unwrap();
+    project_task(root.path(), &format!("{row}throttle='off'\n"));
+    let dir = eject_nightly(root.path(), &workflow_name());
+    let signal = Signal {
+        name: "deploy.finished".parse().unwrap(),
+        payload: json!({"env": "prod"}).as_object().unwrap().clone(),
+        source: crate::store::event::SignalSource::Cli,
+        watch: None,
+    };
+    let (inline, ejected) = inline_and_ejected(row, root.path(), &dir, Some(signal));
+    let evidence = "Rule `nightly` fired here. deploy.finished · env: prod";
+    assert_eq!(inline.2.len(), 1, "{inline:?}");
+    assert!(
+        inline.2[0].starts_with(&format!("{evidence}\n\nfix it")),
+        "{inline:?}"
+    );
+    assert_eq!(ejected.2.len(), 1, "{ejected:?}");
+    assert!(ejected.2[0].starts_with("fix it"), "{ejected:?}");
+    assert!(
+        ejected.2[0].ends_with(&format!("\n\n{evidence}")),
+        "{ejected:?}"
+    );
+    let without_prompts = |(node, state, _, pushes, routes): Drive| (node, state, pushes, routes);
+    assert_eq!(without_prompts(ejected), without_prompts(inline.clone()));
+    assert_eq!(inline.1, RunState::Done, "{inline:?}");
+}
+
+#[test]
+fn a_scheduled_recurring_fire_gives_up_on_capacity_before_its_next_fire() {
+    let home = tempfile::tempdir().unwrap();
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load(None).unwrap();
+    let now: jiff::Timestamp = "2026-03-02T10:00:00Z".parse().unwrap();
+    let cutoff = |row: &str, mode| {
+        let task = loaded("nightly", row, home.path());
+        crate::harness::schedule::runner::TaskFire::new(
+            "nightly",
+            task,
+            &catalog,
+            mode,
+            false,
+            now,
+            std::sync::Arc::new(MachineConfig::default()),
+            None,
+            std::time::Instant::now(),
+        )
+        .unwrap()
+        .default_capacity_cutoff()
+        .unwrap()
+        .map(|at| at.to_string())
+    };
+    use crate::harness::schedule::run_log::LoopRunMode::{Manual, Scheduled};
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    assert_eq!(
+        cutoff(row, Scheduled).as_deref(),
+        Some("2026-03-02T10:59:59Z"),
+        "an unset wait gives up a second before the next fire"
+    );
+    assert_eq!(
+        cutoff(
+            &format!("{row}deadline='2026-03-02T10:30:00Z'\n"),
+            Scheduled
+        )
+        .as_deref(),
+        Some("2026-03-02T10:30:00Z"),
+        "an earlier deadline bounds it"
+    );
+    assert_eq!(
+        cutoff(&format!("{row}capacity-wait='forever'\n"), Scheduled),
+        None,
+        "a configured wait stands"
+    );
+    assert_eq!(cutoff(row, Manual), None, "a manual fire never waits");
+    assert_eq!(
+        cutoff(
+            "agent='claude'\nprompt='fix it'\nsignal='deploy.finished'\n",
+            Scheduled
+        ),
+        None,
+        "a signal task waits as long as it takes"
     );
 }

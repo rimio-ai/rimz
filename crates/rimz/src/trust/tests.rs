@@ -369,6 +369,18 @@ fn loop_overlap_fields_do_not_enter_project_trust_hash() {
 }
 
 #[test]
+fn loop_once_per_checkout_does_not_enter_project_trust_hash() {
+    let base = "[tasks.x]\nworkflow='review'\nevery='1h'\n";
+    let configured = format!("{base}once-per-checkout=true\n");
+    let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
+    assert!(entry.tasks.0["x"].dedupes_checkout());
+    assert_eq!(
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(base).unwrap()),
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(&configured).unwrap())
+    );
+}
+
+#[test]
 fn loop_capacity_wait_does_not_enter_project_trust_hash() {
     let base = "[tasks.x]\nagent='claude'\nprompt='repair'\nwhen=['team.stage=Done']\n";
     let configured = format!("{base}capacity-wait='2h'\n");
