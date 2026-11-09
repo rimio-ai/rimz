@@ -231,6 +231,44 @@ fn command_events_preserve_due_messages_on_rebuilt_agent_cards() {
 }
 
 #[test]
+fn command_events_keep_a_manual_unread_mark_only_on_the_same_agent_row() {
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    // (bound card, new command, unread after): a sessionless idle row keyed by
+    // pane id keeps its mark across a wired command, a shell rebuild drops it,
+    // and a bound card rebuilt into the pane's idle row is a new tenant.
+    for (bound, command, unread) in [
+        (false, "claude", true),
+        (false, "codex --quiet", true),
+        (false, "zsh", false),
+        (true, "codex --quiet", false),
+    ] {
+        let mut snapshot = pulled(vec![pane("terminal_1", "claude")], 10);
+        snapshot.wired_kinds = vec!["claude".to_owned(), "codex".to_owned()];
+        let row = snapshot.rows_mut().next().unwrap();
+        assert_eq!(row.id, pane_id.as_str());
+        row.name = "claude".to_owned();
+        row.card = crate::store::snapshot::RowCard::Agent(Default::default());
+        row.unread = true;
+        if bound {
+            row.id = "session-plain".to_owned();
+        }
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id: pane_id.clone(),
+                command: command.to_owned(),
+            },
+        );
+        let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+        let row = fused.rows().next().unwrap();
+        assert_eq!(row.pane.as_ref().unwrap().command.as_deref(), Some(command));
+        assert_eq!(row.unread, unread, "bound={bound} command={command}");
+    }
+}
+
+#[test]
 fn bare_rimz_command_events_wait_for_pulled_argv_without_deferring_other_commands() {
     let actual = [false, true].map(|agent_before| {
         let mut live = pane("%1", "bash");

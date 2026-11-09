@@ -424,6 +424,9 @@ impl SidebarSnapshot {
                         continue;
                     }
                     next.attention_at_ms = row.attention_at_ms;
+                    if next.is_agent() && row.id == next.id {
+                        next.unread = row.unread;
+                    }
                     if let (Some(prior), Some(card)) = (row.as_agent(), next.as_agent_mut()) {
                         card.due_messages = prior.due_messages;
                     }
