@@ -36,7 +36,12 @@ The summary after the agent name says what install found:
 
 The annotation is `(new file)` when install created the file, `(updated existing config)` when it edited one, and `(removed)` when it deleted one. An agent with two files prints the second as an indented `config → PATH` line.
 
-Codex runs a new or changed hook only after you trust it inside Codex. When its installed hooks are untrusted, including outdated trust, install and `rimz start` print `codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks`, and the `HOOKS` row of `rimz doctor` names the same fix.
+Codex and Hermes run a new or changed hook only after you approve it in the agent itself. When installed hooks are unapproved, including outdated Codex trust, install and `rimz start` print one line naming the hooks and the fix, and the `HOOKS` row of `rimz doctor` names the same fix:
+
+```text
+codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks
+hermes hooks are installed but untrusted (…) — hermes silently skips them; launch hermes in a terminal and answer y to each RimZ hook prompt
+```
 
 An `rimz agents` launch, restart, resume, or fork from your own shell proceeds with one notice per account: choose **Trust all and continue** in Codex's new pane, or RimZ cannot track it. Agent-started launches, teams, loops, and subagent resumes refuse before opening panes, naming the command to ask you to run once. Room recovery skips that agent and names a user-run fix. RimZ never grants hook trust or bypasses Codex's review. [The account check at launch](./agents.md#the-account-check-at-launch) defines which starts are watched; account selection and headless checks are unchanged.
 
@@ -81,7 +86,7 @@ Codex's `rules/rimz.rules` grants the [routine command prefixes](../agent-suppor
 
 ### Preview with `--dry-run`
 
-`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file`, `updates existing config`, or `removes file`, and a statusline note when install wraps one), then a unified diff per file, all on stdout:
+`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file`, `updates existing config`, or `removes file`, and a `+ wraps your statusline …` or `+ sets your statusline …` line when install changes the statusline), then a unified diff per file, all on stdout:
 
 ```console
 $ rimz hooks install --dry-run grok
@@ -123,7 +128,7 @@ Both commands exit 0 on success and 1 on any of these:
 | `install` with no `AGENT` finds no agent | `no supported coding agents detected on PATH (KINDS) - install an agent and rerun, or name one: rimz hooks install <agent>` |
 | `AGENT` is not a known kind | ``unknown agent integration `NAME` `` |
 | The named kind cannot take RimZ hooks (a plugin agent, a Kiro CLI below 2.31.0, a Hermes Agent below 0.22.2 or a Hermes `config.yaml` RimZ cannot edit safely, or Grok's `allow_managed_hooks_only` policy engaged with no `rimz hooks feed --source grok` handler in `/etc/grok/managed_config.toml` or `/etc/grok/requirements.toml`) | `install failed for AGENT: REASON` |
-| A whole-file path holds a file without the marker | `refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi, `hook file` for Copilot) |
+| A whole-file path holds a file without the marker | `install failed for AGENT: refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi and OMP, `hook file` for Copilot and Kiro). OpenCode prints `refusing an unmarked user plugin at PATH; …`, or `PATH must be a real file, not a symlink or directory; move it aside` |
 | `uninstall` with no `AGENT` finds the machine's accounts config invalid | `only the providers' own homes were unhooked; fix the accounts config and rerun`, after unhooking those homes |
 
 An install without `AGENT` handles agents one at a time and stops at the first failure; agents already installed keep their hooks.
@@ -136,7 +141,7 @@ rimz trust grant --agents [KIND,...] [--json]
 rimz trust grant --empty-dir [--agents KIND,...] [--json]
 ```
 
-A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tasks, env, and accounts, and each of those can run a command. RimZ hashes every command-running field into the executable surface and applies the project config only while this machine holds a grant for that exact hash. The list of hashed fields is in [security and trust](../../guide/security.md#project-trust). Trust is per project root, as resolved from the current directory or [`--root`](../cli.md#global-flags).
+A repository's `.rimz/config.toml` can declare language servers, agents, profiles, subagent profiles, teams, loop tasks, hooks, env, and accounts. RimZ hashes every field among them that runs a command, plus the `[accounts]` table that picks which provider account the room launches into, into the executable surface and applies the project config only while this machine holds a grant for that exact hash. The list of hashed fields is in [security and trust](../../guide/security.md#project-trust). Trust is per project root, as resolved from the current directory or [`--root`](../cli.md#global-flags).
 
 | Verb | What it does |
 | --- | --- |
@@ -144,17 +149,17 @@ A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tas
 | `grant` | Pins the current hash and surface on this machine, and clears declined project and folder-trust birth prompts. When it replaces a grant for a different hash, it prints the surface diff. With no project config it creates no project grant and prints `no project config`; agent folder trust can still be granted. With `--empty-dir`, grants only machine-wide empty-directory folder trust, without pinning the project or clearing declined prompts. |
 | `revoke` | Deletes the project grant, leaving the project `untrusted` (or `no project config`). Does not modify agent configuration or revoke provider folder trust. |
 
-All three exit 0 whatever the state, and 1 when configuration or a grant record cannot be read or parsed. An agent grant also exits 1 if a requested kind is unknown or undetected, or a write fails; it attempts the remaining selected kinds first. `--json` works on each verb; previews, questions, and grant notices go to stderr.
+All three exit 0 whatever the state, and 1 when the project config or a grant record cannot be read or parsed. When RimZ cannot resolve the folder-trust rows of a section, it prints `trust: agents: <error>` or `trust: empty-dir: <error>` on stderr, shows that section empty, and still exits 0. Two cases exit 1 instead: the `agents:` rows under `grant --agents`, and the empty-directory rows under `grant --empty-dir`. An agent grant also exits 1 when a named kind is unknown or undetected (`trust: KIND: unknown or undetected agent with folder trust`), names a restricted kind, or a write fails. It attempts the remaining selected kinds first, then ends with `one or more agent folder-trust grants failed`. `--json` works on each verb, before or after it. Previews, questions, and grant notices go to stderr.
 
 ### Agent folder trust
 
-Every report adds an `agents:` section for detected Codex, Claude, and Qoder binaries, using this room's account for each kind; outside a room it follows the trusted project, then machine, then provider default, as a new room there would. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. `restricted (saved untrusted)` means Codex will show Folder access on every launch: pick Open restricted in the pane, or trust the folder in Codex. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`, while restricted rows carry `key` and `fix`. `rimz doctor --json` uses the same folder-trust states.
+Every report adds an `agents:` section for detected Codex, Claude, and Qoder binaries, with one row for this room's account of each kind and one for each other account a live agent in the room runs on. Outside a room, the account follows the trusted project, then machine, then provider default, as a new room there would. Each row reads `KIND (ACCOUNT)  STATE`. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. `restricted (saved untrusted)` means Codex will show Folder access on every launch: pick Open restricted in the pane, or trust the folder in Codex. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`, while restricted rows carry `key` and `fix`. `rimz doctor --json` uses the same folder-trust states.
 
-After the project grant, `rimz trust grant` on a terminal shows proposed provider-file diffs and asks `Also trust this folder for <kinds>?`, default No. Without a terminal it only prints the command to grant; provider files stay untouched. `--agents` explicitly authorizes writes without a question: bare `--agents` selects all undecided kinds, while `--agents codex,claude` or repeated `--agents` selects named kinds. The diffs still print before writes. Already-decided named kinds are left unchanged. Any `rimz trust grant` clears the workspace's remembered folder-trust decline; automatic project re-grants after `rimz loop` edits do not.
+After the project grant, `rimz trust grant` on a terminal shows proposed provider-file diffs and asks `Also trust this folder for <kinds>?`, default No. Without a terminal it prints ``trust: KIND undecided; run `rimz trust grant --agents` to write it`` for each undecided row, and provider files stay untouched. `--agents` explicitly authorizes writes without a question: bare `--agents` selects all undecided kinds, while `--agents codex,claude` or repeated `--agents` selects named kinds. The diffs still print before writes. A named kind that is already decided is left unchanged and prints `trust: KIND already decided`. Each write prints `trust: KIND trusted → PATH`. Every project `rimz trust grant` clears the workspace's remembered folder-trust decline. `--empty-dir` and the automatic project re-grants after `rimz loop` edits do not.
 
 Restricted rows are never offered a grant or selected by bare `--agents`. Explicitly naming a Restricted kind writes nothing for it and exits 1: RimZ does not change a saved untrusted decision. `rimz start` prints its fix on every start without adding it to the grant question or remembered declines.
 
-For Codex and Claude, the grant covers the main repository root, including its worktrees, in the room's selected account home. Codex accounts linked to the same `config.toml` share the grant; Claude's `.claude.json` stays per account. Qoder grants append the canonical current worktree directory to `permissions.trustDirectories` in its user `settings.json`; descendants are covered, but sibling worktrees need their own grant or a trusted ancestor. Outside Git, the provider's folder rules apply. An unreadable or malformed file is not overwritten; the fix names what to repair. A provider file changed since the preview causes a refusal to overwrite it. Undo a provider grant in that provider's configuration; `rimz trust revoke` only controls RimZ project config. See [folder trust for agents](../../guide/security.md#folder-trust-for-agents) for what these grants enable.
+For Codex and Claude, the grant covers the main repository root, including its worktrees, in the room's selected account home. Codex accounts linked to the same `config.toml` share the grant; Claude's `.claude.json` stays per account. Qoder grants append the canonical current worktree directory to `permissions.trustDirectories` in its user `settings.json`; descendants are covered, but sibling worktrees need their own grant or a trusted ancestor. Outside Git, the provider's folder rules apply. An unreadable or malformed file is not overwritten; the fix names what to repair. A provider file changed since the preview is not overwritten, and the error names the rerun: ``PATH changed since the preview; run `rimz trust grant --agents KIND` `` (`rimz trust grant --empty-dir --agents KIND` for the empty root). Undo a provider grant in that provider's configuration; `rimz trust revoke` only controls RimZ project config. See [folder trust for agents](../../guide/security.md#folder-trust-for-agents) for what these grants enable.
 
 ### Empty-directory folder trust
 
@@ -162,7 +167,7 @@ Profiles with [`empty-dir: true`](../definitions.md) can start outside the proje
 
 A fresh eligible empty-directory launch grants an undecided account automatically when its grantable key is exactly the resolved empty root. The profile key, explicit subagent `--empty-dir`, or undecided-cwd fallback is consent: no setup question or extra option is needed. RimZ prints the trusted folder, provider, account, and changed provider file on stderr and records an `empty_dir_grant` assist in [`rimz stats`](./stats.md). Claude normally needs this grant; Codex outside a project needs none. A saved-untrusted decision, a non-grantable file, or a key wider than the empty root stays manual: a profile-only launch prints `empty-dir ignored:` and keeps the caller's directory; explicit child `--empty-dir` and undecided-cwd fallback launches instead refuse. A write failure or a file that keeps changing also names the file and error, falling back for a profile-only launch and refusing when placement is required. A dirty empty root refuses before any grant. Restart and resume never grant automatically. `rimz start` neither checks nor offers this empty-root grant. [`rimz doctor`](./getting-started.md#diagnose-with-doctor) shows only the remaining manual account cases, merging matching human rows, and reports stray files in the empty root. The explicit grant command above stays available and previews wider keys before writing them.
 
-Status adds an `empty-dir:` heading after the project's agent rows, naming the empty root and each declared account's decision. JSON adds `empty_dir`, an array with the same row shape as `agents`. The machine-wide grant's JSON contains only `empty_dir`.
+Status adds an `empty-dir:` heading after the project's agent rows, then a `folder: PATH` line naming the empty root, then one row per declared account in the `agents:` row shape. JSON adds `empty_dir`, an array with the same row shape as `agents`. The machine-wide grant's JSON contains only `empty_dir`.
 
 ### Trust states
 
@@ -179,7 +184,7 @@ A trust-gated command refused in an `untrusted` or `stale` project names the fix
 
 ### Status output
 
-A `stale` report includes the surface diff: one line per changed field, `+` added, `-` removed, `~` changed, with the granted value under `-` and the live value under `+`. Array items are numbered, so `tasks[0]` is the first task in name order. This excerpt shows the project-trust portion; the `agents:` section follows it.
+A `stale` report includes the surface diff: one line per changed field, `+` added, `-` removed, `~` changed, with the granted value under `-` and the live value under `+`. Array items are numbered, so `tasks[0]` is the first task in name order. This excerpt shows the project-trust portion. The `agents:` and `empty-dir:` sections follow it.
 
 ```console
 $ rimz trust
