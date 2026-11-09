@@ -10920,10 +10920,6 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
         ("waiting", None),
     ] {
         for mode in [None, Some("--steer"), Some("--interrupt")] {
-            // Without a line, a boundary send keeps the row it was claimed on.
-            if line.is_none() && mode.is_none() {
-                continue;
-            }
             let env = Env::new();
             env.record(&env.project_root);
             env.install_agent_hooks("claude");
@@ -10996,6 +10992,17 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
                 continue;
             }
             assert!(output.status.success(), "{output:?}");
+            if changed == "open turn" && mode.is_none() {
+                assert!(
+                    lines.iter().all(|line| is_client_view_read(line)),
+                    "{changed}: a boundary send must not write into the opened turn: {lines:?}"
+                );
+                let messages = env.store().list_messages().unwrap();
+                assert_eq!(messages.len(), 1, "{messages:?}");
+                assert_eq!(messages[0].status, MessageStatus::Queued);
+                assert_eq!(messages[0].attempts, 0);
+                continue;
+            }
             assert_text_then_enter(&trace, &user_message("go"));
             assert!(
                 !String::from_utf8_lossy(&output.stdout).contains("compacted"),
@@ -11003,6 +11010,208 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             );
         }
     }
+}
+
+#[test]
+fn fresh_boundary_send_defers_when_the_turn_opens_during_its_write_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_resting_agent(&env, "sess-late-turn", "late-turn", pane_env);
+    run_success(
+        env.rimz()
+            .args(["config", "set", "harness.smart_compact", "off"]),
+        "send without a seat line",
+    );
+    let trace = env.project_root.join("late-turn.log");
+    let before = DeliveryRendezvous::new(&env, "late-turn-before-write");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .args(["message", "@claude", "--", "after your turn"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-late-turn",
+            "prompt": "work",
+        }),
+        pane_env,
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("is running; send now"), "{output:?}");
+    let lines = trace_lines(&trace);
+    assert!(
+        lines.iter().all(|line| is_client_view_read(line)),
+        "no byte may reach a pane whose turn opened: {lines:?}"
+    );
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].status, MessageStatus::Queued);
+    assert_eq!(messages[0].attempts, 0);
+    assert_eq!(messages[0].last_sent_at, None);
+
+    let shim = zellij_trace_shim();
+    let shim = shim.to_str().expect("utf-8 shim path");
+    let trace_path = trace.to_str().expect("utf-8 trace path");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-late-turn"}),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim),
+            ("RIMZ_TEST_ZELLIJ_LOG", trace_path),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+            ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
+        ],
+    );
+    wait_for_text_then_enter(&trace, &user_message("after your turn"));
+    assert_eq!(
+        trace_lines(&trace)
+            .iter()
+            .filter(|line| is_paste(line, &user_message("after your turn")))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn sweep_defers_a_claimed_head_when_the_turn_opens_during_its_write_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-sweep-turn",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Idle);
+    let mut prompt = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "after your turn".to_owned(),
+        DeliveryGate::Done,
+    );
+    prompt.message_id = fixed_message_id(1);
+    queue_messages(&env, &[&prompt]);
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let before = DeliveryRendezvous::new(&env, "sweep-before-write");
+    let trace = env.project_root.join("sweep-turn-trace.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .args(["message", "sweep"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    append_lifecycle(
+        &env,
+        "claude",
+        "UserPromptSubmit",
+        "sess-sweep-turn",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        |_| {},
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines = trace_lines(&trace);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| is_paste(line, &user_message("after your turn")) || is_enter_key(line)),
+        "the sweep must not write into the opened turn: {lines:?}"
+    );
+    let queued = message_by_id(&env, &prompt.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(
+        queued.attempts, 0,
+        "a busy receiver must not spend attempts"
+    );
+    assert_eq!(queued.last_sent_at, None);
+}
+
+#[test]
+fn steer_skips_an_input_prompt_raised_during_its_write_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-late-ask", "late-ask", pane_env);
+    let trace = env.project_root.join("late-ask.log");
+    let before = DeliveryRendezvous::new(&env, "late-ask-before-write");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .args(["message", "--steer", "@claude", "--", "steer me"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    push_pending_agent_ask(&env, "sess-late-ask");
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let lines = trace_lines(&trace);
+    assert!(
+        lines.iter().all(|line| is_client_view_read(line)),
+        "no write into an input prompt: {lines:?}"
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("waiting on your input"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn interrupt_skips_its_key_when_the_turn_ends_during_its_write_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-late-stop", "late-stop", pane_env);
+    let trace = env.project_root.join("late-stop.log");
+    let before = DeliveryRendezvous::new(&env, "late-stop-before-write");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+        .args(["message", "--interrupt", "@claude", "--", "new direction"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-late-stop"}),
+        pane_env,
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_text_then_enter(&trace, &user_message("new direction"));
+    let lines = trace_lines(&trace);
+    assert!(
+        !lines.iter().any(|line| is_escape_key(line)),
+        "the key would cancel the turn the paste starts: {lines:?}"
+    );
 }
 
 #[test]

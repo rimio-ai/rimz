@@ -4820,6 +4820,7 @@ allowed-dependencies = [
     "config",
     "disk::atomic",
     "harness::assist_log",
+    "harness::auto_continue",
     "harness::hibernate",
     "address",
     "ids",
@@ -4833,7 +4834,9 @@ allowed-dependencies = [
 ]
 # Queued delivery shares the typed interrupt-key preflight with pane sends.
 # Delivery and compact-first writes share pre-write wake-stamp maintenance (+1).
-surface-budget = 11
+# Deferral names why a boundary write stopped on its post-wait row; it reads the
+# same CardStatus gate as candidacy, from harness::auto_continue (+1).
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"

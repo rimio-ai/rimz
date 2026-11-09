@@ -8,6 +8,7 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
+use crate::harness::auto_continue::CardStatus;
 use crate::message::{
     DeliveryKind, InterruptConfirmation, MessageDraft, Recipient, command_segments,
     command_submit_delay_from_env, message_interval_from_env,
@@ -47,6 +48,24 @@ pub enum SendErr {
     },
     #[error("someone is using the receiver's pane; retry at {until}")]
     TypingHeld { until: Timestamp },
+    #[error("not sent: {reason}")]
+    Deferred { reason: String },
+}
+
+/// Why a boundary write stopped on the row read after its waits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Deferral {
+    Status(AgentStatus),
+    ProviderStarting,
+}
+
+impl std::fmt::Display for Deferral {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status(status) => write!(f, "the receiver is {}", status.as_str()),
+            Self::ProviderStarting => f.write_str("the receiver's provider is still starting"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +81,7 @@ pub(super) enum Receipt {
         until: Timestamp,
         compacted: bool,
     },
+    Deferred(Deferral),
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -167,12 +187,17 @@ impl LiveSend {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one live write under its own pane lock"
+)]
 pub(super) fn send_batch_to_live_pane(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     bound: Option<&AgentState>,
+    card_status: &CardStatus,
     batch: &[MessageRecord],
     send: &mut LiveSend,
 ) -> Result<Receipt> {
@@ -180,36 +205,44 @@ pub(super) fn send_batch_to_live_pane(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
+    let key = match send.kind {
+        DeliveryKind::Interrupt => {
+            Some(interrupt_key(&head.kind, &format!("@{}", target.label()))?)
+        }
+        DeliveryKind::Boundary | DeliveryKind::Steer => None,
+    };
     crate::harness::hibernate::wake_pane(store, &target.pane_id)?;
     let writer = PaneWriter::open(
         Some(store.runtime_paths()),
         &target.pane_id,
         &workspace.session_name,
     )?;
-    // Decide under the pane lock: a resting agent gets a plain send, since the
-    // key would cancel the very turn this paste starts.
-    // Queued records can retain a provisional launch id; confirm the live card's session.
-    let interrupt = if send.kind == DeliveryKind::Interrupt {
-        let key = interrupt_key(&head.kind, &format!("@{}", target.label()))?;
-        let current = store.snapshot_cached()?;
-        current
-            .agents
-            .iter()
-            .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none())
-            .filter(|agent| {
-                matches!(
-                    agent.effective_status(current.now),
-                    AgentStatus::Running | AgentStatus::Waiting
-                )
-            })
-            .map(|agent| (key, agent.agent_id.clone()))
-    } else {
-        None
-    };
-    let receipt = write_live(
-        workspace, store, snapshot, target, bound, batch, send, &writer,
+    let (receipt, row) = write_live(
+        workspace,
+        store,
+        snapshot,
+        target,
+        bound,
+        card_status,
+        batch,
+        send,
+        &writer,
     )?;
-    let (Some((key, agent_id)), Receipt::Sent { compacted, .. }) = (interrupt, receipt) else {
+    let (Some(key), Receipt::Sent { compacted, .. }) = (key, receipt) else {
+        return Ok(receipt);
+    };
+    // Decide on the row read after the write's waits: a resting agent gets a
+    // plain send, since the key would cancel the very turn this paste starts.
+    // Queued records can retain a provisional launch id; the row carries the live card's session.
+    let Some(agent_id) = row
+        .filter(|agent| {
+            matches!(
+                agent.effective_status(Timestamp::now()),
+                AgentStatus::Running | AgentStatus::Waiting
+            )
+        })
+        .map(|agent| agent.agent_id)
+    else {
         return Ok(receipt);
     };
     sleep(super::interrupt_delay_from_env());
@@ -266,6 +299,8 @@ fn confirm_interrupt(
     InterruptConfirmation::NotConfirmed { window }
 }
 
+/// Write a batch, returning the receipt and the receiver row its last write
+/// decided on.
 #[expect(
     clippy::too_many_arguments,
     reason = "one live write under the caller's pane lock"
@@ -276,134 +311,88 @@ fn write_live(
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     bound: Option<&AgentState>,
+    card_status: &CardStatus,
     batch: &[MessageRecord],
     send: &mut LiveSend,
     writer: &PaneWriter,
-) -> Result<Receipt> {
+) -> Result<(Receipt, Option<AgentState>)> {
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
-    // A steer or interrupt can wait out another writer's lock while its turn
-    // raises an input prompt, and compact-first judges the current fill, so
-    // both decide on the row as it stands under the lock.
-    let fresh = if send.kind != DeliveryKind::Boundary
-        || batch.iter().any(|message| message.auto_compact.is_some())
-    {
-        row_under_lock(store, head)?
-    } else {
-        None
+    let decide = |send: &mut LiveSend, compacted: bool| {
+        wait_and_decide(
+            workspace,
+            store,
+            snapshot,
+            bound,
+            card_status,
+            batch,
+            compacted,
+            send,
+        )
     };
-    let bound = fresh.as_ref().or(bound);
+    let fresh = match decide(send, false)? {
+        Decided::Write(row) => row,
+        Decided::Stop(receipt) => return Ok((receipt, None)),
+    };
+    let sent = |compacted| Receipt::Sent {
+        compacted,
+        interrupt: InterruptConfirmation::NotChecked,
+    };
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
-        return Ok(
-            match write_batch(
-                workspace, store, snapshot, writer, bound, batch, false, send,
-            )? {
-                PaneWrite::Sent => Receipt::Sent {
-                    compacted: false,
-                    interrupt: InterruptConfirmation::NotChecked,
-                },
-                PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
-                PaneWrite::ClaimLost => Receipt::ClaimLost,
-                PaneWrite::TypingHeld(until) => Receipt::TypingHeld {
-                    until,
-                    compacted: false,
-                },
-            },
-        );
+        write_text(workspace, store, snapshot, writer, batch, send)?;
+        return Ok((sent(false), fresh));
     }
     debug_assert!(
         batch
             .iter()
             .all(|message| message.body == MessageBody::Prompt)
     );
-    let mut compacted = false;
     let compact = batch
         .iter()
         .find_map(|message| compact_message_for_target(store, target, fresh.as_ref(), message));
-    if let Some((command, threshold, agent)) = compact {
-        let command = store.queue_claimed_message(
-            &command,
-            &workspace.session_name,
-            jiff::Timestamp::now(),
-        )?;
-        match write_batch(
-            workspace,
-            store,
-            snapshot,
-            writer,
-            bound,
-            std::slice::from_ref(&command),
-            false,
-            send,
-        ) {
-            Ok(PaneWrite::Sent) => {
-                compacted = true;
-                let peers = crate::address::addressable_agents(snapshot);
-                crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
-                    at: jiff::Timestamp::now(),
-                    assist: crate::harness::assist_log::Assist::AutoCompact {
-                        kind: target.kind.clone(),
-                        agent_id: agent.agent_id.clone(),
-                        label: Some(crate::address::agent_handle(agent, &peers, false)),
-                        threshold,
-                        occupied_tokens: command.compacted_context_tokens,
-                        message_id: command.message_id.to_string(),
-                    },
-                });
-                if send.kind == DeliveryKind::Boundary {
-                    return Ok(Receipt::CompactionPending);
-                }
-            }
-            Ok(PaneWrite::SkippedWaiting(reason)) => {
-                store.release_message_claims(
-                    std::slice::from_ref(&command),
-                    "agent is waiting on input in its pane",
-                    false,
-                    &workspace.session_name,
-                )?;
-                return Ok(Receipt::SkippedWaiting(reason));
-            }
-            Ok(PaneWrite::ClaimLost) => {
-                store.release_message_claims(
-                    batch,
-                    "pane write stopped: message claim no longer held",
-                    false,
-                    &workspace.session_name,
-                )?;
-                return Ok(Receipt::ClaimLost);
-            }
-            Ok(PaneWrite::TypingHeld(until)) => {
-                store.cancel_message(
-                    &command.message_id,
-                    &workspace.session_name,
-                    "compact-first command not written: someone is using the receiver's pane",
-                )?;
-                return Ok(Receipt::TypingHeld {
-                    until,
-                    compacted: false,
-                });
-            }
-            Err(err) => {
-                store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
-                return Err(err);
-            }
-        }
+    let Some((command, threshold, agent)) = compact else {
+        write_text(workspace, store, snapshot, writer, batch, send)?;
+        return Ok((sent(false), fresh));
+    };
+    // Claimed only once the decisions above passed, so the command record
+    // exists only for a write that follows at once.
+    let command =
+        store.queue_claimed_message(&command, &workspace.session_name, Timestamp::now())?;
+    if let Err(err) = write_text(
+        workspace,
+        store,
+        snapshot,
+        writer,
+        std::slice::from_ref(&command),
+        send,
+    ) {
+        store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
+        return Err(err);
     }
-    Ok(
-        match write_batch(
-            workspace, store, snapshot, writer, bound, batch, compacted, send,
-        )? {
-            PaneWrite::Sent => Receipt::Sent {
-                compacted,
-                interrupt: InterruptConfirmation::NotChecked,
-            },
-            PaneWrite::SkippedWaiting(reason) => Receipt::SkippedWaiting(reason),
-            PaneWrite::ClaimLost => Receipt::ClaimLost,
-            PaneWrite::TypingHeld(until) => Receipt::TypingHeld { until, compacted },
+    let peers = crate::address::addressable_agents(snapshot);
+    crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+        at: Timestamp::now(),
+        assist: crate::harness::assist_log::Assist::AutoCompact {
+            kind: target.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            label: Some(crate::address::agent_handle(agent, &peers, false)),
+            threshold,
+            occupied_tokens: command.compacted_context_tokens,
+            message_id: command.message_id.to_string(),
         },
-    )
+    });
+    if send.kind == DeliveryKind::Boundary {
+        return Ok((Receipt::CompactionPending, fresh));
+    }
+    // The prompts wait their own turn and decide on the row as it stands after the command.
+    let fresh = match decide(send, true)? {
+        Decided::Write(row) => row,
+        Decided::Stop(receipt) => return Ok((receipt, None)),
+    };
+    write_text(workspace, store, snapshot, writer, batch, send)?;
+    Ok((sent(true), fresh))
 }
 
 fn row_under_lock(store: &Store, head: &MessageRecord) -> Result<Option<AgentState>> {
@@ -464,23 +453,35 @@ impl Pacer {
 }
 
 #[expect(
+    clippy::large_enum_variant,
+    reason = "built once per pane write and matched at once"
+)]
+enum Decided {
+    Write(Option<AgentState>),
+    Stop(Receipt),
+}
+
+/// Run a write's waits, then read the receiver's row once and make every
+/// write decision on it: the receiver can open a turn, raise a prompt, or
+/// start compacting while the write waits.
+#[expect(
     clippy::too_many_arguments,
     reason = "one live write under the caller's pane lock"
 )]
-fn write_batch(
+fn wait_and_decide(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
-    writer: &PaneWriter,
     bound: Option<&AgentState>,
+    card_status: &CardStatus,
     batch: &[MessageRecord],
     compacted: bool,
     send: &mut LiveSend,
-) -> Result<PaneWrite> {
+) -> Result<Decided> {
     // Dispatch and delivery claims always pass a non-empty batch.
     let head = batch
         .first()
-        .expect("write_batch requires at least one message");
+        .expect("wait_and_decide requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
     send.pacer.tick();
     #[cfg(feature = "testkit")]
@@ -488,7 +489,7 @@ fn write_batch(
     // Every delivery binds its claim to the pane before entering the write path.
     let pane = head.pane_id.as_ref().expect("live send has a pane pin");
     if let Some(until) = send.typing_hold_until(workspace, store.runtime_paths(), pane) {
-        return Ok(PaneWrite::TypingHeld(until));
+        return Ok(Decided::Stop(Receipt::TypingHeld { until, compacted }));
     }
     if !store.message_claims_held(batch)? {
         store.release_message_claims(
@@ -497,16 +498,42 @@ fn write_batch(
             compacted,
             &workspace.session_name,
         )?;
-        return Ok(PaneWrite::ClaimLost);
+        return Ok(Decided::Stop(Receipt::ClaimLost));
     }
-    if !send.force
-        && let Some(agent) = bound.filter(|agent| agent.is_awaiting_input())
-    {
-        return Ok(PaneWrite::SkippedWaiting(super::InputWait::for_agent(
-            agent,
-            jiff::Timestamp::now(),
+    let fresh = row_under_lock(store, head)?;
+    let Some(agent) = fresh.as_ref().or(bound) else {
+        return Ok(Decided::Write(fresh));
+    };
+    let now = Timestamp::now();
+    if !send.force && agent.is_awaiting_input() {
+        return Ok(Decided::Stop(Receipt::SkippedWaiting(
+            super::InputWait::for_agent(agent, now),
         )));
     }
+    if send.kind == DeliveryKind::Boundary {
+        if !super::gate_open_for_agent(head.gate, agent, send.force, now, snapshot, card_status) {
+            let status = super::gate_status(head.gate, agent, now, snapshot, card_status);
+            return Ok(Decided::Stop(Receipt::Deferred(Deferral::Status(status))));
+        }
+        if super::provider_start_pending(agent, now) {
+            return Ok(Decided::Stop(Receipt::Deferred(Deferral::ProviderStarting)));
+        }
+    }
+    Ok(Decided::Write(fresh))
+}
+
+/// Paste or type the batch, record it `Sent`, then submit it.
+fn write_text(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    writer: &PaneWriter,
+    batch: &[MessageRecord],
+    send: &LiveSend,
+) -> Result<()> {
+    let head = batch
+        .first()
+        .expect("write_text requires at least one message");
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
@@ -571,7 +598,7 @@ fn write_batch(
         send.pause_raw_typing(head.body);
         writer.press(NamedKey::Enter)?;
     }
-    Ok(PaneWrite::Sent)
+    Ok(())
 }
 
 fn type_command_with<E>(
@@ -591,13 +618,6 @@ fn type_command_with<E>(
         write(arguments)?;
     }
     Ok(())
-}
-
-enum PaneWrite {
-    Sent,
-    SkippedWaiting(super::InputWait),
-    ClaimLost,
-    TypingHeld(Timestamp),
 }
 
 fn compact_message_for_target<'a>(

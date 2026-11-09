@@ -120,6 +120,7 @@ pub(super) enum AttemptOutcome {
     TypingHeld {
         until: Timestamp,
     },
+    Deferred(send::Deferral),
 }
 
 pub(super) struct Attempt<'a> {
@@ -128,6 +129,7 @@ pub(super) struct Attempt<'a> {
     pub snapshot: &'a SidebarSnapshot,
     pub target: &'a PaneAgent,
     pub bound: Option<&'a crate::agents::AgentState>,
+    pub card_status: &'a CardStatus,
     pub records: &'a [MessageRecord],
     pub source: AttemptSource,
 }
@@ -462,6 +464,7 @@ fn attempt_delivery(
             snapshot: candidate.snapshot,
             target: candidate.target,
             bound: candidate.bound,
+            card_status,
             records: &send_messages,
             source: AttemptSource::Claimed,
         },
@@ -550,6 +553,7 @@ pub(super) fn execute_attempt(
         snapshot,
         target,
         bound,
+        card_status,
         records,
         source,
     } = attempt;
@@ -591,7 +595,14 @@ pub(super) fn execute_attempt(
         })
     } else {
         send::send_batch_to_live_pane(
-            workspace, store, snapshot, target, bound, records, live_send,
+            workspace,
+            store,
+            snapshot,
+            target,
+            bound,
+            card_status,
+            records,
+            live_send,
         )
     };
     match receipt {
@@ -657,6 +668,33 @@ pub(super) fn execute_attempt(
                 &workspace.session_name,
             )?;
             Ok(AttemptOutcome::Queued)
+        }
+        Ok(send::Receipt::Deferred(deferral)) => {
+            if matches!(
+                source,
+                AttemptSource::Fresh {
+                    durable_receiver: false
+                }
+            ) {
+                let error = send::SendErr::Deferred {
+                    reason: deferral.to_string(),
+                };
+                store.record_message_delivery_failures(
+                    records,
+                    crate::store::writer::DeliveryFailureDisposition::Terminal,
+                    &error.to_string(),
+                    &workspace.session_name,
+                )?;
+                return Err(error.into());
+            }
+            // A busy receiver is no failure: the release nets out this attempt.
+            store.release_message_claims(
+                records,
+                &format!("deferred: {deferral}"),
+                false,
+                &workspace.session_name,
+            )?;
+            Ok(AttemptOutcome::Deferred(deferral))
         }
         Ok(send::Receipt::CompactionPending) => {
             store.release_message_claims(
