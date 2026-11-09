@@ -7,7 +7,7 @@ use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, EntryCursor, HitTarget, UiState, ViewState,
+    BodyFilter, Browse, DashboardTab, EntryCursor, HitTarget, UiState, ViewState, ViewportIntent,
     active_dashboard_tab, dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs,
     selected_agent_kind, selected_sub_provider,
 };
@@ -279,7 +279,7 @@ pub(super) fn handle_key(
     let mut outcome = key_outcome(action, view, ui, snapshot);
     let entry_changed = previous != view.entry_cursor;
     if entry_changed && entry_step {
-        view.offset_authoritative = false;
+        view.request(ViewportIntent::EntryStep);
     }
     outcome.redraw |= entry_changed || notice_cleared;
     outcome
@@ -387,8 +387,9 @@ fn key_outcome(
                     if let Some(row) = view
                         .selected_index
                         .and_then(|index| view.visible_roster(snapshot).row(index))
+                        && toggle_delegation_history(view, snapshot, row.id.clone())
                     {
-                        toggle_delegation_history(view, snapshot, row.id.clone());
+                        view.request(ViewportIntent::Hold);
                     }
                     view.entry_cursor = None;
                     let mut outcome = InputOutcome::redraw();
@@ -417,7 +418,11 @@ fn key_outcome(
             None => InputOutcome::default(),
         },
         KeyAction::MarkAllRead => InputOutcome::mark_all_read(),
-        KeyAction::ToggleInactive => toggle_inactive(view, snapshot),
+        KeyAction::ToggleInactive => {
+            toggle_inactive(view, snapshot);
+            view.request(ViewportIntent::RevealInactive);
+            InputOutcome::redraw()
+        }
         KeyAction::FoldToggle => {
             let Some((row_id, open)) = view
                 .selected_index
@@ -426,6 +431,7 @@ fn key_outcome(
                 return InputOutcome::default();
             };
             set_delegation_open(view, snapshot, row_id, !open);
+            view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
         KeyAction::FoldOpenAll => {
@@ -541,8 +547,7 @@ fn fold_groups(view: &mut ViewState, snapshot: &SidebarSnapshot, before: usize) 
         return InputOutcome::default();
     }
     anchor_selection(view, snapshot);
-    view.offset_authoritative = true;
-    view.scroll_ease.cancel();
+    view.request(ViewportIntent::Hold);
     InputOutcome::redraw()
 }
 
@@ -670,55 +675,58 @@ pub(super) fn handle_mouse_click(
             }
         }
         Some(HitTarget::UnreadBanner) => {
-            view.offset_authoritative = true;
-            view.scroll_ease.cancel();
             let roster = view.visible_roster(snapshot);
-            view.reveal_row = lead_unread_row(&snapshot.worktree_groups)
+            let lead = lead_unread_row(&snapshot.worktree_groups)
                 .filter(|row| roster.ordinal_of_id(&row.id).is_some())
                 .map(|row| row.id.clone());
-            if view.reveal_row.is_none() {
+            if lead.is_none() {
                 view.scroll_offset = 0;
             }
+            view.request(ViewportIntent::RevealRow(lead));
             InputOutcome::redraw()
         }
         Some(HitTarget::FocusMarker) => {
-            view.reveal_row = view
+            let selected = view
                 .selected_index
                 .and_then(|index| view.visible_roster(snapshot).row(index))
                 .map(|row| row.id.clone());
-            view.offset_authoritative = true;
-            view.scroll_ease.cancel();
+            view.request(ViewportIntent::RevealRow(selected));
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleGroup(group_key)) => {
             toggle_group_expanded(view, snapshot, group_key);
+            view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
         Some(HitTarget::ExpandGroup { key, row }) => {
             view.toggles.expanded_groups.insert(key);
             anchor_selection(view, snapshot);
-            view.offset_authoritative = true;
-            view.scroll_ease.cancel();
-            view.reveal_row = pane.is_some().then_some(row);
+            view.request(ViewportIntent::RevealRow(pane.is_some().then_some(row)));
             InputOutcome::redraw()
         }
-        Some(HitTarget::ToggleInactive) => toggle_inactive(view, snapshot),
+        Some(HitTarget::ToggleInactive) => {
+            toggle_inactive(view, snapshot);
+            view.request(ViewportIntent::RevealInactive);
+            InputOutcome::redraw()
+        }
         Some(HitTarget::MoreInactive) => {
             let Some(peek) = &mut view.toggles.inactive_peek else {
                 return InputOutcome::default();
             };
             peek.pages = peek.pages.saturating_add(1);
             anchor_selection(view, snapshot);
-            view.offset_authoritative = true;
-            view.scroll_ease.cancel();
+            view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleDelegation { row, open }) => {
             set_delegation_open(view, snapshot, row, open);
+            view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleDelegationHistory(row_id)) => {
-            toggle_delegation_history(view, snapshot, row_id);
+            if toggle_delegation_history(view, snapshot, row_id) {
+                view.request(ViewportIntent::Hold);
+            }
             InputOutcome::redraw()
         }
         Some(HitTarget::Row(_) | HitTarget::SubAgentPane(_) | HitTarget::Hyperlink(_)) | None => {
@@ -799,8 +807,7 @@ fn select_clicked_pane(
 /// Clamp to the last drawn range so queued ticks can reverse at the bottom
 /// without an intervening paint. The draw still resolves geometry changes.
 pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) -> InputOutcome {
-    view.offset_authoritative = true;
-    view.scroll_ease.arm();
+    view.request(ViewportIntent::Wheel);
     view.scroll_offset = if down {
         view.scroll_offset
             .saturating_add(SCROLL_STEP)
@@ -811,7 +818,7 @@ pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) 
     InputOutcome::redraw()
 }
 
-pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) -> InputOutcome {
+pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) {
     if view.toggles.inactive_peek.take().is_some() {
         for group in snapshot
             .worktree_groups
@@ -823,11 +830,7 @@ pub(super) fn toggle_inactive(view: &mut ViewState, snapshot: &SidebarSnapshot) 
     } else {
         view.toggles.inactive_peek = Some(Default::default());
     }
-    view.inactive_reveal = true;
     anchor_selection(view, snapshot);
-    view.offset_authoritative = true;
-    view.scroll_ease.cancel();
-    InputOutcome::redraw()
 }
 
 fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_key: String) {
@@ -840,8 +843,6 @@ fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_k
         ui.toggles.expanded_groups.insert(group_key);
     }
     anchor_selection(ui, snapshot);
-    ui.offset_authoritative = true;
-    ui.scroll_ease.cancel();
 }
 
 /// A header click sets the section open or closed for the renderer's life. A
@@ -852,11 +853,14 @@ fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: S
     }
     ui.toggles.delegation_overrides.insert(row_id, open);
     anchor_selection(ui, snapshot);
-    ui.offset_authoritative = true;
-    ui.scroll_ease.cancel();
 }
 
-fn toggle_delegation_history(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
+/// Whether the row was an agent card whose history fold flipped.
+fn toggle_delegation_history(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    row_id: String,
+) -> bool {
     let Some(agent) = snapshot
         .worktree_groups
         .iter()
@@ -864,7 +868,7 @@ fn toggle_delegation_history(ui: &mut ViewState, snapshot: &SidebarSnapshot, row
         .find(|row| row.id == row_id)
         .and_then(|row| row.as_agent())
     else {
-        return;
+        return false;
     };
     if ui.toggles.delegation_history.remove(&row_id) != Some(agent.user_turn_started_at) {
         ui.toggles
@@ -872,8 +876,7 @@ fn toggle_delegation_history(ui: &mut ViewState, snapshot: &SidebarSnapshot, row
             .insert(row_id, agent.user_turn_started_at);
     }
     anchor_selection(ui, snapshot);
-    ui.offset_authoritative = true;
-    ui.scroll_ease.cancel();
+    true
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears

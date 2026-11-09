@@ -1,4 +1,5 @@
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportRequest;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -119,11 +120,7 @@ fn write_back(ui: &mut ViewState, pane_ui: &mut UiState, frame: compose::Compose
     pane_ui.scroll_zone_top = frame.top_height;
     pane_ui.banner_shown = frame.banner_shown;
     pane_ui.anchor_clamped = frame.anchor_clamped;
-    ui.offset_authoritative = false;
-    ui.inactive_reveal = false;
-    ui.reveal_row = None;
-    ui.focus_placement = None;
-    ui.own_input_reveal = false;
+    ui.viewport = ViewportRequest::default();
 }
 
 #[test]
@@ -147,7 +144,10 @@ fn group_placements_track_target_window_overlap() {
     );
     let mut ui = ViewState {
         scroll_offset: 1,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pane_ui = UiState::default();
@@ -188,7 +188,7 @@ proptest! {
                     ui.scroll_ease.arm();
                     ui.scroll_offset =
                         usize::from(value) % (pane_ui.drawn_scroll_max.unwrap_or(0) + 1);
-                    ui.offset_authoritative = true;
+                    ui.viewport.offset_authoritative = true;
                 }
                 1 => ui.selected_index =
                     Some(usize::from(value) % ui.visible_roster(&snapshot).len().max(1)),
@@ -272,7 +272,7 @@ fn paint_scope_tracks_window_epoch_and_selection() {
     assert_painted(&pane_ui, (0..count).collect());
     write_back(&mut ui, &mut pane_ui, first);
     ui.scroll_offset = 80;
-    ui.offset_authoritative = true;
+    ui.viewport.offset_authoritative = true;
     let second = compose_cached(&snapshot, &mut ui, &mut pane_ui, 54, 40);
     let visible = visible_cards(&second, &snapshot, &ui);
     assert!(visible.len() < count / 2);

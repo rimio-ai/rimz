@@ -444,7 +444,7 @@ fn raw_entry_steps_reveal_both_lines_despite_an_authoritative_offset() {
     for code in [KeyCode::Char('j'), KeyCode::Down] {
         let (mut rig, panes) = tall_child_focus_rig();
         for pane in panes.iter().skip(1) {
-            rig.view().ui().offset_authoritative = true;
+            rig.view().ui().request(ViewportIntent::Hold);
             let applied = rig
                 .state
                 .apply_input(
@@ -509,12 +509,14 @@ fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
     click_child(&mut rig, &second);
     let selected = rig.view().ui().selected_pane.clone();
     let browse = rig.view().ui().browse.clone();
-    rig.view().ui().focus_placement = Some(crate::mux::focus_anchor::FocusPlacement {
-        row_id: selected.as_ref().unwrap().to_string(),
-        viewport_row: 2,
-        held: Default::default(),
-    });
-    let placement = rig.view().ui().focus_placement.clone();
+    rig.view().ui().request(ViewportIntent::Jump(
+        crate::mux::focus_anchor::FocusPlacement {
+            row_id: selected.as_ref().unwrap().to_string(),
+            viewport_row: 2,
+            held: Default::default(),
+        },
+    ));
+    let placement = rig.view().ui().pending_jump().cloned();
     rig.state.on_focus_failed(first, "stale sibling".into());
     assert_eq!(
         rig.view().ui().browse,
@@ -522,7 +524,7 @@ fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
         "older failure cannot clear the newer browse"
     );
     assert_eq!(rig.view().ui().selected_pane, selected);
-    assert_eq!(rig.view().ui().focus_placement, placement);
+    assert_eq!(rig.view().ui().pending_jump(), placement.as_ref());
     assert!(rig.view().ctx().health.alert.is_none());
     rig.state.on_focus_failed(second, "latest failure".into());
     assert_eq!(rig.view().ui().baseline_pane, Some(baseline));
@@ -2101,7 +2103,7 @@ fn assert_foreign_focus_anchor_is_ignored(shared: bool) {
             rig.fold(snapshot, SnapshotSource::Produced);
         }
         assert_eq!(rig.view().ui().selected_pane, Some(focused));
-        assert!(rig.view().ui().focus_placement.is_none());
+        assert!(rig.view().ui().pending_jump().is_none());
         assert_eq!(rig.view().ui().last_focus_anchor_ms, 0);
         assert_eq!(rig.view().ctx().confirmed_focus_intent_ms, 0);
         assert_eq!(
@@ -2178,7 +2180,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.view().ui().selected_pane = Some(old.pane_id.clone());
     rig.view().ui().scroll_offset = 2;
     rig.state.fold_transition(PaneState::apply_focus_anchor);
-    assert_eq!(rig.view().ui().focus_placement, old.placement);
+    assert_eq!(rig.view().ui().pending_jump(), old.placement.as_ref());
     assert_eq!(
         rig.view().ui().scroll_offset,
         2,
@@ -2209,7 +2211,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.view().ctx().fold_inputs = None;
     rig.view().ui().selected_pane = Some(new.pane_id.clone());
     rig.state.fold_transition(PaneState::apply_focus_anchor);
-    assert_eq!(rig.view().ui().focus_placement, new.placement);
+    assert_eq!(rig.view().ui().pending_jump(), new.placement.as_ref());
     assert_eq!(
         rig.view().ui().scroll_offset,
         2,
@@ -2421,7 +2423,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
 
     assert_eq!(rig.view().ui().selected_pane, Some(target.clone()));
     assert_eq!(rig.view().ui().scroll_offset, 0);
-    assert_eq!(rig.view().ui().focus_placement, anchor.placement);
+    assert_eq!(rig.view().ui().pending_jump(), anchor.placement.as_ref());
     assert_eq!(
         rig.view().ctx().current.worktree_groups[0]
             .rows
@@ -2439,7 +2441,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     );
 
     rig.view().ui().scroll_offset = 4;
-    rig.view().ui().focus_placement = None;
+    rig.view().ui().request(ViewportIntent::DropJump);
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(crate::utils::time::unix_now_ms());
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
@@ -2447,7 +2449,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.view().ui().scroll_offset, 4);
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(rig.view().ui().pending_jump().is_none());
     assert_eq!(rig.view().ui().last_focus_anchor_ms, stamp_ms);
 }
 
@@ -2501,7 +2503,7 @@ fn fresh_child_focus_anchor_selects_parent_and_queues_placement_and_hold() {
     rig.fold(snapshot, SnapshotSource::Produced);
     assert_eq!(rig.view().ui().selected_pane, Some(parent));
     assert_eq!(rig.view().ui().scroll_offset, 0);
-    assert_eq!(rig.view().ui().focus_placement, anchor.placement);
+    assert_eq!(rig.view().ui().pending_jump(), anchor.placement.as_ref());
     assert_eq!(rig.view().ui().freeze.as_ref().unwrap().frozen, order);
     assert_eq!(rig.view().ui().last_focus_anchor_ms, stamp_ms);
 }
@@ -2520,15 +2522,15 @@ fn focus_anchor_stamp_applies_once() {
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
     assert_eq!(rig.view().ui().scroll_offset, 0);
-    assert!(rig.view().ui().focus_placement.is_some());
+    assert!(rig.view().ui().pending_jump().is_some());
 
     rig.view().ui().scroll_offset = 4;
-    rig.view().ui().focus_placement = None;
+    rig.view().ui().request(ViewportIntent::DropJump);
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.view().ui().scroll_offset, 4);
-    assert!(rig.view().ui().focus_placement.is_none());
+    assert!(rig.view().ui().pending_jump().is_none());
 }
 
 #[test]

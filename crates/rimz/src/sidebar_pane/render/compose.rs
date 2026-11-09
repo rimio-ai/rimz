@@ -772,17 +772,14 @@ fn resolve_scroll_offset(
         clamped: false,
         snap: false,
     };
-    if view.offset_authoritative {
-        if let Some(index) = view
-            .reveal_row
-            .as_deref()
-            .and_then(|id| input.roster.ordinal_of_id(id))
-        {
+    if view.viewport.offset_authoritative {
+        let reveal = view.viewport.reveal_row.as_deref();
+        if let Some(index) = reveal.and_then(|id| input.roster.ordinal_of_id(id)) {
             resolved.offset =
                 auto_scroll_to_selection(input.scroll_map, index, resolved.offset, viewport)
                     .min(max_offset);
         }
-        if view.inactive_reveal
+        if view.viewport.inactive_reveal
             && let Some((chip, last)) = input.inactive_span
         {
             resolved.offset = if last - chip + 1 > viewport {
@@ -798,8 +795,7 @@ fn resolve_scroll_offset(
         .selected_index
         .and_then(|index| input.roster.row(index));
     let changed = selected.map(|row| row.id.as_str()) != view.drawn_selection.as_deref();
-    resolved.snap =
-        changed || view.focus_placement.is_some() || input.ui.drawn_scroll_max.is_none();
+    resolved.snap = changed || view.pending_jump().is_some() || input.ui.drawn_scroll_max.is_none();
     let first_line = |id: &str| {
         let ordinal = input.roster.ordinal_of_id(id)?;
         input
@@ -815,8 +811,7 @@ fn resolve_scroll_offset(
                 .find(|(id, _)| first_line(id).is_some())
         });
     let shared = view
-        .focus_placement
-        .as_ref()
+        .pending_jump()
         .filter(|placement| selected.is_some_and(|row| row.id == placement.row_id))
         .and_then(|placement| {
             first_line(&placement.row_id)
@@ -839,7 +834,7 @@ fn resolve_scroll_offset(
     let Some(selected_index) = view.selected_index.filter(|_| selected.is_some()) else {
         return resolved;
     };
-    if view.own_input_reveal
+    if view.viewport.own_input_reveal
         && let (Some(cursor), Some(row)) = (&view.entry_cursor, selected)
     {
         let target = match cursor {
@@ -872,7 +867,7 @@ fn resolve_scroll_offset(
             )
         });
     // A placement from a taller source zone can land below this one: reveal it.
-    if visible || (!view.own_input_reveal && shared.is_none()) {
+    if visible || (!view.viewport.own_input_reveal && shared.is_none()) {
         return resolved;
     }
     resolved.offset =

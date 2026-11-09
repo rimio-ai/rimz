@@ -834,6 +834,13 @@ fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
             .expanded_groups
             .insert(snapshot.worktree_groups[0].key.clone());
         source.selected_index = Some(12);
+        source.request(render::ViewportIntent::RevealRow(Some(
+            snapshot.worktree_groups[0].rows[18].id.clone(),
+        )));
+        source.request(render::ViewportIntent::RevealInactive);
+        source.request(render::ViewportIntent::EntryStep);
+        source.request(render::ViewportIntent::Jump(placement.clone()));
+        source.request(render::ViewportIntent::OwnInput);
         if in_flight {
             source.scroll_ease.arm();
             source.scroll_ease.observe(0, render::FrameTime::default());
@@ -844,11 +851,6 @@ fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
             source.scroll_ease.arm();
         }
         source.scroll_offset = 9;
-        source.offset_authoritative = false;
-        source.reveal_row = Some(snapshot.worktree_groups[0].rows[18].id.clone());
-        source.inactive_reveal = true;
-        source.focus_placement = Some(placement.clone());
-        source.own_input_reveal = true;
         let expected = format!("{source:?}");
         sample(&mut views, &clock, &[(1, 10), (2, 20)]);
         let fork = views.paint(&pane(20), clock.now()).clone();

@@ -331,10 +331,7 @@ impl ViewAccess {
                         entry.state.tally = Default::default();
                         entry.state.cost_rolls = Default::default();
                     }
-                    if entry.state.scroll_ease.in_flight() {
-                        entry.state.scroll_ease.cancel();
-                        entry.state.offset_authoritative = true;
-                    }
+                    entry.state.request(render::ViewportIntent::LandGlide);
                 }
                 entry.last_pane = Some(own_pane.clone());
                 entry.unpainted = false;

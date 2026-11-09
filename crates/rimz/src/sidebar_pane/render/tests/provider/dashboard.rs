@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportRequest;
 
 #[test]
 fn pi_block_follows_the_card_then_memory_then_the_top_level_in_both_layouts() {
@@ -1235,7 +1236,10 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     let ui = ViewState {
         selected_index: Some(0),
         scroll_offset: 6,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();

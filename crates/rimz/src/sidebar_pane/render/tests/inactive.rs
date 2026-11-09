@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportRequest;
 use crate::sidebar_pane::render::compose::scroll_lines;
 use crate::store::snapshot::{SidebarInactive, SidebarWorktreeKind, WorktreePrState};
 use std::collections::BTreeSet;
@@ -135,10 +136,13 @@ fn closed_inactive_line_replaces_receipts_after_external() {
 fn opening_a_bottom_peek_scrolls_only_to_the_first_receipt() {
     let snapshot = inactive_snapshot();
     let view = ViewState {
-        offset_authoritative: true,
-        inactive_reveal: true,
         toggles: PresentationToggles {
             inactive_peek: Some(Default::default()),
+            ..Default::default()
+        },
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            inactive_reveal: true,
             ..Default::default()
         },
         ..Default::default()

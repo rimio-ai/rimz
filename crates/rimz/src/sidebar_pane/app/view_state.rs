@@ -18,7 +18,7 @@ use crate::sidebar::observe;
 use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::timing::{FOCUS_MARKER_TMUX_DWELL, FOCUS_MARKER_ZELLIJ_DWELL, TAB_READ_DWELL};
 use crate::sidebar::unread::UnreadClearCause;
-use crate::sidebar_pane::render::{self, ViewState};
+use crate::sidebar_pane::render::{self, ViewState, ViewportIntent};
 use crate::store::snapshot::{HeldRank, SidebarOwnView, SidebarSnapshot};
 
 use super::clock::LoopClock;
@@ -320,8 +320,7 @@ impl ViewContext {
                 .as_ref()
                 .map(|_| (anchor.clone(), clock.now()));
             if let Some(placement) = &anchor.placement {
-                ui.focus_placement = Some(placement.clone());
-                ui.scroll_ease.cancel();
+                ui.request(ViewportIntent::Jump(placement.clone()));
             }
             if let Some(order) = &anchor.order
                 && self.live_focus_source != Some(anchor.nonce)
@@ -376,7 +375,7 @@ impl ViewContext {
         state.entry_focus = rollback.entry_focus;
         state.entry_cursor = state.entry_focus.clone().map(render::EntryCursor::SubAgent);
         state.browse = None;
-        state.focus_placement = None;
+        state.request(ViewportIntent::DropJump);
         self.focus_landing = None;
         // Dispatch removed the failed intent. Fence older retained cuts from reviving it,
         // but do not fence the pulled baseline that the failed jump must restore.
@@ -680,7 +679,7 @@ impl ViewContext {
                 .and_then(|row| row.pane.as_ref())
                 .is_some_and(|pane| focused.as_ref() == Some(&pane.pane_id))
             {
-                ui.own_input_reveal = true;
+                ui.request(ViewportIntent::OwnInput);
             }
             // Fused focus can precede dispatch; only native client consensus confirms a landing.
             let landed = held_panes.as_slice() == std::slice::from_ref(requested);

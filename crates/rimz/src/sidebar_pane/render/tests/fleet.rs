@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::PresentationToggles;
+use crate::sidebar_pane::render::ViewportRequest;
 use crate::sidebar_pane::render::layout::text_width;
 use crate::sidebar_pane::render::theme::Component;
 
@@ -152,7 +153,10 @@ fn unread_banner_counts_two_actionable_teammates_as_one_unit() {
     group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     let ui = ViewState {
         scroll_offset: 99,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..(selected_ui()).viewport.clone()
+        },
         ..selected_ui()
     };
     let pane_ui = UiState::default();
@@ -1230,7 +1234,10 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
     let ui = ViewState {
         selected_index: Some(0),
         scroll_offset: 99,
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();
@@ -1250,7 +1257,10 @@ fn unread_banner_points_below_or_to_the_filter_hidden_lead() {
     let lead = rows.remove(0);
     rows.push(lead);
     let mut ui = ViewState {
-        offset_authoritative: true,
+        viewport: ViewportRequest {
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pane_ui = UiState::default();

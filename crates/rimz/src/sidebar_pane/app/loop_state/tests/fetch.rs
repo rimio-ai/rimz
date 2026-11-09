@@ -1806,7 +1806,7 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
         }
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
-            v.state.offset_authoritative = true;
+            v.state.request(ViewportIntent::Hold);
         });
         pair.paint(0);
         pair.clock.advance(crate::sidebar::timing::CLICK_GUARD);
@@ -1828,7 +1828,7 @@ fn inactive_peek_keeps_pages_on_pulled_focus_departures_until_toggled() {
         assert!(pair.view(0).toggles.inactive_peek.is_some());
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
-            v.state.offset_authoritative = true;
+            v.state.request(ViewportIntent::Hold);
         });
         pair.paint(0);
         assert!(
@@ -2035,7 +2035,7 @@ fn inactive_jump_placement(mux: MuxName, open: bool, home: usize) -> (Option<isi
     });
     pair.panes[1].state.on_snapshot();
     assert_eq!(pair.view(1).selected_pane, Some(target_pane));
-    assert!(pair.view(1).focus_placement.is_some());
+    assert!(pair.view(1).pending_jump().is_some());
     assert_eq!(pair.view(1).toggles.inactive_peek.is_some(), open);
     pair.paint(1);
     let ui = &pair.panes[1].state.pane.ui;
@@ -2088,7 +2088,7 @@ fn inactive_receipt_tab_jump_keeps_the_peek_until_toggled_and_retains_the_focuse
         assert!(pair.view(0).toggles.expanded_groups.contains("old-01"));
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
             v.state.scroll_offset = usize::MAX;
-            v.state.offset_authoritative = true;
+            v.state.request(ViewportIntent::Hold);
         });
         pair.paint(0);
         assert!(
