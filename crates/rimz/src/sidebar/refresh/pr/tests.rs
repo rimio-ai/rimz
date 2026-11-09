@@ -43,7 +43,7 @@ fn stack_attachment_is_shared_and_carries_on_failure() {
             targets: group.targets.clone(),
             states,
             branch_ci: BTreeMap::new(),
-            ok: true,
+            failed: BTreeSet::new(),
         };
         let mut diff = DiffStatsCache::default();
         diff.entries.insert(
@@ -68,11 +68,16 @@ fn stack_attachment_is_shared_and_carries_on_failure() {
             own.remote.pr_web_url(522)
         );
         assert!(result.states[&terminal.path].stack.is_empty());
-        let mut failed =
-            failed_repo_group_probe(&own.repo_key, &group, &result.states, &BTreeMap::new());
+        let mut failed = failed_repo_group_probe(&own.repo_key, &group);
         attach_stacks(&mut failed, &diff);
+        let prior = PrStateCache {
+            states: result.states.clone(),
+            ..PrStateCache::default()
+        };
+        let mut cache = prior.clone();
+        apply_repo_probe(&mut cache, &prior, failed, 2_000);
         assert_eq!(
-            failed.states[&own.path].stack,
+            cache.states[&own.path].stack,
             result.states[&own.path].stack
         );
         result.states.get_mut(&own.path).unwrap().state = WorktreePrState::Merged;
@@ -951,11 +956,18 @@ fn github_group_failure_carries_complete_prior_truth() {
     ]);
     let prior_branch_ci = BTreeMap::from([("/repo/no-pr".to_owned(), WorktreeCi::Passing)]);
 
-    let probe = failed_repo_group_probe("gh:github.com:org/repo", &group, &prior, &prior_branch_ci);
+    let probe = failed_repo_group_probe("gh:github.com:org/repo", &group);
+    assert!(!probe.ok());
+    let prior = PrStateCache {
+        states: prior,
+        branch_ci: prior_branch_ci,
+        ..PrStateCache::default()
+    };
+    let mut cache = prior.clone();
+    apply_repo_probe(&mut cache, &prior, probe, 2_000);
 
-    assert!(!probe.ok);
-    assert_eq!(probe.states, prior);
-    assert_eq!(probe.branch_ci, prior_branch_ci);
+    assert_eq!(cache.states, prior.states);
+    assert_eq!(cache.branch_ci, prior.branch_ci);
 }
 
 #[test]
@@ -2023,7 +2035,7 @@ fn repo_bookkeeping_prunes_stale_repo_stamps() {
     let groups = group_targets(vec![target("/repo/a", "a")]);
     let needed = vec!["/repo/a".to_owned()];
 
-    let cache = probe_due_repos(
+    let (cache, _) = probe_due_repos(
         &groups,
         &BTreeSet::new(),
         &prior,
@@ -2112,7 +2124,7 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
             targets: group.targets.clone(),
             states,
             branch_ci,
-            ok: true,
+            failed: BTreeSet::new(),
         },
         1000,
     );
@@ -2148,7 +2160,7 @@ fn branch_results_are_separate_and_failed_rows_carry_forward() {
             targets: vec![branch.clone()],
             states: BTreeMap::new(),
             branch_ci: BTreeMap::new(),
-            ok: false,
+            failed: BTreeSet::from([branch.path.clone()]),
         },
         2000,
     );
@@ -2233,7 +2245,7 @@ fn failed_first_branch_probe_obeys_retry_backoff_on_both_due_paths() {
     apply_repo_probe(
         &mut cache,
         &PrStateCache::default(),
-        failed_repo_group_probe(&repo, &group, &BTreeMap::new(), &BTreeMap::new()),
+        failed_repo_group_probe(&repo, &group),
         1000,
     );
     let groups = BTreeMap::from([(repo.clone(), group)]);
@@ -2302,21 +2314,16 @@ fn tea_open_ci_keeps_the_combined_status_commit_without_a_local_fallback() {
     let groups = group_targets(vec![tea_target("/repo/local", "feature")]);
     let (repo, group) = groups.first_key_value().unwrap();
     for sha in [Some(" pushed "), None] {
-        let result = probe_tea_repo_group_with(
-            repo,
-            group,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            |_, program, args| {
+        let result =
+            probe_tea_repo_group_with(repo, group, &BTreeMap::new(), |_, program, args| {
                 assert_eq!(program, "tea");
                 if args.starts_with(&["pr", "list", "--state", "open"]) {
                     return Some(r#"[{"index":"42","state":"open","head":"feature"}]"#.into());
                 }
                 assert_eq!(args, ["api", "repos/org/repo/commits/feature/status"]);
                 Some(serde_json::json!({"state": "failure", "sha": sha}).to_string())
-            },
-        );
-        assert!(result.ok);
+            });
+        assert!(result.ok());
         let link = &result.states["/repo/local"];
         assert_eq!(link.ci, Some(WorktreeCi::Failing));
         assert_eq!(link.ci_sha.as_deref(), sha.map(str::trim));
@@ -2327,21 +2334,15 @@ fn tea_open_ci_keeps_the_combined_status_commit_without_a_local_fallback() {
 fn tea_open_pr_without_reported_statuses_shows_no_ci() {
     let groups = group_targets(vec![tea_target("/repo/local", "feature")]);
     let (repo, group) = groups.first_key_value().unwrap();
-    let result = probe_tea_repo_group_with(
-        repo,
-        group,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        |_, program, args| {
-            assert_eq!(program, "tea");
-            if args.starts_with(&["pr", "list", "--state", "open"]) {
-                return Some(r#"[{"index":"42","state":"open","head":"feature"}]"#.into());
-            }
-            assert_eq!(args, ["api", "repos/org/repo/commits/feature/status"]);
-            Some(r#"{"state":"pending","sha":"head","total_count":0,"statuses":null}"#.into())
-        },
-    );
-    assert!(result.ok);
+    let result = probe_tea_repo_group_with(repo, group, &BTreeMap::new(), |_, program, args| {
+        assert_eq!(program, "tea");
+        if args.starts_with(&["pr", "list", "--state", "open"]) {
+            return Some(r#"[{"index":"42","state":"open","head":"feature"}]"#.into());
+        }
+        assert_eq!(args, ["api", "repos/org/repo/commits/feature/status"]);
+        Some(r#"{"state":"pending","sha":"head","total_count":0,"statuses":null}"#.into())
+    });
+    assert!(result.ok());
     let link = &result.states["/repo/local"];
     assert_eq!(link.state, WorktreePrState::Open);
     assert_eq!(link.number, Some(42));
@@ -2439,27 +2440,21 @@ fn tea_branch_group_lists_all_states_once_and_reads_terminal_details() {
     let groups = group_targets(targets);
     let (repo, group) = groups.first_key_value().unwrap();
     let mut calls = Vec::new();
-    let result = probe_tea_repo_group_with(
-        repo,
-        group,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        |_, program, args| {
-            assert_eq!(program, "tea");
-            calls.push(args.join(" "));
-            if args.starts_with(&["pr", "list", "--state", "open"]) {
-                return Some("[]".to_owned());
-            }
-            if args.starts_with(&["pr", "list", "--state", "all"]) {
-                return Some(r#"[{"index":"42","state":"closed","head":"a"}]"#.to_owned());
-            }
-            if args == ["api", "repos/org/repo/pulls/42"] {
-                return Some(r#"{"state":"closed","merged":true,"merge_commit_sha":"merge","head":{"sha":"head"}}"#.to_owned());
-            }
-            assert!(args[1].ends_with("/status"), "{args:?}");
-            Some(r#"{"state":"success"}"#.to_owned())
-        },
-    );
+    let result = probe_tea_repo_group_with(repo, group, &BTreeMap::new(), |_, program, args| {
+        assert_eq!(program, "tea");
+        calls.push(args.join(" "));
+        if args.starts_with(&["pr", "list", "--state", "open"]) {
+            return Some("[]".to_owned());
+        }
+        if args.starts_with(&["pr", "list", "--state", "all"]) {
+            return Some(r#"[{"index":"42","state":"closed","head":"a"}]"#.to_owned());
+        }
+        if args == ["api", "repos/org/repo/pulls/42"] {
+            return Some(r#"{"state":"closed","merged":true,"merge_commit_sha":"merge","head":{"sha":"head"}}"#.to_owned());
+        }
+        assert!(args[1].ends_with("/status"), "{args:?}");
+        Some(r#"{"state":"success"}"#.to_owned())
+    });
     assert_eq!(
         calls
             .iter()
@@ -2474,7 +2469,7 @@ fn tea_branch_group_lists_all_states_once_and_reads_terminal_details() {
             .count(),
         1
     );
-    assert!(result.ok);
+    assert!(result.ok());
     assert_eq!(result.states["\0a"].state, WorktreePrState::Merged);
     assert_eq!(result.states["\0a"].ci, Some(WorktreeCi::Passing));
     assert_eq!(result.branch_ci["\0a"], WorktreeCi::Passing);
@@ -2492,12 +2487,8 @@ fn tea_branch_status_errors_leave_unknown_ci_without_failing_checkouts() {
         let groups = group_targets(vec![checkout.clone(), branch.clone()]);
         let (repo, group) = groups.first_key_value().unwrap();
         let mut status_calls = Vec::new();
-        let result = probe_tea_repo_group_with(
-            repo,
-            group,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            |_, program, args| {
+        let result =
+            probe_tea_repo_group_with(repo, group, &BTreeMap::new(), |_, program, args| {
                 assert_eq!(program, "tea");
                 if args.starts_with(&["pr", "list", "--state", "open"]) {
                     let mut rows =
@@ -2530,8 +2521,7 @@ fn tea_branch_status_errors_leave_unknown_ci_without_failing_checkouts() {
                 status_calls.push(args[1].to_owned());
                 (args[1] == "repos/org/repo/commits/local/status")
                     .then(|| r#"{"state":"success"}"#.to_owned())
-            },
-        );
+            });
         assert_eq!(result.states[&checkout.path].ci, Some(WorktreeCi::Passing));
         let expected_statuses = if state == "merged" { 4 } else { 2 };
         assert_eq!(
@@ -2541,7 +2531,7 @@ fn tea_branch_status_errors_leave_unknown_ci_without_failing_checkouts() {
         );
         outcomes.push((
             state,
-            result.ok,
+            result.ok(),
             result.states.get(&branch.path).and_then(|link| link.ci),
             result.branch_ci.get(&branch.path).copied(),
         ));

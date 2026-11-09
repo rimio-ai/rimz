@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -24,11 +24,13 @@ fn opened_requires_a_successful_continuous_prior_without_the_same_open_pr() {
             "forge"
         );
     }
-    let mut failed = base_cache();
-    failed.repos.get_mut(REPO).unwrap().ok = false;
-    for prior in [PrStateCache::default(), failed, next.clone()] {
+    // A prior without a target stamp is a first-sight failure.
+    let mut first_sight_failure = base_cache();
+    first_sight_failure.target_seen.clear();
+    for prior in [PrStateCache::default(), first_sight_failure, next.clone()] {
         assert!(production_transitions(&prior, &next).is_empty());
     }
+    assert!(failed_transitions(&base_cache(), &next).is_empty());
 }
 
 #[test]
@@ -88,9 +90,7 @@ fn first_seen_adverse_prs_require_continuity_ownership_and_success() {
     );
     assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
 
-    let mut failed = next.clone();
-    failed.repos.get_mut(REPO).unwrap().ok = false;
-    assert!(production_transitions(&prior, &failed).is_empty());
+    assert!(failed_transitions(&prior, &next).is_empty());
     let mut unowned = next.clone();
     unowned.states.get_mut(PATH).unwrap().branch = Some("other".into());
     assert!(production_transitions(&prior, &unowned).is_empty());
@@ -346,14 +346,11 @@ fn queue_signals_require_continuity_ownership_and_success() {
         );
         assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
 
-        let mut failed = next.clone();
-        failed.repos.get_mut(REPO).unwrap().ok = false;
-        assert!(production_transitions(&prior, &failed).is_empty());
+        assert!(failed_transitions(&prior, &next).is_empty());
 
         // A failed probe carries the last good link; the next good poll does not repeat it.
-        let mut carried = next.clone();
-        carried.repos.get_mut(REPO).unwrap().ok = false;
-        assert!(production_transitions(&next, &carried).is_empty());
+        let carried = next.clone();
+        assert!(failed_transitions(&next, &carried).is_empty());
         assert!(production_transitions(&carried, &next).is_empty());
 
         let mut changed_branch = next.clone();
@@ -415,8 +412,13 @@ fn queue_payloads_keep_the_pr_head_apart_from_the_queue_timestamp() {
         production_transitions(&queued, &manual)[0].1,
         expect(json!({"dequeued_at": REMOVED, "reason": "manual"}))
     );
-    let no_remote =
-        super::super::transitions::transitions(&queued, &failed, &BTreeMap::new()).remove(0);
+    let no_remote = super::super::transitions::transitions(
+        &queued,
+        &failed,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .remove(0);
     assert!(!no_remote.1.contains_key("queue_checks_url"));
 }
 
@@ -623,13 +625,8 @@ fn first_sight_reset_and_failed_probe_carry_forward_emit_nothing() {
     assert!(production_transitions(&reset, &next).is_empty());
 
     let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
-    let mut carried = prior.clone();
-    carried.repos.get_mut(REPO).unwrap().ok = false;
-    assert!(production_transitions(&prior, &carried).is_empty());
-
-    let mut failed = next;
-    failed.repos.get_mut(REPO).unwrap().ok = false;
-    assert!(production_transitions(&prior, &failed).is_empty());
+    assert!(failed_transitions(&prior, &prior.clone()).is_empty());
+    assert!(failed_transitions(&prior, &next).is_empty());
 }
 
 #[test]
@@ -713,7 +710,12 @@ fn inherited_head_suppresses_only_non_trunk_branch_ci() {
     next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Failing);
     let mut target = super::target(PATH, "feature");
     let signals = |target| {
-        super::super::transitions::transitions(&prior, &next, &group_targets(vec![target]))
+        super::super::transitions::transitions(
+            &prior,
+            &next,
+            &group_targets(vec![target]),
+            &BTreeSet::new(),
+        )
     };
     assert_eq!(signal_names(&signals(target.clone())), vec!["ci.failed"]);
     target.inherited_head = true;
@@ -727,7 +729,8 @@ fn inherited_head_suppresses_only_non_trunk_branch_ci() {
             super::super::transitions::transitions(
                 &prior,
                 &next,
-                &group_targets(vec![target.clone()])
+                &group_targets(vec![target.clone()]),
+                &BTreeSet::new(),
             )
             .len(),
             1,
@@ -766,7 +769,8 @@ fn checks_urls_use_remote_slug_and_the_verdict_commit() {
                 next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Failing);
                 (base_cache(), next)
             };
-            let signals = super::super::transitions::transitions(&prior, &next, &groups);
+            let signals =
+                super::super::transitions::transitions(&prior, &next, &groups, &BTreeSet::new());
             let (_, payload) = &signals[0];
             let expected = if with_pr {
                 expected.replace("head-2", "ci-2")
@@ -784,7 +788,12 @@ fn checks_urls_use_remote_slug_and_the_verdict_commit() {
                         next.head_seen.insert(PATH.to_owned(), head.to_owned());
                     }
                 }
-                let signals = super::super::transitions::transitions(&prior, &next, &groups);
+                let signals = super::super::transitions::transitions(
+                    &prior,
+                    &next,
+                    &groups,
+                    &BTreeSet::new(),
+                );
                 let (_, payload) = &signals[0];
                 assert!(!payload.contains_key("checks_url"));
             }
@@ -792,7 +801,8 @@ fn checks_urls_use_remote_slug_and_the_verdict_commit() {
     }
     let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
     let next = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Failing));
-    let signals = super::super::transitions::transitions(&prior, &next, &BTreeMap::new());
+    let signals =
+        super::super::transitions::transitions(&prior, &next, &BTreeMap::new(), &BTreeSet::new());
     let (_, payload) = &signals[0];
     assert!(!payload.contains_key("checks_url"));
 }
@@ -832,12 +842,225 @@ fn forge_signal_argv_keeps_root_name_and_payload_as_distinct_values() {
     assert_eq!(payload, expected_payload);
 }
 
+const TEA_REPO: &str = "tea:gitea.example.test:org/repo";
+const MERGED_DETAIL: &str =
+    r#"{"state":"closed","merged":true,"merge_commit_sha":"merge","head":{"sha":"head"}}"#;
+
+#[test]
+fn a_failed_tea_target_leaves_its_siblings_signals_and_republishes_its_prior() {
+    let (a, b) = (
+        super::tea_target("/repo/a", "a"),
+        super::tea_target("/repo/b", "b"),
+    );
+    let mut prior = tea_cache(&[&a, &b]);
+    for (target, number, ci) in [(&a, 1, Some(WorktreeCi::Pending)), (&b, 2, None)] {
+        let mut link = target.pr_link(WorktreePrState::Open, number, ci, None, None);
+        link.ci_sha = ci.map(|_| "a-ci".to_owned());
+        prior.states.insert(target.path.clone(), link);
+    }
+    let mut calls = Vec::new();
+    let (next, signals) = tea_pass(&prior, vec![a.clone(), b.clone()], |args| {
+        calls.push(args.join(" "));
+        match args {
+            ["pr", "list", "--state", "open", ..] => Some("[]".to_owned()),
+            ["api", "repos/org/repo/pulls/2"] => Some(MERGED_DETAIL.to_owned()),
+            ["api", status] if status.ends_with("/status") => {
+                Some(r#"{"state":"success"}"#.to_owned())
+            }
+            _ => None,
+        }
+    });
+
+    assert_eq!(signal_names(&signals), vec!["pr.merged", "ci.passed"]);
+    assert!(
+        signals
+            .iter()
+            .all(|(_, payload)| payload["path"] == "/repo/b")
+    );
+    assert_eq!(next.states[&a.path], prior.states[&a.path]);
+    assert_eq!(next.branch_ci.get(&a.path), None);
+    assert_eq!(next.target_seen.get(&a.path), Some(&a.stamp()));
+    assert_eq!(next.head_seen[&a.path], "sha");
+    assert_eq!(next.path_repos[&a.path], TEA_REPO);
+    assert_eq!(next.states[&b.path].state, WorktreePrState::Merged);
+    let repo = &next.repos[TEA_REPO];
+    assert_eq!((repo.ok, repo.consecutive_failures), (false, 1));
+    let count = |call: &str| calls.iter().filter(|seen| *seen == call).count();
+    assert_eq!(count("api repos/org/repo/pulls/1"), 1);
+    assert_eq!(count("api repos/org/repo/commits/a/status"), 0);
+    assert_eq!(count("api repos/org/repo/commits/merge/status"), 1);
+}
+
+#[test]
+fn a_sibling_failure_does_not_hide_the_next_passes_opened_pr() {
+    let (a, b) = (
+        super::tea_target("/repo/a", "a"),
+        super::tea_target("/repo/b", "b"),
+    );
+    let mut prior = tea_cache(&[&a, &b]);
+    prior.states.insert(
+        a.path.clone(),
+        a.pr_link(WorktreePrState::Open, 1, None, None, None),
+    );
+    let targets = vec![a.clone(), b.clone()];
+    let (failed, signals) = tea_pass(&prior, targets.clone(), |args| match args {
+        ["pr", "list", "--state", "open", ..] => Some("[]".to_owned()),
+        ["api", status] if status.ends_with("/status") => Some(r#"{"state":"pending"}"#.into()),
+        _ => None,
+    });
+    assert!(signals.is_empty());
+    assert!(!failed.repos[TEA_REPO].ok);
+
+    let (_, signals) = tea_pass(&failed, targets, |args| match args {
+        ["pr", "list", "--state", "open", ..] => Some(
+            r#"[{"index":"1","state":"open","head":"a"},{"index":"2","state":"open","head":"b"}]"#
+                .to_owned(),
+        ),
+        ["api", status] if status.ends_with("/status") => Some(r#"{"state":"pending"}"#.into()),
+        _ => None,
+    });
+    assert_eq!(signal_names(&signals), vec!["pr.opened"]);
+    assert_eq!(signals[0].1["path"], "/repo/b");
+}
+
+#[test]
+fn continuity_spans_a_failed_pass_only_under_the_same_identity() {
+    let open_a = r#"[{"index":"1","state":"open","head":"a"}]"#;
+    let sequences: [&[TeaPassSpec]; 4] = [
+        // First-sight failure, then a success: the success is first sight.
+        &[
+            ("a", None, None, "success", &[]),
+            ("a", Some("[]"), None, "success", &[]),
+        ],
+        // Read without a PR, failed, read open: the open PR is announced.
+        &[
+            ("a", Some("[]"), None, "pending", &[]),
+            ("a", None, None, "pending", &[]),
+            ("a", Some(open_a), None, "pending", &["pr.opened"]),
+        ],
+        // Read open, failed, read merged: the merge is announced.
+        &[
+            ("a", Some(open_a), None, "pending", &[]),
+            ("a", None, None, "pending", &[]),
+            (
+                "a",
+                Some("[]"),
+                Some(MERGED_DETAIL),
+                "success",
+                &["pr.merged", "ci.passed"],
+            ),
+        ],
+        // A failure under a changed identity, then a success: first sight.
+        &[
+            ("a", Some(open_a), None, "pending", &[]),
+            ("b", None, None, "success", &[]),
+            ("b", Some("[]"), None, "success", &[]),
+        ],
+    ];
+    for (index, sequence) in sequences.into_iter().enumerate() {
+        let mut prior = PrStateCache::default();
+        for (pass, (branch, open, detail, status, expected)) in sequence.iter().enumerate() {
+            let target = super::tea_target("/repo/a", branch);
+            let (next, signals) = tea_pass(&prior, vec![target.clone()], |args| match args {
+                ["pr", "list", "--state", "open", ..] => open.map(str::to_owned),
+                ["api", "repos/org/repo/pulls/1"] => detail.map(str::to_owned),
+                ["api", endpoint] if endpoint.ends_with("/status") => {
+                    Some(json!({"state": status}).to_string())
+                }
+                _ => None,
+            });
+            assert_eq!(
+                signal_names(&signals),
+                expected.to_vec(),
+                "sequence {index}, pass {pass}"
+            );
+            if open.is_none() {
+                assert_eq!(
+                    next.target_seen.get(&target.path),
+                    prior
+                        .target_seen
+                        .get(&target.path)
+                        .filter(|stamp| **stamp == target.stamp()),
+                    "sequence {index}, pass {pass}: a failure keeps only a same-identity stamp"
+                );
+            }
+            prior = next;
+        }
+    }
+}
+
+/// One pass's target branch, open list (`None` fails it), PR detail, combined
+/// status, and the signals it emits.
+type TeaPassSpec<'a> = (
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'a str,
+    &'a [&'a str],
+);
+type Signals = Vec<(&'static str, Map<String, Value>)>;
+
+/// One Tea pass over `targets` through the production probe, apply, and
+/// transition steps, with `command` answering for `tea`.
+fn tea_pass(
+    prior: &PrStateCache,
+    targets: Vec<Target>,
+    mut command: impl FnMut(&[&str]) -> Option<String>,
+) -> (PrStateCache, Signals) {
+    let groups = group_targets(targets);
+    let (repo, group) = groups.first_key_value().unwrap();
+    let result = probe_tea_repo_group_with(repo, group, &prior.states, |_, program, args| {
+        assert_eq!(program, "tea");
+        command(args)
+    });
+    let failed = result.failed.clone();
+    let mut next = prior.clone();
+    apply_repo_probe(&mut next, prior, result, 3_000);
+    let signals = super::super::transitions::transitions(prior, &next, &groups, &failed);
+    (next, signals)
+}
+
+/// A cache in which every target was last read successfully, without a link.
+fn tea_cache(targets: &[&Target]) -> PrStateCache {
+    let mut cache = PrStateCache::default();
+    cache.repos.insert(
+        TEA_REPO.to_owned(),
+        RepoProbe {
+            refreshed_at_ms: 2_000,
+            ok: true,
+            consecutive_failures: 0,
+        },
+    );
+    for target in targets {
+        cache
+            .head_seen
+            .insert(target.path.clone(), target.head_sha.clone().unwrap());
+        cache
+            .path_repos
+            .insert(target.path.clone(), TEA_REPO.to_owned());
+        cache
+            .target_seen
+            .insert(target.path.clone(), target.stamp());
+    }
+    cache
+}
+
 fn production_transitions(
     prior: &PrStateCache,
     next: &PrStateCache,
 ) -> Vec<(&'static str, Map<String, Value>)> {
     let groups = group_targets(vec![super::target(PATH, "feature")]);
-    super::super::transitions::transitions(prior, next, &groups)
+    super::super::transitions::transitions(prior, next, &groups, &BTreeSet::new())
+}
+
+/// Transitions for a pass in which the target's reading failed.
+fn failed_transitions(
+    prior: &PrStateCache,
+    next: &PrStateCache,
+) -> Vec<(&'static str, Map<String, Value>)> {
+    let groups = group_targets(vec![super::target(PATH, "feature")]);
+    let failed = BTreeSet::from([PATH.to_owned()]);
+    super::super::transitions::transitions(prior, next, &groups, &failed)
 }
 
 fn signal_names(signals: &[(&'static str, Map<String, Value>)]) -> Vec<&'static str> {

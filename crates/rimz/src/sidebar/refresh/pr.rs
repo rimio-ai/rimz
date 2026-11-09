@@ -114,7 +114,7 @@ pub(super) fn produce_pr_states(
     if due.is_empty() && !needs_reconcile {
         return prior;
     }
-    let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
+    let (cache, failed) = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
     if guard.is_some()
         && write_pr_state_cache(&path, &cache)
         && let Some(project_root) = snapshot.project_root.as_deref()
@@ -122,7 +122,7 @@ pub(super) fn produce_pr_states(
         emit_transitions(
             runtime,
             project_root,
-            transitions::transitions(&prior, &cache, &groups),
+            transitions::transitions(&prior, &cache, &groups, &failed),
         );
     }
     cache
@@ -732,7 +732,7 @@ fn probe_due_repos(
     needed: &[String],
     diff_cache: &DiffStatsCache,
     now_ms: u64,
-) -> PrStateCache {
+) -> (PrStateCache, BTreeSet<String>) {
     let target_paths = current_target_paths(groups);
     let mut cache =
         reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths, now_ms);
@@ -750,42 +750,40 @@ fn probe_due_repos(
         &due_groups,
         |(repo_key, group)| {
             let mut states = BTreeMap::new();
-            let mut branch_ci = BTreeMap::new();
             for target in &group.targets {
-                let (link, ci) = if target.branch_only {
-                    let row = prior
+                let link = if target.branch_only {
+                    prior
                         .branches
                         .get(*repo_key)
-                        .and_then(|rows| rows.get(&target.branch));
-                    (
-                        row.and_then(|row| row.pr.as_ref()),
-                        row.and_then(|row| row.ci),
-                    )
+                        .and_then(|rows| rows.get(&target.branch))
+                        .and_then(|row| row.pr.as_ref())
                 } else {
-                    (
-                        prior.states.get(&target.path),
-                        prior.branch_ci.get(&target.path).copied(),
-                    )
+                    prior.states.get(&target.path)
                 };
                 if let Some(link) = link {
                     states.insert(target.path.clone(), link.clone());
                 }
-                if let Some(ci) = ci {
-                    branch_ci.insert(target.path.clone(), ci);
-                }
             }
-            probe_repo_group(repo_key, group, &states, &branch_ci)
+            probe_repo_group(repo_key, group, &states)
         },
     );
+    let mut failed = BTreeSet::new();
     for mut result in results {
         attach_stacks(&mut result, diff_cache);
+        failed.extend(
+            result
+                .targets
+                .iter()
+                .filter(|target| !target.branch_only && result.failed.contains(&target.path))
+                .map(|target| target.path.clone()),
+        );
         apply_repo_probe(&mut cache, prior, result, now_ms);
     }
     let active_repo_keys = cache.path_repos.values().cloned().collect::<BTreeSet<_>>();
     cache
         .repos
         .retain(|repo_key, _| active_repo_keys.contains(repo_key));
-    cache
+    (cache, failed)
 }
 
 struct RepoGroupProbe {
@@ -794,7 +792,15 @@ struct RepoGroupProbe {
     targets: Vec<Target>,
     states: BTreeMap<String, PrLink>,
     branch_ci: BTreeMap<String, WorktreeCi>,
-    ok: bool,
+    /// Targets whose reading failed this pass. They republish their prior
+    /// entries, and the repository probe succeeded only when this is empty.
+    failed: BTreeSet<String>,
+}
+
+impl RepoGroupProbe {
+    fn ok(&self) -> bool {
+        self.failed.is_empty()
+    }
 }
 
 fn apply_repo_probe(
@@ -803,9 +809,23 @@ fn apply_repo_probe(
     mut result: RepoGroupProbe,
     now_ms: u64,
 ) {
+    let failed_targets = result
+        .targets
+        .iter()
+        .filter(|target| result.failed.contains(&target.path))
+        .cloned()
+        .collect::<Vec<_>>();
+    result
+        .states
+        .extend(carry_prior_states(&failed_targets, &prior.states));
+    result
+        .branch_ci
+        .extend(carry_prior_branch_ci(&failed_targets, &prior.branch_ci));
+    let ok = result.ok();
     for target in &result.targets {
+        let failed = result.failed.contains(&target.path);
         if target.branch_only {
-            let row = if result.ok {
+            let row = if !failed {
                 BranchRow {
                     pr: result.states.remove(&target.path),
                     ci: result.branch_ci.remove(&target.path),
@@ -840,17 +860,23 @@ fn apply_repo_probe(
         cache
             .path_repos
             .insert(target.path.clone(), target.repo_key.clone());
-        cache
-            .target_seen
-            .insert(target.path.clone(), target.stamp());
+        // A failed reading keeps the last successful one's stamp only while
+        // it still names this target, so continuity spans two real readings.
+        if !failed {
+            cache
+                .target_seen
+                .insert(target.path.clone(), target.stamp());
+        } else if cache.target_seen.get(&target.path) != Some(&target.stamp()) {
+            cache.target_seen.remove(&target.path);
+        }
     }
     let repo_key = result.repo_key;
     cache.repos.insert(
         repo_key.clone(),
         RepoProbe {
             refreshed_at_ms: now_ms,
-            ok: result.ok,
-            consecutive_failures: next_consecutive_failures(prior.repos.get(&repo_key), result.ok),
+            ok,
+            consecutive_failures: next_consecutive_failures(prior.repos.get(&repo_key), ok),
         },
     );
 }
@@ -875,11 +901,10 @@ fn probe_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     match group.forge_cli {
-        ForgeCli::Gh => probe_github_repo_group(repo_key, group, prior, prior_branch_ci),
-        ForgeCli::Tea => probe_tea_repo_group(repo_key, group, prior, prior_branch_ci),
+        ForgeCli::Gh => probe_github_repo_group(repo_key, group, prior),
+        ForgeCli::Tea => probe_tea_repo_group(repo_key, group, prior),
     }
 }
 
@@ -960,10 +985,9 @@ fn probe_github_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     if group.repo_slug.is_none() {
-        return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+        return failed_repo_group_probe(repo_key, group);
     }
     let plans = plan_github_queries(group);
     let mut batches = Vec::with_capacity(plans.len());
@@ -978,7 +1002,7 @@ fn probe_github_repo_group(
             .ok()
             .filter(|output| !output.timed_out)
         else {
-            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+            return failed_repo_group_probe(repo_key, group);
         };
         let response = match forge::parse_github_bulk_response(
             plan.include_open,
@@ -989,13 +1013,13 @@ fn probe_github_repo_group(
             Ok(response) => response,
             Err(err) => {
                 tracing::debug!(error = %err, "github bulk PR/CI parse failed");
-                return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+                return failed_repo_group_probe(repo_key, group);
             }
         };
         if plan.pr_targets.iter().enumerate().any(|(alias, index)| {
             group.targets[*index].branch_only && !response.refs.contains_key(&alias)
         }) {
-            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+            return failed_repo_group_probe(repo_key, group);
         }
         batches.push((plan, response));
     }
@@ -1006,7 +1030,7 @@ fn probe_github_repo_group(
         targets: group.targets.clone(),
         states,
         branch_ci,
-        ok: true,
+        failed: BTreeSet::new(),
     }
 }
 
@@ -1098,19 +1122,18 @@ fn project_github_group(
     (states, branch_ci)
 }
 
-fn failed_repo_group_probe(
-    repo_key: &str,
-    group: &RepoGroup,
-    prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
-) -> RepoGroupProbe {
+fn failed_repo_group_probe(repo_key: &str, group: &RepoGroup) -> RepoGroupProbe {
     RepoGroupProbe {
         open: None,
         repo_key: repo_key.to_owned(),
         targets: group.targets.clone(),
-        states: carry_prior_states(&group.targets, prior),
-        branch_ci: carry_prior_branch_ci(&group.targets, prior_branch_ci),
-        ok: false,
+        states: BTreeMap::new(),
+        branch_ci: BTreeMap::new(),
+        failed: group
+            .targets
+            .iter()
+            .map(|target| target.path.clone())
+            .collect(),
     }
 }
 
@@ -1118,21 +1141,19 @@ fn probe_tea_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
-    probe_tea_repo_group_with(repo_key, group, prior, prior_branch_ci, command_stdout)
+    probe_tea_repo_group_with(repo_key, group, prior, command_stdout)
 }
 
 fn probe_tea_repo_group_with(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
     mut command: impl FnMut(&Path, &str, &[&str]) -> Option<String>,
 ) -> RepoGroupProbe {
     let (open_map, open) = match query_open_tea_prs(group, &mut command) {
         Some(result) => result,
-        None => return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci),
+        None => return failed_repo_group_probe(repo_key, group),
     };
     let assigned = assign_states(&group.targets, &open_map, prior);
     let all_states = if assigned
@@ -1142,14 +1163,14 @@ fn probe_tea_repo_group_with(
     {
         let args = forge::tea_pr_list_args("all", group.repo_slug.as_deref());
         let Some(output) = command(&group.worktree, "tea", &args) else {
-            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+            return failed_repo_group_probe(repo_key, group);
         };
         Some(output)
     } else {
         None
     };
     let mut states = assigned.states;
-    let mut ok = true;
+    let mut failed = BTreeSet::new();
     for (target, number) in assigned.transitions {
         let result = probe_tea(
             &target,
@@ -1158,14 +1179,7 @@ fn probe_tea_repo_group_with(
             &mut command,
         );
         if !result.ok {
-            ok = false;
-            if let Some(link) = prior
-                .get(&target.path)
-                .filter(|link| target.owns_link(link))
-                .cloned()
-            {
-                states.insert(target.path.clone(), link);
-            }
+            failed.insert(target.path.clone());
             continue;
         }
         if let Some(state) = result.state {
@@ -1175,6 +1189,9 @@ fn probe_tea_repo_group_with(
     let mut branch_ci = BTreeMap::new();
     if let Some(repo_slug) = group.repo_slug.as_deref() {
         for target in &group.targets {
+            if failed.contains(&target.path) {
+                continue;
+            }
             if let Some(link) = states.get_mut(&target.path) {
                 if link.state == WorktreePrState::Open
                     && let Ok((ci, ci_sha)) =
@@ -1205,7 +1222,7 @@ fn probe_tea_repo_group_with(
         targets: group.targets.clone(),
         states,
         branch_ci,
-        ok,
+        failed,
         open: Some(open),
     }
 }

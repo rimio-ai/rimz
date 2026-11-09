@@ -1,6 +1,6 @@
 //! Pure forge-signal derivation from consecutive PR cache publications.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -13,13 +13,17 @@ pub(super) fn transitions(
     prior: &PrStateCache,
     next: &PrStateCache,
     groups: &BTreeMap<String, RepoGroup>,
+    failed: &BTreeSet<String>,
 ) -> Vec<(&'static str, Map<String, Value>)> {
     let mut signals = Vec::new();
     for (path, next_link) in &next.states {
+        if failed.contains(path) {
+            continue;
+        }
         let Some(stamp) = continuous_target(prior, next, path) else {
             continue;
         };
-        let Some(repo) = successful_repo(next, path) else {
+        let Some(repo) = next.path_repos.get(path).map(String::as_str) else {
             continue;
         };
         let remote = target_for_path(groups, repo, path).map(|target| &target.remote);
@@ -28,7 +32,6 @@ pub(super) fn transitions(
         }
         let prior_link = prior.states.get(path).filter(|link| stamp.owns_link(link));
         if next_link.state == WorktreePrState::Open
-            && prior.repos.get(repo).is_some_and(|probe| probe.ok)
             && !prior_link.is_some_and(|link| {
                 link.state == WorktreePrState::Open && link.number == next_link.number
             })
@@ -104,10 +107,13 @@ pub(super) fn transitions(
     }
 
     for (path, next_ci) in &next.branch_ci {
+        if failed.contains(path) {
+            continue;
+        }
         let Some(stamp) = continuous_target(prior, next, path) else {
             continue;
         };
-        let Some(repo) = successful_repo(next, path) else {
+        let Some(repo) = next.path_repos.get(path).map(String::as_str) else {
             continue;
         };
         if prior.states.contains_key(path) || next.states.contains_key(path) {
@@ -163,6 +169,8 @@ fn target_for_path<'a>(
         .find(|target| target.path == path)
 }
 
+/// The target's stamp when this pass and the prior one both hold a successful
+/// reading under it: `target_seen` marks a target's last successful reading.
 fn continuous_target<'a>(
     prior: &PrStateCache,
     next: &'a PrStateCache,
@@ -170,15 +178,6 @@ fn continuous_target<'a>(
 ) -> Option<&'a TargetStamp> {
     let next_stamp = next.target_seen.get(path)?;
     (prior.target_seen.get(path) == Some(next_stamp)).then_some(next_stamp)
-}
-
-fn successful_repo<'a>(cache: &'a PrStateCache, path: &str) -> Option<&'a str> {
-    let repo = cache.path_repos.get(path)?;
-    cache
-        .repos
-        .get(repo)
-        .is_some_and(|probe| probe.ok)
-        .then_some(repo)
 }
 
 fn final_verdict_name(ci: Option<WorktreeCi>) -> Option<&'static str> {
