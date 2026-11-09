@@ -1309,6 +1309,50 @@ fn definitive_discovery_absences_stay_unsupported() {
 }
 
 #[test]
+fn an_unborn_branch_is_a_target_that_drops_the_old_branchs_link() {
+    let unborn = tempfile::tempdir().unwrap();
+    git_in(unborn.path(), &["init", "-q", "-b", "fresh"]);
+    git_in(
+        unborn.path(),
+        &["remote", "add", "origin", "https://github.com/org/repo.git"],
+    );
+    let orphan = git_checkout("https://github.com/org/repo.git");
+    let orphan_path = orphan.path().display().to_string();
+    let prior = PrStateCache {
+        states: BTreeMap::from([(
+            orphan_path.clone(),
+            target(&orphan_path, "feature").pr_link(WorktreePrState::Open, 7, None, None, None),
+        )]),
+        ..PrStateCache::default()
+    };
+    git_in(orphan.path(), &["switch", "-q", "--orphan", "fresh"]);
+    let needed = [&unborn, &orphan].map(|repo| repo.path().display().to_string());
+    let discovered = build_targets(
+        &BTreeMap::new(),
+        &needed,
+        &DiffStatsCache::default(),
+        &mut super::super::ProducerRefreshState::default(),
+    );
+
+    assert!(discovered.retryable.is_empty());
+    let branches = discovered
+        .targets
+        .iter()
+        .map(|target| (target.path.clone(), target.branch.clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        branches,
+        needed.map(|path| (path, "fresh".to_owned())).into()
+    );
+    // Even a failed reading republishes only a link the target owns.
+    let group = repo_group(discovered.targets);
+    let mut cache = prior.clone();
+    let probe = failed_repo_group_probe("gh:github.com:org/repo", &group);
+    apply_repo_probe(&mut cache, &prior, probe, 2_000);
+    assert!(cache.states.is_empty());
+}
+
+#[test]
 fn an_unreadable_head_is_a_retryable_discovery_failure() {
     let repo = git_checkout("https://github.com/org/repo.git");
     std::fs::write(repo.path().join(".git/HEAD"), "garbage\n").unwrap();
