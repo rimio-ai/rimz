@@ -22,7 +22,8 @@ use crate::disk::atomic;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_HIBERNATED_TTL,
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_QUIET_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_QUIET_TTL, DIFF_STATS_RETIRED_TTL, DIFF_STATS_TTL,
+    WORKTREE_ROOTS_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup};
 use crate::utils::time::unix_now_ms;
@@ -42,6 +43,9 @@ pub(in crate::sidebar) struct DiffStats {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCache {
+    /// Bounded by retirement: the elected writer of a refreshing pass drops an
+    /// entry its pass does not need once both stamps are older than
+    /// `DIFF_STATS_RETIRED_TTL`; other passes leave the map as published.
     pub entries: BTreeMap<String, DiffStatsCacheEntry>,
 }
 
@@ -465,7 +469,8 @@ fn refresh_diff_stats(
                 pass,
                 state,
             );
-            let changed = !refreshed.is_empty();
+            let pruned = prune_retired(&mut cache, needed, now_ms);
+            let changed = pruned || !refreshed.is_empty();
             for (path, entry, memo, index_refresh) in refreshed {
                 cache.entries.insert(path.clone(), entry);
                 if pass == GitPass::Host {
@@ -494,6 +499,21 @@ fn refresh_diff_stats(
             cache
         }
     }
+}
+
+/// Drop the entries no path in `needed` keeps whose newer stamp is older than
+/// [`DIFF_STATS_RETIRED_TTL`], and report whether any went. Saturating, so a
+/// clock that ran backwards keeps the entry.
+fn prune_retired(cache: &mut DiffStatsCache, needed: &[String], now_ms: u64) -> bool {
+    let before = cache.entries.len();
+    cache.entries.retain(|path, entry| {
+        let stamp = entry
+            .refreshed_at_ms
+            .max(entry.commit_refreshed_at_ms.unwrap_or(0));
+        needed.contains(path)
+            || now_ms.saturating_sub(stamp) <= DIFF_STATS_RETIRED_TTL.as_millis() as u64
+    });
+    cache.entries.len() != before
 }
 
 /// The `needed` paths whose cached entry is due under their tier, with which
