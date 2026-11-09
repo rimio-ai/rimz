@@ -19,7 +19,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
 use crate::store::message::{
-    HarnessNotice, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
+    HarnessNotice, MessageRecord, MessageSender, MessageStatus, SoftCompactStep, sender_notice,
 };
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
@@ -145,7 +145,7 @@ pub(super) struct PreparationTarget<'a> {
 pub(super) struct ReplyPreparation {
     targets: Vec<ReplyTarget>,
     wait_base: u64,
-    caller_identity: Option<(AgentKind, String)>,
+    caller_identity: Option<MessageSender>,
 }
 
 impl ReplyPreparation {
@@ -153,7 +153,7 @@ impl ReplyPreparation {
         store: &Store,
         snapshot: &SidebarSnapshot,
         targets: impl IntoIterator<Item = PreparationTarget<'a>>,
-        caller_identity: Option<(AgentKind, String)>,
+        caller_identity: Option<MessageSender>,
     ) -> Result<Self, ReplyPrepareErr> {
         let targets = targets.into_iter().collect::<Vec<_>>();
         if targets.is_empty() {
@@ -182,10 +182,9 @@ impl ReplyPreparation {
             if checked_logins.insert(agent.login_key()) {
                 preflight_reply_hooks(agent, adapter)?;
             }
-            if let (Some((self_kind, self_name)), Some((live, history))) =
+            if let (Some(caller), Some((live, history))) =
                 (caller_identity.as_ref(), guard_records.as_ref())
-                && let Some(cycle) =
-                    wait_cycle(live, history, &snapshot.agents, self_kind, self_name, agent)
+                && let Some(cycle) = wait_cycle(live, history, &snapshot.agents, caller, agent)
             {
                 let first = cycle.first();
                 return Err(ReplyPrepareErr::DependencyCycle {
@@ -236,7 +235,7 @@ pub struct ReplyWait {
     legs: Vec<Leg>,
     kind: DeliveryKind,
     join: ReplyJoin,
-    caller_identity: Option<(AgentKind, String)>,
+    caller_identity: Option<MessageSender>,
     tick: u8,
 }
 
@@ -278,20 +277,15 @@ impl ReplyWait {
         let mut view = TurnWaitView::load(store)?;
         let mut newly_settled = Vec::new();
         if self.tick == 0
-            && let Some((self_kind, self_name)) = self.caller_identity.as_ref()
+            && let Some(caller) = self.caller_identity.as_ref()
         {
             view.snapshot = view
                 .snapshot
                 .with_agent_context(crate::store::agent_context::read_all(store.runtime_paths()));
             let history = store.list_message_history()?;
-            for (index, cycle) in deadlocked_legs(
-                &self.legs,
-                &view.messages,
-                &history,
-                &view.snapshot,
-                self_kind,
-                self_name,
-            ) {
+            for (index, cycle) in
+                deadlocked_legs(&self.legs, &view.messages, &history, &view.snapshot, caller)
+            {
                 let leg = &mut self.legs[index];
                 let first = cycle.first();
                 leg.done = Some(RunStatus::Failed);
@@ -891,13 +885,13 @@ fn wait_cycle(
     live: &[MessageRecord],
     history: &[MessageRecord],
     agents: &[AgentState],
-    self_kind: &AgentKind,
-    self_name: &str,
+    caller: &MessageSender,
     target: &AgentState,
 ) -> Option<Vec<WaitCycleHop>> {
+    let caller = sender_notice::resolve_sender(caller, agents)?;
     let self_index = agents
         .iter()
-        .position(|agent| agent.kind == *self_kind && agent.name.as_deref() == Some(self_name))?;
+        .position(|agent| std::ptr::eq(agent, caller))?;
     let target_index = agents.iter().position(|agent| same_card(agent, target))?;
     let mut edges = Vec::new();
     for record in live.iter().filter(|record| {
@@ -1009,19 +1003,9 @@ fn walk_edges(
 }
 
 fn running_sender_index(record: &MessageRecord, agents: &[AgentState]) -> Option<usize> {
-    let MessageSender::Agent {
-        kind,
-        name: Some(name),
-        ..
-    } = &record.sender
-    else {
-        return None;
-    };
-    agents.iter().position(|agent| {
-        agent.kind == *kind
-            && agent.name.as_deref() == Some(name)
-            && agent.status == AgentStatus::Running
-    })
+    let sender = sender_notice::resolve_sender(&record.sender, agents)
+        .filter(|agent| agent.status == AgentStatus::Running)?;
+    agents.iter().position(|agent| std::ptr::eq(agent, sender))
 }
 
 fn same_card(left: &AgentState, right: &AgentState) -> bool {
@@ -1033,8 +1017,7 @@ fn deadlocked_legs(
     live: &[MessageRecord],
     history: &[MessageRecord],
     snapshot: &SidebarSnapshot,
-    self_kind: &AgentKind,
-    self_name: &str,
+    caller: &MessageSender,
 ) -> Vec<(usize, Vec<WaitCycleHop>)> {
     legs.iter()
         .enumerate()
@@ -1044,14 +1027,7 @@ fn deadlocked_legs(
                 .agents
                 .iter()
                 .find(|agent| leg.target.matches(agent))?;
-            let cycle = wait_cycle(
-                live,
-                history,
-                &snapshot.agents,
-                self_kind,
-                self_name,
-                target,
-            )?;
+            let cycle = wait_cycle(live, history, &snapshot.agents, caller, target)?;
             (youngest_wait_message(&cycle, &leg.message_id) == leg.message_id)
                 .then_some((index, cycle))
         })

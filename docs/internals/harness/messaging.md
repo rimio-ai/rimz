@@ -791,8 +791,10 @@ One 500 ms poll reads the message list and cached snapshot once per tick and adv
 
 Two agents that each wait on the other would hang forever, so [`wait_cycle`](../../../crates/rimz/src/message/reply.rs) builds a wait graph and refuses to enter a cycle. An edge runs from a sender card to a receiver card in two cases:
 
-- A live `reply_wait` record that is `Queued`, `Claimed`, or `Sent`, from a named `Running` sender.
-- A `Delivered` `reply_wait` record from history, when the receiver is `Running`, its `turn_opened_by` context lists the record, and the sender is named and `Running`.
+- A live `reply_wait` record that is `Queued`, `Claimed`, or `Sent`, from a `Running` sender.
+- A `Delivered` `reply_wait` record from history, when the receiver is `Running`, its `turn_opened_by` context lists the record, and the sender is `Running`.
+
+The sender card of each edge, and the caller's own card, resolve through `resolve_sender` as sender notices do ([Sender notices](#sender-notices)): a session id before a name, so a same-name card in another lane never stands in for either.
 
 Dispatch checks the graph before enqueue, and the periodic poll catches simultaneous dispatches and cycles that form later. The youngest `msg_` id in a detected cycle yields: only that reply leg fails, and its record is left untouched so the turn boundary still delivers the text. Older waits continue. Diagnostics name the blocking handle and message id and render the multi-hop chain.
 
@@ -848,7 +850,7 @@ An agent that sent a message gets one notice when the message ends undelivered a
 
 Each qualifying pending record on the refused head's card is measured from its own `enqueued_at`, not just the head, and its own schedule and conditions must be met. An unconfirmed-send requeue keeps that clock, while `message requeue` creates a fresh message. `Store::queue_still_queued_notice` rechecks `Queued` and an absent `queued_notice_at` under the workspace lock, then stamps that field and queues `MESSAGE_QUEUED` with its audit event together, so a second call changes nothing. The original message stays queued, and the notice names `rimz message cancel <id>` as the withdrawal path. The [millisecond overrides](../../reference/cli/message.md#the-message-header) for the two delays use the same `env_ms` convention as the delivery window, and are independent of it.
 
-`crates/rimz/src/store/message/sender_notice.rs::resolve_sender` picks the recipient: an unended card of the sender's kind. When the sender has `agent_id`, it must match the card's session id or launch id. Otherwise the recorded name must match, and among several live cards with that name (as team roles across lanes) the one in the sender's recorded channel wins. It never falls back from a stale id to a recycled name. With no live sender there is no notice, only the ending's own audit. A notice is an ordinary queued `Harness` prompt with the sender card's channel, a `Done` gate, no pane pin, and no `in_reply_to` causality.
+`crates/rimz/src/store/message/sender_notice.rs::resolve_sender` picks the recipient: an unended card of the sender's kind that is not a provider subagent. When the sender has `agent_id`, it must match the card's session id or launch id. Otherwise the recorded name must match, and among several live cards with that name (as team roles across lanes) the one in the sender's recorded channel wins. It never falls back from a stale id to a recycled name. With no live sender there is no notice, only the ending's own audit. A notice is an ordinary queued `Harness` prompt with the sender card's channel, a `Done` gate, no pane pin, and no `in_reply_to` causality.
 
 The queue commit refreshes the wake stamp for the notices it queues, including endings outside the sweep (lifecycle hooks, GC, worktree creation or retirement), so no caller-side refresh or notice timer is needed. Notices write no assist record: the message record and its queued audit event are the durable account.
 

@@ -1008,7 +1008,7 @@ fn detects_mutual_queued_cycle() {
         wait_message(&agents[1], &agents[0], 2, MessageStatus::Queued),
     ];
 
-    let cycle = wait_cycle(&live, &[], &agents, &agents[0].kind, "a", &agents[1])
+    let cycle = wait_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
         .expect("mutual wait closes a cycle");
 
     assert_eq!(cycle, [hop("@b", 2)]);
@@ -1018,7 +1018,7 @@ fn detects_mutual_queued_cycle() {
 fn detects_an_immediate_self_wait_cycle_without_edges() {
     let agents = [agent("a", AgentStatus::Running)];
 
-    let cycle = wait_cycle(&[], &[], &agents, &agents[0].kind, "a", &agents[0])
+    let cycle = wait_cycle(&[], &[], &agents, &sender_of(&agents[0]), &agents[0])
         .expect("waiting on the caller itself is an immediate cycle");
 
     assert!(cycle.is_empty());
@@ -1036,7 +1036,7 @@ fn detects_three_agent_chain_and_renders_it() {
         wait_message(&agents[2], &agents[0], 3, MessageStatus::Claimed),
     ];
 
-    let cycle = wait_cycle(&live, &[], &agents, &agents[0].kind, "a", &agents[1])
+    let cycle = wait_cycle(&live, &[], &agents, &sender_of(&agents[0]), &agents[1])
         .expect("chain reaches caller");
 
     assert_eq!(cycle, [hop("@b", 2), hop("@c", 3)]);
@@ -1053,8 +1053,14 @@ fn detects_delivered_wait_that_opened_reply_turn() {
     agents[0].context = Some(crate::agents::AgentContext::new("codex", Timestamp::now()));
     agents[0].context.as_mut().unwrap().turn_opened_by = vec![delivered.message_id.clone()];
 
-    let cycle = wait_cycle(&[], &[delivered], &agents, &agents[0].kind, "a", &agents[1])
-        .expect("delivered wait remains live through reply turn");
+    let cycle = wait_cycle(
+        &[],
+        &[delivered],
+        &agents,
+        &sender_of(&agents[0]),
+        &agents[1],
+    )
+    .expect("delivered wait remains live through reply turn");
 
     assert_eq!(cycle, [hop("@b", 7)]);
 }
@@ -1071,8 +1077,7 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
             &[message.clone()],
             &[],
             &agents,
-            &agents[0].kind,
-            "a",
+            &sender_of(&agents[0]),
             &agents[1]
         )
         .is_none()
@@ -1087,8 +1092,7 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
             &[message.clone()],
             &[],
             &agents,
-            &agents[0].kind,
-            "a",
+            &sender_of(&agents[0]),
             &agents[1]
         )
         .is_none()
@@ -1098,7 +1102,40 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
         kind: agents[1].kind.clone(),
         name: "child".to_owned(),
     };
-    assert!(wait_cycle(&[message], &[], &agents, &agents[0].kind, "a", &agents[1]).is_none());
+    assert!(wait_cycle(&[message], &[], &agents, &sender_of(&agents[0]), &agents[1]).is_none());
+}
+
+#[test]
+fn a_same_name_row_in_another_lane_does_not_stand_in_for_the_caller() {
+    let lane = |id: &str, channel: &str| {
+        let mut agent = agent("a", AgentStatus::Running);
+        agent.agent_id = id.into();
+        agent.channel = Some(channel.to_owned());
+        agent
+    };
+    let agents = [
+        lane("sess-a-docs", "docs"),
+        lane("sess-a-auth", "auth"),
+        agent("b", AgentStatus::Running),
+    ];
+    let live = [wait_message(
+        &agents[2],
+        &agents[0],
+        2,
+        MessageStatus::Queued,
+    )];
+    let caller = sender_with_id(&agents[1], "sess-a-auth");
+
+    assert_eq!(
+        wait_cycle(&live, &[], &agents, &caller, &agents[2]),
+        None,
+        "@b waits on the docs lane's @a, not on the caller"
+    );
+    let docs = sender_with_id(&agents[0], "sess-a-docs");
+    assert_eq!(
+        wait_cycle(&live, &[], &agents, &docs, &agents[2]),
+        Some(vec![hop("@b", 2)])
+    );
 }
 
 #[test]
@@ -1176,6 +1213,25 @@ fn wait_message(
     message.message_id = message_id(id);
     message.status = status;
     message
+}
+
+fn sender_of(agent: &AgentState) -> MessageSender {
+    MessageSender::Agent {
+        agent_id: None,
+        kind: agent.kind.clone(),
+        name: agent.name.clone(),
+        profile: None,
+        role: None,
+        channel: None,
+    }
+}
+
+fn sender_with_id(agent: &AgentState, id: &str) -> MessageSender {
+    let mut sender = sender_of(agent);
+    if let MessageSender::Agent { agent_id, .. } = &mut sender {
+        *agent_id = Some(id.into());
+    }
+    sender
 }
 
 fn hop(handle: &str, id: u64) -> WaitCycleHop {

@@ -79,6 +79,33 @@ fn a_name_shared_across_lanes_resolves_by_the_senders_channel() {
 }
 
 #[test]
+fn a_provider_subagent_never_stands_in_for_its_named_sender() {
+    let mut card = agent();
+    card.agent_id = "sender-session".into();
+    card.name = Some("sender".into());
+    let mut child = card.clone();
+    child.agent_id = "child-session".into();
+    child.parent_agent_id = Some("sender-session".into());
+    child.launch_depth = None;
+    assert!(child.is_provider_subagent());
+    let origin = MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: None,
+        name: Some("sender".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    };
+    for cards in [[child.clone(), card.clone()], [card.clone(), child.clone()]] {
+        assert_eq!(
+            sender_notice::resolve_sender(&origin, &cards).map(|agent| agent.agent_id.as_str()),
+            Some("sender-session")
+        );
+    }
+    assert!(sender_notice::resolve_sender(&origin, &[child]).is_none());
+}
+
+#[test]
 fn sender_notice_prose_carries_evidence_without_a_blind_resend() {
     let q = Queue::new();
     let mut record = q.record(1).with_address(Some("@receiver#docs".into()));

@@ -22,7 +22,7 @@ use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, env_ms, fresh_boundary_blocker, queue_head,
+    WhenCondition, env_ms, fresh_boundary_blocker, queue_head, sender_notice,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, count_rows_materialized};
 use crate::store::writer::{BoundaryClaim, ResumeAttempt};
@@ -379,10 +379,7 @@ pub fn dispatch(
                     agent: target.agent.as_ref(),
                     label: target.label(&snapshot),
                 }),
-                request
-                    .caller
-                    .as_ref()
-                    .and_then(|caller| Some((caller.kind.clone(), caller.name.clone()?))),
+                caller_sender(&request),
             )
         })
         .transpose()?;
@@ -1282,20 +1279,25 @@ fn preflight_queue_hooks(
     }
 }
 
+/// The caller as a message sender, for reply-wait cycle detection: the
+/// request's own sender, or the caller's identity when it sends without a name.
+fn caller_sender(request: &DispatchRequest) -> Option<MessageSender> {
+    if let MessageSender::Agent { .. } = request.sender {
+        return Some(request.sender.clone());
+    }
+    let caller = request.caller.as_ref()?;
+    Some(MessageSender::Agent {
+        agent_id: caller.launch_id.clone(),
+        kind: caller.kind.clone(),
+        name: caller.name.clone(),
+        profile: caller.profile.clone(),
+        role: caller.role.clone(),
+        channel: None,
+    })
+}
+
 fn turn_openers_for_sender(snapshot: &SidebarSnapshot, sender: &MessageSender) -> Vec<MessageId> {
-    let MessageSender::Agent {
-        kind,
-        name: Some(name),
-        ..
-    } = sender
-    else {
-        return Vec::new();
-    };
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| !agent.is_provider_subagent())
-        .find(|agent| agent.kind == *kind && agent.name.as_deref() == Some(name))
+    sender_notice::resolve_sender(sender, &snapshot.agents)
         .and_then(|agent| agent.context.as_ref())
         .map(|context| context.turn_opened_by.clone())
         .unwrap_or_default()
