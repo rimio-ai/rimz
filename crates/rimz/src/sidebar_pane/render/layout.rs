@@ -53,12 +53,17 @@ pub(super) fn pin_right(
     }
     let right_width = spans_width(&right);
     let mut spans = trim_spans_to_width(left, width.saturating_sub(right_width + 1));
+    // The one-cell gap separates the two sides, so it goes once the left side is
+    // gone; a right side wider than the width is then cut at the pane edge.
+    let gap = usize::from(!spans.is_empty());
     let padding = width
         .saturating_sub(spans_width(&spans) + right_width)
-        .max(1);
-    spans.push(Span::raw(" ".repeat(padding)));
+        .max(gap);
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+    }
     spans.extend(right);
-    Line::from(spans)
+    Line::from(trim_spans_to_width(spans, width))
 }
 
 pub(super) fn truncate_left(text: &str, budget: usize) -> String {
@@ -239,6 +244,29 @@ mod tests {
 
         assert_eq!(clipped, "a漢…");
         assert_eq!(text_width(&clipped), 4);
+    }
+
+    #[test]
+    fn pin_right_stays_within_the_width_when_the_right_side_fills_it() {
+        let left = || vec![Span::raw("spend")];
+        let text = |line: &Line<'_>| -> String {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+
+        let full = pin_right(left(), vec![Span::raw("$12.00")], 6);
+        assert_eq!(text(&full), "$12.00");
+        assert_eq!(full.width(), 6);
+
+        let wider = pin_right(left(), vec![Span::raw("$123.00")], 6);
+        assert_eq!(text(&wider), "$123.0");
+        assert_eq!(wider.width(), 6);
+
+        let roomy = pin_right(left(), vec![Span::raw("$1")], 10);
+        assert_eq!(text(&roomy), "spend   $1");
+        assert_eq!(roomy.width(), 10);
     }
 
     #[test]
