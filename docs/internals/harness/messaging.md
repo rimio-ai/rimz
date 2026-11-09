@@ -24,6 +24,7 @@ The rest of the page follows from that rule: how a record decides it is ready, w
 | [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, typed commands, the interrupt key, pacing, the Sent-before-submit barrier, and the compact-first command. |
 | [`message/synthetic.rs`](../../../crates/rimz/src/message/synthetic.rs) | RimZ-authored text for a card (`SyntheticMessage`, `deliver_now`, `attempt_now`): the record's channel, sender, and pane, the boundary attempt, and the recorded miss. |
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb, idle compaction, and flip compaction: repeat refusal and boundary delivery. |
+| [`message/soft_compact.rs`](../../../crates/rimz/src/message/soft_compact.rs) | The two [soft-compaction](#mid-turn-soft-trigger) sends: `send_wrap_up` (one steer-only attempt) and `send_continue` (a queue-tail prompt). |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The host's side of the clock: read the wake stamp and spawn `message sweep`, naming the room by workspace id and mux. |
 | [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, prompt alignment for [confirmation](#confirmation-and-retry), header parsing, and the read-only submitted-prompt origin classifier. |
@@ -35,7 +36,7 @@ The rest of the page follows from that rule: how a record decides it is ready, w
 
 Three neighbours carry pieces this module depends on. [`address.rs`](../../../crates/rimz/src/address.rs) resolves `@handle#channel` addresses, binds a match to a pane, and renders handles. [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the conversation log. [`channel.rs`](../../../crates/rimz/src/channel.rs) owns the lane-name rules.
 
-The layering runs one way: `dispatch` calls `deliver` and `send`, `deliver` calls `send`, and `send` calls the store and the mux. Nothing calls back up.
+The layering runs one way: `dispatch` calls `reply`, `deliver`, and `send`; `synthetic`, `compact`, and `soft_compact` call `deliver`; `deliver` calls `send`; and `send` calls the store and the mux. `reply` uses dispatch's outcome types but calls nothing in `dispatch`, and nothing calls back up.
 
 ## The record
 
@@ -61,7 +62,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `enter` | Submit with Enter after the write |
 | `gate` | `Done`, `Any`, or internal `Resume`: which agent statuses release delivery |
 | `force` | Deliver past an agent that is holding a question |
-| `pane_id` | Pane pin, set when a pane resolved at enqueue. Only a requeue after a failed attempt clears it |
+| `pane_id` | Pane pin, set when a pane resolved at enqueue. Every requeue clears it (`MessageRecord::requeue`), and a typing hold restores the claim's pin |
 | `status` | [Lifecycle state](#status-lifecycle) |
 | `not_before` | Scheduled delivery floor |
 | `register_by` | Registration deadline for a child's resume, shared by its waiting follow-ups. Inert outside `Queued` |
@@ -108,6 +109,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Soft-compaction wrap-up and continue | `crates/rimz/src/cli/agents_cmd/soft_compact.rs::run`, `agents::soft_compact_prompt` or configured resume text, through `crates/rimz/src/message/soft_compact.rs::send_wrap_up` or `send_continue` | `System` / `Prompt`, tagged `wrap_up` (steer-only) or `continue` (boundary FIFO) |
 | Supervised verification reprompt | `crates/rimz/src/harness/prompt_compose.rs::verify_reprompt`, delivered by `crates/rimz/src/cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
 | Restart continue | `crates/rimz/src/cli/agents_cmd/exec.rs::queue_resume_continue`, run by the replacement wrapper when its exec request sets `continue_session` and no stage re-wake stood in (`resume_continue_text`), configured resume text through `SyntheticMessage` | `System` / `Prompt` |
+| Deadline stop rung | `crates/rimz/src/cli/agents_cmd/run_timeout.rs::run_timeout`, text from `crates/rimz/src/harness/deadline.rs::Rung::text`, dispatched as a steer when `harness::deadline::stop_due_by_pane` holds. Other rungs ride hook context (`crates/rimz/src/cli/hooks.rs::attach_deadline_context`) and queue nothing | `Harness { notice: Deadline }` / `Prompt` |
 | Fleet or account budget continuation | `crates/rimz/src/cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Agent budget continuation | `crates/rimz/src/cli/agents_cmd/tune/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Idle compaction | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
@@ -117,6 +119,9 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Stage notice | `crates/rimz/src/harness/team_stage.rs::stage_open_body`, queued by `open_stage` from a flip, the exec wrapper's resume (`rewake_resumed`), or the registration backstop ([teams.md § Resume re-wake](./teams.md#resume-re-wake)) | `Harness { notice: Stage }` / `Prompt` |
 | Loop delivery, self-wait, or watch delivery | `crates/rimz/src/harness/schedule/runner.rs::resolve_effect_prompt`, `crates/rimz/src/harness/schedule/runner/prompt.rs::compose_wait`, dispatched by `crates/rimz/src/cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
 | Signal delivery | Same composition and dispatch, for a `Trigger::Signal` row. Team bindings are armed by `crates/rimz/src/harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
+| Workflow message step | `crates/rimz/src/cli/workflow/host.rs::Host::message`, through `queue_notice` and `attempt_now` | `Harness { notice: Wait }` / `Prompt` |
+| Signal forwarded to a staying workflow step's leader | `crates/rimz/src/cli/workflow/host.rs::Host::forward`, through `queue_notice` with `about_run` set to the attempt's run | `Harness { notice: Signal }` / `Prompt` |
+| Workflow push-back | `crates/rimz/src/cli/workflow/host.rs::Host::push`, through `SyntheticMessage` under the push's own message id | `System` / `Prompt` |
 | Loop task agent step | The task's compiled workflow run: `crates/rimz/src/harness/workflow/engine/agent.rs::compose` joins the sealed prompt file with the run prompt, and `crates/rimz/src/cli/workflow/host.rs::Host::launch` launches it through the library launcher | No queue record. The run's task, carried by `StepLaunch.task` into the launch's `RunRecord.loop_task`, supplies harness origin |
 | Supervised launch or subagent brief | `crates/rimz/src/launcher/resolve.rs::supervised_prompt`, fallback reminder from `crates/rimz/src/harness/launch_reminders.rs::subagent_reminder` | No queue record. Run origin is human or the subagent's parent |
 | Supervised retry | `crates/rimz/src/harness/prompt_compose.rs::retry_prompt` | No queue record. Keeps the run's origin |
@@ -165,15 +170,15 @@ The seven terminal states are final. A terminal transition removes the record fr
 
 | Trigger | Terminal status |
 | --- | --- |
-| A lifecycle hook correlates with the submitted record | `Delivered` |
+| A lifecycle hook correlates with the submitted record, or a `Sent` wrap-up's receiver ended a turn at or after the write | `Delivered` |
 | A queued automatic command reaches its validity deadline | `Expired` |
 | A queued resume follow-up reaches `register_by` with its card absent or ended no later than enqueue | `Expired` |
 | An unconfirmed command reaches its delivery deadline | `TimedOut` |
-| An unconfirmed prompt goes stale again after its last permitted requeue | `TimedOut` |
+| An unconfirmed prompt goes stale again after its last permitted requeue, or a `Sent` wrap-up passes its deadline with no turn end | `TimedOut` |
 | The address resolved to no agent, after the durable fallback | `Errored` |
 | A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer to an agent waiting on input (a self wait's wake stays `Queued` instead) | `Errored` |
 | A queued compaction command would follow an unprompted compaction ([the repeat guards](#the-repeat-guards)) | `Errored` |
-| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), the [run-link guard](#the-run-linked-notice-guard), a cleared soft-compaction cycle, the [idle-compaction turn guard](#the-idle-compaction-turn-guard), or an ended workflow attempt's unconsumed push-back (including `Sent`) | `Canceled` |
+| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), the [run-link guard](#the-run-linked-notice-guard), a cleared soft-compaction cycle, the [idle-compaction turn guard](#the-idle-compaction-turn-guard), a wrap-up still unsent when its claim TTL lapses, or an ended workflow attempt's unconsumed push-back (including `Sent`) | `Canceled` |
 | A retryable failure with `attempts` at its cap | `Abandoned` |
 | The receiver session ended, a watched `when` session ended, or the channel was torn down | `Archived` |
 
@@ -318,7 +323,7 @@ All fifteen pass and the verdict is `Ready`.
 
 Checks 5 and 6 pass for a condition satisfied in the snapshot even before its stamp is written, so `message show` can read a record as past its conditions while it still waits. FIFO selection and the claim use the durable stamps (`MessageRecord::is_deliverable`), which the sweep writes.
 
-Check 15 honours the pin. A record pinned to a pane binds only to that pane (`address::pane_binding`), and a `NoPane` deferral keeps the pin (`Store::defer_message_wake`). Only a requeue after a failed attempt clears it (`MessageRecord::requeue`). A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate. A durable end lets the sweep archive the records.
+Check 15 honours the pin. A record pinned to a pane binds only to that pane (`address::pane_binding`), and a `NoPane` deferral keeps the pin (`Store::defer_message_wake`). A requeue clears it (`MessageRecord::requeue`): a pre-send failure, an expired or released claim, or an unconfirmed-send requeue. A typing hold requeues too but restores the claim's pin. A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate. A durable end lets the sweep archive the records.
 
 #### The FIFO hold
 
@@ -392,7 +397,7 @@ One race remains. A join after the post-claim scan can still race the send, beca
 
 ### The run-linked notice guard
 
-The pause and stall helpers set `MessageRecord.about_run` to the child run they claimed before queueing their notices. `cancel_moot_message` checks any record carrying that link, independently of its sender or notice kind. The run-link check adds no run read for an unlinked record; digest scans remain unchanged.
+The pause and stall helpers set `MessageRecord.about_run` to the child run they claimed before queueing their notices, and a signal forwarded to a workflow step's leader sets it to the attempt's run (`Host::forward`). `cancel_moot_message` checks any record carrying that link, independently of its sender or notice kind. The run-link check adds no run read for an unlinked record; digest scans remain unchanged.
 
 Before candidacy, the head's linked run is read even while the parent's turn-boundary gate is closed. After the claim, every claimed member passes the same check. A terminal run cancels its record through `Store::cancel_message` with reason `child run <status> before delivery`, using `RunStatus::as_str`; a missing run cancels it with `child run gone before delivery`. No pane write follows, even if the cancel finds the record already closed. `rimz message show` keeps the reason in its timeline. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
 
@@ -422,8 +427,9 @@ When a queued head delivers, the helper extends the claim through the contiguous
 - has its own gate open
 - matches the head's `force` flag
 - shares the head's batch key: the sender's channel for an `Agent`, the receiver's channel for a `Human`, `Subagent`, or `System` sender, and no key for a `Harness` sender
+- holds no unexpired claim and no future typing hold
 
-The first record that fails a rule ends the batch. `Resume` control messages never batch.
+The first deliverable record on the card's lane that fails a rule ends the batch (`crates/rimz/src/store/message.rs::delivery_batch_indices`). `Resume` control messages never batch.
 
 A fleet digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message. Other harness notices batch normally, `TEAM_REPORT` and run-linked pause/stall notices included. Every claimed member passes the [retirement guards](#the-run-linked-notice-guard) before the paste.
 
@@ -458,7 +464,7 @@ Origin classification is a separate, read-only decision in `store::message::clas
 
 Reconciliation (`Store::reconcile_stale_messages`) runs in `message sweep` and `gc`, and handles expired claims alongside stale writes. Steer-only wrap-ups are a separate path: a `Queued` one is preserved until the claim TTL elapses from `updated_at`, and a `Claimed` one until its claim expires; only then does it become `Canceled`. Their wake deadlines use the same TTL, so the host does not sweep them early. At a `Sent` wrap-up's deadline, an open receiver turn silently pushes `retry_after` one prompt window ahead without changing counters or writing an event. Otherwise a receiver `turn_ended_at` at or after the last write settles it `Delivered`, and no such end settles it `TimedOut`. It never requeues or resends; the ordinary rules below apply only to other records.
 
-A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Past the deadline, reconciliation tries each rule below in order and applies the first that matches.
+A `Sent` record's deadline for reconciliation, wakeups, FIFO, and acknowledgement selection is `retry_after` when set, otherwise its last write (`last_sent_at`, falling back to `updated_at`) plus its body's delivery window. Wake-in-flight readers additionally hold a `Sent` harness wake while its receiver's compaction bracket is open, without waiting for reconciliation to extend the deadline. A pass before that deadline leaves the record untouched, even if the condition that armed a hold has already cleared. Rule 1 below applies to a `Claimed` record. A `Sent` record past its deadline takes the first of rules 2 to 7 that matches.
 
 | # | Case | Effect |
 | --- | --- | --- |
@@ -561,7 +567,7 @@ Content:
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message stays queued past its receiver-class delay, sent once to its live sender | `@rimz` |
-| `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |
+| `DEADLINE` | The deadline ladder's stop rung, steered to a supervised child whose kind takes its stop through the pane | `@rimz` |
 | `WAIT` | A timer, command, watch, or clock wait delivery, or a workflow message step's message ([workflow.md](./workflow.md)) | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping ([policy](#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a staying workflow step's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |
