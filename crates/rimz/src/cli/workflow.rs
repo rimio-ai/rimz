@@ -11,7 +11,7 @@ use rimz::ids::{EventId, WorkflowRunId};
 use rimz::store::workflow::{self as records, RunRecord};
 
 use super::render;
-use super::workflow_view;
+use super::workflow_view::{self, resolve};
 
 mod definition;
 mod host;
@@ -19,7 +19,6 @@ mod list;
 mod node;
 mod rail;
 mod receipt;
-mod resolve;
 mod show;
 
 use host::Host;
@@ -240,7 +239,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             woken_by,
             ..
         } => {
-            let (state, _) = locate(&id)?;
+            let (state, _) = resolve::locate(&id)?;
             workflow::advance(&state, &id, &Host::new(&state, globals, woken_by))?;
             let record = records::load(&state.workflow(&id))?;
             write_history_copy(&state, &record)
@@ -366,11 +365,32 @@ fn start(
     Ok(())
 }
 
-fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)> {
-    paths::workflow_runs_under(&paths::rimz_home())?
-        .into_iter()
-        .find(|(state, run)| state.workflow(id).home == run.home)
-        .with_context(|| format!("unknown workflow run {id}"))
+fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Located> {
+    let outside = || {
+        anyhow::anyhow!(
+            "caller is not part of a workflow run; use rimz workflow show <run> or rimz workflow list"
+        )
+    };
+    let workspace = resolve::caller(globals).ok_or_else(outside)?;
+    let state = paths::StatePaths::for_project_root(&workspace.project_root)?;
+    let store = super::open_existing_store_at(state.clone())?.ok_or_else(outside)?;
+    let snapshot = store.snapshot()?;
+    let mut agent =
+        rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).map_err(|_| outside())?;
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.insert((&agent.kind, &agent.agent_id)) {
+        if let Some(pin) = &agent.workflow {
+            let paths = state.workflow(&pin.run);
+            return Ok(resolve::Located {
+                record: records::load(&paths)?,
+                paths,
+                state,
+            });
+        }
+        agent =
+            rimz::address::launched_parent(snapshot.agents.iter(), agent).ok_or_else(outside)?;
+    }
+    Err(outside())
 }
 
 fn definition_dir(name: &std::path::Path) -> PathBuf {
@@ -392,7 +412,7 @@ fn show(
     globals: &super::GlobalFlags,
 ) -> Result<()> {
     let Some(target) = target else {
-        return show::render(&resolve::calling_run(globals)?, json, history, globals);
+        return show::render(&calling_run(globals)?, json, history, globals);
     };
     if let Some(node) = node {
         if !resolve::names_workflow(target) {

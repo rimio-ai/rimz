@@ -1,9 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+//! Workflow run targets: what `rimz workflow` commands select, and the copyable command that
+//! names a run through that same selection.
 
-use super::*;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use rimz::disk::paths;
+use rimz::ids::WorkflowRunId;
+use rimz::store::workflow::{self as records, RunAddress, RunRecord, ScopeKind};
+
+use crate::cli::GlobalFlags;
+use crate::cli::render;
 use crate::cli::usage::{UsageError, shell_command};
-use rimz::store::workflow::{RunAddress, ScopeKind};
 
 enum Target {
     Id(WorkflowRunId),
@@ -11,18 +20,23 @@ enum Target {
     Workflow(String),
 }
 
-pub(super) struct Located {
-    pub(super) state: rimz::StatePaths,
-    pub(super) paths: paths::WorkflowPaths,
-    pub(super) record: RunRecord,
+pub(in crate::cli) struct Located {
+    pub(in crate::cli) state: rimz::StatePaths,
+    pub(in crate::cli) paths: paths::WorkflowPaths,
+    pub(in crate::cli) record: RunRecord,
 }
 
-pub(super) enum Selection {
+pub(in crate::cli) enum Selection {
     Run(Box<Located>),
     Workflow(Vec<Located>),
 }
 
-pub(super) fn caller(globals: &super::super::GlobalFlags) -> Option<rimz::ResolvedWorkspace> {
+enum Picked {
+    Run(usize),
+    Workflow(Vec<usize>),
+}
+
+pub(in crate::cli) fn caller(globals: &GlobalFlags) -> Option<rimz::ResolvedWorkspace> {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok()?;
     let recorded = paths::StatePaths::for_project_root(&workspace.project_root)
@@ -37,35 +51,16 @@ pub(super) fn caller(globals: &super::super::GlobalFlags) -> Option<rimz::Resolv
     Some(workspace)
 }
 
-pub(super) fn calling_run(globals: &super::super::GlobalFlags) -> Result<Located> {
-    let outside = || {
-        anyhow::anyhow!(
-            "caller is not part of a workflow run; use rimz workflow show <run> or rimz workflow list"
-        )
-    };
-    let workspace = caller(globals).ok_or_else(outside)?;
-    let state = paths::StatePaths::for_project_root(&workspace.project_root)?;
-    let store = super::super::open_existing_store_at(state.clone())?.ok_or_else(outside)?;
-    let snapshot = store.snapshot()?;
-    let mut agent =
-        rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).map_err(|_| outside())?;
-    let mut seen = BTreeSet::new();
-    while seen.insert((&agent.kind, &agent.agent_id)) {
-        if let Some(pin) = &agent.workflow {
-            let paths = state.workflow(&pin.run);
-            return Ok(Located {
-                record: records::load(&paths)?,
-                paths,
-                state,
-            });
-        }
-        agent =
-            rimz::address::launched_parent(snapshot.agents.iter(), agent).ok_or_else(outside)?;
-    }
-    Err(outside())
+pub(in crate::cli) fn locate(
+    id: &WorkflowRunId,
+) -> Result<(rimz::StatePaths, paths::WorkflowPaths)> {
+    paths::workflow_runs_under(&paths::rimz_home())?
+        .into_iter()
+        .find(|(state, run)| state.workflow(id).home == run.home)
+        .with_context(|| format!("unknown workflow run {id}"))
 }
 
-pub(super) fn all() -> Result<Vec<Located>> {
+pub(in crate::cli) fn all() -> Result<Vec<Located>> {
     let rooms: BTreeMap<_, _> = paths::workflow_runs_under(&paths::rimz_home())?
         .into_iter()
         .map(|(state, _)| (state.root.clone(), state))
@@ -83,7 +78,7 @@ pub(super) fn all() -> Result<Vec<Located>> {
     Ok(runs)
 }
 
-pub(super) fn command(
+pub(in crate::cli) fn command(
     verb: &str,
     targets: &[&str],
     root: Option<&Path>,
@@ -128,10 +123,10 @@ pub(super) fn command(
     format!("{prefix} {command}")
 }
 
-pub(super) fn run_command(
+pub(in crate::cli) fn run_command(
     record: &RunRecord,
     verb: &str,
-    globals: &super::super::GlobalFlags,
+    globals: &GlobalFlags,
     at: Option<&str>,
     extend: &[String],
     flags: &[&str],
@@ -139,32 +134,84 @@ pub(super) fn run_command(
     RunCommands::new(record, globals).command(verb, at, extend, flags)
 }
 
-pub(super) struct RunCommands<'a> {
+/// Names many runs for copyable commands against one load of every room's runs, and one caller
+/// resolution per room the runs live in.
+pub(in crate::cli) struct RunTargets {
+    globals: GlobalFlags,
+    runs: Option<Vec<Located>>,
+    home: Option<rimz::ResolvedWorkspace>,
+    rooms: RefCell<BTreeMap<PathBuf, Option<rimz::ResolvedWorkspace>>>,
+}
+
+impl RunTargets {
+    pub(in crate::cli) fn load(globals: &GlobalFlags) -> Self {
+        let mut globals = globals.clone();
+        globals.root = None;
+        Self {
+            home: caller(&globals),
+            runs: all().ok(),
+            globals,
+            rooms: RefCell::default(),
+        }
+    }
+
+    pub(in crate::cli) fn commands<'a>(&self, record: &'a RunRecord) -> RunCommands<'a> {
+        let home = self.home.as_ref().map(|workspace| &workspace.project_root);
+        let elsewhere = home != Some(&record.project_root);
+        let mut context = self.globals.clone();
+        context.root = elsewhere.then(|| record.project_root.clone());
+        let address = record.address().to_string();
+        let selected = self.runs.as_deref().and_then(|runs| {
+            let workspace = match &context.root {
+                None => self.home.clone(),
+                Some(root) => self
+                    .rooms
+                    .borrow_mut()
+                    .entry(root.clone())
+                    .or_insert_with(|| caller(&context))
+                    .clone(),
+            };
+            let target = Target::parse(&address).ok()?;
+            let home = || home.cloned();
+            match pick(
+                &target,
+                &address,
+                "show",
+                workspace.as_ref(),
+                home,
+                runs,
+                None,
+                &[],
+            ) {
+                Ok(Picked::Run(index)) => Some(&runs[index].record.id),
+                _ => None,
+            }
+        });
+        let target = if selected == Some(&record.id) {
+            address
+        } else {
+            record.id.to_string()
+        };
+        RunCommands {
+            record,
+            target,
+            root: context.root,
+        }
+    }
+}
+
+pub(in crate::cli) struct RunCommands<'a> {
     record: &'a RunRecord,
     target: String,
     root: Option<PathBuf>,
 }
 
 impl<'a> RunCommands<'a> {
-    pub(super) fn new(record: &'a RunRecord, globals: &super::super::GlobalFlags) -> Self {
-        let mut context = globals.clone();
-        context.root = None;
-        let elsewhere =
-            caller(&context).is_none_or(|workspace| workspace.project_root != record.project_root);
-        context.root = elsewhere.then(|| record.project_root.clone());
-        let address = record.address().to_string();
-        let target = match select(&address, "show", &context, None, &[]) {
-            Ok(Selection::Run(run)) if run.record.id == record.id => address,
-            _ => record.id.to_string(),
-        };
-        Self {
-            record,
-            target,
-            root: context.root,
-        }
+    pub(in crate::cli) fn new(record: &'a RunRecord, globals: &GlobalFlags) -> Self {
+        RunTargets::load(globals).commands(record)
     }
 
-    pub(super) fn command(
+    pub(in crate::cli) fn command(
         &self,
         verb: &str,
         at: Option<&str>,
@@ -197,11 +244,11 @@ impl Target {
     }
 }
 
-pub(super) fn names_workflow(raw: &str) -> bool {
+pub(in crate::cli) fn names_workflow(raw: &str) -> bool {
     matches!(Target::parse(raw), Ok(Target::Workflow(_)))
 }
 
-fn candidate_target(record: &RunRecord, runs: &[Located]) -> String {
+fn candidate_target(record: &RunRecord, runs: &[&Located]) -> String {
     let address = record.address();
     if runs.iter().any(|other| {
         other.record.id != record.id
@@ -214,10 +261,10 @@ fn candidate_target(record: &RunRecord, runs: &[Located]) -> String {
     }
 }
 
-pub(super) fn select(
+pub(in crate::cli) fn select(
     raw: &str,
     verb: &str,
-    globals: &super::super::GlobalFlags,
+    globals: &GlobalFlags,
     at: Option<&str>,
     extend: &[String],
 ) -> Result<Selection> {
@@ -232,16 +279,60 @@ pub(super) fn select(
         })));
     }
     let workspace = caller(globals);
-    let root = workspace
-        .as_ref()
-        .map(|workspace| workspace.project_root.as_path());
-    let name = match &target {
-        Target::Address(address) => &address.workflow,
-        Target::Workflow(name) => name,
-        Target::Id(_) => unreachable!("ids returned above"),
+    let home = || {
+        let mut context = globals.clone();
+        context.root = None;
+        caller(&context).map(|workspace| workspace.project_root)
     };
     let mut runs = all()?;
-    runs.retain(|run| run.record.workflow == *name);
+    let picked = pick(
+        &target,
+        raw,
+        verb,
+        workspace.as_ref(),
+        home,
+        &runs,
+        at,
+        extend,
+    )?;
+    Ok(match picked {
+        Picked::Run(index) => Selection::Run(Box::new(runs.swap_remove(index))),
+        Picked::Workflow(indices) => {
+            let keep = indices.into_iter().collect::<BTreeSet<_>>();
+            let mut index = 0;
+            runs.retain(|_| {
+                index += 1;
+                keep.contains(&(index - 1))
+            });
+            Selection::Workflow(runs)
+        }
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "select's inputs, with the home scan and caller lookup passed in for batch naming"
+)]
+fn pick(
+    target: &Target,
+    raw: &str,
+    verb: &str,
+    workspace: Option<&rimz::ResolvedWorkspace>,
+    home: impl FnOnce() -> Option<PathBuf>,
+    all: &[Located],
+    at: Option<&str>,
+    extend: &[String],
+) -> Result<Picked> {
+    let root = workspace.map(|workspace| workspace.project_root.as_path());
+    let name = match target {
+        Target::Address(address) => &address.workflow,
+        Target::Workflow(name) => name,
+        Target::Id(_) => unreachable!("select returns ids before picking"),
+    };
+    let mut runs = all
+        .iter()
+        .filter(|run| run.record.workflow == *name)
+        .collect::<Vec<_>>();
     let mut components = Path::new(name).components();
     let definition = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
@@ -256,7 +347,7 @@ pub(super) fn select(
         .filter(|run| !local_workflow || Some(run.record.project_root.as_path()) == root)
         .map(|run| run.record.address().to_string())
         .collect::<BTreeSet<_>>();
-    runs.retain(|run| match &target {
+    runs.retain(|run| match target {
         Target::Address(address) => address.matches(&run.record.address()),
         _ => true,
     });
@@ -295,20 +386,25 @@ pub(super) fn select(
             commands.into_iter().collect::<Vec<_>>().join("\n")
         );
     }
+    let index_of = |run: &Located| {
+        all.iter()
+            .position(|other| std::ptr::eq(other, run))
+            .expect("every picked run is borrowed from all")
+    };
     if matches!(target, Target::Workflow(_)) && verb == "show" {
         if !known {
             bail!("unknown workflow {name}");
         }
-        return Ok(Selection::Workflow(runs));
+        return Ok(Picked::Workflow(runs.into_iter().map(index_of).collect()));
     }
     if verb == "show" && runs.iter().all(|run| run.record.state.is_terminal()) {
         runs.sort_by_key(|run| std::cmp::Reverse(run.record.terminal_at));
         runs.truncate(1);
     }
     if matches!(target, Target::Workflow(_))
-        && let Some(workspace) = &workspace
+        && let Some(workspace) = workspace
     {
-        let local = |run: &Located| {
+        let local = |run: &&Located| {
             run.record.scope.path == workspace.worktree_root
                 || (run.record.scope.kind == ScopeKind::Project
                     && run.record.project_root == workspace.project_root)
@@ -318,9 +414,7 @@ pub(super) fn select(
         }
     }
     if runs.len() > 1 {
-        let mut context = globals.clone();
-        context.root = None;
-        let caller_root = caller(&context).map(|workspace| workspace.project_root);
+        let caller_root = home();
         let choices = runs
             .iter()
             .map(|run| {
@@ -339,9 +433,9 @@ pub(super) fn select(
         bail!("ambiguous workflow run {raw}:\n{choices}");
     }
     if let Some(run) = runs.pop() {
-        return Ok(Selection::Run(Box::new(run)));
+        return Ok(Picked::Run(index_of(run)));
     }
-    let miss = match &target {
+    let miss = match target {
         Target::Address(address) => format!("no {} run in {}", address.workflow, address.lane),
         _ => format!("{name} has no live runs"),
     };
