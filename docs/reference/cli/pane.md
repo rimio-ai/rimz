@@ -1,6 +1,6 @@
 # Pane CLI
 
-`rimz pane` works on the room's raw panes: list them, read what one shows, type into one, move focus, and measure how much output each pane writes. Humans and scripts use the same verbs, so a script sees and drives a pane the way a person at the keyboard would. To talk to an agent rather than its terminal, use [`rimz message`](./message.md); to answer a structured prompt, use [`rimz answer`](./asks.md#answer-an-ask).
+`rimz pane` works on the room's raw panes: list them, read what one shows, type into one, move focus, and measure how much output each pane writes. Humans and scripts use the same verbs. To talk to an agent rather than its terminal, use [`rimz message`](./message.md); to answer a structured prompt, use [`rimz answer`](./asks.md#answer-an-ask).
 
 ```sh
 rimz pane list
@@ -56,7 +56,7 @@ process               -        zsh      ~/code/qe-wt/auth-refresh  zellij:termin
 +1 sidebar · --all shows it
 ```
 
-The `AGENT` column holds a handle naming that agent alone (launched children included), `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix; repeated names get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
+The `AGENT` column holds a handle naming that agent alone (launched children included), `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix, fall back to the tab's view id when the multiplexer gives no name, and read `(panes)` when it gives neither. Repeated headings get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
 
 `rimz pane list [SCOPE]` limits the listing to a channel (`#` optional), worktree, branch, or directory name. An agent pane matches through its agent's channel or worktree; sidebars and process panes match when they share a native tab with a matching agent. Other agent panes in that tab still need to match individually. A scope with no matching panes exits `0`: the table view prints a note on stderr and nothing on stdout, and `--json` prints the usual document with `"tabs": []`. Scoping a session without reachable agent records, including a foreign session, fails with the session name and exits `1`.
 
@@ -79,7 +79,7 @@ The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `
 | `pane_id` | The pane id, usable as a target. |
 | `kind` | `agent`, `sidebar`, or `process`. |
 | `self` | `true` on the calling pane; absent elsewhere. |
-| `agent` | For `kind: "agent"`: `kind` (agent kind), `handle` (names that agent alone, launched children included), `status`, and `worktree`. |
+| `agent` | For `kind: "agent"`: `kind` (agent kind), `handle` (names that agent alone, launched children included), `status`, and `worktree` (the agent's channel, omitted outside any channel). |
 | `command` | The pane's foreground command. |
 | `cwd` | The pane's working directory. |
 | `pid` | The pane's root process id, when the backend reports it. |
@@ -92,22 +92,22 @@ A capture whose reply never arrives fails (exit `1`) rather than printing nothin
 
 | Flag | Meaning |
 | --- | --- |
-| `--lines <N>` | Print the last `N` lines, reaching into scrollback, on either backend. Trailing blank rows are removed before counting, so a pane with fewer content lines prints fewer than `N`. `N` must be at least `1`; `0` is a usage error (exit `2`). Without the flag, only the visible screen, unchanged. |
+| `--lines <N>` | Print the last `N` lines, reaching into scrollback, on either backend. Trailing blank rows are removed before counting, so a pane with fewer content lines prints fewer than `N`. `N` is `1` to `65535`; a value outside that range is a usage error (exit `2`). Without the flag, only the visible screen, unchanged. |
 | `--ansi` | Keep colors and text attributes as escape sequences. |
 | `--json` | Print `pane_id`, `raw_text` (the capture as one string), and `lines` (the same text split into lines). |
 
 ## Render a sidebar frame
 
-`rimz sidebar frame` renders the room's sidebar once without capturing a pane. It uses the live sidebar's size when available, otherwise the configured width policy and terminal height (24 rows without a terminal). Output keeps colors on a terminal and strips escape sequences over a pipe.
+`rimz sidebar frame` renders the room's sidebar once without capturing a pane. It draws at the live sidebar's size when one is running. Otherwise the width comes from the configured width policy over the calling terminal (the policy's maximum without a terminal), and the height is the terminal's (24 rows without a terminal). Output keeps colors on a terminal and strips escape sequences over a pipe.
 
 | Flag | Meaning |
 | --- | --- |
-| `--width <COLS>`, `--height <ROWS>` | Override the frame dimensions. Each must be at least `1`. |
+| `--width <COLS>`, `--height <ROWS>` | Override the frame dimensions. Each is `1` to `65535`. |
 | `--expand` | Open every card and group, including inactive groups, and grow the frame to fit. Conflicts with `--height`. |
-| `--section <LABEL>` | Print only the matching physical rows from the full-size frame, without labels. Filtering does not reflow or expand the frame. No match prints nothing. |
-| `--workspace-id <ID>`, `--mux <BACKEND>`, `--session-name <NAME>` | Select the room and multiplexer to render. |
+| `--section <LABEL>` | Print only the matching physical rows of the frame, without labels. Filtering does not reflow or resize the frame; with `--expand` it filters the expanded frame. No match prints nothing. |
+| `--workspace-id <ID>`, `--mux <tmux\|zellij>`, `--session-name <NAME>` | Select the room and multiplexer to render. A `--workspace-id` with no state on this machine and no `--session-name` renders an empty sidebar and creates nothing. |
 
-Section labels are `cockpit` (top lines and unread banner), `providers` (dashboard and pet art), `chrome` (search, notices, footer, alert), `#<group>` (group header, pipeline, and tail), `@<handle>#<group>` (agent card), and `<process name>#<group>` (process row). A handleless card uses its row id instead of `@<handle>`. Wrapped continuation rows retain their section. `--section '#main'` selects the group and all its cards and processes; other labels match exactly. The group name is its displayed label, not necessarily its branch name.
+Section labels are `cockpit` (top lines and unread banner), `providers` (dashboard and pet art), `chrome` (search, notices, footer, alert), `#<group>` (group header, pipeline, and tail), `@<handle>#<group>` (agent card), and `<process name>#<group>` (process row). A handleless card uses its row id instead of `@<handle>`. Wrapped continuation rows retain their section. A label that starts with `#` matches every row whose label ends with it, so `--section '#main'` selects the group and all its cards and processes; other labels match exactly. The group name is its displayed label, not necessarily its branch name.
 
 ## Send text and keys
 
@@ -116,10 +116,10 @@ Section labels are `cockpit` (top lines and unread banner), `providers` (dashboa
 | Argument or flag | Meaning |
 | --- | --- |
 | `[TEXT]` | Literal text to type. May start with `-`; only a value that is itself one of the command's flags (`--enter`, `--key`, `--key=…`, `-h`, `--help`, etc.) needs `--` before it. |
-| `--key <KEY>` | Press a named key. Repeat for several keys. |
+| `--key <KEY>` | Press a named key from the table below. Repeat for several keys. An unknown name is a usage error (exit `2`) that lists the valid names. |
 | `--enter` | Press Enter last. |
 
-With no text, no `--key`, and no `--enter`, the command fails with `expected text, --key, or --enter`.
+With no text (or empty text), no `--key`, and no `--enter`, the command fails with `expected text, --key, or --enter`. When the room has hibernated the pane's agent, `send` wakes it before typing.
 
 The text is typed byte for byte, with no bracketed-paste markers, so it works in a bare shell. This is the difference from `rimz message`, which pastes a prompt into an agent's input box and records the delivery. Both take the same per-pane write lock: `send` waits for an in-flight `message`, `answer`, or other `send` to the same pane, and its own text, keys, and Enter land together. The wait gives up after 30 seconds with an error. The [messaging internals](../../internals/harness/messaging.md#writing-to-the-pane) describe the lock and the paste path.
 
@@ -143,18 +143,18 @@ Key names are case-insensitive, and `_`, `+`, or a space may stand in for `-`:
 
 ## Focus a pane
 
-`rimz pane focus <TARGET>` moves the attached client to the target pane, switching tabs if needed. It works only in a RimZ room; any other session fails with `pane focus requires a managed RimZ room session`. `--session-name` names another room for any target.
+`rimz pane focus <TARGET>` moves the attached client to the target pane, switching tabs if needed, and wakes the pane's agent first when the room has hibernated it. It works only in a RimZ room; any other session fails with `pane focus requires a managed RimZ room session`. Unlike `capture` and `send`, `focus` does not check that the room holds the pane.
 
 | Flag | Meaning |
 | --- | --- |
-| `--session-name <NAME>` | Room session the pane belongs to. Defaults to the cwd's workspace session. |
-| `--pane-process-start <TIMESTAMP>` | Guard against a reused pane id. The command lists panes first and fails with `pane <id> is no longer present` when the pane is gone, or `pane <id> was reused since the sidebar snapshot` when its process start time (an RFC 3339 timestamp) differs from this value. |
+| `--session-name <NAME>` | Room session the pane belongs to, for any target form. Defaults to the room an agent or `sidebar` target resolved in, else the current room. |
+| `--pane-process-start <TIMESTAMP>` | Hidden from `--help`; the sidebar passes it. Guards against a reused pane id: the command lists panes first and fails with `pane <id> is no longer present` when the pane is gone, or `pane <id> was reused since the sidebar snapshot` when the pane's process start time (an RFC 3339 timestamp) differs from this value. A pane whose multiplexer reports no start time passes the check. |
 
 ## Zoom, split, and detach
 
 These three act on the current room and take no target.
 
-`rimz pane zoom` toggles fullscreen for the pane the attached client is focused on. It needs exactly one attached client focused on one live pane, and otherwise fails with `pane zoom requires one attached client focused on one live pane`. When the focused pane is the sidebar, it focuses a working pane in the same tab and fullscreens that one instead; in a tab that holds only the sidebar, it prints `rimz: sidebar is the only pane in its view; nothing to zoom` to stderr, changes nothing, and exits `0`. `--session-name` targets another room session. The room's `[sidebar] zoom_key` (default `Alt+g`) runs this command; see [room keys](../../internals/multiplexers.md#room-keys).
+`rimz pane zoom` toggles fullscreen for the pane the attached client is focused on. It needs exactly one attached client focused on one live pane, and otherwise fails with `pane zoom requires one attached client focused on one live pane`. When the focused pane is the sidebar, it focuses a working pane in the same tab and fullscreens that one instead; in a tab that holds only the sidebar, it prints `rimz: sidebar is the only pane in its view; nothing to zoom` to stderr, changes nothing, and exits `0`. `--session-name` targets another room session. With `[room] style = "native"`, the `sidebar.zoom_key` chord (default `Alt+g`) runs this command ([sidebar keys](../../guide/configuration.md#sidebar-rendering)).
 
 `rimz pane split` opens a shell in a new pane beside the calling pane and focuses it; run from a shell outside any pane, it opens the pane in the room's session instead. The shell starts in the worktree root. The split runs side by side when the terminal is more than twice as wide (in columns) as it is tall (in rows), stacked otherwise, and side by side when no terminal is attached.
 
@@ -164,7 +164,7 @@ The new pane's normalized id (`tmux:%3` or `zellij:terminal_7`) is the only line
 
 ## Bandwidth
 
-`rimz pane bandwidth` samples how many bytes each pane's processes write per second, over a window, and prints the rates highest first. Use it to find which pane makes an attached room busy, locally or over SSH. Run it on the Linux host serving the room, as the room's user, from a pane in the room or the room's directory.
+`rimz pane bandwidth` samples how many bytes each pane's processes write per second, over a window, and prints the rates highest first. Use it to find which pane makes an attached room busy, locally or over SSH. Run it on the Linux host serving the room, as the room's user, from a pane in the room, the room's directory, or with `--root <project>`.
 
 ```text
 PANE          LABEL                      WRITE/S
@@ -178,14 +178,14 @@ TOTAL         5s sample                    42k/s
 per-pane rows are producer write-rate; muxes diff the focused tab and SSH compresses it, so WIRE(ssh) is the actual TCP payload on this room's SSH socket, usually far below the per-pane sum. WIRE is absent for local rooms.
 ```
 
-Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle naming that agent alone (launched children included), a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`. Tab names omit RimZ's status glyph suffix. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts the quiet panes not shown. `TOTAL` includes every pane, including quiet panes.
+Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle naming that agent alone (launched children included), a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`, or the command alone when the tab carries the same name. Tab names omit RimZ's status glyph suffix, and a label longer than 56 characters is cut to 53 plus `...`. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts them (`2 quiet panes not shown · --all lists them`). `TOTAL` sums every pane, quiet ones included.
 
 The two `WIRE(ssh)` rows are what actually crossed the SSH socket to and from attached clients, after the multiplexer redraws only the focused tab and SSH compresses the stream, so they sit far below the per-pane sum. They appear only when an SSH client is attached and `ss` can read the socket's counters. The caveat paragraph appears only with these rows. Full-screen programs that redraw constantly, such as an agent mid-turn or a system monitor, lead the report.
 
 | Flag | Meaning |
 | --- | --- |
-| `--secs <N>` | Sampling window in seconds. Default `5`; `0` is refused. A process started during the window is not counted, so a longer window catches more. |
+| `--secs <N>` | Sampling window in whole seconds. Default `5`; `0` fails with `--secs must be greater than 0`. A process started during the window is not counted, so a longer window catches more. |
 | `--all` | Include quiet panes (zero write rate) in the table. |
-| `--json` | Print `available`, `sample_secs`, `total_bps`, `wire_tx_bps` and `wire_rx_bps` (present only with an SSH client), `panes` (each with `pane_id`, `label`, `write_bps`), `caveat` (only with wire rates), and `message`. Every pane is included, regardless of `--all`. |
+| `--json` | Print `available`, `sample_secs` (a number such as `5.0`), `total_bps`, `wire_tx_bps` and `wire_rx_bps` (present only with an SSH client), `panes` (each with `pane_id`, `label`, `write_bps`), `caveat` (only with wire rates), and `message`. Every pane is included, regardless of `--all`. |
 
-When the host cannot measure, the command prints one notice instead of the report and exits `0`; with `--json` it sets `available` to `false` and puts the notice in `message`. The notices cover a host that is not Linux, no pane that resolves to a process (on Zellij, a pane resolves only while it runs a uniquely named foreground command, so idle shells are skipped), and unreadable `/proc/<pid>/io` (usually a room served by another user, or a kernel built without `CONFIG_TASK_IO_ACCOUNTING`). The [bandwidth attribution internals](../../internals/remote.md#bandwidth-attribution) explain the measurements.
+When the host cannot measure, the command prints one notice instead of the report and exits `0`; with `--json` it sets `available` to `false`, `total_bps` to `0`, and `panes` to `[]`, and puts the notice in `message`. The notices cover a host that is not Linux or whose process table cannot be read, no pane that resolves to a process (on Zellij, a pane resolves only while it runs a uniquely named foreground command, so idle shells are skipped), and unreadable `/proc/<pid>/io` (usually a room served by another user, or a kernel built without `CONFIG_TASK_IO_ACCOUNTING`). The [bandwidth attribution internals](../../internals/remote.md#bandwidth-attribution) explain the measurements.
