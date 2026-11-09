@@ -176,50 +176,7 @@ pub fn native_compaction(
     if window == 0 {
         return None;
     }
-    match kind {
-        "claude" => configured
-            .filter(|point| *point < window)
-            .map(|point| NativeCompaction {
-                point,
-                capacity: window,
-                raw_window: window,
-                lowered: None,
-            }),
-        "codex" => {
-            let percent = limits
-                .and_then(|limits| limits.usable_percent)
-                .filter(|percent| (1..=100).contains(percent))
-                .unwrap_or(95);
-            let raw = u128::from(window) * 100 / u128::from(percent);
-            let cap = raw * 9 / 10;
-            let target = configured
-                .or_else(|| limits.and_then(|limits| limits.own_compact_limit))
-                .map(u128::from)
-                .unwrap_or(cap);
-            let point = target.min(cap).min(u128::from(window)) as u64;
-            let raw_window = u64::try_from(raw).unwrap_or(u64::MAX);
-            Some(NativeCompaction {
-                point,
-                capacity: limits
-                    .and_then(|limits| limits.max_window)
-                    .unwrap_or(raw_window),
-                raw_window,
-                lowered: configured.filter(|configured| point < *configured),
-            })
-        }
-        // OpenCode v2.2.5's default ceiling (`calculateCeiling` with no buffer configured).
-        "opencode" => {
-            let buffer = (u128::from(window) * 15 / 100) as u64;
-            let reserve = if window >= 32_000 { 16_000 } else { 0 };
-            Some(NativeCompaction {
-                point: window - buffer.max(reserve),
-                capacity: capacity.unwrap_or(window),
-                raw_window: window,
-                lowered: None,
-            })
-        }
-        _ => None,
-    }
+    find_definition(kind)?.native_compaction(configured, window, capacity, limits)
 }
 
 /// The compaction command for `agent`, carrying the harness brief for its

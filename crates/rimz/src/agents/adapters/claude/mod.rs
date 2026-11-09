@@ -1401,6 +1401,23 @@ impl crate::agents::capabilities::TranscriptCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
+    fn native_compaction(
+        &self,
+        configured: Option<u64>,
+        window: u64,
+        _capacity: Option<u64>,
+        _limits: Option<&crate::agents::context::ModelContextLimits>,
+    ) -> Option<crate::agents::registry::NativeCompaction> {
+        configured.filter(|point| *point < window).map(|point| {
+            crate::agents::registry::NativeCompaction {
+                point,
+                capacity: window,
+                raw_window: window,
+                lowered: None,
+            }
+        })
+    }
+
     fn prompt_cache_ttl(
         &self,
         _sign_in: Option<crate::agents::context::SignIn>,
