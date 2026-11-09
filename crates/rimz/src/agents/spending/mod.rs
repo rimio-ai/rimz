@@ -342,6 +342,14 @@ struct SpendingMemoKey {
     files_signature: u64,
 }
 
+/// What a walk may do with shared state: stay in memory, produce, or produce and
+/// rebuild saved days.
+enum FleetWalk<'a> {
+    Local,
+    Publish,
+    Rebuild(&'a mut rebuild::RebuildRun),
+}
+
 pub struct WalkRequest<'a> {
     pub history: &'a crate::disk::paths::SpendingHistoryPaths,
     pub files: &'a [SpendingFile],
@@ -456,7 +464,7 @@ impl SpendingWalker {
         req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(cache_path, true, req, observer, None)
+        self.walk_inner(cache_path, req, FleetWalk::Publish, observer)
     }
 
     pub fn walk_local(
@@ -465,17 +473,18 @@ impl SpendingWalker {
         req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(cache_path, false, req, observer, None)
+        self.walk_inner(cache_path, req, FleetWalk::Local, observer)
     }
 
     fn walk_inner(
         &mut self,
         cache_path: &Path,
-        persist: bool,
         req: &WalkRequest<'_>,
+        mode: FleetWalk<'_>,
         observer: &mut dyn WalkObserver,
-        rebuild: Option<&mut rebuild::RebuildRun>,
     ) -> SpendingWalkResult {
+        let persist = !matches!(mode, FleetWalk::Local);
+        let rebuilding = matches!(mode, FleetWalk::Rebuild(_));
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
         let prior_generation = self.cache.generation;
@@ -504,9 +513,7 @@ impl SpendingWalker {
             persist_worthy.set(true);
         }
         let checkpoint_ready = Cell::new(true);
-        let mut checkpoint_written = false;
         let mut checkpoint_generation = None;
-        let rebuilding = rebuild.is_some();
         let mut incomplete = BTreeSet::new();
         {
             let authoritative = self.spending_discovery_is_authoritative();
@@ -581,7 +588,6 @@ impl SpendingWalker {
                         && cache.dirty
                         && write_spending_cache(cache_path, cache)
                     {
-                        checkpoint_written = true;
                         checkpoint_generation = Some(cache.generation);
                         pending_dirty.set(false);
                     }
@@ -607,7 +613,7 @@ impl SpendingWalker {
             );
         }
         self.rebuild_days_dirty = pending_dirty.get();
-        if let Some(rebuild) = rebuild {
+        if let FleetWalk::Rebuild(rebuild) = mode {
             rebuild.report = self.closed_days.rebuild(
                 &self.cache,
                 req,
@@ -632,13 +638,9 @@ impl SpendingWalker {
             }
         }
         self.discovery.reconcile(&self.cache, req.now_secs);
-        if checkpoint_written {
+        if let Some(generation) = checkpoint_generation {
             stats.cache_written = true;
-            self.last_persisted_now_secs = Some(req.now_secs);
-            if checkpoint_generation == Some(self.cache.generation) {
-                self.cache.dirty = false;
-                self.cache_stamp = cache_stamp(cache_path);
-            }
+            self.note_persisted(cache_path, req.now_secs, generation);
         }
         let finishing_fill = persist && self.cache.fill_in_progress;
         if finishing_fill {
@@ -658,10 +660,8 @@ impl SpendingWalker {
             && (pending_check || (persist_worthy.get() && self.cache.dirty))
             && write_spending_cache(cache_path, &self.cache)
         {
-            self.cache.dirty = false;
+            self.note_persisted(cache_path, req.now_secs, self.cache.generation);
             self.rebuild_days_dirty = false;
-            self.cache_stamp = cache_stamp(cache_path);
-            self.last_persisted_now_secs = Some(req.now_secs);
             stats.cache_written = true;
             // A successful downgrade skip did not persist this walk's pending set.
             pending_persisted = pending_check
@@ -681,12 +681,8 @@ impl SpendingWalker {
         }
         #[cfg(test)]
         panic_after_refresh_for_test();
-        if self.cache.generation != prior_generation {
-            self.memo = None;
-        }
 
-        self.ensure_memo(req.files, &mut stats);
-        let memo = self.memo.as_ref().expect("memo seeded above");
+        let memo = Self::ensure_memo(&mut self.memo, req.files, &self.cache, &mut stats);
         let counted = indexed_counted_entries(req.files, &self.cache, &memo.counted);
         let roles = session_roles::load_history(req.history, req.now_secs);
         let recorded = self
@@ -727,20 +723,35 @@ impl SpendingWalker {
         stats.cache_parsed = stamp.is_some();
     }
 
-    fn ensure_memo(&mut self, files: &[SpendingFile], stats: &mut WalkStats) {
+    /// Record a successful cursor write of the cache at `generation`. A cache
+    /// that changed after that write stays dirty.
+    fn note_persisted(&mut self, cache_path: &Path, now_secs: u64, generation: u64) {
+        self.last_persisted_now_secs = Some(now_secs);
+        if generation == self.cache.generation {
+            self.cache.dirty = false;
+            self.cache_stamp = cache_stamp(cache_path);
+        }
+    }
+
+    fn ensure_memo<'a>(
+        memo: &'a mut Option<SpendingMemo>,
+        files: &[SpendingFile],
+        cache: &SpendingDiskCache,
+        stats: &mut WalkStats,
+    ) -> &'a SpendingMemo {
         let key = SpendingMemoKey {
-            generation: self.cache.generation,
+            generation: cache.generation,
             files_signature: spending_files_signature(files),
         };
-        if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
-            self.memo = Some(SpendingMemo {
-                key,
-                counted: dedup_cached_entry_locations(files, &self.cache).into_boxed_slice(),
-                contested_sessions: contested_session_locations(files, &self.cache)
-                    .into_boxed_slice(),
-            });
+        memo.take_if(|memo| memo.key != key);
+        memo.get_or_insert_with(|| {
             stats.dedup_passes = 1;
-        }
+            SpendingMemo {
+                key,
+                counted: dedup_cached_entry_locations(files, cache).into_boxed_slice(),
+                contested_sessions: contested_session_locations(files, cache).into_boxed_slice(),
+            }
+        })
     }
 
     /// Compute one scope from the synchronized cursor cache without refreshing
@@ -759,8 +770,7 @@ impl SpendingWalker {
     ) -> CachedScopedSpending {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
-        self.ensure_memo(files, &mut stats);
-        let memo = self.memo.as_ref().expect("memo seeded above");
+        let memo = Self::ensure_memo(&mut self.memo, files, &self.cache, &mut stats);
         aggregate_scoped_locations(
             files,
             &self.cache,
@@ -806,10 +816,8 @@ impl SpendingWalker {
                 .is_none_or(|last| now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL)
             && write_spending_cache(cache_path, &self.cache)
         {
-            self.cache.dirty = false;
+            self.note_persisted(cache_path, now_secs, self.cache.generation);
             self.rebuild_days_dirty = false;
-            self.cache_stamp = cache_stamp(cache_path);
-            self.last_persisted_now_secs = Some(now_secs);
         }
     }
 }

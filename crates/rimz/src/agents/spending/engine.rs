@@ -14,7 +14,7 @@ use crate::agents::spending::{
 
 use crate::utils::time::unix_now_ms;
 
-use super::{SPENDING_STALE_GRACE, SpendingFile};
+use super::{FleetWalk, SPENDING_STALE_GRACE, SpendingFile};
 
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
@@ -63,12 +63,6 @@ pub fn rebuild_spending_history(
         now_secs,
     );
     rebuild.report
-}
-
-enum FleetWalk<'a> {
-    Local,
-    Publish,
-    Rebuild(&'a mut super::rebuild::RebuildRun),
 }
 
 /// Walk every provider's transcript history into a fleet-wide and per-provider
@@ -410,16 +404,12 @@ fn walk_fleet_spending_files(
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
     use crate::agents::spending::{
-        ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
-        WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
-        read_provider_spending_cache, write_provider_spending_cache,
+        ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches, WalkObserver,
+        WalkRequest, WorkspaceSpendingCache, read_provider_spending_cache,
+        write_provider_spending_cache,
     };
 
-    let (publish, rebuild) = match mode {
-        FleetWalk::Local => (false, None),
-        FleetWalk::Publish => (true, None),
-        FleetWalk::Rebuild(rebuild) => (true, Some(rebuild)),
-    };
+    let publish = !matches!(mode, FleetWalk::Local);
 
     if publish && let Err(error) = super::history::migrate(runtime, now_secs) {
         tracing::warn!(%error, "failed to migrate shared spending history");
@@ -448,56 +438,17 @@ fn walk_fleet_spending_files(
                 workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
             };
         }
-        let refreshed_at_ms = unix_now_ms();
-        let user_inputs = user_input::load();
-        let req = WalkRequest {
-            history: &runtime.spending_history,
-            files,
-            prices: &Default::default(),
-            now_secs,
-            origin_overrides: &context.origin_overrides,
-            user_inputs: &user_inputs,
-            scope: Some(&scope),
-            spec: context.headline,
-        };
-        let cache_path = runtime.shared_spending_cursor_path();
-        let result = if publish {
-            walker.walk_inner(&cache_path, true, &req, &mut SilentWalk, rebuild)
-        } else {
-            walker.walk_local(&cache_path, &req, &mut SilentWalk)
-        };
-        let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
-        let scoped = if scope.is_empty() {
-            Default::default()
-        } else {
-            result.workspace
-        };
-        let workspace = WorkspaceSpendingCache::from_scoped(
-            scope_hash.as_deref().unwrap_or_default(),
-            refreshed_at_ms,
-            scoped,
-        );
-        if publish {
-            // Stamp the empty result too: an agentless machine must not re-run
-            // the (empty) discovery readdirs every tick.
-            write_provider_spending_cache(&provider_path, &provider);
-            if let Some(scope_hash) = scope_hash.as_deref() {
-                publish_workspace(runtime, scope_hash, &workspace);
-            }
-        }
-        spawn_rebuild_if_requested(runtime, &result.stats);
-        return SpendingCaches {
-            provider: provider.into(),
-            workspace,
-        };
     }
 
+    let stamp_before = files.is_empty().then(unix_now_ms);
     let cache_path = runtime.shared_spending_cursor_path();
     // The price book exists only to price the walk, so its load (and TTL-gated
     // remote refresh, including the unknown-model chase) rides the stale arm
     // with it. A local fallback reads the shared pricing cache without writing;
     // only the producer refreshes it while holding the spending lock.
-    let prices = if publish {
+    let prices = if files.is_empty() {
+        Default::default()
+    } else if publish {
         let unknowns = walker.recorded_unknown_models(&cache_path, files, now_secs);
         pricing::load_for_spending(runtime, &unknowns)
     } else {
@@ -514,8 +465,10 @@ fn walk_fleet_spending_files(
         scope: Some(&scope),
         spec: context.headline,
     };
-    let result = if publish {
-        let mut observer = PublishingWalkObserver {
+    let mut silent = SilentWalk;
+    let mut publishing;
+    let observer: &mut dyn WalkObserver = if publish && !files.is_empty() {
+        publishing = PublishingWalkObserver {
             runtime,
             provider_path: provider_path.clone(),
             files,
@@ -528,23 +481,20 @@ fn walk_fleet_spending_files(
             accounts: walker.discovery.history_accounts.clone(),
             closed_days: Default::default(),
         };
-        walker.walk_inner(&cache_path, true, &req, &mut observer, rebuild)
+        &mut publishing
     } else {
-        let mut observer = SilentWalk;
-        walker.walk_local(&cache_path, &req, &mut observer)
+        &mut silent
     };
-    let refreshed_at_ms = unix_now_ms();
+    let result = walker.walk_inner(&cache_path, &req, mode, observer);
+    let refreshed_at_ms = stamp_before.unwrap_or_else(unix_now_ms);
     let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
-    let workspace = if let Some(scope_hash) = scope_hash.as_deref() {
-        WorkspaceSpendingCache::from_scoped(scope_hash, refreshed_at_ms, result.workspace)
-    } else {
-        WorkspaceSpendingCache {
-            version: WORKSPACE_SPENDING_VERSION,
-            refreshed_at_ms,
-            ..Default::default()
-        }
+    let workspace = match scope_hash.as_deref() {
+        Some(hash) => WorkspaceSpendingCache::from_scoped(hash, refreshed_at_ms, result.workspace),
+        None => WorkspaceSpendingCache::from_scoped("", refreshed_at_ms, Default::default()),
     };
     if publish {
+        // Stamp the empty result too: an agentless machine must not re-run
+        // the (empty) discovery readdirs every tick.
         write_provider_spending_cache(&provider_path, &provider);
         if let Some(scope_hash) = scope_hash.as_deref() {
             publish_workspace(runtime, scope_hash, &workspace);
