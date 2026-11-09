@@ -155,7 +155,7 @@ upward-dependencies = ["address"]
 # the card's type-led wait entries, so no seam lives in the agents layer.
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
-# Model sub-cap matching and parent-axis headroom are shared with the renderer.
+# Model sub-cap matching and parent-axis headroom are shared with the snapshot's budget reading.
 # Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
 # Store's fold and follower pass the prior record's turn ids to `lifecycle::step`
 # and advance them through the one shared `lifecycle::turn_ids_after`.
@@ -211,7 +211,7 @@ upward-dependencies = ["address"]
 # ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
 # The idle-stop request body is shared by the store record and the agent rollup (+2).
 # 970: `PendingIdleStop`, the projected idle stop with its due time, and its `label`, the one wording shared by `agents show` and the card.
-# `RateLimitWindow::remaining_percentage` is the one displayed remainder the sidebar bar and `rimz accounts` read (+1).
+# `RateLimitWindow::remaining_percentage` is the one displayed remainder the snapshot's budget reading and `rimz accounts` read (+1).
 # `DaemonSessions` is the three-state answer the account-link gate reads from `runtime_control_writes_history` (+1).
 # AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
 # TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
@@ -4337,7 +4337,28 @@ path = "crates/rimz/src/store"
 # raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
 # raised::prepare_raise owns the CLI's basis, rest and captured-reply decisions (+1).
 # MessageRecord::with_reply_wait_lease stamps a reply wait leg's lease token for cycle detection (+1).
-surface-budget = 585
+# Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
+surface-budget = 589
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::budget::ProviderBudget"
+reason = "The provider panel's budget rows in precedence order, derived per call from the panel at the snapshot clock and drawn by the renderer without re-reading windows or credits."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::budget::ProviderBar"
+reason = "One budget row in draw order: a window with its resolved reading, or the extra-usage row with its credit."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::budget::WindowReading"
+reason = "A window bar's resolved state: lifted, unknown, or draining with forced-spent, countdown, pace, sub-cap and ceiling decided."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::budget::CreditDisplay"
+reason = "The sidebar's six-state paid-usage reading; its availability is not ExtraCredits::is_usable, which counts a limit-only reading usable."
 
 [[verdict]]
 kind = "item"

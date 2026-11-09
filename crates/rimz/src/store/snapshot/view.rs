@@ -25,6 +25,7 @@ use crate::store::subagent_context::SubagentContextRecord;
 use crate::workspace::RootClass;
 
 mod aggregate;
+mod budget;
 mod layout;
 mod live;
 mod model;
@@ -36,6 +37,7 @@ mod score;
 use providers::format_plan_label;
 pub(crate) use providers::sort_windows;
 
+pub(crate) use budget::{CreditDisplay, ProviderBar, ProviderBudget, WindowReading};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub(crate) use layout::{HeldRank, group_partition};
 use model::cohort_team;
