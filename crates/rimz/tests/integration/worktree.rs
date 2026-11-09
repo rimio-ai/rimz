@@ -976,6 +976,94 @@ fn loop_tasks_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
     assert!(!path.exists());
 }
 
+fn mark_fire_tree(path: &Path, task: &str) {
+    let mut marker = rimz::worktree::read_marker_for_worktree(path)
+        .unwrap()
+        .unwrap();
+    marker.loop_task = Some(task.to_owned());
+    let marker_path = path.join(git_stdout(
+        path,
+        &["rev-parse", "--git-path", "rimz-worktree.json"],
+    ));
+    std::fs::write(marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+}
+
+#[test]
+fn a_fire_tree_holds_sweep_only_while_its_task_run_lock_is_held() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let names = ["night-20260101-000000", "night-20260101-000000-2"];
+    let paths = names.map(|name| {
+        env.rimz()
+            .args(["worktree", "new", name])
+            .assert()
+            .success();
+        let path = env.home_root.join("project-worktrees").join(name);
+        mark_fire_tree(&path, "nightly");
+        path
+    });
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.nightly]\ncheck = 'true'\nroot = '{}'\nfresh-worktree = 'night'\nevery = '1h'\n",
+            env.project_root.display(),
+        ),
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["loop", "show", "nightly", "--json"])
+        .assert()
+        .success();
+    let shown: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let kept: Vec<&str> = shown["kept_worktrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tree| tree["branch"].as_str().unwrap())
+        .collect();
+    assert_eq!(kept.len(), 2, "{shown}");
+    assert!(names.iter().all(|name| kept.contains(name)), "{shown}");
+    env.rimz()
+        .args(["loop", "show", "nightly"])
+        .assert()
+        .success()
+        .stdout(contains("KEPT WORKTREES").and(contains(names[1])));
+    let lock_path = env.runtime_paths().lock_path("loop-run-nightly.lock");
+    std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let lock = std::fs::File::create(&lock_path).unwrap();
+    lock.try_lock().unwrap();
+    let output = env
+        .rimz()
+        .args(["worktree", "sweep", "--json"])
+        .assert()
+        .success();
+    let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let kept = report["kept"].as_array().unwrap();
+    assert_eq!(kept.len(), 2, "{report}");
+    for row in kept {
+        assert_eq!(row["holders"]["loop_tasks"], serde_json::json!(["nightly"]));
+    }
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&paths[0])
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(!paths[0].exists(), "wrapper cleanup takes no fire hold");
+    assert!(paths[1].exists());
+    drop(lock);
+    env.rimz()
+        .args(["worktree", "sweep", "--json"])
+        .assert()
+        .success();
+    assert!(!paths[1].exists(), "a released run lock frees the tree");
+}
+
 #[test]
 fn team_boards_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
     if git_missing() {

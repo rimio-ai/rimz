@@ -8978,6 +8978,411 @@ fn check_task_worktree_stores_a_fresh_prefix_listed_as_a_pattern() {
     assert_eq!(shown["fresh_worktree"], "night", "{shown}");
 }
 
+/// A bare `origin` one commit ahead of the local `main`, so a tree branched from
+/// fetched trunk is told apart from one branched from the local checkout.
+fn origin_ahead_of_local_main(env: &Env) -> Option<String> {
+    if !init_git_repo(&env.project_root) {
+        return None;
+    }
+    let origin = env.home_root.join("origin.git");
+    let root = &env.project_root;
+    let pushed = git_ok(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    ) && git_ok(root, &["remote", "add", "origin", origin.to_str().unwrap()])
+        && git_ok(root, &["commit", "-q", "--allow-empty", "-m", "ahead"])
+        && git_ok(root, &["push", "-q", "-u", "origin", "main"])
+        && git_ok(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    assert!(pushed, "origin fixture");
+    let tip = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "origin/main"])
+        .output()
+        .unwrap();
+    Some(String::from_utf8(tip.stdout).unwrap().trim().to_owned())
+}
+
+/// Every `night-*` worktree path and branch the fixture still has.
+fn night_leftovers(env: &Env) -> Vec<String> {
+    let mut left: Vec<String> = std::fs::read_dir(env.home_root.join("project-worktrees"))
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let branches = Command::new("git")
+        .arg("-C")
+        .arg(&env.project_root)
+        .args(["branch", "--list", "night-*", "--format=%(refname:short)"])
+        .output()
+        .unwrap();
+    left.extend(
+        String::from_utf8(branches.stdout)
+            .unwrap()
+            .lines()
+            .map(|branch| format!("branch {branch}")),
+    );
+    left
+}
+
+#[cfg(unix)]
+#[test]
+fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let Some(tip) = origin_ahead_of_local_main(&env) else {
+        crate::common::skip("git unavailable");
+        return;
+    };
+    let seen = env.home_root.join("seen");
+    let check = format!(
+        "{{ pwd -P; git rev-parse HEAD; git branch --show-current; }} >> {:?}; touch scratch",
+        seen.display().to_string()
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "nightly",
+            "--check",
+            &check,
+            "--worktree",
+            "night",
+            "--every",
+            "1h",
+        ],
+    );
+    loop_ok(&env, &["loop", "fire", "nightly"]);
+    loop_ok(&env, &["loop", "fire", "nightly"]);
+
+    let lines: Vec<String> = std::fs::read_to_string(&seen)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(lines.len(), 6, "{lines:?}");
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2);
+    let worktrees = canonical(&env.home_root.join("project-worktrees"));
+    for (fire, record) in lines.chunks(3).zip(&records) {
+        assert_eq!(record.result, LoopRunResult::Completed);
+        let tree = rimz::utils::path::normalize_path_lexical(
+            &record.worktree.as_ref().expect("fire worktree").path,
+        );
+        assert_eq!(fire[0], tree.display().to_string());
+        assert_eq!(tree.parent(), Some(worktrees.as_path()));
+        let name = tree.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("night-"), "{name}");
+        assert_eq!(fire[1], tip, "branched from fetched trunk");
+        assert_eq!(fire[2], name, "the branch takes the tree's name");
+    }
+    assert_eq!(night_leftovers(&env), Vec::<String>::new());
+    let logs = loop_ok(&env, &["loop", "logs", "nightly"]);
+    let name = records[1]
+        .worktree
+        .as_ref()
+        .unwrap()
+        .path
+        .file_name()
+        .unwrap();
+    assert!(
+        logs.contains(&format!("  worktree: {}", name.to_str().unwrap())),
+        "{logs}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    if origin_ahead_of_local_main(&env).is_none() {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let pwd_file = env.home_root.join("guard-pwd");
+    let guard = format!(
+        "pwd -P > {:?}; touch untracked; exit 1",
+        pwd_file.display().to_string()
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "guarded",
+            "--agent",
+            "claude",
+            "--prompt",
+            "repair",
+            "--every",
+            "1h",
+            "--check",
+            &guard,
+            "--on",
+            "success",
+            "--worktree",
+            "night",
+        ],
+    );
+    loop_ok(&env, &["loop", "fire", "guarded"]);
+
+    let record = last_loop_record(&env);
+    assert_eq!(record.result, LoopRunResult::CheckSkipped);
+    let tree =
+        rimz::utils::path::normalize_path_lexical(&record.worktree.expect("fire worktree").path);
+    assert_eq!(
+        std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
+        tree.display().to_string()
+    );
+    assert!(!tree.exists());
+    assert_eq!(night_leftovers(&env), Vec::<String>::new());
+    let signals: Vec<serde_json::Value> = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "signal.emit")
+        .map(|event| serde_json::from_str(event.params.get()).unwrap())
+        .collect();
+    let named: Vec<_> = signals
+        .iter()
+        .map(|signal| (signal["name"].as_str(), signal["payload"]["name"].as_str()))
+        .collect();
+    let name = tree.file_name().and_then(|name| name.to_str());
+    assert_eq!(
+        named,
+        [
+            (Some("worktree.created"), name),
+            (Some("worktree.removed"), name)
+        ],
+        "{signals:?}"
+    );
+    assert_eq!(signals[1]["payload"]["branch_deleted"], true, "{signals:?}");
+}
+
+/// A codex stand-in that runs a whole hook-firing turn in a tmux pane. Each
+/// turn appends its `pwd -P` to `turns`, and commits a file first while
+/// `commit` exists.
+#[cfg(unix)]
+struct LaunchedTurn {
+    bin: std::path::PathBuf,
+    shell: std::path::PathBuf,
+    turns: std::path::PathBuf,
+    commit: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl LaunchedTurn {
+    fn install(env: &Env) -> Self {
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nshell = 'bash'\n",
+        )
+        .unwrap();
+        env.install_agent_hooks("codex");
+        trust_codex_preflight_hooks(env);
+        trust_codex_project(env, &env.project_root);
+        let bin = crate::common::write_hook_firing_agent(env, "codex");
+        let hooks = bin.join("codex-hooks");
+        std::fs::rename(bin.join("codex"), &hooks).unwrap();
+        let turns = env.home_root.join("turn-pwd");
+        let commit = env.home_root.join("turn-commits");
+        let quote = |path: &Path| {
+            shlex::try_quote(path.to_str().unwrap())
+                .unwrap()
+                .into_owned()
+        };
+        write_path_shim(
+            &bin,
+            "codex",
+            &format!(
+                "case \"${{1:-}}\" in --version|login|app-server) exec {hooks} \"$@\";; esac\n\
+                 pwd -P >> {turns}\n\
+                 if [ -e {commit} ]; then\n\
+                   echo work > work.txt && git add work.txt && \
+                 git -c user.name=t -c user.email=t@example.com commit -qm work || exit 9\n\
+                 fi\n\
+                 exec {hooks} \"$@\"",
+                hooks = quote(&hooks),
+                turns = quote(&turns),
+                commit = quote(&commit),
+            ),
+        );
+        let login_shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
+        std::os::unix::fs::symlink(&login_shell, bin.join("bash")).unwrap();
+        // The room's first pane runs `$SHELL` bare, and must outlive the birth.
+        let shell = write_path_shim(
+            &env.home_root.join("interactive-shell-bin"),
+            "rimz-test-sh",
+            &format!(
+                "for arg do\n  if [ \"$arg\" = -c ]; then exec {} \"$@\"; fi\ndone\nexec /bin/sh \"$@\"",
+                quote(&login_shell),
+            ),
+        );
+        Self {
+            bin,
+            shell,
+            turns,
+            commit,
+        }
+    }
+
+    /// Fire `task` and wait for its pane's wrapper and cleanup helper to exit.
+    fn fire(&self, env: &Env, task: &str, commit: bool) -> std::process::Output {
+        if commit {
+            std::fs::write(&self.commit, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(&self.commit);
+        }
+        let output = env
+            .rimz()
+            .args(["--mux", "tmux", "loop", "fire", task])
+            .env("PATH", path_with_front(&self.bin))
+            .env("SHELL", &self.shell)
+            .output()
+            .expect("fire the launched turn");
+        let spec = rimz::testkit::sandbox::SandboxSpec {
+            home_root: env.home_root.clone(),
+            runtime_root: env.runtime_root.clone(),
+        };
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while rimz::testkit::sandbox::sandbox_processes(&spec)
+            .into_iter()
+            .filter_map(rimz::proc::argv)
+            .any(|argv| {
+                argv.iter().any(|arg| arg == "--supervise")
+                    || argv.iter().any(|arg| arg == "cleanup")
+            })
+        {
+            assert!(Instant::now() < deadline, "the turn's wrapper did not exit");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        output
+    }
+
+    fn turn_dirs(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.turns)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let env = Env::new();
+    if origin_ahead_of_local_main(&env).is_none() {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    let turn = LaunchedTurn::install(&env);
+    let guards = env.home_root.join("guard-pwd");
+    let guard = format!("pwd -P >> {:?}", guards.display().to_string());
+    for (task, verify) in [("turn", "true"), ("unverified", "exit 1")] {
+        loop_ok(
+            &env,
+            &[
+                "loop",
+                "add",
+                task,
+                "--agent",
+                "codex",
+                "--prompt",
+                "repair",
+                "--every",
+                "1h",
+                "--check",
+                &guard,
+                "--on",
+                "success",
+                "--verify",
+                verify,
+                "--worktree",
+                "night",
+            ],
+        );
+    }
+
+    let mut kept = Vec::new();
+    for (task, commit) in [
+        ("turn", false),
+        ("turn", true),
+        ("unverified", false),
+        ("unverified", true),
+    ] {
+        let output = turn.fire(&env, task, commit);
+        let record = last_loop_record(&env);
+        let verified = task == "turn";
+        assert_eq!(
+            record.result,
+            if verified {
+                LoopRunResult::Completed
+            } else {
+                LoopRunResult::Errored
+            },
+            "{record:?}"
+        );
+        let tree = rimz::utils::path::normalize_path_lexical(
+            &record.worktree.expect("fire worktree").path,
+        );
+        let shown = tree.display().to_string();
+        assert_eq!(turn.turn_dirs().last(), Some(&shown), "{output:?}");
+        let guarded = std::fs::read_to_string(&guards).unwrap();
+        assert_eq!(guarded.lines().last(), Some(shown.as_str()));
+        assert_eq!(
+            tree.exists(),
+            commit,
+            "{task} (commit: {commit}): {output:?}"
+        );
+        if commit {
+            assert!(tree.join("work.txt").exists());
+            kept.push((task, tree));
+        }
+    }
+
+    for (task, tree) in &kept {
+        let text = loop_ok(&env, &["loop", "show", task]);
+        let section = text
+            .split_once("KEPT WORKTREES")
+            .unwrap_or_else(|| panic!("{text}"))
+            .1;
+        let name = tree.file_name().unwrap().to_str().unwrap();
+        assert!(section.contains(name), "{text}");
+        let json: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &["loop", "show", task, "--json"])).unwrap();
+        let listed: Vec<std::path::PathBuf> = json["kept_worktrees"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{json}"))
+            .iter()
+            .map(|row| {
+                rimz::utils::path::normalize_path_lexical(Path::new(row["path"].as_str().unwrap()))
+            })
+            .collect();
+        assert_eq!(listed, std::slice::from_ref(tree), "{json}");
+        let marker = rimz::worktree::read_marker_for_worktree(tree)
+            .unwrap()
+            .unwrap();
+        assert_eq!(marker.loop_task.as_deref(), Some(*task));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
@@ -9040,6 +9445,28 @@ fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
         std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
         root.display().to_string()
     );
+
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let turn = LaunchedTurn::install(&env);
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .args([
+            "loop", "add", "launched", "--agent", "codex", "--prompt", "repair", "--every", "1h",
+        ])
+        .output()
+        .expect("add a launching task from linked worktree");
+    assert!(output.status.success(), "{output:?}");
+    let output = turn.fire(&env, "launched", false);
+    assert_eq!(
+        last_loop_record(&env).result,
+        LoopRunResult::Completed,
+        "{output:?}"
+    );
+    assert_eq!(turn.turn_dirs(), [root.display().to_string()]);
 }
 
 #[test]

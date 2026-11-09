@@ -115,6 +115,7 @@ fn project_group_roots_publishes_exact_marker_names() {
         repo_root: main.clone(),
         worktree_path: external.clone(),
         created_at: jiff::Timestamp::now(),
+        loop_task: None,
     };
     let output = Command::new("git")
         .arg("-C")

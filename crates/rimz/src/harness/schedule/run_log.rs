@@ -101,6 +101,9 @@ pub struct LoopRunRecord {
     pub kind: Option<super::TaskKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<PathBuf>,
+    /// The fresh worktree this fire created, apart from `checkout`, which keys lock attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<FireWorktree>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<PathBuf>,
     /// When the fire started for a gate refusal (`TaskFire::record_gate`), and when the record
@@ -156,6 +159,15 @@ pub struct LoopRunRecord {
     pub output_tokens: Option<u64>,
 }
 
+/// The fresh worktree one fire of a `fresh-worktree` task created.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FireWorktree {
+    pub path: PathBuf,
+    /// Why the trunk fetch fell back to the last fetched tip, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_fallback: Option<String>,
+}
+
 impl LoopRunRecord {
     pub fn stages(&self) -> impl DoubleEndedIterator<Item = RunStage<'_>> {
         self.check
@@ -199,6 +211,7 @@ impl LoopRunRecord {
             task: task.into(),
             kind: None,
             checkout: None,
+            worktree: None,
             root: None,
             at: Timestamp::now(),
             result,

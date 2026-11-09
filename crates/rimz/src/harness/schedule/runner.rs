@@ -143,6 +143,9 @@ pub struct PreparedSpawn {
     pub root: PathBuf,
     pub request: SupervisedRunRequest,
     pub stream: bool,
+    /// The fire's own tree, handed to the launch; its caller cleans it up when the launch errors
+    /// or the budget refuses an attempt.
+    pub fire_tree: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,6 +430,24 @@ pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
 /// spawn time, so two minutes or more means no clock saw the instant.
 const LATE_FIRE_MS: u64 = 120_000;
 
+/// The room a fire tree's signals go to, when its store exists.
+fn fire_tree_room(root: &Path) -> Option<(crate::Store, crate::ResolvedWorkspace)> {
+    let paths = StatePaths::for_project_root(root).ok()?;
+    let runtime = RuntimePaths::for_state(&paths).ok()?;
+    let store = crate::Store::open_existing(paths, runtime)?;
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).ok()?;
+    Some((store, workspace))
+}
+
+/// The worktree one fire of a `fresh-worktree` task created for its guard and turn.
+struct FireTree {
+    name: String,
+    path: PathBuf,
+    base_fallback: Option<String>,
+    /// A launch took it over, so the harness never force-removes it.
+    handed_over: bool,
+}
+
 /// One loop fire from ordered gates through one history transition, unless a drain finds no work.
 pub struct TaskFire<'a> {
     name: String,
@@ -447,6 +468,9 @@ pub struct TaskFire<'a> {
     from_arrived_at: Option<Timestamp>,
     condition: Option<super::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
+    /// The fresh tree of a `fresh-worktree` fire. It is never `checkout`, which
+    /// keys the run lock, capacity and declines at the project root.
+    fire_tree: Option<FireTree>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     record_hold: Option<CheckSignalGuard>,
@@ -513,6 +537,7 @@ impl<'a> TaskFire<'a> {
             from_arrived_at: None,
             condition: None,
             checkout: None,
+            fire_tree: None,
             started,
             run_lock: None,
             record_hold: None,
@@ -1013,6 +1038,98 @@ impl<'a> TaskFire<'a> {
             .unwrap_or_else(|| self.entry.run_dir())
     }
 
+    /// Where the guard and the turn run: the fire's fresh tree, else the launch checkout.
+    fn fire_dir(&self) -> PathBuf {
+        self.fire_tree
+            .as_ref()
+            .map_or_else(|| self.launch_checkout(), |tree| tree.path.clone())
+    }
+
+    /// Create a `fresh-worktree` fire's tree from trunk and announce it when the room's
+    /// store exists; a scheduled check-only fire births no room.
+    fn prepare_fire_tree(&mut self) -> Result<()> {
+        let Some(crate::config::TaskWorktree::Fresh { prefix }) = self.entry.task_worktree() else {
+            return Ok(());
+        };
+        if self.fire_tree.is_some() {
+            return Ok(());
+        }
+        let root = self.entry.resolved_root();
+        let created = crate::worktree::create_for_loop_fire(
+            &root,
+            &self.config.agents.worktree,
+            prefix,
+            &self.name,
+            self.now,
+        )
+        .with_context(|| format!("creating the fresh worktree for loop task `{}`", self.name))?;
+        self.fire_tree = Some(FireTree {
+            name: created.marker.name.clone(),
+            path: created.marker.worktree_path.clone(),
+            base_fallback: created.trunk_fetch.as_ref().map(ToString::to_string),
+            handed_over: false,
+        });
+        match fire_tree_room(&root) {
+            Some((store, workspace)) => {
+                crate::worktree::emit_worktree_created(&store, &workspace, &created.marker);
+            }
+            None => {
+                tracing::debug!(task = %self.name, "skipping worktree signal: store unavailable")
+            }
+        }
+        Ok(())
+    }
+
+    /// From the launch on, a pane, dirt or commits may hold the tree, so only the
+    /// keep-assessed wrapper cleanup removes it.
+    fn hand_over_fire_tree(&mut self) -> Option<PathBuf> {
+        let tree = self.fire_tree.as_mut()?;
+        tree.handed_over = true;
+        Some(tree.path.clone())
+    }
+
+    /// Remove a fire's tree that no launch took over, forced: only the guard touched
+    /// it, and the run record keeps the guard's output.
+    fn remove_unlaunched_fire_tree(&mut self) {
+        let Some(tree) = self.fire_tree.take_if(|tree| !tree.handed_over) else {
+            return;
+        };
+        let root = self.entry.resolved_root();
+        let memo = crate::worktree::LandedMemo::load(&root);
+        match crate::worktree::remove(
+            &root,
+            &self.config.agents.worktree,
+            &tree.name,
+            &tree.path,
+            true,
+            &crate::worktree::ProtectionSet::default(),
+            &memo,
+        ) {
+            Ok(removed) => {
+                if let Some((store, workspace)) = fire_tree_room(&root) {
+                    let retirement = crate::worktree::retire_removal(
+                        &store,
+                        &removed,
+                        crate::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+                        &workspace.session_name,
+                    );
+                    for (step, result) in [
+                        ("retire its sessions", retirement.session_retirement),
+                        ("archive its channel", retirement.message_archival),
+                    ] {
+                        if let Err(error) = result {
+                            tracing::warn!(task = %self.name, worktree = %tree.path.display(), %error, "failed to {step} after removing the fire's unused worktree");
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(task = %self.name, worktree = %tree.path.display(), error = %format!("{error:#}"), "failed to remove the fire's unused worktree");
+            }
+        }
+        memo.save();
+    }
+
     pub fn prepare(
         &mut self,
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
@@ -1052,8 +1169,10 @@ impl<'a> TaskFire<'a> {
             if let Some(done) = self.prepare_run_lock(false)? {
                 return Ok(TaskFirePlan::Done(done));
             }
+            self.prepare_fire_tree()?;
             self.prepare_check(&mut |_| Ok(()))?
         } else {
+            self.prepare_fire_tree()?;
             self.prepare_check(before_check)?
         };
         if let ControlFlow::Break(done) = check {
@@ -1927,7 +2046,7 @@ impl<'a> TaskFire<'a> {
                 .interrupts()
                 .map_err(throttle::ThrottleError::Interrupts)?,
         );
-        let dir = self.launch_checkout();
+        let dir = self.fire_dir();
         if let Some(command) = shell {
             if self.check_interrupted() {
                 return Ok(ControlFlow::Break(GuardStop::Interrupted));
@@ -2054,6 +2173,7 @@ impl<'a> TaskFire<'a> {
             root: self.context_root()?,
             request,
             stream,
+            fire_tree: self.hand_over_fire_tree(),
         }))
     }
 
@@ -2078,10 +2198,11 @@ impl<'a> TaskFire<'a> {
             .transpose()?;
         let mut request = SupervisedRunRequest::new(spec, prompt, permission_mode, managed_launch);
         request.login = LaunchLogin::from(self.entry.account.clone());
-        // A fresh-worktree row fires at the project root until its per-fire tree exists.
-        if let Some(crate::config::TaskWorktree::Named(name)) = self.entry.task_worktree() {
-            request.worktree = Some(name.to_owned());
-        }
+        request.worktree = match (self.entry.task_worktree(), &self.fire_tree) {
+            (Some(crate::config::TaskWorktree::Named(name)), _) => Some(name.to_owned()),
+            (_, Some(tree)) => Some(tree.name.clone()),
+            _ => None,
+        };
         request.system_prompt_file = system_prompt_file;
         request.effort.clone_from(&self.entry.effort);
         request.fast = self.entry.fast;
@@ -2286,6 +2407,10 @@ impl<'a> TaskFire<'a> {
         if self.entry.stay || self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
         }
+        record.worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
+            path: tree.path.clone(),
+            base_fallback: tree.base_fallback.clone(),
+        });
         add_check_usage(&mut record);
         record
     }
@@ -2350,6 +2475,7 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, %error, "failed to clear loop capacity wait");
         }
+        self.remove_unlaunched_fire_tree();
         let result = record.result;
         let transition = self.record_and_release(&mut record);
         if record.result != result {
@@ -2419,6 +2545,7 @@ impl<'a> TaskFire<'a> {
 
 impl Drop for TaskFire<'_> {
     fn drop(&mut self) {
+        self.remove_unlaunched_fire_tree();
         if let Err(error) = self.release_run_lock() {
             tracing::warn!(task = %self.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
         }

@@ -22,10 +22,11 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `from_pr` | Pull-request number for a `--from-pr` tree. |
 | `repo_root`, `worktree_path` | The repository the tree was created from, and where the tree lives. |
 | `created_at` | Creation time. It bounds the lane's [attribution lifetime](../agents/attribution.md#selecting-records). |
+| `loop_task` | The loop task whose fire created a per-fire tree (`create_for_loop_fire`); omitted on every other tree. |
 
 Creation writes the marker through `write_marker`, a temp file renamed into place. One later write exists: reusing a same-repository PR head's tree fills a missing `from_pr` through the same writer and keeps every other field, `version` and `created_at` included. So `created_at` is the birth of the tree's current incarnation, and a tree removed and recreated under the same name gets a fresh one. The filled PR number makes the tree discoverable by PR resume and by the sidebar's PR matching.
 
-`base_branch` and `from_pr` are `#[serde(default)]` options, so a marker that lacks them still deserializes and its tree still cleans up. Two tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
+`base_branch`, `from_pr` and `loop_task` are `#[serde(default)]` options, so a marker that lacks them still deserializes and its tree still cleans up; the marker takes no `deny_unknown_fields`, so an older binary reads a marker that carries `loop_task`. Tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
 
 ### Two spellings of a tree's path
 
@@ -309,6 +310,7 @@ The CLI gathers pane cwds from the mux and agent rows from the store, and `prote
 - An agent of unknown liveness contributes its recorded path, under `Occupancy::Unproven` only.
 - A dead agent, or any agent bound to the caller's own pane, contributes nothing.
 - An armed machine or instance loop task contributes its root and usually its run directory. `crates/rimz/src/harness/schedule/catalog.rs::worktree_pins` is the shared rule: live and paused tasks pin until their deadline (equality is expired), and disabled and project-source tasks do not. Fan-out tasks pin only their root. A spawning `--worktree` task also pins only its root, unless a check, judge, condition, or watch needs its run directory. Invalid actions or triggers do not release pins.
+- For automatic gc and `sweep` only, a marked tree whose `loop_task` names a task with a held run lock in the marker's room contributes its path as that task's pin (`crates/rimz/src/cli/worktree_protection.rs::add_fire_trees`); a lock that cannot be probed holds the tree. Wrapper cleanup and explicit removal skip this pin.
 - A team board short of `Done` contributes its checkout root. `crates/rimz/src/harness/scratch.rs::holding_team` reads the board once through the root's `.rimz/team` link, following foreign links too. The first `Stage:` line decides. No stage, or a read error other than not-found, holds the tree. `Done`, a missing board, and a dangling link hold nothing. The label comes from the linked `run.json`, falling back to `unknown`. A board anywhere else in the checkout is not read.
 - A `.rimz` that is itself a symlink (shared through `.worktreelink`) holds nothing, since the board behind it belongs to the checkout it shares. `crates/rimz/src/harness/team_notes.rs::register` enforces the same rule when it refuses to register a team there.
 - An unfinished workflow run contributes its recorded `scope.path`, whether active or parked and whatever its scope kind. Done, failed, and canceled runs contribute nothing. A project-scoped run normally lies outside every linked worktree, so containment alone excludes it.

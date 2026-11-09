@@ -109,6 +109,7 @@ fn registration_archives_a_linked_checkout_and_reuses_only_open_runs() {
         repo_root: repo.clone(),
         worktree_path: checkout.clone(),
         created_at: jiff::Timestamp::now(),
+        loop_task: None,
     };
     let git_dir = PathBuf::from(git(&checkout, &["rev-parse", "--absolute-git-dir"]));
     fs::write(

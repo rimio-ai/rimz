@@ -371,6 +371,20 @@ pub(super) fn run_one(
                     .map(rimz::harness::schedule::runner::TaskFireEffect::Spawn)
                     .context("scheduled launch aborted despite its explicit root")
             });
+            // No pane is left to clean an errored launch's tree, nor one the budget refused
+            // before or between attempts.
+            if matches!(
+                &effect,
+                Err(_)
+                    | Ok(rimz::harness::schedule::runner::TaskFireEffect::Spawn(
+                        rimz::harness::run::SupervisedRunOutcome::BudgetExceeded { .. }
+                    ))
+            ) && let Some(tree) = prepared.fire_tree.as_deref()
+                && let Err(error) =
+                    crate::cli::worktree::cleanup_worktree(tree, &run_globals, false)
+            {
+                tracing::warn!(task = name, worktree = %tree.display(), error = %format!("{error:#}"), "failed to clean up the worktree a launch left");
+            }
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared)) => {
