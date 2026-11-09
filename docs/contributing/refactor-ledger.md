@@ -4,10 +4,10 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `5e7280b9f`, pass 33b: 7025 scoped commits (pace window 1757), 24 admission intents, 239 holds; no parse failures or ledger problems. Left open: 58 stale verdict keys (53 item, 5 shape; `sidebar::fuse::fuse` among them, which pass 33d re-keys), one ambiguous key (`harness::schedule::run_log::new`, two visible items), and the pending restamps of `agents/definition`, `agents/adapters/claude`, `agents/capabilities` and `harness/launch_plan` (`survey --restamp` writes them).
+- **Survey:** base `99e760639`, pass 33d: 7050 scoped commits (pace window 1763), 24 admission intents, 240 holds; no parse failures, ledger problems, ambiguous verdict keys or pending restamps. One stale key remains, `guard:$0Some($1)=&$2.degraded`: its family forms only under `survey --all`, below the finding gate. Left open: one shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts/report.rs::write_comparison`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** 61 rank rows reached their reopen count, led by `mux/zellij`, `agents/adapters/claude`, `sidebar/refresh`, `sidebar_pane/render/sections` and `mux/tmux`.
-- **Never reviewed:** 151 library rank rows carry no hold, led by `launcher`, `harness/schedule/runner`, `sidebar_pane/app/loop_state` and `lsp/broker`; some ledger rows (`harness/schedule`, `lsp`, `store/snapshot`) sit above the granularity the survey ranks and so hold no rank row. Binary modules and test-only rows carry no hold.
+- **Reopened:** 60 rank rows reached their reopen count, led by `mux/zellij`, `agents/adapters/claude`, `sidebar/refresh`, `mux/tmux` and `message`.
+- **Never reviewed:** 150 library rank rows carry no hold, led by `launcher`, `harness/schedule/runner`, `sidebar_pane/app/loop_state` and `lsp/broker`; some ledger rows (`harness/schedule`, `lsp`, `store/snapshot`) sit above the granularity the survey ranks and so hold no rank row. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** the `crates/rimz/src/message` and `crates/rimz/src/message/send.rs` rules' upward edge to `harness::hibernate` (2 sites each); no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `agents ↔ trust`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree` and `harness ↔ room`.
 - **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 31, `cli/agents_cmd/mod.rs` 23, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 4); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
@@ -26,11 +26,11 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/account_links` | holds; landed pass-31b | `ac8b4038a` | 30 | guarded settings sharing with signature-floored error and report types. |
 | `agents/provider_file` | holds; landed pass-31b | `ac8b4038a` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
 | `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
-| `agents/definition` | holds; landed pass-18a; pass-32a | `1986a3caa` | 30 | with `agents`; the spec declares the hook-context reply shape (`HookContextReply`) and `AgentDefinition::attach_hook_context` is its one writer. |
+| `agents/definition` | holds; landed pass-18a; pass-32a | `6ea09c504` | 30 | with `agents`; the spec declares the hook-context reply shape (`HookContextReply`) and `AgentDefinition::attach_hook_context` is its one writer. |
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
 | `agents/adapters/(root)` | holds | `4a82d6b28` | 30 | module declarations and the registry; nothing escapes `agents`. |
 | `agents/adapters/install_report` | holds | `4a82d6b28` | 30 | `report_files` is `pub(super)` for the sibling installers. |
-| `agents/adapters/claude` | holds; landed pass-9; pass-27a; pass-32a | `1986a3caa` | 30 | one-of hook payload (`ClaudeHook`) parsed once per hook, one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
+| `agents/adapters/claude` | holds; landed pass-9; pass-27a; pass-32a | `6ea09c504` | 30 | one-of hook payload (`ClaudeHook`) parsed once per hook, one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
 | `agents/adapters/codex` | holds; landed pass-9; pass-31c | `7bbf4a576` | 30 | one-of hook payload, `config_home` as the one home rule, one spend emission tail; one framed transport and handshake. |
 | `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
@@ -47,8 +47,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/attribution` | holds | `2f84d791a` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
-| `agents/spending` | holds; landed pass-13; pass-33 | `08578cccd` | 30 | one writer per cache, one engine election, one mode through the walk with one persisted acknowledgement, keyed fold windows; walker, ledger and migration residuals are fix-pinned state machines. |
-| `agents/capabilities` | holds; landed pass-32a | `1986a3caa` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
+| `agents/spending` | holds; landed pass-13; pass-33 | `21e72ec88` | 30 | one writer per cache, one engine election, one mode through the walk with one persisted acknowledgement, keyed fold windows; walker, ledger and migration residuals are fix-pinned state machines. |
+| `agents/capabilities` | holds; landed pass-32a | `6ea09c504` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
 | `agents/hook_types` | holds; landed pass-24b | `6f49ccef0` | 30 | hook representation at `pub(super)`; `HookRouting` and two binary-called `HookOutput` readers stay `pub`. |
 | `agents/account` | holds; landed pass-24b | `6f49ccef0` | 30 | cache schema and reset-credit types stay `pub` for the integration crate. |
 | `agents/credits` | holds; landed pass-24b | `6f49ccef0` | 30 | OAuth transport `pub(super)`; probe and snapshot types floored by signature. |
@@ -152,7 +152,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/cache_keepalive` | holds | `38b487c52` | 30 | request type stays `pub` for the integration crate. |
 | `harness/deadline` | holds; landed pass-26c | `38b487c52` | 30 | rung selection `pub(super)` for `run`; stop channel private. |
 | `harness/launch_env` | holds | `38b487c52` | 30 | already `pub(super)`; `LaunchEnv` floored by the launch reminders render. |
-| `harness/launch_plan` | holds; landed pass-24c; pass-32b | `d31ae3c28` | 30 | error and warning types floor `compile`/`apply`; `prepare_exec` is the exec wrapper's one launch-decision entry. |
+| `harness/launch_plan` | holds; landed pass-24c; pass-32b | `19681d1bf` | 30 | error and warning types floor `compile`/`apply`; `prepare_exec` is the exec wrapper's one launch-decision entry. |
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `1ec086301` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
@@ -196,7 +196,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/cache` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/unread` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/read_marks` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
-| `sidebar/fuse` | holds; landed pass-23c; pass-33b | `5e7280b9f` | 30 | command events reach rows only through the snapshot's tenant transition, so fusion keeps no carry list. |
+| `sidebar/fuse` | holds; landed pass-23c; pass-33b | `fa35aa62a` | 30 | command events reach rows only through the snapshot's tenant transition, so fusion keeps no carry list. |
 | `sidebar/meter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/event_store` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/body_filter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
@@ -212,7 +212,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/animation` | holds; landed pass-26b | `be91f3434` | 30 | cadence decision is now render's, contradicting pass 23c. |
 | `sidebar_pane/render/(root)` | holds; landed pass-26b | `be91f3434` | 30 | one live draw entry and pane-reach selectors. |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; frame types at pane reach. |
-| `sidebar_pane/render/sections` | holds; landed pass-29e | `eb03b2204` | 30 | collapsed header and pipeline representations with pinned width and hit regions. |
+| `sidebar_pane/render/sections` | holds; landed pass-33d | `46c659274` | 30 | provider bars and the card's latest call draw a reading resolved in the snapshot. |
 | `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
 | `sidebar_pane/render/ui_state` | holds; landed pass-26b | `be91f3434` | 30 | pane-reach state owns the active roster projection. |
@@ -225,7 +225,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b; pass-27b | — | — | owns every record it persists, imports nothing above it. |
 | `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
 | `store/snapshot` | holds; landed pass-28d | `b93ab174a` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
-| `store/snapshot/view` | holds; landed pass-33b | `5e7280b9f` | 30 | a command overlay keeps a row whose tenant stays and starts a new tenant with only the pane slot. |
+| `store/snapshot/view` | holds; landed pass-33b; pass-33d | `46c659274` | 30 | a command overlay keeps a row whose tenant stays and starts a new tenant with only the pane slot; `SidebarProviderPanel::budget` is the one quota reading, derived per call over the panel. |
+| `store/snapshot/row` | holds; landed pass-33d | `46c659274` | 30 | `AgentCard::call_split` composes the latest call, rich-correlated before lifecycle. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
 | `store/message` | holds; landed pass-21b; pass-29g | `0df251b8a` | 30 | submitted-prompt classifier, header grammar and codec hold; author vocabulary lives in `transcript`. |

@@ -798,8 +798,8 @@ reason = "Supervised CLI launches and headless loop judges require different sav
 
 [[verdict]]
 kind = "item"
-key = "agents::folder_trust::FolderTrust::RESTRICTED_FIX"
-reason = "One saved-untrusted remediation shared by library refusal errors and CLI trust surfaces."
+key = "agents::folder_trust::FolderTrust"
+reason = "`RESTRICTED_FIX`: One saved-untrusted remediation shared by library refusal errors and CLI trust surfaces."
 
 [[verdict]]
 kind = "item"
@@ -981,21 +981,6 @@ surface-budget = 31
 
 [[verdict]]
 kind = "item"
-key = "cli::record_work_on_exit"
-reason = "The binary holds the testkit work-log guard from main entry through return."
-
-[[verdict]]
-kind = "item"
-key = "testkit::WorkCounters"
-reason = "Snapshot and configuration boundaries share process atomics with the work-log writer."
-
-[[verdict]]
-kind = "item"
-key = "testkit::WORK_COUNTERS"
-reason = "The testkit-only work log reads one counter set across all process threads."
-
-[[verdict]]
-kind = "item"
 key = "store::snapshot::fold::testkit::count_rows_materialized"
 reason = "Store projections, context joins and dispatch share the fold-row copy counter."
 
@@ -1008,66 +993,6 @@ reason = "Hook reactions borrow durable rows; role decisions use Audit-marked co
 kind = "item"
 key = "store::runtime::audit_rows"
 reason = "Signal retirement reads shared durable rows through StatePaths without opening a writer-capable Store."
-
-[[verdict]]
-kind = "item"
-key = "testkit::fleet::seed_live_launch_text"
-reason = "Apply and fleet benches share production-encoded launch text and observed prompts in their live rows."
-
-[[verdict]]
-kind = "item"
-key = "testkit::fleet::checkpoint_fleet_store"
-reason = "The apply bench prices complete persisted arrays after raw fixture seeding without exposing the private publish stamp."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass"
-reason = "Tests and benches share testkit-only host I/O and attachment work measurements."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::Counter"
-reason = "Host instrumentation and its external performance consumers share named event kinds."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::Counters"
-reason = "Tests retain thread counter handles without retaining worker threads or a global registry."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::TOTAL"
-reason = "Performance consumers measure host work across fetch, refresh and attachment threads."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::thread_counters"
-reason = "Tests distinguish a refresher's fold calls and each attachment's wake sources."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::count"
-reason = "Proc, heartbeat, fold and attachment funnels record testkit events through one seam."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::add"
-reason = "The hidden drain records the number of actual retained-outcome clones."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::timeout_source"
-reason = "The inbox attributes a timed-out wait to the attachment's winning deadline."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::set_timeout_source"
-reason = "Frame timing records the initial timeout candidate without changing scheduling."
-
-[[verdict]]
-kind = "item"
-key = "testkit::host_pass::cap_timeout"
-reason = "Frame timing tracks a tighter deadline without changing its duration or clock reads."
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -3913,56 +3838,6 @@ reason = "The focus marker replaces one painted edge line and its hit regions wi
 
 [[verdict]]
 kind = "item"
-key = "sidebar::scenario"
-reason = "Testkit scenario admission and pure snapshot sources serve the contributor CLI and loop player; the typed IR stays crate-visible."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::check"
-reason = "The binary validates and folds scenario files through one library entry without rendering."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::ScenarioError"
-reason = "The CLI and reload status present the same typed line/column refusal."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Scenario::configure_rendering"
-reason = "The loop player applies explicit screenshot geometry and theme overrides to every modeled snapshot without changing the source file."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Scenario"
-reason = "The loop player consumes parsed geometry, ordered beat data and pure at(Duration) snapshots inside the library."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Beat"
-reason = "The player schedules typed actions by offset and records their source labels."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Action"
-reason = "The player dispatches UI actions through the real input path while the model folds agent verbs."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::UiAction"
-reason = "Scenario UI beats remain data until the loop player resolves their handles against a painted frame."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Verb"
-reason = "Typed agent actions belong to the crate-visible beat vocabulary rather than an untyped player callback."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::Field"
-reason = "Typed metric edits are part of the admitted agent-action vocabulary."
-
-[[verdict]]
-kind = "item"
 key = "sidebar::unread::reconcile_snapshot"
 reason = "Production fetch and testkit playback share runtime unread reconciliation without notification execution."
 
@@ -3970,11 +3845,6 @@ reason = "Production fetch and testkit playback share runtime unread reconciliat
 kind = "item"
 key = "sidebar::attention::reconcile_snapshot"
 reason = "Only the host fetch worker reconciles launch-keyed attention stamps, before observing and publishing final framed folds."
-
-[[verdict]]
-kind = "item"
-key = "store::snapshot::view::SidebarSnapshot::score_scenario_rows"
-reason = "The testkit source stamps rows with production attention scoring before presentation sorting."
 
 [[verdict]]
 kind = "item"
@@ -4163,16 +4033,6 @@ surface-budget = 15
 kind = "item"
 key = "sidebar_pane::app::card_commands::CardInput"
 reason = "The host queues one reply-bearing command with its original view and expiry."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::app::hidden_views::testkit::HiddenViewSweep"
-reason = "Live tests and latency fixtures kick the production sweep rather than reproducing its planner."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::app::hidden_views::testkit::start_hidden_view_sweep"
-reason = "An injected private tmux backend exercises the host's real sweep without a room full of supervisors."
 
 [[verdict]]
 kind = "item"
@@ -4548,8 +4408,8 @@ reason = "Fresh restart reserves under the launch lock while preserving the old 
 
 [[verdict]]
 kind = "item"
-key = "store::snapshot::row::AgentCard::ask_detail"
-reason = "The public serialized AgentCard schema carries eligible blocking ask text across snapshot consumers."
+key = "store::snapshot::row::AgentCard"
+reason = "`ask_detail`: The public serialized AgentCard schema carries eligible blocking ask text across snapshot consumers."
 
 [[verdict]]
 kind = "item"
@@ -5040,11 +4900,6 @@ kind = "item"
 key = "disk::atomic::write_checkpoint"
 reason = "Store checkpoints publish into existing, validated runtime directories only."
 
-[[verdict]]
-kind = "item"
-key = "disk::paths::Class::Snapshots"
-reason = "Runtime store checkpoints have no age sweep and survive disposable resets."
-
 [[module]]
 path = "crates/rimz/src/store/gc"
 # The lifetime-class sweeps read owner liveness (store::runtime, agents), ended rows
@@ -5073,7 +4928,7 @@ surface-budget = 22
 [[verdict]]
 kind = "item"
 key = "disk::paths::Class"
-reason = "Doctor carries typed lifetime classes across the library boundary without constructing room paths."
+reason = "Doctor carries typed lifetime classes across the library boundary without constructing room paths. `Snapshots`: Runtime store checkpoints have no age sweep and survive disposable resets."
 
 [[verdict]]
 kind = "item"
@@ -5739,13 +5594,8 @@ reason = "Room birth publishes the capability verdict; launch planning and the d
 
 [[verdict]]
 kind = "item"
-key = "harness::hibernate::Check::summary"
-reason = "Doctor renders the producer's summary separately from its remedy while retaining the existing JSON detail."
-
-[[verdict]]
-kind = "item"
-key = "harness::hibernate::Check::fix"
-reason = "Doctor places producer-owned hibernation remedies in the closing fix block."
+key = "harness::hibernate::Check"
+reason = "`summary`: Doctor renders the producer's summary separately from its remedy while retaining the existing JSON detail. `fix`: Doctor places producer-owned hibernation remedies in the closing fix block."
 
 [[verdict]]
 kind = "item"
@@ -5794,17 +5644,17 @@ reason = "Wake paths append diagnostic evidence through the owning best-effort s
 
 [[verdict]]
 kind = "shape"
-key = "attach_lifecycle+decode_catalog_hook+set_final_message+set_routing+spec"
+key = "attach_lifecycle+decode_catalog_hook+set_routing+spec"
 reason = "Each adapter's decode_hook is provider policy over the shared HookOutput and catalog API; its divergences are pinned fixes (pass 2; re-keyed pass 21c)."
 
 [[verdict]]
 kind = "shape"
-key = "BTreeMap::new+CachedEntry::new+TokenSplit::new+cached"
+key = "BTreeMap::new+CachedEntry::new+SpendCursor::with_state+TokenSplit::new+Vec::new+cached"
 reason = "The map tracks unknown models; pricing, CachedEntry, deduplication, and aggregation already live in agents::spending, while provider parsers own I/O, replay, and cost precedence (pass 2)."
 
 [[verdict]]
 kind = "shape"
-key = "auto_flag+blocking_tool_kind+session_start_signal+stop_payload_errored+tool_edits_files+tool_mutates"
+key = "auto_flag+blocking_tool_kind+optional_payload_string+session_start_signal+tool_edits_files+tool_mutates"
 reason = "The callees live once in AgentSpec, payload, SessionSource, and CompactTrigger; the three mappers retain fix-pinned per-event provider policy (pass 2)."
 
 [[verdict]]
@@ -6294,16 +6144,6 @@ reason = "The adapter's trust and drift checks share Codex's normalized hash wit
 
 [[verdict]]
 kind = "item"
-key = "agents::adapters::codex::install::trust_hook_config_for_test"
-reason = "The provider-neutral test seam writes native slot hashes without exposing the adapter to harness or integration fixtures."
-
-[[verdict]]
-kind = "item"
-key = "agents::trust_hook_config_for_test"
-reason = "Testkit-only Trust all seam keeps launch, recovery, and integration fixtures on real hashes behind the private-adapter boundary."
-
-[[verdict]]
-kind = "item"
 key = "agents::adapters::codex::model_alias::resolve"
 reason = "A sequential alias ladder, not a table or a fold; no shared shape reduces it (pass 31c)."
 
@@ -6326,26 +6166,6 @@ reason = "The CLI builds room-owned settings for the host separately from each p
 kind = "item"
 key = "sidebar_pane::app::SidebarAppErr"
 reason = "Public sidebar_pane::host::run returns this error to the CLI binary; pub is the signature floor."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::app::play::PlayOptions"
-reason = "The testkit sidebar play CLI passes its headless options into the library-owned loop driver."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::scenario::parser::parse_duration"
-reason = "The testkit play CLI parses time options with the scenario grammar before calling the typed player."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::app::play::PlayError"
-reason = "The public testkit playback entry returns typed parse, I/O, and loop failures to the CLI binary."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::app::play::play"
-reason = "The sidebar play CLI delegates scenario playback and frame export to the library's attachment loop."
 
 [[verdict]]
 kind = "item"
@@ -6879,7 +6699,7 @@ reason = "Carried by public DeliveryTrigger, Trigger and TaskTimingState; integr
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::run_log::new"
+key = "harness::schedule::run_log::LoopRunRecord::new"
 reason = "Integration fixtures construct LoopRunRecord history rows from the separate test crate (pass 14)."
 
 [[verdict]]
@@ -7129,11 +6949,6 @@ reason = "Public payload of SubagentPaneBindRead, preserving kind, pane and end 
 
 [[verdict]]
 kind = "item"
-key = "diag::record::FetchFoldCauseStats"
-reason = "No producer since 8c02a0b7a retired routine fetch-fold production; the variant is decoded wire the doctor fixture still reads (pass 16)."
-
-[[verdict]]
-kind = "item"
 key = "diag::hook_feed"
 reason = "The CLI records feed errors through this machine-scope diagnostic module, including errors before workspace resolution."
 
@@ -7339,16 +7154,6 @@ reason = "Reached by the integration crate, which sees only pub, and called in p
 
 [[verdict]]
 kind = "item"
-key = "store::gc::SESSION_PROBE_MARKER_PREFIX"
-reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sidebar session probe reads them and the integration gc suite pins them (pass 21b)."
-
-[[verdict]]
-kind = "item"
-key = "store::gc::SESSION_PROBE_MARKER_TTL"
-reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sidebar session probe reads them and the integration gc suite pins them (pass 21b)."
-
-[[verdict]]
-kind = "item"
 key = "store::event_log::LogExtent"
 reason = "The freshness stamp is the snapshot wire: SidebarSnapshot.reflects_log is a pub field of the sidebar's published schema (pass 23a)."
 
@@ -7386,11 +7191,6 @@ reason = "Followers and the parked watchdog read the durable generation without 
 kind = "item"
 key = "store::event_log::testkit::bytes_read"
 reason = "Always-on byte counter the performance tier and the message reply tests read from outside the library crate (ac096bc) (pass 23a)."
-
-[[verdict]]
-kind = "item"
-key = "store::event_log::testkit::bytes_read_under"
-reason = "Testkit-only per-path byte tally the performance tier reads from outside the library crate to prove archived history stays off the write path."
 
 [[verdict]]
 kind = "item"
@@ -7455,12 +7255,7 @@ reason = "Stops in the binary and rebirth share a bounded wait without signallin
 [[verdict]]
 kind = "item"
 key = "store::runtime::RuntimeProjection"
-reason = "Returned by pub Store::runtime_projection and re-exported from the crate root; the harness rebirth path names it (pass 23a)."
-
-[[verdict]]
-kind = "item"
-key = "store::runtime::RuntimeProjection::resume_outcomes"
-reason = "Spent-child CLI parity carries the fold's terminal resume evidence into audit and runtime readers."
+reason = "Returned by pub Store::runtime_projection and re-exported from the crate root; the harness rebirth path names it (pass 23a). `resume_outcomes`: Spent-child CLI parity carries the fold's terminal resume evidence into audit and runtime readers."
 
 [[verdict]]
 kind = "item"
@@ -8234,16 +8029,6 @@ reason = "Projection readers share bounded, full-stamp parsed and negative outco
 
 [[verdict]]
 kind = "item"
-key = "disk::parse_cache::testkit"
-reason = "Cache counters are re-exported through testkit without a disk-to-testkit dependency."
-
-[[verdict]]
-kind = "item"
-key = "disk::parse_cache::testkit::read_counts"
-reason = "Integration tests and benches measure this thread's cache stats and parses."
-
-[[verdict]]
-kind = "item"
 key = "agents::spending::publish::cached_provider_spending"
 reason = "Host budget and spending projections share provider parses; mutation readers remain uncached."
 
@@ -8256,21 +8041,6 @@ reason = "Auto-continue and budget enforcement reuse queue/history parses; queue
 kind = "item"
 key = "store::agent_context::read_cached_one"
 reason = "Due-session refresh shares bounded stamped context parses without evicting the projection's held records."
-
-[[verdict]]
-kind = "item"
-key = "testkit::read_cached_json"
-reason = "Real-filesystem identity tests exercise the private keyed cache without exporting its type."
-
-[[verdict]]
-kind = "item"
-key = "testkit::park_demotion"
-reason = "Fleet cache tests supply explicit auto-continue configuration without exporting the private harness module."
-
-[[verdict]]
-kind = "item"
-key = "testkit::resume_parked"
-reason = "Fleet cache tests exercise live auto-continue with explicit config and time without exporting the harness module."
 
 [[verdict]]
 kind = "item"
@@ -9004,11 +8774,6 @@ reason = "A rustdoc link in mux's pub presence-stamp docs resolves against it; n
 
 [[verdict]]
 kind = "item"
-key = "sidebar::timing::SESSION_REFRESH_INTERVAL"
-reason = "A rustdoc link in store::gc's pub docs resolves against it; narrowing it needs an edit in a module pass 23c does not own (pass 23c)."
-
-[[verdict]]
-kind = "item"
 key = "sidebar::timing::RESIZE_PAINT_HOLD_CEILING"
 reason = "The journey tier asserts the post-resize paint hold directly, so the ceiling stays pub for the integration crate (pass 23c)."
 
@@ -9026,11 +8791,6 @@ reason = "The hotpath bench builds the overlay store and appends to it, so Event
 kind = "item"
 key = "sidebar::event_store::append"
 reason = "Called by the hotpath bench (pass 23c)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::fuse::fuse"
-reason = "The hotpath bench measures pulled/event fusion directly; fuse and fuse_owned stay pub (pass 23c)."
 
 [[verdict]]
 kind = "item"
@@ -9381,11 +9141,6 @@ reason = "Error type of pub flip; atlas caveat 13 (pass 23b, registration re-wak
 kind = "item"
 key = "harness::team_stage::react_to_lifecycle"
 reason = "Moved whole from the hook in pass 28g: the append-free skip, the ended-session retire above the side-conversation return, then per event retire, arm, agent and team signals, fire, and re-wake, in the order the loop_schedule and teams_flip tests pin. Each phase has one caller and hides nothing, so splitting it only to cross the cx threshold would scatter that order (pass 28g)."
-
-[[verdict]]
-kind = "item"
-key = "cli::hooks::lifecycle::handle_lifecycle_hook"
-reason = "After collapsing observation projections and root-tool eligibility, residual cx 12.7 selects ordered hook phases: side-conversation exit, child derivation, activity/context, run settlement, deadline delivery, message confirmation, transcript and reactors. The two run-identity reads straddle enrollment deliberately; extracting single-use phases would hide ordering without deleting policy (pass 29b; refines pass 28g)."
 
 [[verdict]]
 kind = "item"
@@ -10744,11 +10499,6 @@ reason = "Scenario presets and the native renderer share the calm-tail row cap w
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::view::capped_visible_rows"
-reason = "Scenario presets and native renderer projections share calm-tail visibility inside the library."
-
-[[verdict]]
-kind = "item"
 key = "sidebar_pane::render::odometer::Roll"
 reason = "Field type of TallyAnim::today_usd (odometer.rs:179), so it follows that field to pane reach rather than going private (pass 24c)."
 
@@ -10979,18 +10729,13 @@ reason = "The machine-wide retirement pass returns counts without depending on r
 
 [[verdict]]
 kind = "shape"
-key = "BTreeMap::new+canonicalize+kind+path+std::fs::read_dir+to_str"
+key = "kind+path+std::fs::read_dir+to_str"
 reason = "The two share only a missing root read as empty and a per-entry I/O error map; each keeps its own error type (SkillErr, SandboxErr) and entry policy: agents::skills walks two roots first-wins and keeps only filtered SKILL.md directories, skipping non-UTF-8 names, while sandbox::skills lists every entry of one root, rejects non-UTF-8 names as InvalidPath, and optionally preserves the symlink kind for the mount view. One owner needs a per-caller error mapper and an entry-policy callback and saves no lines (pass 31d, re-keyed from the pass 26c four-scanner row)."
 
 [[verdict]]
 kind = "guard"
 key = "$0.status!=RunStatus::Completed"
 reason = "Four decisions on one terminal status: reply prints a turn-failure line, supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
-
-[[verdict]]
-kind = "shape"
-key = "Ctx::for_workspace+Timestamp::now+mux+record+rimz::harness::assist_log::append+synthetic::deliver_now"
-reason = "Synthetic-message composition, boundary attempts and recorded misses now belong to message::synthetic; cache_keepalive and auto_continue keep target resolution and assist records in cli. The two remote::web members manage SSH web tunnels, not messages: this callee-set family is not a shared workflow. Fleet and team report queue/settle/cancel choreography stays in cli to avoid new upward dependencies from message (pass 31a)."
 
 [[verdict]]
 kind = "guard"
