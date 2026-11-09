@@ -350,7 +350,7 @@ A supervised run refuses at entry, before it writes a run record or opens a pane
 - the room's daily cap or provider account's day or month cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
 
-None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook, home-directory, folder-trust, and existing-tree entry refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
+None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed. The hook, home-directory, folder-trust, and existing-tree entry refusals exit `2`, printed as `rimz: <reason>`, as does a flag combination the parser rejects (`--retries` or `--verify` with `--bg`, `--timeout` without `-p`). A combination the command rejects after parsing (`--output-format stream-json` with `--bg`, `--detach` without `--bg`, `--max-attempts 0`) exits `1`, the same code a run that started and failed uses.
 
 Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
 
@@ -690,7 +690,7 @@ HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 @planner  planner  claude  waiting  Opus 5@high   42%     84k   2m
   which rotation strategy should we use?
 
-@coder    coder    codex   running  GPT 5.5@high  31%     84k   0s
+@coder    coder    codex   running  GPT 5.5@high  33%     84k   0s
   wire up the refresh-token path
 ```
 
@@ -723,12 +723,13 @@ Under each row, the sidebar's description rule chooses the error reason, first w
 
 The status is derived for display. Codex launched in `auto` mode shows `running` with no blocking ask during its first 60 seconds of automatic permission review, then `waiting` if the ask is still open; a rollout-proven finish of the asking Code Mode cell closes the ask and keeps `running`; questions and plan approvals remain immediate ([limits](../../internals/agents/adapter_codex.md#asks-and-answers)). [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`, except that an in-review or asking-cell-settled permission matches `running`. An unsettled permission's `waiting` dwell starts at the 60-second visibility instant. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, step <k> of <n>, <bytes> reclaimed` (cumulative bytes for this frozen stretch).
 
-`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. Except for `login`, `idle_stop`, and `hibernation`, every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, `model.tier`, and a child's `tokens` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |
 | `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode` | Identity. |
 | `login` | The agent's recorded named account as `kind@name`, such as `claude@work`; omitted for the default account. Switching the room default does not change this field for an existing agent. |
+| `checkout`, `add_dirs`, `untrusted_checkout` | An [empty-dir](#channel-worktree-and-placement) agent's original checkout; the host directories granted at launch and carried on every relaunch; and `true` when the checkout had no folder-trust decision at launch, so empty-dir placement displaced it. |
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. `turn_error` describes the agent's own turn; it remains `null` when only a child's park pauses or fails the parent card. |
 | `pending_waits` | Pending wakes, each with its name, trigger, optional arm timestamp, and `class`: `working`, `sleeping`, or `inert` (a settled report or no in-flight target). Launched child and team waits precede catalog waits. Catalog trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, signals, and conditions. Catalog timers come first by due time, then watches and signals; names break ties. |
@@ -738,11 +739,11 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `capacity`, `severity`, `compactions` (completed), and `compacting` (in progress). `capacity` is the label's published size, falling back to the usable `window`, and is present whenever `window` is. `severity` follows the configured context-meter scale; `fill_pct`, `used_tokens`, and `window` remain usable-window-based. |
-| `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
+| `stats` | The token split (`total_tokens`, `fresh_input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`); `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | UTC timestamps: `registered_at`, `turn_started_at`, `last_activity` (real activity), `last_seen` (liveness), and `idle_since` (the displayed `AGE` origin, always present). |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. Inspect or change the cap with [`tune … budget`](#tune). |
-| `sub_agents` | Nested children. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
+| `sub_agents` | Nested children, each with `id`, `name`, `status`, `phase`, `model`, optional `tokens`, and `elapsed_secs`. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
 
 #### `show` / `inspect`
 
@@ -769,17 +770,19 @@ Context
   budget:      -
 
 Identity
-  session:  01JQZ8L4M2P9RT
-  role:     coder
-  team:     forge
-  channel:  auth-refresh
-  worktree: /home/you/code/query-engine-auth-refresh
-  pr:       #91 open · ci passing
-  pane:     tmux:%14
+  session:    01JQZ8L4M2P9RT
+  registered: 2026-11-08T15:10:02Z
+  role:       coder
+  team:       forge
+  name:       round-binder
+  channel:    auth-refresh
+  worktree:   /home/you/code/query-engine-auth-refresh
+  pr:         #91 open · ci passing
+  pane:       tmux:%14
 
 ```
 
-The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch. When requested and running effort are both known and differ, an `effort` row reads, for example, `running max, requested xhigh`. This text-only notice leaves the launch request and JSON unchanged.
+The Identity section always has `session`, `channel`, `worktree`, `pr`, and `pane` (`-` when unknown), and adds `registered` (UTC), `role`, `team`, and `name` (the explicit or pet name) when recorded. It includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch. When requested and running effort are both known and differ, an `effort` row reads, for example, `running max, requested xhigh`. This text-only notice leaves the launch request and JSON unchanged.
 
 Context labels window occupancy separately from lifetime tokens spent, cache reads, cost, and active time. The `of` size is the published capacity, not necessarily the usable window that fill measures: the example uses a 258,400-token usable window and Codex's inferred 272,000-token raw capacity. Lifetime figures cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 
@@ -899,7 +902,7 @@ Member and total `cost_usd`, `tokens`, and `active_secs` are all-in; asks, tool 
 $ rimz agents top --once
 4 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
 AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
-@coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
+@coder            running  96.0%  892 MB  4 MB/s     12  33%     1M  0s
   └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
 @planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
 @reviewer         idle      1.0%   50 MB       -      4   3%    12k  15m
@@ -908,7 +911,7 @@ AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
 | Flag | Effect |
 | --- | --- |
 | `--once` | Take two samples 500 ms apart, print one table, and exit. Without it, `top` refreshes until you quit. |
-| `--interval <DURATION>` | Refresh interval (`2s`, `500ms`, or bare seconds). Default 2 seconds. |
+| `--interval <DURATION>` | Refresh interval (`500ms`, `2s`, `1m`, or bare seconds). Default 2 seconds. |
 | `--all` | Every channel in the room instead of the current channel. |
 | `-w, --worktree <NAME>` | One worktree or channel, with an optional leading `#`. Conflicts with `--all`. An unknown lane fails with the same refusal as `list`. |
 
