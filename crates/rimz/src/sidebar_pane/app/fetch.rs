@@ -830,7 +830,7 @@ impl FetchWorker {
         sink: &mut ResultSink,
     ) {
         sink.begin_cycle();
-        let Some(eldest) = sink.cycle.first() else {
+        let Some(tick) = room_tick(&sink.cycle) else {
             return;
         };
         self.window.record(trigger, watched);
@@ -864,7 +864,6 @@ impl FetchWorker {
             },
         );
         self.window.fold_time += fold_started.elapsed();
-        let tick = data_tick(eldest);
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
         let hibernated_panes = fast.as_ref().ok().map_or_else(Default::default, |fold| {
             fold.workspace
@@ -1437,12 +1436,18 @@ pub(super) struct Subscriber {
     pub(super) mirror_offer: Arc<AtomicBool>,
 }
 
-pub(super) fn data_tick(eldest: &Subscriber) -> Duration {
-    tick_for(eldest.tick_seconds)
+/// The room's data tick: the shortest tick among `subscribers`, or `None` when none subscribes.
+pub(super) fn room_tick<'a>(
+    subscribers: impl IntoIterator<Item = &'a Subscriber>,
+) -> Option<Duration> {
+    subscribers
+        .into_iter()
+        .map(|subscriber| tick_for(subscriber.tick_seconds))
+        .min()
 }
 
 /// The renderers one fetch worker feeds, keyed by instance id so they iterate
-/// oldest subscriber first, fixing cadence, frame witness and observation origin.
+/// oldest subscriber first, fixing the frame witness and observation origin.
 pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 
 struct ResultSink {
@@ -1599,12 +1604,12 @@ impl FetchWorker {
             &request_rx,
             FOLD_FLOOR,
             || {
-                subscribers
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .values()
-                    .map(|subscriber| tick_for(subscriber.tick_seconds))
-                    .min()
+                room_tick(
+                    subscribers
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .values(),
+                )
             },
             || views.read().watched(),
             || {

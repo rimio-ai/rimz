@@ -251,3 +251,47 @@ fn heavy_lane_panic_does_not_stop_maintenance_or_the_next_pass() {
     assert!(next.is_ok(), "next pass must recover: {next:?}");
     assert_eq!(maintained.get(), 2);
 }
+
+fn subscriber(id: &str, tick_seconds: u64) -> super::super::fetch::Subscriber {
+    super::super::fetch::Subscriber {
+        mirror_offer: Arc::default(),
+        instance_id: crate::SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
+        own_pane: crate::PaneId::from_parts(crate::MuxName::Zellij, format!("terminal_{id}")),
+        tick_seconds,
+        completion: Arc::default(),
+        wake: std::sync::mpsc::sync_channel(1).0,
+    }
+}
+
+#[test]
+fn a_younger_faster_pane_sets_the_refresh_budget() {
+    let subscribers = Subscribers::default();
+    for subscriber in [subscriber("01", 60), subscriber("02", 1)] {
+        subscribers
+            .lock()
+            .unwrap()
+            .insert(subscriber.instance_id.as_str().to_owned(), subscriber);
+    }
+    let data = Mutex::new(HostData::default());
+    let views = data.lock().unwrap().views.clone();
+    views.lock().presentation(
+        &crate::PaneId::from_parts(crate::MuxName::Zellij, "terminal_02"),
+        Instant::now(),
+        true,
+    );
+    publish(
+        &mut views.lock(),
+        fold(Instant::now() - Duration::from_secs(3)),
+    );
+    let (requests, pending) = channel();
+    let tick = refresh_tick(&subscribers).expect("a subscribed room has a tick");
+    let started = Instant::now();
+    let result = refresh_pass(&data, &requests, tick, |_| Ok(()), || ());
+    let waited = started.elapsed();
+    assert_eq!(
+        (result.is_err(), pending.try_iter().count()),
+        (true, 1),
+        "a 3 s old fold is stale at the room's 1 s tick (budget {tick:?})"
+    );
+    assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+}
