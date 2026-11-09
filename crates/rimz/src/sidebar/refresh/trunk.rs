@@ -162,6 +162,7 @@ mod tests {
     use crate::ids::WorkspaceId;
     use crate::proc::testkit::spawn_count;
     use serde_json::json;
+    use std::path::PathBuf;
     use std::process::Command;
 
     const MAIN: &str = "2222222222222222222222222222222222222222";
@@ -208,6 +209,30 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
+    /// `git init -b main` a repo at `<dir>/repo`, in the reftable backend when
+    /// `reftable`. Git before 2.45 has no `--ref-format`: a reftable init that
+    /// fails returns `None` with the git version on stderr, so the caller skips.
+    #[expect(clippy::print_stderr, reason = "report skipped reftable cases")]
+    fn init_repo(dir: &Path, reftable: bool) -> Option<PathBuf> {
+        let repo = dir.join("repo");
+        if !reftable {
+            git(dir, &["init", "-q", "-b", "main", "repo"]);
+            return Some(repo);
+        }
+        let init = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["init", "-q", "--ref-format=reftable", "-b", "main", "repo"])
+            .output()
+            .unwrap();
+        if init.status.success() {
+            return Some(repo);
+        }
+        let version = git(dir, &["--version"]);
+        eprintln!("skipping reftable cases: {version} cannot init a reftable repo");
+        None
+    }
+
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
@@ -238,12 +263,9 @@ mod tests {
         for format in ["files", "reftable"] {
             for head in ["loose", "packed", "detached", "unborn", "linked"] {
                 let dir = tempfile::tempdir().unwrap();
-                let repo = dir.path().join("repo");
-                let format_arg = format!("--ref-format={format}");
-                git(
-                    dir.path(),
-                    &["init", "-q", &format_arg, "-b", "main", "repo"],
-                );
+                let Some(repo) = init_repo(dir.path(), format == "reftable") else {
+                    return;
+                };
                 git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
                 let sha = git(&repo, &["rev-parse", "refs/heads/main"]);
                 let mut root = repo.clone();
@@ -271,11 +293,9 @@ mod tests {
     #[test]
     fn a_reftable_trunk_forks_only_when_the_stack_changes() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("repo");
-        git(
-            dir.path(),
-            &["init", "-q", "--ref-format=reftable", "-b", "main", "repo"],
-        );
+        let Some(repo) = init_repo(dir.path(), true) else {
+            return;
+        };
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
         git(&repo, &["branch", "develop"]);
         let first = git(&repo, &["rev-parse", "main"]);
