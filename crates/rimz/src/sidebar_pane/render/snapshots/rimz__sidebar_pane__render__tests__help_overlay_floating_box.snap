@@ -18,25 +18,25 @@ expression: screen
 ▎  task-1                                                                      🮇
 ▎  ▢ ──────────────────────────────────────────────────────────────  0.0%      🮇
 ▎⣾ codex 3                                                                     🮇
-▎  task-2                                                                      🮇
-▎  ▢ ───────────────────────────────╭ help ────────────────────────────────────╮
-                                    │ keys                                     │
- ⑂ beta                             │   /    search           esc   clear      │
- ⣾ codex 4                          │ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
-   task-3                           │ ↕ gg/G ends           ↕ ^f/^b page       │
-   ▢ ───────────────────────────────│ ↕ H/L  screen         ⏎ l     focus/open │
- ⣾ codex 5                          │ ⏎ 1-9  direct         ␣ n/N   needs-you  │
-   task-4                           │ ✉ m    read/unread    ✉ M     read all   │
-   ▢ ───────────────────────────────│ ↔ ←/→  account tabs   ⟳ r     reload     │
- ⣾ codex 6                          │ ✕ x    dismiss        ↕ </>   width      │
-   task-5                           │   i    inactive fold                     │
+▎  task-2                           ╭ help ────────────────────────────────────╮
+▎  ▢ ───────────────────────────────│ keys                                     │
+                                    │   /    search         ✕ Esc   clear      │
+ ⑂ beta                             │ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
+ ⣾ codex 4                          │ ↕ gg/G ends           ↕ ^f/^b page       │
+   task-3                           │ ⏎ 1-9  direct         ↕ ^d/^u half page  │
+   ▢ ───────────────────────────────│ ␣ n/N  next/prev      ↕ H/M/L screen     │
+ ⣾ codex 5                          │ ⏎ Tab  last card      ⏎ Enter focus/open │
+   task-4                           │ ✉ m    read/unread    ✉ U     read all   │
+   ▢ ───────────────────────────────│ ↔ ←/→  account tabs   ⟳ R     reload     │
+ ⣾ codex 6                          │   zi   inactive fold  ↕ </>   width      │
+   task-5                           │   za   card fold        zR/zM all groups │
    ▢ ───────────────────────────────│                                          │
                                     │ filter                                   │
-                                    │ ? q    waiting        ! e     attention  │
-                                    │ ⏸︎ p    paused         ✓ s     done       │
-                                    │ ⢿ w    working        ○ o     idle       │
-                                    │ ☾ z    sleeping                          │
-                                    │ ● u    unread         ≡ A     all        │
+                                    │ ? f?   waiting        ! f!    attention  │
+                                    │ ⏸︎ fp   paused         ✓ fd    done       │
+                                    │ ⢿ fw   working        ○ fi    idle       │
+                                    │ ☾ fz   sleeping       ␣ fn    needs you  │
+                                    │ ● fu   unread         ≡ F     all        │
                                     │                                          │
                                     │ ▐ alt p sidebar                          │
                                     │   alt g zoom                             │

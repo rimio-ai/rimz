@@ -88,7 +88,7 @@ fn render_hook_drainer_alert_lingers_with_the_observed_gap() {
     let screen =
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &view, &UiState::default(), 80, 24);
     assert!(
-        screen.contains("last alert 2m ago: hook drainer unreachable for 40s · x dismiss"),
+        screen.contains("last alert 2m ago: hook drainer unreachable for 40s · Esc dismiss"),
         "{screen}"
     );
     assert!(
@@ -266,7 +266,7 @@ fn render_recovered_alert_lingers_with_dismiss_hint() {
     let rendered = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
 
     assert!(rendered.contains("last alert"), "{rendered}");
-    assert!(rendered.contains("x dismiss"), "{rendered}");
+    assert!(rendered.contains("Esc dismiss"), "{rendered}");
 }
 #[test]
 fn render_no_alert_omits_banner() {

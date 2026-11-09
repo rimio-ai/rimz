@@ -89,7 +89,12 @@ pub(super) fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
     )
 }
 
-pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<Line<'static>> {
+pub(super) fn alert_lines(
+    theme: &Theme,
+    alert: &Alert,
+    keys: &SidebarKeymap,
+    now: Timestamp,
+) -> Vec<Line<'static>> {
     if alert.is_active() {
         let elapsed = age_short(alert.since, now);
         vec![Line::styled(
@@ -107,14 +112,57 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
             format!(
-                "{} last alert {elapsed} ago: {}{}x dismiss",
+                "{} last alert {elapsed} ago: {}{}",
                 theme.glyph(GlyphRole::ChromeAlert),
                 alert.reason,
-                value_seam(theme)
+                dismiss_hint(theme, keys)
             ),
             theme.warn(Modifier::DIM),
         )]
     }
+}
+
+/// The ` · Esc dismiss` tail of a dismissible notice, from the key bound to
+/// `view.cancel`; empty when nothing is bound.
+fn dismiss_hint(theme: &Theme, keys: &SidebarKeymap) -> String {
+    sequence_label(keys, SidebarAction::ViewCancel)
+        .map(|key| format!("{}{key} dismiss", value_seam(theme)))
+        .unwrap_or_default()
+}
+
+/// A refusal from the last in-pane key, in the bottom chrome until the next key.
+pub(super) fn pane_notice_line(theme: &Theme, notice: &str, keys: &SidebarKeymap) -> Line<'static> {
+    Line::styled(
+        format!(
+            "{} {notice}{}",
+            theme.glyph(GlyphRole::ChromeAlert),
+            dismiss_hint(theme, keys)
+        ),
+        theme.styled(Component::PaneNotice, Modifier::DIM),
+    )
+}
+
+/// The which-key row for a pending prefix: the keys pressed so far, then each
+/// continuation key and its short label, right-aligned and cut from the right
+/// when the row is too narrow.
+pub(super) fn key_hint_line(
+    theme: &Theme,
+    keys: &SidebarKeymap,
+    pending: &[SidebarChord],
+    width: usize,
+) -> Line<'static> {
+    let key_style = theme.styled(Component::KeyHint, Modifier::BOLD);
+    let mut spans = vec![Span::styled(sequence_text(pending), key_style)];
+    for (rest, action) in keys.continuations(pending) {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(sequence_text(rest), key_style));
+        spans.push(Span::styled(format!(" {}", action.label()), theme.faint()));
+    }
+    let used = layout::spans_width(&spans);
+    if used < width {
+        spans.insert(0, Span::raw(" ".repeat(width - used)));
+    }
+    Line::from(layout::trim_spans_to_width(spans, width))
 }
 
 pub(super) fn hook_drainer_alert_lines(
@@ -156,7 +204,7 @@ pub(super) fn hook_drainer_alert_lines(
         ),
         ..alert.clone()
     };
-    alert_lines(theme, &recovered, snapshot.now)
+    alert_lines(theme, &recovered, &snapshot.keys, snapshot.now)
 }
 
 fn hook_drainer_card_label(snapshot: &SidebarSnapshot, outage: &HookDrainerOutageAgent) -> String {
@@ -333,6 +381,7 @@ pub(super) struct FooterParts {
     stall: Option<FooterStall>,
     presence: Option<Span<'static>>,
     help: Span<'static>,
+    help_key: String,
 }
 
 #[derive(Clone)]
@@ -364,11 +413,20 @@ enum FooterStep {
 }
 
 pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme) -> FooterParts {
+    let help_key = sequence_label(&snapshot.keys, SidebarAction::Help).unwrap_or_default();
     FooterParts {
         link: snapshot.link.as_ref().map(|link| link_badge(link, theme)),
         stall: (!snapshot.stall.is_empty()).then(|| stall_badge(&snapshot.stall, theme)),
         presence: presence_badge(snapshot.presence, snapshot.now, theme),
-        help: Span::styled("? for help", theme.faint()),
+        help: Span::styled(
+            if help_key.is_empty() {
+                String::new()
+            } else {
+                format!("{help_key} for help")
+            },
+            theme.faint(),
+        ),
+        help_key,
     }
 }
 
@@ -396,7 +454,7 @@ pub(super) fn footer_line(parts: FooterParts, width: usize) -> Line<'static> {
         };
         let mut help = parts.help.clone();
         if step >= ShortHelp {
-            help.content = "?".into();
+            help.content = parts.help_key.clone().into();
         }
         if step >= NoHelp && !fits(help.width()) {
             help.content = "".into();
@@ -621,159 +679,168 @@ fn help_body_rows(
     zoom_key: Option<&str>,
     keys: &SidebarKeymap,
 ) -> Vec<Line<'static>> {
-    let movement = |key: String, label| {
-        key_entry(
-            theme,
-            Some(key_icon(theme, GlyphRole::KeysMove)),
-            key,
-            label,
-        )
-    };
+    use SidebarAction as A;
+    let key = |action| chord_label(keys, action);
+    let pair = |first, second| format!("{}/{}", key(first), key(second));
+    let icon = |role| Some(key_icon(theme, role));
+    let movement = |key: String, label| key_entry(theme, icon(GlyphRole::KeysMove), key, label);
+    let slots = format!("{}-{}", key(A::CardSlot(1)), key(A::CardSlot(9)));
+    let screen = format!(
+        "{}/{}",
+        pair(A::MoveScreenTop, A::MoveScreenMiddle),
+        key(A::MoveScreenBottom)
+    );
     let keys_section = vec![
         (
-            key_entry(theme, None, "/", "search"),
-            Some(key_entry(theme, None, "esc", "clear")),
+            key_entry(theme, None, key(A::SearchStart), "search"),
+            Some(key_entry(
+                theme,
+                icon(GlyphRole::KeysDismiss),
+                key(A::ViewCancel),
+                "clear",
+            )),
         ),
         (
-            movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::MoveDown),
-                    chord_label(keys, SidebarAction::MoveUp)
-                ),
-                "cards/entries",
-            ),
+            movement(pair(A::MoveDown, A::MoveUp), "cards/entries"),
             Some(movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::MoveWorktreeDown),
-                    chord_label(keys, SidebarAction::MoveWorktreeUp)
-                ),
+                pair(A::MoveWorktreeDown, A::MoveWorktreeUp),
                 "worktrees",
             )),
         ),
         (
-            movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::MoveTop),
-                    chord_label(keys, SidebarAction::MoveBottom)
-                ),
-                "ends",
-            ),
+            movement(pair(A::MoveTop, A::MoveBottom), "ends"),
+            Some(movement(pair(A::MovePageDown, A::MovePageUp), "page")),
+        ),
+        (
+            key_entry(theme, icon(GlyphRole::KeysFocus), slots, "direct"),
             Some(movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::MovePageDown),
-                    chord_label(keys, SidebarAction::MovePageUp)
-                ),
-                "page",
+                pair(A::MoveHalfPageDown, A::MoveHalfPageUp),
+                "half page",
             )),
         ),
         (
-            movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::MoveScreenTop),
-                    chord_label(keys, SidebarAction::MoveScreenBottom)
-                ),
-                "screen",
+            key_entry(
+                theme,
+                icon(GlyphRole::KeysInbox),
+                pair(A::SearchNext, A::SearchPrev),
+                "next/prev",
+            ),
+            Some(movement(screen, "screen")),
+        ),
+        (
+            key_entry(
+                theme,
+                icon(GlyphRole::KeysFocus),
+                key(A::CardLast),
+                "last card",
             ),
             Some(key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysFocus)),
-                "l",
+                icon(GlyphRole::KeysFocus),
+                key(A::CardFocus),
                 "focus/open",
             )),
         ),
         (
             key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysFocus)),
-                "1-9",
-                "direct",
-            ),
-            Some(key_entry(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysInbox)),
-                "n/N",
-                "needs-you",
-            )),
-        ),
-        (
-            key_entry(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysRead)),
-                "m",
+                icon(GlyphRole::KeysRead),
+                key(A::ReadToggle),
                 "read/unread",
             ),
             Some(key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysRead)),
-                "M",
+                icon(GlyphRole::KeysRead),
+                key(A::ReadAll),
                 "read all",
             )),
         ),
         (
             key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysAccounts)),
-                "←/→",
+                icon(GlyphRole::KeysAccounts),
+                pair(A::DashboardPrev, A::DashboardNext),
                 "account tabs",
             ),
             Some(key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysReload)),
-                "r",
+                icon(GlyphRole::KeysReload),
+                key(A::ViewReload),
                 "reload",
             )),
         ),
         (
-            key_entry(
+            key_entry(theme, None, key(A::FoldInactive), "inactive fold"),
+            Some(movement(pair(A::WidthNarrower, A::WidthWider), "width")),
+        ),
+        (
+            key_entry(theme, None, key(A::FoldToggle), "card fold"),
+            Some(key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysDismiss)),
-                "x",
-                "dismiss",
-            ),
-            Some(movement(
-                format!(
-                    "{}/{}",
-                    chord_label(keys, SidebarAction::WidthNarrower),
-                    chord_label(keys, SidebarAction::WidthWider)
-                ),
-                "width",
+                None,
+                pair(A::FoldOpenAll, A::FoldCloseAll),
+                "all groups",
             )),
         ),
-        (key_entry(theme, None, "i", "inactive fold"), None),
     ];
     let filter_section = vec![
         (
-            status_entry(theme, AgentStatus::Waiting, "q", "waiting"),
-            Some(status_entry(theme, AgentStatus::Failed, "e", "attention")),
+            status_entry(theme, AgentStatus::Waiting, key(A::FilterAsks), "waiting"),
+            Some(status_entry(
+                theme,
+                AgentStatus::Failed,
+                key(A::FilterFailures),
+                "attention",
+            )),
         ),
         (
-            status_entry(theme, AgentStatus::Paused, "p", "paused"),
-            Some(status_entry(theme, AgentStatus::Success, "s", "done")),
+            status_entry(theme, AgentStatus::Paused, key(A::FilterPaused), "paused"),
+            Some(status_entry(
+                theme,
+                AgentStatus::Success,
+                key(A::FilterDone),
+                "done",
+            )),
         ),
         (
-            status_entry(theme, AgentStatus::Running, "w", "working"),
-            Some(status_entry(theme, AgentStatus::Idle, "o", "idle")),
+            status_entry(
+                theme,
+                AgentStatus::Running,
+                key(A::FilterWorking),
+                "working",
+            ),
+            Some(status_entry(
+                theme,
+                AgentStatus::Idle,
+                key(A::FilterIdle),
+                "idle",
+            )),
         ),
         (
-            status_entry(theme, AgentStatus::Sleeping, "z", "sleeping"),
-            None,
+            status_entry(
+                theme,
+                AgentStatus::Sleeping,
+                key(A::FilterSleeping),
+                "sleeping",
+            ),
+            Some(key_entry(
+                theme,
+                icon(GlyphRole::KeysInbox),
+                key(A::FilterNeedsYou),
+                "needs you",
+            )),
         ),
         (
             key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysUnread)),
-                "u",
+                icon(GlyphRole::KeysUnread),
+                key(A::FilterUnread),
                 "unread",
             ),
             Some(key_entry(
                 theme,
-                Some(key_icon(theme, GlyphRole::KeysAll)),
-                "A",
+                icon(GlyphRole::KeysAll),
+                key(A::FilterClear),
                 "all",
             )),
         ),
@@ -806,9 +873,15 @@ fn help_body_rows(
 /// The legend's spelling of the first sequence bound to `action`, `?` when
 /// the table leaves it unbound.
 fn chord_label(keys: &SidebarKeymap, action: SidebarAction) -> String {
-    let Some(sequence) = keys.sequences(action).next() else {
-        return "?".to_owned();
-    };
+    sequence_label(keys, action).unwrap_or_else(|| "?".to_owned())
+}
+
+/// The first sequence bound to `action`, as the chrome spells keys.
+fn sequence_label(keys: &SidebarKeymap, action: SidebarAction) -> Option<String> {
+    keys.sequences(action).next().map(sequence_text)
+}
+
+fn sequence_text(sequence: &[SidebarChord]) -> String {
     sequence
         .iter()
         .map(|chord| {
@@ -941,7 +1014,7 @@ fn key_entry(
     }
 }
 
-fn status_entry(theme: &Theme, status: AgentStatus, keys: &str, label: &str) -> Entry {
+fn status_entry(theme: &Theme, status: AgentStatus, keys: String, label: &str) -> Entry {
     key_entry(theme, Some(status_icon(theme, status)), keys, label)
 }
 
@@ -1084,20 +1157,64 @@ mod tests {
     #[test]
     fn help_shows_width_chords_and_remapped_filters() {
         let theme = Theme::fixed(false);
-        let text = help_body_rows(&theme, None, None, &SidebarKeymap::default())
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
+        let legend = |keys: &SidebarKeymap| {
+            help_body_rows(&theme, None, None, keys)
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let text = legend(&SidebarKeymap::default());
+        for shown in [
+            "</>", "width", "fd", "done", "F", "all", "Esc", "clear", "za", "zR/zM",
+        ] {
+            assert!(text.contains(shown), "{shown:?} missing from {text:?}");
+        }
 
-        assert!(text.contains("</>"));
-        assert!(text.contains("width"));
-        assert!(text.contains("s"));
-        assert!(text.contains("done"));
-        assert!(text.contains("A"));
-        assert!(text.contains("all"));
-        assert!(text.contains("esc"));
-        assert!(text.contains("clear"));
+        let text = legend(&SidebarKeymap::rebound(&[
+            ("f d", "none"),
+            ("Q", "filter.done"),
+            ("Esc", "none"),
+            ("Ctrl+g", "view.cancel"),
+        ]));
+        assert!(!text.contains("fd"), "{text:?}");
+        assert!(text.contains("Q"), "{text:?}");
+        assert!(text.contains("^g"), "{text:?}");
+        assert!(!text.contains("Esc"), "{text:?}");
+    }
+
+    #[test]
+    fn key_hint_row_lists_the_live_continuations_of_the_pending_prefix() {
+        let theme = Theme::fixed(false);
+        let f = [SidebarChord {
+            key: SidebarKey::Char('f'),
+            ctrl: false,
+            alt: false,
+        }];
+        let text = |keys: &SidebarKeymap| {
+            key_hint_line(&theme, keys, &f, 200)
+                .spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        let line = text(&SidebarKeymap::default());
+        assert!(line.trim_start().starts_with('f'), "{line:?}");
+        for shown in ["d done", "w working", "n needs you", "? asks"] {
+            assert!(line.contains(shown), "{shown:?} missing from {line:?}");
+        }
+        assert!(!line.contains("clear filter"), "{line:?}");
+
+        let line = text(&SidebarKeymap::rebound(&[
+            ("f d", "none"),
+            ("f x", "filter.done"),
+        ]));
+        assert!(line.contains("x done"), "{line:?}");
+        assert!(!line.contains("d done"), "{line:?}");
+        assert_eq!(
+            key_hint_line(&theme, &SidebarKeymap::default(), &f, 12).width(),
+            12
+        );
     }
 
     #[test]

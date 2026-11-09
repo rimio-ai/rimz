@@ -225,7 +225,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         |s| s.contains("VIEW-HOME") && s.contains("⢿ 12"),
         "all twelve running cards reach the first client",
     );
-    first.send(b"g");
+    first.send(b"gg");
     wait_screen(
         || first.screen(),
         |s| {
@@ -291,7 +291,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         },
         &format!("host resolves the split before independent input: {second_id:?} on {away_id}"),
     );
-    second.send(b"g");
+    second.send(b"gg");
     wait_screen(
         || second.screen(),
         |s| {
@@ -377,7 +377,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         |s| s.contains("VIEW-AGENTS") && sidebar_view(s) == bottom,
         "leaving carries the joined view",
     );
-    second.send(b"g");
+    second.send(b"gg");
     wait_screen(
         || second.screen(),
         |s| {
@@ -546,7 +546,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         "entry working-pane baseline reaches the selection before the hold",
     );
     second.press_alt_until('h', &away_id, "sidebar before the retention browse");
-    second.send(b"g");
+    second.send(b"gg");
     wait_screen(
         || second.screen(),
         |s| {
@@ -648,7 +648,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         sidebar,
         "fresh client's sidebar for the browse-offset proof",
     );
-    fresh.send(b"g");
+    fresh.send(b"gg");
     let homed = sidebar_view(&wait_screen(
         || fresh.screen(),
         |s| {

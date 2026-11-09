@@ -10,7 +10,7 @@ fn typing_resolves_before_keymap_and_command_table() {
     let keymap = SidebarKeymap::rebound(&[("Ctrl+b", "width.wider")]);
     for ch in "njqr?A1".chars() {
         assert_eq!(
-            resolve_key(
+            resolve_one(
                 &keymap,
                 InputMode::Typing,
                 KeyCode::Char(ch),
@@ -20,7 +20,7 @@ fn typing_resolves_before_keymap_and_command_table() {
         );
     }
     assert_eq!(
-        resolve_key(
+        resolve_one(
             &keymap,
             InputMode::Typing,
             KeyCode::Char('b'),
@@ -29,7 +29,7 @@ fn typing_resolves_before_keymap_and_command_table() {
         KeyAction::Other
     );
     assert_eq!(
-        resolve_key(
+        resolve_one(
             &keymap,
             InputMode::Typing,
             KeyCode::Char('B'),
@@ -49,7 +49,7 @@ fn typing_resolves_before_keymap_and_command_table() {
         (KeyCode::Up, KeyModifiers::ALT, KeyAction::Other),
         (KeyCode::Char('y'), KeyModifiers::CONTROL, KeyAction::Other),
     ] {
-        assert_eq!(resolve_key(&keymap, InputMode::Typing, code, mods), action);
+        assert_eq!(resolve_one(&keymap, InputMode::Typing, code, mods), action);
     }
 }
 
@@ -59,7 +59,7 @@ fn encode_default(code: KeyCode) -> Option<String> {
 
 fn resolve_wakeup(bytes: &[u8]) -> Wakeup {
     match decode_wakeup(bytes) {
-        Wakeup::Press { code, mods } => Wakeup::Key(resolve_key(
+        Wakeup::Press { code, mods } => Wakeup::Key(resolve_one(
             &default_keymap(),
             InputMode::Normal,
             code,
@@ -162,10 +162,10 @@ fn mouse_events_encode_clicks_and_scrolls() {
 }
 
 #[test]
-fn r_key_triggers_a_reload() {
-    // Pressing `r` re-execs the renderer in place unless the help overlay
+fn shift_r_triggers_a_reload() {
+    // Pressing `R` re-execs the renderer in place unless the help overlay
     // consumes it first; external reloads keep the shared control word.
-    let encoded = encode_default(KeyCode::Char('r')).expect("r is bound");
+    let encoded = encode_default(KeyCode::Char('R')).expect("R is bound");
     assert_eq!(
         resolve_wakeup(encoded.as_bytes()),
         Wakeup::Key(KeyAction::Reload)
@@ -211,10 +211,9 @@ fn agent_session_boundary_event_requests_fresh_panes() {
 #[test]
 fn keys_round_trip_through_the_wire() {
     // Every raw keypress resolves to the action the serve loop dispatches: vim row/focus keys, the J/K worktree jumps,
-    // and the full filter key set. (The `r` reload keypress is covered by
-    // `r_key_triggers_a_reload`; the literal reload word is checked below.)
+    // and the full filter key set. (The `R` reload keypress is covered by
+    // `shift_r_triggers_a_reload`; the literal reload word is checked below.)
     let cases = [
-        // vim row and focus keys
         (
             "j → down",
             KeyCode::Char('j'),
@@ -246,6 +245,12 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::Enter),
         ),
         (
+            "Enter → enter",
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Enter),
+        ),
+        (
             "< → narrower",
             KeyCode::Char('<'),
             KeyModifiers::NONE,
@@ -257,11 +262,16 @@ fn keys_round_trip_through_the_wire() {
             KeyModifiers::NONE,
             Wakeup::Key(KeyAction::WidthWider),
         ),
-        // worktree-jump keys
         (
             "J → worktree down",
             KeyCode::Char('J'),
             KeyModifiers::SHIFT,
+            Wakeup::Key(KeyAction::WorktreeDown),
+        ),
+        (
+            "} → worktree down",
+            KeyCode::Char('}'),
+            KeyModifiers::NONE,
             Wakeup::Key(KeyAction::WorktreeDown),
         ),
         (
@@ -270,12 +280,11 @@ fn keys_round_trip_through_the_wire() {
             KeyModifiers::SHIFT,
             Wakeup::Key(KeyAction::WorktreeUp),
         ),
-        // top/bottom jumps
         (
-            "g alone only starts g g",
-            KeyCode::Char('g'),
+            "{ → worktree up",
+            KeyCode::Char('{'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Other),
+            Wakeup::Key(KeyAction::WorktreeUp),
         ),
         (
             "G → bottom",
@@ -308,10 +317,28 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::PageDown),
         ),
         (
+            "Ctrl+d → half page down",
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            Wakeup::Key(KeyAction::HalfPageDown),
+        ),
+        (
+            "Ctrl+u → half page up",
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            Wakeup::Key(KeyAction::HalfPageUp),
+        ),
+        (
             "H → screen top",
             KeyCode::Char('H'),
             KeyModifiers::SHIFT,
             Wakeup::Key(KeyAction::ScreenTop),
+        ),
+        (
+            "M → screen middle",
+            KeyCode::Char('M'),
+            KeyModifiers::SHIFT,
+            Wakeup::Key(KeyAction::ScreenMiddle),
         ),
         (
             "L → screen bottom",
@@ -319,26 +346,24 @@ fn keys_round_trip_through_the_wire() {
             KeyModifiers::SHIFT,
             Wakeup::Key(KeyAction::ScreenBottom),
         ),
-        // inbox triage: n and Space step forward, N steps back
         (
-            "n → inbox next",
+            "n → search next",
             KeyCode::Char('n'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::InboxNext),
+            Wakeup::Key(KeyAction::SearchNext),
         ),
         (
-            "space → inbox next",
-            KeyCode::Char(' '),
-            KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::InboxNext),
-        ),
-        (
-            "N → inbox prev",
+            "N → search prev",
             KeyCode::Char('N'),
             KeyModifiers::SHIFT,
-            Wakeup::Key(KeyAction::InboxPrev),
+            Wakeup::Key(KeyAction::SearchPrev),
         ),
-        // read-state hygiene without jumping
+        (
+            "Tab → last card",
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::LastCard),
+        ),
         (
             "m → toggle read",
             KeyCode::Char('m'),
@@ -346,87 +371,155 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::MarkToggle),
         ),
         (
-            "M → mark all read",
-            KeyCode::Char('M'),
+            "U → mark all read",
+            KeyCode::Char('U'),
             KeyModifiers::SHIFT,
             Wakeup::Key(KeyAction::MarkAllRead),
         ),
-        // filter keys
         (
-            "A → all",
-            KeyCode::Char('A'),
+            "F → clear filter",
+            KeyCode::Char('F'),
             KeyModifiers::SHIFT,
             Wakeup::Key(KeyAction::Filter(None)),
         ),
         (
-            "u → unread",
-            KeyCode::Char('u'),
+            "/ → search",
+            KeyCode::Char('/'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Unread))),
+            Wakeup::Key(KeyAction::Search),
         ),
         (
-            "q → waiting",
-            KeyCode::Char('q'),
-            KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Waiting,
-            )))),
-        ),
-        (
-            "! → failed",
-            KeyCode::Char('!'),
+            "? → help",
+            KeyCode::Char('?'),
             KeyModifiers::SHIFT,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Failed,
-            )))),
+            Wakeup::Key(KeyAction::Help),
         ),
         (
-            "e → failed",
-            KeyCode::Char('e'),
+            "Esc → cancel",
+            KeyCode::Esc,
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Failed,
-            )))),
+            Wakeup::Key(KeyAction::Cancel),
         ),
         (
-            "o → idle",
-            KeyCode::Char('o'),
+            "← → dashboard prev",
+            KeyCode::Left,
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Idle,
-            )))),
+            Wakeup::Key(KeyAction::TabPrev),
         ),
         (
-            "p → paused",
-            KeyCode::Char('p'),
+            "→ → dashboard next",
+            KeyCode::Right,
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Paused,
-            )))),
+            Wakeup::Key(KeyAction::TabNext),
         ),
+        // freed keys and lone prefixes do nothing on their own
         (
-            "w → running",
-            KeyCode::Char('w'),
+            "g → nothing",
+            KeyCode::Char('g'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Running,
-            )))),
+            Wakeup::Key(KeyAction::Other),
         ),
         (
-            "s → success",
-            KeyCode::Char('s'),
+            "d → nothing",
+            KeyCode::Char('d'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Success,
-            )))),
+            Wakeup::Key(KeyAction::Other),
         ),
         (
-            "z → sleeping",
+            "z → nothing",
             KeyCode::Char('z'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                AgentStatus::Sleeping,
-            )))),
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "f → nothing",
+            KeyCode::Char('f'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "x → nothing",
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "e → nothing",
+            KeyCode::Char('e'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "A → nothing",
+            KeyCode::Char('A'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "o → nothing",
+            KeyCode::Char('o'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "O → nothing",
+            KeyCode::Char('O'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "p → nothing",
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "w → nothing",
+            KeyCode::Char('w'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "s → nothing",
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "u → nothing",
+            KeyCode::Char('u'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "r → nothing",
+            KeyCode::Char('r'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "i → nothing",
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "a → nothing",
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            "space → nothing",
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
+        ),
+        (
+            ". → nothing",
+            KeyCode::Char('.'),
+            KeyModifiers::NONE,
+            Wakeup::Key(KeyAction::Other),
         ),
     ];
     for (label, key, mods, wakeup) in cases {
@@ -434,14 +527,14 @@ fn keys_round_trip_through_the_wire() {
         assert_eq!(resolve_wakeup(encoded.as_bytes()), wakeup, "{label}");
     }
     assert_eq!(
-        resolve_key(
+        resolve_one(
             &default_keymap(),
             InputMode::Normal,
-            KeyCode::Char('s'),
-            KeyModifiers::CONTROL
+            KeyCode::Char('j'),
+            KeyModifiers::ALT
         ),
         KeyAction::Other,
-        "modified fixed keys do not fall back to bare actions"
+        "a modified key does not fall back to its bare binding"
     );
     // The host consumes reload controls, not an attachment's input decoder.
     assert_eq!(resolve_wakeup(b"reload"), Wakeup::Tick);
@@ -519,7 +612,7 @@ fn digit_keys_round_trip_one_through_nine() {
         let n = c.to_digit(10).unwrap() as u8;
         assert_eq!(
             resolve_wakeup(encoded.as_bytes()),
-            Wakeup::Key(KeyAction::Digit(n))
+            Wakeup::Key(KeyAction::Slot(n))
         );
     }
     // '0' and out-of-range digit wire strings are not selectable rows.
@@ -546,15 +639,137 @@ fn unbound_keys_round_trip_as_other() {
 }
 
 #[test]
-fn escape_clears_search_unless_rebound() {
+fn escape_cancels_unless_rebound() {
     let encoded = encode_default(KeyCode::Esc).unwrap();
     assert_eq!(
         resolve_wakeup(encoded.as_bytes()),
-        Wakeup::Key(KeyAction::CancelSearch)
+        Wakeup::Key(KeyAction::Cancel)
     );
     let keymap = SidebarKeymap::rebound(&[("Esc", "width.wider")]);
     assert_eq!(
-        resolve_key(&keymap, InputMode::Normal, KeyCode::Esc, KeyModifiers::NONE),
+        resolve_one(&keymap, InputMode::Normal, KeyCode::Esc, KeyModifiers::NONE),
         KeyAction::WidthWider
+    );
+}
+
+fn press_all(keymap: &SidebarKeymap, keys: &[(KeyCode, KeyModifiers)]) -> Vec<KeyAction> {
+    let mut pending = Vec::new();
+    keys.iter()
+        .map(|&(code, mods)| resolve_key(keymap, InputMode::Normal, &mut pending, code, mods))
+        .collect()
+}
+
+fn ch(c: char) -> (KeyCode, KeyModifiers) {
+    (KeyCode::Char(c), KeyModifiers::NONE)
+}
+
+#[test]
+fn g_g_reaches_the_top_and_a_lone_g_waits() {
+    let keymap = default_keymap();
+    let mut pending = Vec::new();
+    let first = resolve_key(
+        &keymap,
+        InputMode::Normal,
+        &mut pending,
+        KeyCode::Char('g'),
+        KeyModifiers::NONE,
+    );
+    assert_eq!(first, KeyAction::Other);
+    assert_eq!(pending.len(), 1, "g waits for its continuation");
+    let second = resolve_key(
+        &keymap,
+        InputMode::Normal,
+        &mut pending,
+        KeyCode::Char('g'),
+        KeyModifiers::NONE,
+    );
+    assert_eq!(second, KeyAction::Top);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn an_unbound_continuation_cancels_the_prefix_and_is_swallowed() {
+    let keymap = default_keymap();
+    assert_eq!(
+        press_all(&keymap, &[ch('g'), ch('j'), ch('j')]),
+        [KeyAction::Other, KeyAction::Other, KeyAction::Down],
+        "the j after g is swallowed; the next j moves"
+    );
+    assert_eq!(
+        press_all(
+            &keymap,
+            &[
+                ch('z'),
+                (KeyCode::Esc, KeyModifiers::NONE),
+                (KeyCode::Esc, KeyModifiers::NONE)
+            ]
+        ),
+        [KeyAction::Other, KeyAction::Other, KeyAction::Cancel],
+        "Esc cancels a pending prefix before it reaches the search"
+    );
+    let mut pending = Vec::new();
+    let keymap = default_keymap();
+    resolve_key(
+        &keymap,
+        InputMode::Normal,
+        &mut pending,
+        KeyCode::Char('f'),
+        KeyModifiers::NONE,
+    );
+    assert_eq!(
+        resolve_key(
+            &keymap,
+            InputMode::Normal,
+            &mut pending,
+            KeyCode::Delete,
+            KeyModifiers::NONE
+        ),
+        KeyAction::Other
+    );
+    assert!(
+        pending.is_empty(),
+        "a key the table cannot name also cancels"
+    );
+}
+
+#[test]
+fn every_f_and_z_default_reaches_its_action() {
+    use crate::agents::AgentStatus as S;
+    let status = |status| KeyAction::Filter(Some(BodyFilter::Status(status)));
+    let keymap = default_keymap();
+    for (prefix, key, action) in [
+        ('f', '?', status(S::Waiting)),
+        ('f', '!', status(S::Failed)),
+        ('f', 'u', KeyAction::Filter(Some(BodyFilter::Unread))),
+        ('f', 'w', status(S::Running)),
+        ('f', 'p', status(S::Paused)),
+        ('f', 'd', status(S::Success)),
+        ('f', 'z', status(S::Sleeping)),
+        ('f', 'i', status(S::Idle)),
+        ('f', 'n', KeyAction::NeedsYou),
+        ('z', 'a', KeyAction::FoldToggle),
+        ('z', 'R', KeyAction::FoldOpenAll),
+        ('z', 'M', KeyAction::FoldCloseAll),
+        ('z', 'i', KeyAction::ToggleInactive),
+    ] {
+        assert_eq!(
+            press_all(&keymap, &[ch(prefix), ch(key)]),
+            [KeyAction::Other, action],
+            "{prefix} {key}"
+        );
+    }
+}
+
+#[test]
+fn a_rebound_sequence_resolves_and_its_old_default_waits_no_more() {
+    let keymap = SidebarKeymap::rebound(&[("g g", "none"), ("g t", "move.top")]);
+    assert_eq!(
+        press_all(&keymap, &[ch('g'), ch('t'), ch('g'), ch('g')]),
+        [
+            KeyAction::Other,
+            KeyAction::Top,
+            KeyAction::Other,
+            KeyAction::Other
+        ]
     );
 }

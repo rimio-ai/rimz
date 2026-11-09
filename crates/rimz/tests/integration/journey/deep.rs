@@ -1259,7 +1259,7 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         "sidebar frame at the settled automatic width",
     );
 
-    backend.send_keys(&pane, name, "d").expect("send wider key");
+    backend.send_keys(&pane, name, ">").expect("send wider key");
     let wider = wait_for_rendered_sidebar_width(
         &mut client,
         |width| width > initial,
@@ -1274,7 +1274,7 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     );
 
     backend
-        .send_keys(&pane, name, "a")
+        .send_keys(&pane, name, "<")
         .expect("send narrower key");
     let narrower = wait_for_rendered_sidebar_width(
         &mut client,

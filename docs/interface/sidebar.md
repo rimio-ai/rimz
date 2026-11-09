@@ -241,9 +241,9 @@ The make-up line counts units: a team's members within one worktree group, or on
 
 Any member can add `?`, `!`, or `⏸︎`. A staged board at `Done` gives `✓`, even without an owner. Otherwise a visible owner's displayed status decides `⢿`, `☾`, or `○` (an owner showing `✓` also gives `○` until the board reaches `Done`). Other members add attention only. Without a usable pipeline and owner, the team's calm bucket is working first, otherwise sleeping, idle, or done. A solo unit follows its row. The calm bucket counts beside attention only when it is `⢿`. Only `✓` excludes inactive groups. For example, a working team with idle teammates is `⢿ 1`, `○ 0`; a team with a waiting member and working owner is `? 1`, `⢿ 1`. The same team name in two worktree groups counts twice; cards in `external` count solo. `¤` still counts agents, so the buckets need not sum to it.
 
-Picking a status shows every member of every unit that counts in that bucket. A filter chooses only which cards appear: shown cards keep their provider colour and selection opens only the selected card, exactly as without a filter. Selection keys (`j`/`k`, `g`/`G`, pages, `H`/`L`, `[`/`]`) reach every shown card; clicks, `Enter`, and the `n`/`N`/`Space` inbox walk keep their usual behaviour within the shown roster. Changing the filter keeps a still-shown selection, without starting a browse pick; typing a search highlights its first visible row. Unread and needs-you lenses keep per-card membership; open-PR keeps per-group membership. Needs-you includes waiting and failed cards, including parents lifted by a current waiting child or a provider-native child's failure, but not paused cards or process rows. While active, a muted `needs-you: N` line below the make-up buckets counts matching cards across the room. Digits instead address room-wide birth slots, even when a filter hides the target.
+Picking a status shows every member of every unit that counts in that bucket. A filter chooses only which cards appear: shown cards keep their provider colour and selection opens only the selected card, exactly as without a filter. Selection keys (`j`/`k`, `g g`/`G`, pages, `H`/`M`/`L`, `J`/`K`) reach every shown card; clicks, `Enter`, and the `n`/`N` walk keep their usual behaviour within the shown roster. Changing the filter keeps a still-shown selection, without starting a browse pick; typing a search highlights its first visible row. Unread and needs-you lenses keep per-card membership; open-PR keeps per-group membership. Needs-you includes waiting and failed cards, including parents lifted by a current waiting child or a provider-native child's failure, but not paused cards or process rows. While active, a muted `needs-you: N` line below the make-up buckets counts matching cards across the room. Digits instead address room-wide birth slots, even when a filter hides the target.
 
-Click a non-zero bucket or the `⑃` count to filter the cards to it; press `u` to filter to unread cards. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. Work kept unfolded by a layout hold still counts; a pick supported only by that work clears when the hold ends. The filter keys are in [Keys and mouse](#keys-and-mouse).
+Click a non-zero bucket or the `⑃` count to filter the cards to it; press `f u` to filter to unread cards. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `F`, or pick another filter. It also clears when its count reaches zero. Work kept unfolded by a layout hold still counts; a pick supported only by that work clears when the hold ends. The filter keys are in [Keys and mouse](#keys-and-mouse).
 
 At narrow widths the right-hand buckets clip from the idle end. A bucket without room for its full click target is not clickable; existing filter keys still work when their bucket is clipped.
 
@@ -472,7 +472,7 @@ A card with waits uses the same entry layout:
 
 Selecting a card opens the section. Clicking the line opens or closes it and focuses the card's own live pane, even when one of its child panes is focused. The open or closed choice outranks selection and `card_density` while the client view is retained, and follows the client view between tabs. Select an idle or done card first to reach the line unless it is already open, held, or under `expanded` density. In `compact` density, select the card first.
 
-Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. Focusing a child selects its parent card and puts the entry cursor on that child when its entry is open. The light `▏` in the indent marks that cursor on both entry lines, or on `+K older`; it stays when the sidebar gains focus. The parent keeps its selection band, and moving to the parent card or another card removes the entry mark; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
+Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N` (without a committed search) focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. Focusing a child selects its parent card and puts the entry cursor on that child when its entry is open. The light `▏` in the indent marks that cursor on both entry lines, or on `+K older`; it stays when the sidebar gains focus. The parent keeps its selection band, and moving to the parent card or another card removes the entry mark; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 
 With the sidebar focused, `j`/`k` and the arrows walk each card, then its entries with live panes and the `+K older` line. Waits and pane-less entries are skipped. `Enter`/`l` focuses a child, or opens `+K older` and focuses the parent, returning the cursor to the card. Worktree, end, page, screen-edge, digit, needs-you and search motions remain card-level and clear the entry cursor; `m` still marks the parent.
 
@@ -737,7 +737,7 @@ A group becomes inactive once its latest agent launch or non-keepalive prompt is
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with time since the latest agent activity pinned right. This compact age is always present, plain and muted without a glyph, even under five minutes (`30s`, `12m`, `2h`). Cache pings do not move it, and process activity counts only in groups without agents. Cost and tokens cover every session the team ran in this worktree, resumed sessions and subagents included; the sidebar shows no work-time figure. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click a member's name or status glyph on a folded group's first receipt line to show the cards and focus that member's live pane, bringing its card into view. Clicking anywhere else on the receipt, or its folded header, does the same for the first receipt member. A member without a live pane opens the cards without moving focus. The cards stay unfolded through focus changes and layout-hold expiry until you fold the expanded header, close the inactive peek, or the group leaves the roster or has nothing left to fold. Focusing any member also shows the cards, in place without changing fold membership or count. Without a user unfold, newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only folds a user unfold; it does not move focus. A header click on cards revealed only by focus, a layout hold, or a filter leaves that reveal unchanged. The `s` lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
+Click a member's name or status glyph on a folded group's first receipt line to show the cards and focus that member's live pane, bringing its card into view. Clicking anywhere else on the receipt, or its folded header, does the same for the first receipt member. A member without a live pane opens the cards without moving focus. The cards stay unfolded through focus changes and layout-hold expiry until you fold the expanded header, close the inactive peek, or the group leaves the roster or has nothing left to fold. Focusing any member also shows the cards, in place without changing fold membership or count. Without a user unfold, newly inactive groups with members stay out while selected, focused, or held by the layout freeze; they fold on the first pass after those holds release. Revival is immediate, even during a freeze. The expanded header only folds a user unfold; it does not move focus. A header click on cards revealed only by focus, a layout hold, or a filter leaves that reveal unchanged. The done lens excludes results in inactive groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
 Inactive groups follow all active project work and `external`, at the very bottom. At 54 columns, the closed inactive chip replaces their headers and receipts:
 
@@ -750,7 +750,7 @@ Inactive groups follow all active project work and `external`, at the very botto
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 inactive ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-Click anywhere on the chip, or press `i`, to peek at the first 10 inactive groups in presented order, most recent activity first, without hiding active work. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it and bring the chip back into view; the selection never moves. Closing resets the page count and folds the inactive cards opened through receipts, except those still focused or held. Under `NO_COLOR` the chip is reverse video. The peek changes only when you click the chip or press `i`. Focus changes, receipt jumps, and tab switches keep its pages and unfolded receipts, with the destination showing it open from the first frame. Clients sharing a view share the toggle; splitting across tabs copies it, after which each copy toggles independently. Returning to a continuing viewer rejoins their view. It starts closed for a new view or host restart. Open groups remain collapsed to receipts until revealed:
+Click anywhere on the chip, or press `z i`, to peek at the first 10 inactive groups in presented order, most recent activity first, without hiding active work. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Toggle again to close it and bring the chip back into view; the selection never moves. Closing resets the page count and folds the inactive cards opened through receipts, except those still focused or held. Under `NO_COLOR` the chip is reverse video. The peek changes only when you click the chip or press `z i`. Focus changes, receipt jumps, and tab switches keep its pages and unfolded receipts, with the destination showing it open from the first frame. Clients sharing a view share the toggle; splitting across tabs copies it, after which each copy toggles independently. Returning to a continuing viewer rejoins their view. It starts closed for a new view or host restart. Open groups remain collapsed to receipts until revealed:
 
 ```
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -804,7 +804,7 @@ Click anywhere on the chip, or press `i`, to peek at the first 10 inactive group
 
 If more inactive groups remain undrawn, a muted `+K older` line follows the last drawn one at the end of the body. Click it to reveal the next 10 without moving the viewport or selection. Focused, held, individually expanded, and process-only groups also draw beyond the page, and K counts only undrawn groups. Closing and reopening starts at 10 again.
 
-The counts are groups, not agents. `M unlanded` is information, not a filter, and is omitted when M is zero. Every cell of the line toggles the same peek. A focused or held group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any filter or a search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches inactive groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card without a page cut or older tail. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
+The counts are groups, not agents. `M unlanded` is information, not a filter, and is omitted when M is zero. Every cell of the line toggles the same peek. A focused or held group stays visible below the closed chip without changing the count; process-only groups also stay visible. Any filter or a search suppresses the chip and reveals matching cards uncollapsed, but the done lens never matches inactive groups. Unread results there remain reachable through `f u`; `n` and `N` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card without a page cut or older tail. On narrow panes the breakdown drops first, then the label, preserving `[ ▸ N ]`; at widths too small for that frame, only the count remains.
 
 A folded inactive group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -996,12 +996,12 @@ Both clear on the next good read. When the sidebar cannot read the room at all, 
  ⚠ Sidebar degraded for 8s: snapshot failed: store not found
 ```
 
-While the alert is active, `/` does nothing; `r` reloads the tab, `x` dismisses the alert, and `?` and movement keys keep their usual meanings. If the alert appears while you are typing a search, the draft is discarded and the committed query stays.
+While the alert is active, `/` does nothing; `R` reloads the tab, `Esc` dismisses the alert once no search or notice is left to clear, and `?` and movement keys keep their usual meanings. If the alert appears while you are typing a search, the draft is discarded and the committed query stays.
 
-After recovery the alert stays as a dim notice until you press `x`, so a failure that came and went is still visible. A new failure raises it again.
+After recovery the alert stays as a dim notice until you press `Esc`, so a failure that came and went is still visible. A new failure raises it again.
 
 ```
- ⚠ last alert 8s ago: snapshot failed: store not found  ·  x dismiss
+ ⚠ last alert 8s ago: snapshot failed: store not found  ·  Esc dismiss
 ```
 
 A notice or alert wider than the pane continues on the rows below it, broken between words and indented one cell like its first row; a single word longer than a row is cut across rows.
@@ -1014,41 +1014,42 @@ If an agent's hook drainer stays unreachable for 10 seconds, a separate alert wa
  ⚠ hook drainer unreachable for 40s · coder's card may be stale
 ```
 
-When several agents are affected, it names the earliest one's card: `coder and 2 other cards may be stale`. The dashboard, footer, notices, pets, and search stay usable; this alert never discards a search draft. Pressing `x` cannot dismiss an active hook-drainer alert. After recovery it stays active for about 3 seconds, then lingers dimly until `x`:
+When several agents are affected, it names the earliest one's card: `coder and 2 other cards may be stale`. The dashboard, footer, notices, pets, and search stay usable; this alert never discards a search draft. Pressing `Esc` cannot dismiss an active hook-drainer alert. After recovery it stays active for about 3 seconds, then lingers dimly until `Esc`:
 
 ```
- ⚠ last alert 2m ago: hook drainer unreachable for 40s · x dismiss
+ ⚠ last alert 2m ago: hook drainer unreachable for 40s · Esc dismiss
 ```
 
-An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `x` clears that alert and any recovered drainer alert. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
+An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `Esc` clears that alert and any recovered drainer alert. After refresh recovery both alert lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
 
 ### The help overlay
 
-`?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists your configured movement keys, so it differs from this frame after a rebind.
+`?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists the keys you configured under `[keys.sidebar]`, so it differs from this frame after a rebind.
 
 ```
-╭ help ───────────────────────────────────╮
-│ keys                                    │
-│   /   search           esc   clear      │
-│ ↕ j/k cards/entries  ↕ J/K   worktrees  │
-│ ↕ g/G ends           ↕ ^f/^b page       │
-│ ↕ H/L screen         ⏎ l     focus/open │
-│ ⏎ 1-9 direct         ␣ n/N   needs-you  │
-│ ✉ m   read/unread    ✉ M     read all   │
-│ ↔ ←/→ account tabs   ⟳ r     reload     │
-│ ✕ x   dismiss        ↕ a/d   width      │
-│   i   inactive fold                     │
-│                                         │
-│ filter                                  │
-│ ? q   waiting        ! e     attention  │
-│ ⏸︎ p   paused         ✓ s     done       │
-│ ⢿ w   working        ○ o     idle       │
-│ ☾ z   sleeping                          │
-│ ● u   unread         ≡ A     all        │
-│                                         │
-│ ▐ alt p sidebar                         │
-│   alt g zoom                            │
-╰─────────── any key to close ────────────╯
+╭ help ────────────────────────────────────╮
+│ keys                                     │
+│   /    search         ✕ Esc   clear      │
+│ ↕ j/k  cards/entries  ↕ J/K   worktrees  │
+│ ↕ gg/G ends           ↕ ^f/^b page       │
+│ ⏎ 1-9  direct         ↕ ^d/^u half page  │
+│ ␣ n/N  next/prev      ↕ H/M/L screen     │
+│ ⏎ Tab  last card      ⏎ Enter focus/open │
+│ ✉ m    read/unread    ✉ U     read all   │
+│ ↔ ←/→  account tabs   ⟳ R     reload     │
+│   zi   inactive fold  ↕ </>   width      │
+│   za   card fold        zR/zM all groups │
+│                                          │
+│ filter                                   │
+│ ? f?   waiting        ! f!    attention  │
+│ ⏸︎ fp   paused         ✓ fd    done       │
+│ ⢿ fw   working        ○ fi    idle       │
+│ ☾ fz   sleeping       ␣ fn    needs you  │
+│ ● fu   unread         ≡ F     all        │
+│                                          │
+│ ▐ alt p sidebar                          │
+│   alt g zoom                             │
+╰──────────── any key to close ────────────╯
 ```
 
 ## Keys and mouse
@@ -1058,39 +1059,43 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | key | action |
 |-----|--------|
 | `j` / `k`, `↓` / `↑` | walk cards, their open live-pane entries and `+K older`, without changing focus; skip waits and pane-less entries; with no selection, select the first card |
-| `J` / `K` | select the first row of the next or previous worktree |
-| `g` / `G` | select the first or last row |
+| `J` / `K`, `}` / `{` | select the first row of the next or previous worktree |
+| `g g` / `G` | select the first or last row |
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
-| `H` / `L` | select the first or last row on screen; when that row has left the room since the last paint, the nearest row on screen inward that is still listed, and nothing when none is |
+| `Ctrl+d` / `Ctrl+u` | move half a page |
+| `H` / `M` / `L` | select the first, middle, or last row on screen; when that row has left the room since the last paint, the nearest row on screen inward that is still listed, and nothing when none is |
 | `Enter`, `l` | focus the selected card or child; on `+K older`, open history and focus the parent, returning the cursor to the card |
-| `1` to `9` | focus that room-wide card slot, even if a filter or fold hides it |
-| `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
-| `N` | the same walk, backward |
+| `1` to `9` | select and focus that room-wide card slot, even if a filter or fold hides it; an empty slot shows a notice |
+| `Tab` | select and focus the card you focused before this one; a notice says when there is none or it left the room |
+| `n` / `N` | with a committed text search, select and focus the next or previous matching card, wrapping; otherwise jump to the next or previous card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
 | `m` | mark the selected card read or unread, without jumping; with no selection, do nothing |
-| `M` | mark every card read |
-| `i` | toggle the inactive peek; opening reveals its chip and first receipt, closing returns to the chip; selection stays put |
+| `U` | mark every card read |
+| `z a` | open or close the selected card's subagents and waits |
+| `z R` / `z M` | unfold or fold every group |
+| `z i` | toggle the inactive peek; opening reveals its chip and first receipt, closing returns to the chip; selection stays put |
 | `←` / `→` | switch the dashboard tab |
-| `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
-| `r` | reload this tab's sidebar |
-| `x` | dismiss recovered alerts or clear an active `Sidebar degraded` alert |
+| `<` / `>` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
+| `R` | reload this tab's sidebar |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
-| `Esc` | clear only the text search; while help is open, close help only |
+| `Esc` | peel one layer per press: a pending key sequence, then the search draft, then the committed text search, then a pane notice, then recovered alerts or an active `Sidebar degraded` alert; while help is open, close help only |
+
+`g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, or `n` / `N` shows as a `⚠` notice above the bottom row until the next key.
 
 | filter key | cards shown |
 |------------|-------------|
-| `u` | unread |
-| needs-you (room command only) | waiting or failed cards, including child-lifted attention; no in-sidebar key |
-| `q` | waiting (`?` is the help key) |
-| `!`, `e` | failed; the overlay labels it attention |
-| `p` | paused |
-| `s` | done |
-| `w` | working |
-| `z` | sleeping |
-| `o` | idle |
-| `A` | all; clear both the body pick and the text search |
+| `f u` | unread |
+| `f n` | waiting or failed cards, including child-lifted attention |
+| `f ?` | waiting |
+| `f !` | failed; the overlay labels it attention |
+| `f p` | paused |
+| `f d` | done |
+| `f w` | working |
+| `f z` | sleeping |
+| `f i` | idle |
+| `F` | all; clear both the body pick and the text search |
 
-Pressing the active filter's key again clears just that pick; a text search stays active. Movement keys and `<` / `>` can be rebound under `[keys.sidebar]`, and outside search typing a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
+Pressing the active filter's key again clears just that pick; a text search stays active. Every key in both tables can be rebound under [`[keys.sidebar]`](../guide/configuration.md#sidebar-keys), and the help overlay, the bottom row and the alert hints show the keys you bound.
 
 ### Text search
 
@@ -1116,9 +1121,9 @@ The right-edge count is matching visible rows over all rows, processes included.
 
 `/` starts typing, seeded with the committed query. Matching is case-insensitive substring over worktree/group names and qualifiers, branches, agent names and handles, teams, and PR numbers (`#123` or `123`). A matching group name, team, or PR keeps all its rows; otherwise only matching rows remain. Search composes with the status, unread, needs-you, or open-PR pick, hides empty groups, and lifts the fold cap. The cockpit counts still describe the whole fleet.
 
-Every printable key pressed without `Ctrl` or `Alt` enters the draft, including `n`, `j`, `q`, `r`, `?`, `A`, and digits. `Backspace` removes one character; on an empty draft it cancels. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; every other `Ctrl` or `Alt` chord does nothing, whether or not `[keys.sidebar]` binds it. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
+Every printable key pressed without `Ctrl` or `Alt` enters the draft, including `n`, `j`, `q`, `R`, `?`, `F`, and digits. `Backspace` removes one character; on an empty draft it ends typing and clears the text search. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; every other `Ctrl` or `Alt` chord does nothing, whether or not `[keys.sidebar]` binds it. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
 
-`Esc` clears the text search, whether typing or committed, leaving any status, unread, needs-you, or open-PR pick intact. It also works during a health alert; while help is open it only closes help. Any click that focuses a pane while typing also drops the search, including a subagents and waits line or `+K older`. Other clicks commit the draft and then act normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, clicks keep the query, ordinary movement stays inside the matches, and `n` / `N` keep their needs-you meaning. Press `A` to clear both narrowings.
+`Esc` while typing discards the draft and keeps the committed query; the next `Esc` clears the committed text search, leaving any status, unread, needs-you, or open-PR pick intact. It also works during a health alert; while help is open it only closes help. Any click that focuses a pane while typing also drops the search, including a subagents and waits line or `+K older`. Other clicks commit the draft and then act normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, clicks keep the query, ordinary movement stays inside the matches, and `n` / `N` walk the matching cards, wrapping, selecting and focusing each one; with no visible match they show a notice. Press `F` to clear both narrowings.
 
 ### Mouse
 
@@ -1137,7 +1142,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a member's name or status glyph on a folded inactive group's first receipt line | show its cards and focus that member's live pane, revealing its card |
 | click a folded inactive group's header or any other receipt cell | show its cards and focus the first receipt member's live pane, revealing its card |
 | click an expanded inactive group's header | fold cards you unfolded without moving focus; cards focus, a layout hold, or a filter reveals stay shown |
-| click anywhere on the inactive chip, or press `i` | show or hide a paged peek at inactive receipts without filtering; opening reveals the first receipt, closing returns to the chip and resets paging |
+| click anywhere on the inactive chip, or press `z i` | show or hide a paged peek at inactive receipts without filtering; opening reveals the first receipt, closing returns to the chip and resets paging |
 | click the inactive peek's `+K older` | reveal the next 10 inactive groups, keeping the viewport and selection |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |

@@ -13,6 +13,8 @@ use crate::sidebar_pane::render::{
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
+use crate::sidebar_pane::commands::{CardDirection, CardReply, CardRequest};
+
 use super::input::KeyAction;
 
 /// Content lines a wheel tick moves the viewport — about one card line-group
@@ -108,7 +110,7 @@ impl InputOutcome {
     }
 }
 
-/// Step the inbox triage list `forward` or backward from the current selection and focus its attention pane: the `n`/`N` (and `Space`) walk through rows that need you in the visible roster, oldest episode first. A walk with nothing to triage does nothing.
+/// Step the inbox triage list `forward` or backward from the current selection and focus its attention pane: the `n`/`N` walk through rows that need you in the visible roster, oldest episode first. A walk with nothing to triage does nothing.
 fn inbox_jump(ui: &mut ViewState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
@@ -125,7 +127,7 @@ enum End {
     Bottom,
 }
 
-/// Move the browse pick to the first or last visible row — the `g`/`G` Vim
+/// Move the browse pick to the first or last visible row — the `gg`/`G` Vim
 /// jump. Selection only, no focus, over the same filtered row universe ordinary
 /// selection walks. A no-op when already there or the body is empty.
 fn select_end_row(ui: &mut ViewState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
@@ -164,14 +166,22 @@ fn select_to_index_in(
     InputOutcome::redraw()
 }
 
-/// Select the first (`H`) or last (`L`) row the last paint drew. The painted edge resolves
-/// through its id to the live roster; when that row has left it, the nearest painted row
-/// inward that is still listed takes its place, and with none left the key does nothing.
-fn select_screen_edge(
+#[derive(Clone, Copy)]
+enum ScreenRow {
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// Select the first (`H`), middle (`M`) or last (`L`) row the last paint drew. The painted
+/// row resolves through its id to the live roster; when that row has left it, the nearest
+/// painted row inward that is still listed takes its place (below the middle first, then
+/// above it), and with none left the key does nothing.
+fn select_screen_row(
     view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    end: End,
+    at: ScreenRow,
 ) -> InputOutcome {
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
@@ -179,9 +189,16 @@ fn select_screen_edge(
     let painted = ui.painted_roster.get(first..=last).unwrap_or_default();
     let roster = view.visible_roster(snapshot);
     let live = |id: &String| roster.ordinal_of_id(id);
-    let target = match end {
-        End::Top => painted.iter().find_map(live),
-        End::Bottom => painted.iter().rev().find_map(live),
+    let target = match at {
+        ScreenRow::Top => painted.iter().find_map(live),
+        ScreenRow::Middle => {
+            let (above, below) = painted.split_at(painted.len().saturating_sub(1) / 2);
+            below
+                .iter()
+                .find_map(live)
+                .or_else(|| above.iter().rev().find_map(live))
+        }
+        ScreenRow::Bottom => painted.iter().rev().find_map(live),
     };
     match target {
         Some(target) => select_to_index_in(view, &roster, target),
@@ -189,11 +206,13 @@ fn select_screen_edge(
     }
 }
 
+/// Step the selection by one painted screenful, or half of one.
 fn select_page(
     view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     down: bool,
+    half: bool,
 ) -> InputOutcome {
     let Some(selected) = view.selected_index else {
         return select_to_index(view, snapshot, 0);
@@ -201,7 +220,8 @@ fn select_page(
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
-    let page = last.saturating_sub(first).saturating_add(1).max(1);
+    let page = last.saturating_sub(first).saturating_add(1);
+    let page = if half { page / 2 } else { page }.max(1);
     let target = if down {
         selected.saturating_add(page)
     } else {
@@ -218,6 +238,8 @@ pub(super) fn handle_key(
 ) -> InputOutcome {
     let previous = view.entry_cursor.clone();
     let entry_step = matches!(action, KeyAction::Up | KeyAction::Down);
+    let notice_cleared = !matches!(action, KeyAction::Cancel | KeyAction::CancelSearch)
+        && view.notice.take().is_some();
     view.validate_entry_cursor(snapshot);
     if view.search_draft.is_some()
         || matches!(
@@ -229,11 +251,15 @@ pub(super) fn handle_key(
                 | KeyAction::Bottom
                 | KeyAction::PageUp
                 | KeyAction::PageDown
+                | KeyAction::HalfPageUp
+                | KeyAction::HalfPageDown
                 | KeyAction::ScreenTop
+                | KeyAction::ScreenMiddle
                 | KeyAction::ScreenBottom
-                | KeyAction::Digit(_)
-                | KeyAction::InboxNext
-                | KeyAction::InboxPrev
+                | KeyAction::Slot(_)
+                | KeyAction::LastCard
+                | KeyAction::SearchNext
+                | KeyAction::SearchPrev
         )
     {
         view.entry_cursor = None;
@@ -243,7 +269,7 @@ pub(super) fn handle_key(
     if entry_changed && entry_step {
         view.offset_authoritative = false;
     }
-    outcome.redraw |= entry_changed;
+    outcome.redraw |= entry_changed || notice_cleared;
     outcome
 }
 
@@ -277,17 +303,23 @@ fn key_outcome(
             select_first_search_match(view, snapshot);
             InputOutcome::redraw()
         }
-        KeyAction::CancelSearch => {
-            if view.search_draft.is_some() {
-                return finish_search(view, snapshot, false);
-            }
-            let mut lens = view.make_up_filter.clone();
-            if lens.query.take().is_none() {
-                return InputOutcome::default();
-            }
-            set_make_up_filter(view, snapshot, lens);
+        KeyAction::CancelSearch if view.search_draft.take().is_some() => {
+            // The committed lens never saw the draft, so it stands as it was.
             reconcile_selection(view, snapshot, None);
-            InputOutcome::sync_filter(view.make_up_filter.clone())
+            anchor_selection(view, snapshot);
+            InputOutcome::redraw()
+        }
+        KeyAction::CancelSearch | KeyAction::Cancel => {
+            let mut lens = view.make_up_filter.clone();
+            if lens.query.take().is_some() {
+                set_make_up_filter(view, snapshot, lens);
+                reconcile_selection(view, snapshot, None);
+                return InputOutcome::sync_filter(view.make_up_filter.clone());
+            }
+            if view.notice.take().is_some() {
+                return InputOutcome::redraw();
+            }
+            InputOutcome::dismiss()
         }
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
@@ -313,10 +345,13 @@ fn key_outcome(
         KeyAction::WorktreeDown => select_adjacent_worktree(view, snapshot, 1),
         KeyAction::Top => select_end_row(view, snapshot, End::Top),
         KeyAction::Bottom => select_end_row(view, snapshot, End::Bottom),
-        KeyAction::PageUp => select_page(view, ui, snapshot, false),
-        KeyAction::PageDown => select_page(view, ui, snapshot, true),
-        KeyAction::ScreenTop => select_screen_edge(view, ui, snapshot, End::Top),
-        KeyAction::ScreenBottom => select_screen_edge(view, ui, snapshot, End::Bottom),
+        KeyAction::PageUp => select_page(view, ui, snapshot, false, false),
+        KeyAction::PageDown => select_page(view, ui, snapshot, true, false),
+        KeyAction::HalfPageUp => select_page(view, ui, snapshot, false, true),
+        KeyAction::HalfPageDown => select_page(view, ui, snapshot, true, true),
+        KeyAction::ScreenTop => select_screen_row(view, ui, snapshot, ScreenRow::Top),
+        KeyAction::ScreenMiddle => select_screen_row(view, ui, snapshot, ScreenRow::Middle),
+        KeyAction::ScreenBottom => select_screen_row(view, ui, snapshot, ScreenRow::Bottom),
         KeyAction::Enter => {
             if let Some(draft) = &view.search_draft {
                 let pane = (!draft.is_empty())
@@ -353,8 +388,8 @@ fn key_outcome(
                 _ => InputOutcome::default(),
             }
         }
-        KeyAction::InboxNext => inbox_jump(view, snapshot, true),
-        KeyAction::InboxPrev => inbox_jump(view, snapshot, false),
+        KeyAction::SearchNext => search_jump(view, snapshot, CardDirection::Next),
+        KeyAction::SearchPrev => search_jump(view, snapshot, CardDirection::Prev),
         KeyAction::MarkToggle => match view
             .selected_index
             .and_then(|index| agent_row_mark_target_at(snapshot, view, index))
@@ -365,6 +400,30 @@ fn key_outcome(
         },
         KeyAction::MarkAllRead => InputOutcome::mark_all_read(),
         KeyAction::ToggleInactive => toggle_inactive(view, snapshot),
+        KeyAction::FoldToggle => {
+            let Some((row_id, open)) = view
+                .selected_index
+                .and_then(|index| view.delegation_open(snapshot, index))
+            else {
+                return InputOutcome::default();
+            };
+            set_delegation_open(view, snapshot, row_id, !open);
+            InputOutcome::redraw()
+        }
+        KeyAction::FoldOpenAll => {
+            let keys = snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.key.clone());
+            let before = view.expanded_groups.len();
+            view.expanded_groups.extend(keys);
+            fold_groups(view, snapshot, before)
+        }
+        KeyAction::FoldCloseAll => {
+            let before = view.expanded_groups.len();
+            view.expanded_groups.clear();
+            fold_groups(view, snapshot, before)
+        }
         KeyAction::Help => {
             view.help_visible = true;
             InputOutcome::redraw()
@@ -380,18 +439,58 @@ fn key_outcome(
                 InputOutcome::default()
             }
         }
-        KeyAction::Dismiss => InputOutcome::dismiss(),
-        KeyAction::Digit(digit) => {
-            let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = crate::sidebar_pane::view::card_slots(snapshot).get(index) {
-                return InputOutcome::focus((*pane).clone());
-            }
-            InputOutcome::default()
+        KeyAction::Slot(n) => card_key(view, snapshot, CardRequest::Slot { n }),
+        KeyAction::LastCard => card_key(view, snapshot, CardRequest::Last),
+        KeyAction::NeedsYou => {
+            card_key(view, snapshot, CardRequest::FilterNeedsYou { toggle: true })
         }
         KeyAction::TabPrev => cycle_dashboard_tab(view, snapshot, -1),
         KeyAction::TabNext => cycle_dashboard_tab(view, snapshot, 1),
         KeyAction::Other => InputOutcome::default(),
     }
+}
+
+/// Run a room card request from an in-pane key: a refusal becomes the pane
+/// notice.
+fn card_key(
+    view: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    request: CardRequest,
+) -> InputOutcome {
+    let (mut outcome, reply) = super::card_commands::reduce(&request, view, snapshot);
+    if let CardReply::Refused { reason } = reply {
+        view.notice = Some(reason);
+        outcome.redraw = true;
+    }
+    outcome
+}
+
+/// `n`/`N`: under a committed search, walk the filtered roster's cards and
+/// focus; otherwise walk the inbox of rows that need you.
+fn search_jump(
+    view: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    direction: CardDirection,
+) -> InputOutcome {
+    if view.search_draft.is_none() && view.make_up_filter.query.is_some() {
+        let walk = CardRequest::Walk {
+            direction,
+            worktree: false,
+        };
+        return card_key(view, snapshot, walk);
+    }
+    inbox_jump(view, snapshot, direction == CardDirection::Next)
+}
+
+/// Settle a fold or unfold of every group; `before` is the unfolded count.
+fn fold_groups(view: &mut ViewState, snapshot: &SidebarSnapshot, before: usize) -> InputOutcome {
+    if view.expanded_groups.len() == before {
+        return InputOutcome::default();
+    }
+    anchor_selection(view, snapshot);
+    view.offset_authoritative = true;
+    view.scroll_ease.cancel();
+    InputOutcome::redraw()
 }
 
 fn select_first_search_match(ui: &mut ViewState, snapshot: &SidebarSnapshot) {

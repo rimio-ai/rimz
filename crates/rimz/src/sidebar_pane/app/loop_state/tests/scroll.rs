@@ -2138,14 +2138,18 @@ fn screen_edge_after_removing(
 
 #[test]
 fn screen_edge_keys_select_the_painted_edge_after_a_row_above_departs() {
-    for action in [KeyAction::ScreenTop, KeyAction::ScreenBottom] {
+    for action in [
+        KeyAction::ScreenTop,
+        KeyAction::ScreenMiddle,
+        KeyAction::ScreenBottom,
+    ] {
         let (mut rig, window) = scrolled_window();
         let above = rig.state.pane.ui.painted_roster[0].clone();
         let (_, selected) = screen_edge_after_removing(&mut rig, &[&above], action);
-        let expected = if action == KeyAction::ScreenTop {
-            window.first()
-        } else {
-            window.last()
+        let expected = match action {
+            KeyAction::ScreenTop => window.first(),
+            KeyAction::ScreenMiddle => window.get((window.len() - 1) / 2),
+            _ => window.last(),
         };
         assert_eq!(selected.as_ref(), expected, "{action:?}");
     }
@@ -2328,7 +2332,7 @@ fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
         .clone();
     let outcome = rig
         .state
-        .apply_input([Wakeup::Key(KeyAction::InboxNext)], &mut rig.terminal)
+        .apply_input([Wakeup::Key(KeyAction::SearchNext)], &mut rig.terminal)
         .unwrap();
     assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
     assert_eq!(rig.view().ui().selected_pane, None);

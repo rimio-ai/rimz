@@ -14,7 +14,8 @@ use ratatui::text::{Line, Span};
 
 use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
-    hook_drainer_alert_lines, repo_header_lines, search_line, truth_notice_lines,
+    hook_drainer_alert_lines, key_hint_line, pane_notice_line, repo_header_lines, search_line,
+    truth_notice_lines,
 };
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
@@ -622,7 +623,24 @@ pub(super) fn build_bottom_chrome(
     if plan.alert
         && let Some(alert) = alert
     {
-        bottom.extend_inert(notice_rows(alert_lines(theme, alert, snapshot.now), inner));
+        bottom.extend_inert(notice_rows(
+            alert_lines(theme, alert, &snapshot.keys, snapshot.now),
+            inner,
+        ));
+    }
+    if let Some(notice) = &view.notice {
+        bottom.extend_inert(notice_rows(
+            vec![pane_notice_line(theme, notice, &snapshot.keys)],
+            inner,
+        ));
+    }
+    if !view.pending_keys.is_empty() {
+        bottom.push_inert(pad_chrome(key_hint_line(
+            theme,
+            &snapshot.keys,
+            &view.pending_keys,
+            inner,
+        )));
     }
     header.append(bottom);
     header.tag("chrome");
@@ -1124,7 +1142,7 @@ pub(super) fn top_lines(
 /// steady bright crest, so the one pane that most needs you is the only thing in
 /// continuous motion. Computed over the whole unfiltered roster — the lead is a
 /// global attention fact, like the cockpit buckets — so a make-up filter never
-/// shifts it, and it mirrors the `␣` triage head (oldest actionable first).
+/// shifts it, and it mirrors the `n` triage head (oldest actionable first).
 /// `None` when nothing unread needs an answer.
 pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, AgentStatus)> {
     lead_unread_row(groups).map(|row| {

@@ -1186,7 +1186,7 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .contains("r reload"),
+            .contains("R reload"),
         "help chrome survives narrow framing:\n{rendered}"
     );
     assert!(

@@ -130,11 +130,11 @@ fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
         InputOutcome::default()
     );
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
+        handle_key(KeyAction::SearchNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(pane_of(&snapshot, 0))
     );
     assert_eq!(
-        handle_key(KeyAction::InboxPrev, &mut ui, &mut pane_ui, &snapshot),
+        handle_key(KeyAction::SearchPrev, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(pane_of(&snapshot, 2))
     );
     assert_eq!(ui.selected_pane, None);
@@ -211,9 +211,9 @@ fn card_level_motions_and_search_clear_an_entry_even_without_a_card_move() {
         KeyAction::PageDown,
         KeyAction::ScreenTop,
         KeyAction::ScreenBottom,
-        KeyAction::Digit(1),
-        KeyAction::InboxNext,
-        KeyAction::InboxPrev,
+        KeyAction::Slot(1),
+        KeyAction::SearchNext,
+        KeyAction::SearchPrev,
         KeyAction::Search,
     ] {
         let mut view = ViewState::default();
@@ -442,9 +442,9 @@ fn card_motions_leave_the_entry_and_m_marks_its_parent() {
         KeyAction::Top,
         KeyAction::WorktreeUp,
         KeyAction::WorktreeDown,
-        KeyAction::Digit(1),
-        KeyAction::InboxNext,
-        KeyAction::InboxPrev,
+        KeyAction::Slot(1),
+        KeyAction::SearchNext,
+        KeyAction::SearchPrev,
     ] {
         let mut view = ViewState::default();
         let mut ui = UiState::default();
@@ -1136,12 +1136,19 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
     let offset = view.scroll_offset;
     let selected = view.selected_pane.clone();
     let keymap = crate::config::keys::sidebar::SidebarKeymap::default();
-    let action = resolve_key(
-        &keymap,
-        InputMode::Normal,
-        KeyCode::Char('i'),
-        KeyModifiers::NONE,
-    );
+    let mut pending = Vec::new();
+    let mut action = KeyAction::Other;
+    for key in ['z', 'i'] {
+        let none = KeyModifiers::NONE;
+        action = resolve_key(
+            &keymap,
+            InputMode::Normal,
+            &mut pending,
+            KeyCode::Char(key),
+            none,
+        );
+    }
+    assert_eq!(action, KeyAction::ToggleInactive);
     for open in [true, false] {
         handle_key(action, &mut view, &mut ui, &snapshot);
         assert_eq!(view.inactive_peek.is_some(), open);
@@ -1165,15 +1172,16 @@ fn inactive_key_toggles_and_reveals_without_moving_selection() {
         );
         assert_eq!(view.selected_pane, selected);
     }
-    let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("i", "move.down")]);
+    let keymap = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("i", "fold.inactive")]);
     assert_eq!(
         resolve_key(
             &keymap,
             InputMode::Normal,
+            &mut pending,
             KeyCode::Char('i'),
             KeyModifiers::NONE
         ),
-        KeyAction::Down
+        KeyAction::ToggleInactive
     );
 }
 
@@ -2083,7 +2091,7 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
 }
 
 #[test]
-fn focus_keys_fire_without_mutating_selection() {
+fn slot_and_last_keys_select_through_the_reducer_and_refuse_into_the_notice() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let mut snapshot = snapshot_with_panes(
@@ -2100,14 +2108,37 @@ fn focus_keys_fire_without_mutating_selection() {
     let mut ui = ViewState::default();
     ui.make_up_filter.query = Some("no matches".into());
     let mut pane_ui = UiState::default();
-    let outcome = handle_key(KeyAction::Digit(2), &mut ui, &mut pane_ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::focus(target.clone()));
-    assert_eq!(ui.selected_index, None, "the digit moves no selection");
-    assert_eq!(ui.selected_pane, None);
+    let outcome = handle_key(KeyAction::Slot(2), &mut ui, &mut pane_ui, &snapshot);
+    assert!(outcome.redraw);
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
+    assert_eq!(ui.selected_index, None, "the lens hides the slot's row");
+    assert_eq!(ui.selected_pane, Some(target.clone()), "the slot selects");
+    assert_eq!(ui.notice, None);
 
-    // An out-of-range ordinal resolves no pane and does nothing.
-    let outcome = handle_key(KeyAction::Digit(9), &mut ui, &mut pane_ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::default());
+    // An empty slot refuses into the pane notice.
+    let outcome = handle_key(KeyAction::Slot(9), &mut ui, &mut pane_ui, &snapshot);
+    assert!(outcome.effects.is_empty());
+    assert_eq!(
+        ui.notice.as_deref(),
+        Some("sidebar slot: slot 9 is empty: 2 cards")
+    );
+
+    // Tab with no previous card, then with one that left the room.
+    let outcome = handle_key(KeyAction::LastCard, &mut ui, &mut pane_ui, &snapshot);
+    assert!(outcome.effects.is_empty());
+    assert_eq!(ui.notice.as_deref(), Some("sidebar last: no previous card"));
+    ui.previous_card = Some(PaneId::from_parts(MuxName::Zellij, "terminal_gone"));
+    handle_key(KeyAction::LastCard, &mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(
+        ui.notice.as_deref(),
+        Some("sidebar last: previous card left the room")
+    );
+    let other = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    ui.previous_card = Some(other.clone());
+    let outcome = handle_key(KeyAction::LastCard, &mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(other.clone())]);
+    assert_eq!(ui.selected_pane, Some(other));
+    assert_eq!(ui.notice, None, "the next key cleared the notice");
 
     // Enter focuses the selected pane and reads, never writes, the selection.
     let mut ui = render::ViewState {
@@ -2159,12 +2190,12 @@ fn focus_keys_fire_without_mutating_selection() {
     ));
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
-    let outcome = handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot);
+    let outcome = handle_key(KeyAction::SearchNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, None, "the triage key moves no selection");
     assert_eq!(ui.selected_pane, None);
 
-    let outcome = handle_key(KeyAction::InboxPrev, &mut ui, &mut pane_ui, &snapshot);
+    let outcome = handle_key(KeyAction::SearchPrev, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         outcome,
         InputOutcome::focus(target),
@@ -2236,7 +2267,7 @@ fn dismiss_key_requests_alert_dismissal() {
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::Dismiss, &mut ui, &mut pane_ui, &snapshot);
+    let outcome = handle_key(KeyAction::Cancel, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::dismiss());
     assert_eq!(outcome.effects, vec![InputEffect::DismissAlert]);
@@ -2548,7 +2579,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
 }
 
 #[test]
-fn page_keys_step_by_visible_row_count_and_clamp() {
+fn page_keys_step_by_whole_and_half_visible_row_counts_and_clamp() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
@@ -2608,6 +2639,30 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         Some(0),
         "page up clamps at the first row"
     );
+
+    // Three rows are painted, so half a page is one row.
+    for (action, expected) in [
+        (KeyAction::HalfPageDown, 1),
+        (KeyAction::HalfPageDown, 2),
+        (KeyAction::HalfPageUp, 1),
+        (KeyAction::HalfPageUp, 0),
+    ] {
+        handle_key(action, &mut ui, &mut pane_ui, &snapshot);
+        assert_eq!(ui.selected_index, Some(expected), "{action:?}");
+    }
+    let outcome = handle_key(KeyAction::HalfPageUp, &mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default(), "half page up clamps");
+
+    // H, M and L land on the painted span's top, middle and bottom rows.
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    for (action, expected) in [
+        (KeyAction::ScreenMiddle, 2),
+        (KeyAction::ScreenBottom, 3),
+        (KeyAction::ScreenTop, 1),
+    ] {
+        handle_key(action, &mut ui, &mut pane_ui, &snapshot);
+        assert_eq!(ui.selected_index, Some(expected), "{action:?}");
+    }
 }
 
 #[test]
@@ -2633,7 +2688,7 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
 
 #[test]
 fn mark_keys_name_the_selected_agent_row_without_focus() {
-    // `m` toggles the selected agent row's read state, and `M` names the global
+    // `m` toggles the selected agent row's read state, and `U` names the global
     // mark-all path. They never focus, and they don't redraw here — the loop clears the
     // row and repaints once after the durable write, so the frame never flashes
     // the pre-clear state.
@@ -2773,4 +2828,47 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         following > 0,
         "a fresh unread lead must not displace the bottom selection",
     );
+}
+
+#[test]
+fn fold_keys_toggle_the_selected_cards_entries_and_every_group() {
+    let snapshot = delegation_snapshot();
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
+    let (_, open) = view.delegation_open(&snapshot, 0).unwrap();
+    for expected in [!open, open] {
+        let outcome = handle_key(KeyAction::FoldToggle, &mut view, &mut ui, &snapshot);
+        assert_eq!(outcome, InputOutcome::redraw());
+        assert_eq!(
+            view.delegation_open(&snapshot, 0),
+            Some((row_id.clone(), expected))
+        );
+    }
+
+    let groups = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.key.clone());
+    let groups = groups.collect::<std::collections::BTreeSet<_>>();
+    for (action, expected) in [
+        (KeyAction::FoldOpenAll, groups.clone()),
+        (KeyAction::FoldCloseAll, Default::default()),
+    ] {
+        let outcome = handle_key(action, &mut view, &mut ui, &snapshot);
+        assert_eq!(outcome, InputOutcome::redraw());
+        let open = view
+            .expanded_groups
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(open, expected);
+        let again = handle_key(action, &mut view, &mut ui, &snapshot);
+        assert_eq!(
+            again,
+            InputOutcome::default(),
+            "{action:?} repeats as a no-op"
+        );
+    }
 }

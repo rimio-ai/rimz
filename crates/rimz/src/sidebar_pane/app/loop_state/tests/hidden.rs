@@ -1867,7 +1867,7 @@ fn first_input_reveal_arms_dwell_only_once() {
     let clock = LoopClock::play(rig.state.views.mirror().now);
     rig.state.pane.clock = clock.clone();
     rig.state
-        .on_input(Wakeup::Key(KeyAction::Dismiss), &mut rig.terminal)
+        .on_input(Wakeup::Key(KeyAction::Cancel), &mut rig.terminal)
         .unwrap();
     let until = rig.state.inspect_view(|_, view| view.tab_read_dwell_until);
     assert_eq!(until, Some(clock.now() + TAB_READ_DWELL));
@@ -2118,7 +2118,7 @@ fn hidden_empty_confirmation_applies() {
 #[test]
 fn input_flushes_hidden_content() {
     for input in [
-        Wakeup::Key(KeyAction::Dismiss),
+        Wakeup::Key(KeyAction::Cancel),
         Wakeup::Scroll { down: true },
         Wakeup::MouseClick { column: 0, row: 0 },
     ] {

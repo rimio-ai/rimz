@@ -1,6 +1,5 @@
 //! Wakeup codec: the pure mapping between crossterm events, input words, room event envelopes, and the [`Wakeup`] an attachment dispatches. Selection and focus handling stay in [`super`].
 
-use crate::agents::AgentStatus;
 use crate::sidebar_pane::view::BodyFilter;
 use crate::wakeup::events::SidebarEventEnvelope;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
@@ -54,43 +53,56 @@ pub(in crate::sidebar_pane) enum KeyAction {
     Down,
     WorktreeUp,
     WorktreeDown,
-    /// `g`/`G` — move the selection to the first / last visible row (browse,
-    /// no focus), the Vim top/bottom jump.
+    /// Move the selection to the first / last visible row (browse, no focus),
+    /// the Vim top/bottom jump.
     Top,
     Bottom,
     /// Move the selection up one painted screenful.
     PageUp,
     /// Move the selection down one painted screenful.
     PageDown,
-    /// Move the selection to the top row currently painted on screen.
+    /// Move the selection by half a painted screenful.
+    HalfPageUp,
+    HalfPageDown,
+    /// Move the selection to the top, middle or bottom row painted on screen.
     ScreenTop,
-    /// Move the selection to the bottom row currently painted on screen.
+    ScreenMiddle,
     ScreenBottom,
     Enter,
     Search,
     QueryChar(char),
     Backspace,
-    /// End typing, if active, and clear only the text query, keeping the pick.
+    /// End typing and keep the committed search the draft started from.
     CancelSearch,
-    /// `n`/`Space` — jump to the next item that needs you and focus it; `N`
-    /// walks the same inbox in reverse. The fleet-scale triage keys.
-    InboxNext,
-    InboxPrev,
-    /// `m` — toggle the selected row read/unread without jumping.
+    /// Peel the innermost layer: the committed search, then a pane notice,
+    /// then a recovered alert.
+    Cancel,
+    /// Walk the filtered roster under a committed search, else the inbox of
+    /// rows that need you, and focus the target. `SearchPrev` walks back.
+    SearchNext,
+    SearchPrev,
+    /// Toggle the selected row read/unread without jumping.
     MarkToggle,
-    /// `M` — mark every row read without jumping.
+    /// Mark every row read without jumping.
     MarkAllRead,
     Help,
     ToggleInactive,
+    /// Flip the selected card's subagents and waits section.
+    FoldToggle,
+    /// Unfold or fold every worktree group.
+    FoldOpenAll,
+    FoldCloseAll,
     Reload,
-    Dismiss,
     Filter(Option<BodyFilter>),
-    Digit(u8),
-    /// `←`/`→` — cycle the provider dashboard's tab.
+    /// The room card reducer's Slot, Last, and needs-you toggle.
+    Slot(u8),
+    LastCard,
+    NeedsYou,
+    /// Cycle the provider dashboard's tab.
     TabPrev,
     TabNext,
-    /// Otherwise-unbound keypress. Closes the help overlay; no-op when it is
-    /// already closed.
+    /// Otherwise-unbound keypress, a pending prefix, or a cancelled one.
+    /// Closes the help overlay; no-op when it is already closed.
     Other,
 }
 
@@ -101,16 +113,22 @@ pub(super) enum InputMode {
     Typing,
 }
 
+/// Resolve a press against the mode and the keys `pending` so far. A press
+/// that continues a bound prefix waits in `pending`; any other press after a
+/// prefix cancels it and is swallowed.
 pub(super) fn resolve_key(
     keymap: &SidebarKeymap,
     mode: InputMode,
+    pending: &mut Vec<SidebarChord>,
     code: KeyCode,
     mods: KeyModifiers,
 ) -> KeyAction {
     if mode == InputMode::Help {
+        pending.clear();
         return KeyAction::Other;
     }
     if mode == InputMode::Typing {
+        pending.clear();
         let chord_mods = mods & (KeyModifiers::CONTROL | KeyModifiers::ALT);
         return match (code, chord_mods) {
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => KeyAction::Down,
@@ -124,45 +142,33 @@ pub(super) fn resolve_key(
             _ => KeyAction::Other,
         };
     }
-    if let Some(chord) = chord(code, mods)
-        && let SequenceMatch::Action(action) = keymap.lookup(&[chord])
-        && let Some(action) = motion(action)
-    {
-        return action;
-    }
-    if mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+    let Some(chord) = chord(code, mods) else {
+        pending.clear();
         return KeyAction::Other;
-    }
-    match code {
-        KeyCode::Left => KeyAction::TabPrev,
-        KeyCode::Right => KeyAction::TabNext,
-        KeyCode::Esc => KeyAction::CancelSearch,
-        KeyCode::Enter | KeyCode::Char('l') => KeyAction::Enter,
-        // `n` and `Space` are one key: walk forward through the inbox and read.
-        // `N` walks it in reverse.
-        KeyCode::Char('n') | KeyCode::Char(' ') => KeyAction::InboxNext,
-        KeyCode::Char('N') => KeyAction::InboxPrev,
-        KeyCode::Char('m') => KeyAction::MarkToggle,
-        KeyCode::Char('M') => KeyAction::MarkAllRead,
-        KeyCode::Char('?') => KeyAction::Help,
-        KeyCode::Char('i') => KeyAction::ToggleInactive,
-        KeyCode::Char('/') => KeyAction::Search,
-        KeyCode::Char('A') => KeyAction::Filter(None),
-        KeyCode::Char('u') => KeyAction::Filter(Some(BodyFilter::Unread)),
-        KeyCode::Char('q') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Waiting))),
-        KeyCode::Char('!') | KeyCode::Char('e') => {
-            KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Failed)))
+    };
+    pending.push(chord);
+    match keymap.lookup(pending) {
+        SequenceMatch::Pending => KeyAction::Other,
+        SequenceMatch::Action(action) => {
+            pending.clear();
+            key_action(action)
         }
-        KeyCode::Char('o') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Idle))),
-        KeyCode::Char('p') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Paused))),
-        KeyCode::Char('w') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Running))),
-        KeyCode::Char('s') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Success))),
-        KeyCode::Char('z') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Sleeping))),
-        KeyCode::Char('x') => KeyAction::Dismiss,
-        KeyCode::Char(c @ '1'..='9') => KeyAction::Digit(c as u8 - b'0'),
-        KeyCode::Char('r') => KeyAction::Reload,
-        _ => KeyAction::Other,
+        SequenceMatch::Unbound => {
+            pending.clear();
+            KeyAction::Other
+        }
     }
+}
+
+/// Resolve one press with no prefix pending, for tests of single keys.
+#[cfg(test)]
+pub(super) fn resolve_one(
+    keymap: &SidebarKeymap,
+    mode: InputMode,
+    code: KeyCode,
+    mods: KeyModifiers,
+) -> KeyAction {
+    resolve_key(keymap, mode, &mut Vec::new(), code, mods)
 }
 
 /// The table chord a press spells. Case lives in the character, so Shift is
@@ -191,9 +197,12 @@ fn chord(code: KeyCode, mods: KeyModifiers) -> Option<SidebarChord> {
     })
 }
 
-/// The motion and width keys the table rebinds, as the resolver's actions.
-fn motion(action: SidebarAction) -> Option<KeyAction> {
-    Some(match action {
+/// The resolver's action for a table action. The effects that spawn, write
+/// the room width, or repaint have no action yet.
+fn key_action(action: SidebarAction) -> KeyAction {
+    use crate::agents::AgentStatus as S;
+    let status = |status| KeyAction::Filter(Some(BodyFilter::Status(status)));
+    match action {
         SidebarAction::MoveDown => KeyAction::Down,
         SidebarAction::MoveUp => KeyAction::Up,
         SidebarAction::MoveWorktreeDown => KeyAction::WorktreeDown,
@@ -201,13 +210,47 @@ fn motion(action: SidebarAction) -> Option<KeyAction> {
         SidebarAction::MoveTop => KeyAction::Top,
         SidebarAction::MoveBottom => KeyAction::Bottom,
         SidebarAction::MoveScreenTop => KeyAction::ScreenTop,
+        SidebarAction::MoveScreenMiddle => KeyAction::ScreenMiddle,
         SidebarAction::MoveScreenBottom => KeyAction::ScreenBottom,
+        SidebarAction::MoveHalfPageDown => KeyAction::HalfPageDown,
+        SidebarAction::MoveHalfPageUp => KeyAction::HalfPageUp,
         SidebarAction::MovePageDown => KeyAction::PageDown,
         SidebarAction::MovePageUp => KeyAction::PageUp,
+        SidebarAction::CardFocus => KeyAction::Enter,
+        SidebarAction::CardSlot(n) => KeyAction::Slot(n),
+        SidebarAction::CardLast => KeyAction::LastCard,
+        SidebarAction::ReadToggle => KeyAction::MarkToggle,
+        SidebarAction::ReadAll => KeyAction::MarkAllRead,
+        SidebarAction::SearchStart => KeyAction::Search,
+        SidebarAction::SearchNext => KeyAction::SearchNext,
+        SidebarAction::SearchPrev => KeyAction::SearchPrev,
+        SidebarAction::FilterAsks => status(S::Waiting),
+        SidebarAction::FilterFailures => status(S::Failed),
+        SidebarAction::FilterUnread => KeyAction::Filter(Some(BodyFilter::Unread)),
+        SidebarAction::FilterWorking => status(S::Running),
+        SidebarAction::FilterPaused => status(S::Paused),
+        SidebarAction::FilterDone => status(S::Success),
+        SidebarAction::FilterSleeping => status(S::Sleeping),
+        SidebarAction::FilterIdle => status(S::Idle),
+        SidebarAction::FilterNeedsYou => KeyAction::NeedsYou,
+        SidebarAction::FilterClear => KeyAction::Filter(None),
+        SidebarAction::FoldToggle => KeyAction::FoldToggle,
+        SidebarAction::FoldOpenAll => KeyAction::FoldOpenAll,
+        SidebarAction::FoldCloseAll => KeyAction::FoldCloseAll,
+        SidebarAction::FoldInactive => KeyAction::ToggleInactive,
         SidebarAction::WidthNarrower => KeyAction::WidthNarrower,
         SidebarAction::WidthWider => KeyAction::WidthWider,
-        _ => return None,
-    })
+        SidebarAction::ViewReload => KeyAction::Reload,
+        SidebarAction::ViewCancel => KeyAction::Cancel,
+        SidebarAction::Help => KeyAction::Help,
+        SidebarAction::DashboardPrev => KeyAction::TabPrev,
+        SidebarAction::DashboardNext => KeyAction::TabNext,
+        SidebarAction::CardClose
+        | SidebarAction::PaletteCommands
+        | SidebarAction::PaneReturn
+        | SidebarAction::WidthReset
+        | SidebarAction::ViewRedraw => KeyAction::Other,
+    }
 }
 
 pub(super) fn encode_key(code: KeyCode, mods: KeyModifiers) -> Option<String> {

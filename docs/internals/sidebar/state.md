@@ -192,7 +192,7 @@ The host leaves in three ways:
 
 A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build.
 
-Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `r` action after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes.
+Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `view.reload` action (`R`) after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes.
 
 ### Shared lanes
 
@@ -834,8 +834,8 @@ Each degradation has one owner, and none leaves a wrong verdict that outlives th
 | Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and the worker's data backstop keeps folding until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
 | Hook drainer unreachable for 10 seconds | The wrapper's runtime lease keeps the affected cards identifiable without reading diagnostics. | A separate drainer alert keeps the rest of the sidebar usable; after a 3-second recovery hold it lingers until dismissed. |
 
-`crates/rimz/src/sidebar_pane/render/ui_state.rs::ViewState::hook_drainer_alert` is separate from refresh health. Every committed producer or cached fold activates it from `hook_drainer_outage`, or marks an active episode recovered at that fold's snapshot clock when the fact is absent; later absent folds preserve the recovered stamp. Failed reads do not recover it. `x` clears only a recovered drainer episode, while retaining its existing refresh-alert behavior. A view hidden for the entire lease lifetime misses the line; one revealed after its lease clears marks it recovered on reveal. The [recovery hold](../harness/fleet.md) gives visible views time to observe a crossed outage. Host restart loses lingering view state, but doctor retains the durable evidence.
+`crates/rimz/src/sidebar_pane/render/ui_state.rs::ViewState::hook_drainer_alert` is separate from refresh health. Every committed producer or cached fold activates it from `hook_drainer_outage`, or marks an active episode recovered at that fold's snapshot clock when the fact is absent; later absent folds preserve the recovered stamp. Failed reads do not recover it. `Esc`, as its last layer, clears only a recovered drainer episode, while retaining its existing refresh-alert behavior. A view hidden for the entire lease lifetime misses the line; one revealed after its lease clears marks it recovered on reveal. The [recovery hold](../harness/fleet.md) gives visible views time to observe a crossed outage. Host restart loses lingering view state, but doctor retains the durable evidence.
 
-`x` clears refresh health and any recovered drainer alert in the shared host view. Co-viewers share that dismissal; an active drainer alert remains until it recovers. Workflow parks carry no bottom-notice or dismissal state; legacy runs remain visible in their worktree strip and the pulled workflow list.
+`Esc`, as its last layer, clears refresh health and any recovered drainer alert in the shared host view. Co-viewers share that dismissal; an active drainer alert remains until it recovers. Workflow parks carry no bottom-notice or dismissal state; legacy runs remain visible in their worktree strip and the pulled workflow list.
 
 Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. Flicker, duplicate rows, or a phantom external group each map to a record in `diag.log.jsonl`. `rimz doctor` shows the recent tail, and [diagnostics.md](../diagnostics.md) names the taxonomy.
