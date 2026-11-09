@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::agents::LaunchParams;
-use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::lifecycle::{LifecycleSignal, ToolEffect};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
@@ -270,8 +270,7 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
         Some("/tmp/transcript.jsonl")
     );
     full.signal = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,

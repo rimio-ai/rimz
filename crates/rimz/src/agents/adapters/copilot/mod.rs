@@ -37,7 +37,7 @@ use super::definition::{
     RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::observation::payload_has_context_observation;
@@ -509,16 +509,14 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                     native_key: None,
                 },
                 None => LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: None,
                     turn_id: None,
                 },
             },
             "postToolUse" | "postToolUseFailure" => LifecycleSignal::ToolUsed {
-                mutates: tools.any_named(self.spec().tools.mutating),
-                edits: tools.any_named(self.spec().tools.editing),
+                effect: tools.strongest_effect(&self.spec().tools),
                 name: None,
                 native_key: tools.command_key(),
                 turn_id: None,

@@ -1,6 +1,7 @@
 use std::time::SystemTime;
 
 use super::*;
+use crate::agents::ToolEffect;
 use crate::agents::{
     AgentContext, AgentTurnError, LaunchParams, SessionOrigin, TurnErrorClass, TurnSettle,
     TurnSettleOutcome,
@@ -418,8 +419,7 @@ fn on_screen_switches_and_background_asks_survive_durable_reap_and_rotation() {
                 "a",
                 4,
                 LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: None,
                     turn_id: None,
@@ -798,8 +798,7 @@ fn late_tool_of_interrupted_turn_rests_and_is_superseded() {
         "interrupted",
         "PostToolUse",
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
+            effect: ToolEffect::Mutating,
             name: Some("Bash".to_owned()),
             native_key: None,
             turn_id: Some("turn-1".to_owned()),

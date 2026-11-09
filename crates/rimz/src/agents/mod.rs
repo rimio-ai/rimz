@@ -116,7 +116,7 @@ use lifecycle::LifecycleState;
 pub(crate) use lifecycle::step;
 pub use lifecycle::{
     AskKind, CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
-    LifecycleSignal, LifecycleSignalKind, LifecycleTransition, SignalSet, TurnPhase,
+    LifecycleSignal, LifecycleSignalKind, LifecycleTransition, SignalSet, ToolEffect, TurnPhase,
 };
 pub use locate::locate_binary;
 use locate::{agent_config_path, probe_descriptor_version, read_optional_file};

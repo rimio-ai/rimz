@@ -370,7 +370,8 @@ upward-dependencies = ["address"]
 # request identity pacing compares, which a switch of source does not move (+2).
 # AgentState::lane_checkout and project_lane keep derived rows and the fold on the stored lane (+2).
 # AgentState::working_path keeps occupancy, removal protection and activity on the checkout (+1).
-surface-budget = 1289
+# ToolEffect and TransitionMode type the tool flags and the transition mode at the store seam (+1).
+surface-budget = 1290
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

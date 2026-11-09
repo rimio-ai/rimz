@@ -379,8 +379,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             "SessionStart" => session_start.source.session_start_signal(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: None },
             "PostToolUse" => LifecycleSignal::ToolUsed {
-                mutates: self.spec().tool_mutates(payload),
-                edits: self.spec().tool_edits_files(payload),
+                effect: self.spec().tool_effect(payload),
                 name: None,
                 native_key: None,
                 turn_id: None,

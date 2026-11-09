@@ -184,15 +184,15 @@ fn children_have_split_routing_and_parented_start_stop() {
 
 #[test]
 fn every_tool_arm_carries_the_right_mutation_and_edit_flags() {
-    for (tool, mutates, edits) in [
-        ("Bash", true, false),
-        ("PowerShell", true, false),
-        ("BashInput", true, false),
-        ("Monitor", true, false),
-        ("Write", true, true),
-        ("Edit", true, true),
-        ("NotebookEdit", true, true),
-        ("Read", false, false),
+    for (tool, effect) in [
+        ("Bash", ToolEffect::Mutating),
+        ("PowerShell", ToolEffect::Mutating),
+        ("BashInput", ToolEffect::Mutating),
+        ("Monitor", ToolEffect::Mutating),
+        ("Write", ToolEffect::Editing),
+        ("Edit", ToolEffect::Editing),
+        ("NotebookEdit", ToolEffect::Editing),
+        ("Read", ToolEffect::Observed),
     ] {
         assert_eq!(
             hook_signal(
@@ -201,8 +201,7 @@ fn every_tool_arm_carries_the_right_mutation_and_edit_flags() {
                 &json!({"tool_name":tool,"tool_use_id":"call"})
             ),
             LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
+                effect,
                 name: None,
                 native_key: Some("call".into()),
                 turn_id: None
@@ -216,8 +215,7 @@ fn every_tool_arm_carries_the_right_mutation_and_edit_flags() {
             &json!({"tool_name":"Edit"})
         ),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None

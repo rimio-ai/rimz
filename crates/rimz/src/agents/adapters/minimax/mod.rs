@@ -17,7 +17,7 @@ use crate::agents::hook_types::{
 };
 use crate::agents::{
     AgentLifecycleObservation, AskKind, HookOutput, HookRouting, LifecycleSignal, PresetArgMatcher,
-    Result, SanitizedPrompt, optional_payload_string, sanitize_user_prompt,
+    Result, SanitizedPrompt, ToolEffect, optional_payload_string, sanitize_user_prompt,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -387,8 +387,10 @@ impl HookCapability for MiniMaxAdapter {
                 .session_start_signal(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id },
             "PreToolUse" | "PostToolUse" => LifecycleSignal::ToolUsed {
-                mutates: event_name == "PostToolUse" && self.spec().tool_mutates(payload),
-                edits: event_name == "PostToolUse" && self.spec().tool_edits_files(payload),
+                effect: match event_name {
+                    "PostToolUse" => self.spec().tool_effect(payload),
+                    _ => ToolEffect::Observed,
+                },
                 name: (event_name == "PostToolUse")
                     .then(|| optional_payload_string(payload, &["tool_name"]))
                     .flatten(),

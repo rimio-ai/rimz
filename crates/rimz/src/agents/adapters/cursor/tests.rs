@@ -554,9 +554,9 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
-    for (tool, edits) in [
-        ("Write", Some(true)),
-        ("Shell", Some(false)),
+    for (tool, effect) in [
+        ("Write", Some(ToolEffect::Editing)),
+        ("Shell", Some(ToolEffect::Mutating)),
         ("Read", None),
     ] {
         let observation = hook_observation(
@@ -566,9 +566,8 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         );
         assert_eq!(
             observation.map(|observation| observation.signal),
-            edits.map(|edits| LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits,
+            effect.map(|effect| LifecycleSignal::ToolUsed {
+                effect,
                 name: None,
                 native_key: None,
                 turn_id: None,

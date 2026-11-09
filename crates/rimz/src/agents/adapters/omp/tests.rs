@@ -179,16 +179,14 @@ fn compaction_and_tool_classification_are_omp_specific() {
     assert!(matches!(
         signal("tool_execution_end", json!({"tool_name":"ast_edit"})),
         Some(LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             ..
         })
     ));
     assert!(matches!(
         signal("tool_execution_end", json!({"tool_name":"eval"})),
         Some(LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
+            effect: ToolEffect::Mutating,
             ..
         })
     ));
@@ -196,7 +194,10 @@ fn compaction_and_tool_classification_are_omp_specific() {
         assert!(
             matches!(
                 signal("tool_execution_end", json!({"tool_name":tool})),
-                Some(LifecycleSignal::ToolUsed { mutates: true, .. })
+                Some(LifecycleSignal::ToolUsed {
+                    effect: ToolEffect::Mutating | ToolEffect::Editing,
+                    ..
+                })
             ),
             "{tool}"
         );

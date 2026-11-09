@@ -101,8 +101,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             "PreToolUse",
             json!({"session_id":"s","tool_name":"shell"}),
             Some(ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: None,
                 turn_id: None,
@@ -112,8 +111,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             "PostToolUse",
             json!({"session_id":"s","turn_id":"turn-1","tool_name":"shell"}),
             Some(ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("shell".to_owned()),
                 native_key: None,
                 turn_id: Some("turn-1".to_owned()),
@@ -123,8 +121,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             "PostToolUse",
             json!({"session_id":"s","tool_name":"Bash"}),
             Some(ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("Bash".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -134,8 +131,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             "PostToolUse",
             json!({"session_id":"s","tool_name":"read"}),
             Some(ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("read".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -145,8 +141,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             "PostToolUse",
             json!({"session_id":"s","tool_name":"request_user_input"}),
             Some(ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("request_user_input".to_owned()),
                 native_key: None,
                 turn_id: None,

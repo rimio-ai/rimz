@@ -4,6 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::agents::ToolEffect;
 
 #[test]
 fn outdated_files_compare_only_owned_json() {
@@ -149,10 +150,10 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
-    for (tool, mutates, edits) in [
-        ("Edit", true, true),
-        ("Execute", true, false),
-        ("Read", false, false),
+    for (tool, effect) in [
+        ("Edit", ToolEffect::Editing),
+        ("Execute", ToolEffect::Mutating),
+        ("Read", ToolEffect::Observed),
     ] {
         assert_eq!(
             hook_signal(
@@ -161,8 +162,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
                 &json!({"session_id": "sess-1", "tool_name": tool})
             ),
             LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
+                effect,
                 name: None,
                 native_key: None,
                 turn_id: None,

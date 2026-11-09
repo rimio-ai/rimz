@@ -107,8 +107,10 @@ impl HookCapability for OmpAdapter {
                 })
             }
             "tool_execution_end" | "tool_approval_resolved" => Some(LifecycleSignal::ToolUsed {
-                mutates: event == "tool_execution_end" && self.spec().tool_mutates(payload),
-                edits: event == "tool_execution_end" && self.spec().tool_edits_files(payload),
+                effect: match event {
+                    "tool_execution_end" => self.spec().tool_effect(payload),
+                    _ => ToolEffect::Observed,
+                },
                 name: (event == "tool_execution_end")
                     .then(|| tool_name.map(ToOwned::to_owned))
                     .flatten(),

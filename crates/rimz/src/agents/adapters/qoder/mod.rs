@@ -17,7 +17,7 @@ use super::definition::{
     ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
-use super::lifecycle::{AskKind, LifecycleSignal};
+use super::lifecycle::{AskKind, LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, AgentTurnError, HookOutput, HookRouting, Result, RootIdentity,
     SanitizedPrompt, SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed,
@@ -401,8 +401,10 @@ fn lifecycle(
             LifecycleSignal::TurnInterrupted { turn_id: None }
         }
         "PostToolUse" | "PostToolUseFailure" => LifecycleSignal::ToolUsed {
-            mutates: event == "PostToolUse" && spec.tool_mutates(payload),
-            edits: event == "PostToolUse" && spec.tool_edits_files(payload),
+            effect: match event {
+                "PostToolUse" => spec.tool_effect(payload),
+                _ => ToolEffect::Observed,
+            },
             name: None,
             native_key: hook.tool_use_id.clone(),
             turn_id: None,

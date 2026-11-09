@@ -259,8 +259,7 @@ impl HookCapability for HermesAdapter {
             "on_session_reset" => SessionSource::Clear.session_start_signal(),
             "pre_llm_call" => LifecycleSignal::TurnStarted { turn_id: None },
             "post_tool_call" => LifecycleSignal::ToolUsed {
-                mutates: self.spec().tool_mutates(payload),
-                edits: self.spec().tool_edits_files(payload),
+                effect: self.spec().tool_effect(payload),
                 name: optional_payload_string(payload, &["tool_name"]),
                 // This key never names a human-input request; only its resolve
                 // bracket may close Hermes's native prompt, not a sibling tool.

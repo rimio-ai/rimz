@@ -60,7 +60,7 @@ use super::definition::{
     PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
@@ -1749,8 +1749,7 @@ fn map_claude_lifecycle_signal(
                 native_key: None,
             }),
         ClaudeHook::PostToolUse(tool) => Some(LifecycleSignal::ToolUsed {
-            mutates: spec.tool_mutates(payload),
-            edits: spec.tool_edits_files(payload),
+            effect: spec.tool_effect(payload),
             name: tool.tool_name.clone(),
             native_key: tool_use_id,
             turn_id: None,
@@ -1765,8 +1764,7 @@ fn map_claude_lifecycle_signal(
                     native_key: tool_use_id,
                 }),
                 None => Some(LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: tool_use_id,
                     turn_id: None,

@@ -109,8 +109,7 @@ fn classifies_native_asks_and_lifecycle_events() {
         )
         .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -260,8 +259,7 @@ fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
     assert_eq!(
         answered.signal,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -443,9 +441,9 @@ fn session_start_marks_only_fresh_identity_sources() {
 #[test]
 fn tool_mapping_uses_camel_case_names() {
     for (tool, expected) in [
-        ("edit", Some((true, true))),
-        ("bash", Some((true, false))),
-        ("read", None),
+        ("edit", ToolEffect::Editing),
+        ("bash", ToolEffect::Mutating),
+        ("read", ToolEffect::Observed),
     ] {
         let signal = hook_observation(
             &CopilotAdapter,
@@ -453,12 +451,10 @@ fn tool_mapping_uses_camel_case_names() {
             &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
         )
         .map(|observation| observation.signal);
-        let (mutates, edits) = expected.unwrap_or((false, false));
         assert_eq!(
             signal,
             Some(LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
+                effect: expected,
                 name: None,
                 native_key: None,
                 turn_id: None,
@@ -476,8 +472,7 @@ fn tool_mapping_uses_camel_case_names() {
     assert_eq!(
         signal,
         Some(LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             name: None,
             native_key: None,
             turn_id: None,
@@ -492,8 +487,7 @@ fn tool_mapping_uses_camel_case_names() {
         )
         .map(|observation| observation.signal),
         Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,

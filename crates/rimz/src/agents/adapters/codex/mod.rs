@@ -81,7 +81,7 @@ use super::definition::{
     PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::observation::{SessionOrigin, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
@@ -1967,8 +1967,7 @@ fn map_codex_lifecycle_signal(
         },
         CodexHook::PermissionRequest(_) => awaiting(AskKind::Permission),
         CodexHook::PostToolUse(tool) => LifecycleSignal::ToolUsed {
-            mutates: spec.tool_mutates(payload),
-            edits: spec.tool_edits_files(payload),
+            effect: spec.tool_effect(payload),
             name: tool.tool_name.clone(),
             native_key: None,
             turn_id: tool.common.turn_id.clone(),
@@ -1976,8 +1975,7 @@ fn map_codex_lifecycle_signal(
         CodexHook::PreToolUse(tool) => match spec.blocking_tool_kind(tool.tool_name.as_deref()) {
             Some(kind) => awaiting(kind),
             None => LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: None,
                 turn_id: tool.common.turn_id.clone(),

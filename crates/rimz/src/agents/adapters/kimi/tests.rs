@@ -372,8 +372,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
     assert_eq!(
         failed.signal,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: Some("t1".to_owned()),
             turn_id: None,
@@ -500,8 +499,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
     assert_eq!(
         write.signal,
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             name: None,
             native_key: Some("t1".to_owned()),
             turn_id: None,

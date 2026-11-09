@@ -112,11 +112,11 @@ fn session_start_and_reset_register_without_ending_the_card() {
 fn turns_and_tools_reach_the_consumer_state() {
     let running = advance(None, None, "pre_llm_call", json!({}));
     assert_eq!(running.status, AgentStatus::Running);
-    for (tool, mutates, edits) in [
-        ("write_file", true, true),
-        ("patch", true, true),
-        ("terminal", true, false),
-        ("read_file", false, false),
+    for (tool, effect) in [
+        ("write_file", ToolEffect::Editing),
+        ("patch", ToolEffect::Editing),
+        ("terminal", ToolEffect::Mutating),
+        ("read_file", ToolEffect::Observed),
     ] {
         let output = HermesAdapter
             .decode_hook(
@@ -125,7 +125,7 @@ fn turns_and_tools_reach_the_consumer_state() {
             )
             .unwrap();
         assert!(
-            matches!(&output.lifecycle().expect("tool").signal, LifecycleSignal::ToolUsed {mutates:m,edits:e,..} if *m==mutates && *e==edits)
+            matches!(&output.lifecycle().expect("tool").signal, LifecycleSignal::ToolUsed {effect: e,..} if *e==effect)
         );
         let state = step(
             Some(&running),
@@ -136,7 +136,7 @@ fn turns_and_tools_reach_the_consumer_state() {
         .next;
         assert_eq!(
             state.phase,
-            if edits {
+            if effect == ToolEffect::Editing {
                 TurnPhase::Acting
             } else {
                 TurnPhase::Reasoning

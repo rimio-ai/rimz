@@ -154,26 +154,25 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
 
 #[test]
 fn files_modified_flag_precedes_static_tool_fallback() {
-    for (payload, edits) in [
+    for (payload, effect) in [
         (
             json!({ "session_id": "T-abc123", "tool_name": "read", "files_modified": true }),
-            true,
+            ToolEffect::Editing,
         ),
         (
             json!({ "session_id": "T-abc123", "tool_name": "apply_patch", "files_modified": false }),
-            false,
+            ToolEffect::Mutating,
         ),
         (
             json!({ "session_id": "T-abc123", "tool_name": "apply_patch" }),
-            true,
+            ToolEffect::Editing,
         ),
     ] {
         let observed = hook_lifecycle(&AmpAdapter, "tool_result", &payload);
         assert_eq!(
             observed.signal,
             LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits,
+                effect,
                 name: None,
                 native_key: None,
                 turn_id: None,

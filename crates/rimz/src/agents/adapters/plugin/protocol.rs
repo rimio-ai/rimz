@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use crate::agents::{AgentHookClass, AgentRateLimits, AskKind, LifecycleSignal};
+use crate::agents::{AgentHookClass, AgentRateLimits, AskKind, LifecycleSignal, ToolEffect};
 use crate::transcript::AskQuestion;
 
 use super::manifest::PROTOCOL_VERSION;
@@ -158,7 +158,7 @@ impl CanonicalEvent {
         }
     }
 
-    pub(super) fn normalize(&self, mutates: bool, edits: bool) -> NormalizedCanonicalEvent {
+    pub(super) fn normalize(&self, effect: ToolEffect) -> NormalizedCanonicalEvent {
         match self {
             Self::SessionStart => {
                 NormalizedCanonicalEvent::lifecycle(LifecycleSignal::Registered, true)
@@ -186,8 +186,7 @@ impl CanonicalEvent {
             },
             Self::ToolUse { .. } => NormalizedCanonicalEvent::lifecycle(
                 LifecycleSignal::ToolUsed {
-                    mutates,
-                    edits,
+                    effect,
                     name: None,
                     native_key: None,
                     turn_id: None,

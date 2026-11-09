@@ -41,6 +41,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{PresetArgMatcher, PresetField};
+use crate::agents::ToolEffect;
 
 pub use check::{
     PluginCheckReport, ProbeCheckReport, ProbeCheckStatus, ReplayCheckReport, ReplayFinalState,
@@ -155,14 +156,11 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
         if !self.emits(event_name) {
             warn_undeclared_once(self.spec.kind, event_name);
         }
-        let (mutates, edits) = envelope
-            .event
-            .tool()
-            .map_or((false, false), |(name, is_error)| {
-                let mutates = !is_error && self.spec.tools.mutating.contains(&name);
-                (mutates, mutates && self.spec.tools.editing.contains(&name))
-            });
-        let event = envelope.event.normalize(mutates, edits);
+        let effect = match envelope.event.tool() {
+            Some((name, false)) => self.spec.tools.effect(name),
+            _ => ToolEffect::Observed,
+        };
+        let event = envelope.event.normalize(effect);
         let mut decoded = HookOutput::new(super::ClassifiedHook {
             class: event.class,
             ask_kind: event.ask_kind,

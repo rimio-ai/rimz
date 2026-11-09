@@ -663,8 +663,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 })
             }
             "tool_after" => Some(LifecycleSignal::ToolUsed {
-                mutates: self.spec().tool_mutates(payload),
-                edits: self.spec().tool_edits_files(payload),
+                effect: self.spec().tool_effect(payload),
                 name: optional_payload_string(payload, &["tool_name"]),
                 native_key: None,
                 turn_id: None,

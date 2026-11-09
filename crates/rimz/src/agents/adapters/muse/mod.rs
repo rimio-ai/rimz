@@ -337,8 +337,7 @@ impl HookCapability for MuseAdapter {
                 return Ok(decoded);
             }
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => LifecycleSignal::ToolUsed {
-                mutates: self.spec().tool_mutates(payload),
-                edits: self.spec().tool_edits_files(payload),
+                effect: self.spec().tool_effect(payload),
                 name: parsed.tool_name,
                 native_key: parsed.tool_use_id,
                 turn_id: parsed.turn_id,

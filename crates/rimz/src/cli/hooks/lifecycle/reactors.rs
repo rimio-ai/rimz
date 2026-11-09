@@ -121,6 +121,7 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::agents::ToolEffect;
 
     fn signals() -> Vec<LifecycleSignal> {
         vec![
@@ -135,8 +136,7 @@ mod tests {
             LifecycleSignal::SubagentStarted,
             LifecycleSignal::SubagentStopped { errored: false },
             LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: None,
                 native_key: None,
                 turn_id: None,

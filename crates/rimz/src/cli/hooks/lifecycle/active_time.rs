@@ -195,6 +195,7 @@ fn active_time_at(
 mod tests {
     use super::*;
     use rimz::agents::AskKind;
+    use rimz::agents::ToolEffect;
 
     #[test]
     fn released_effort_is_appended_once_at_the_operation_timestamp() {
@@ -347,8 +348,7 @@ mod tests {
             (LifecycleSignal::SubagentStopped { errored: false }, None),
             (
                 LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: None,
                     turn_id: None,

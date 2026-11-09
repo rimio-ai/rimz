@@ -252,8 +252,7 @@ fn hook_replay_metadata_does_not_repeat_the_event_payload() {
         (
             "PostToolUse",
             LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: true,
+                effect: ToolEffect::Editing,
                 name: Some("Edit".into()),
                 native_key: None,
                 turn_id: None,
@@ -360,22 +359,19 @@ fn hook_recovery_preserves_the_keepalive_ping_transition() {
 #[test]
 fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
     let proof = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,
     };
     let mutating = LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits: false,
+        effect: ToolEffect::Mutating,
         name: None,
         native_key: None,
         turn_id: None,
     };
     let named = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: Some("Read".to_owned()),
         native_key: None,
         turn_id: None,
@@ -435,8 +431,7 @@ fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
     );
 
     let proof = observation(LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,
@@ -816,8 +811,7 @@ fn a_closed_turns_unnamed_tool_proof_is_ignored_without_an_append() {
     });
     let before = store.read_events().unwrap().len();
     let receipt = append(LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: Some("closed".into()),
@@ -900,8 +894,7 @@ fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
     append(
         "PostToolUse",
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -952,8 +945,7 @@ fn read_only_tool_uses_latest_durable_waiting_state() {
     }
 
     let proof = observation(LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,
@@ -1318,8 +1310,7 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
         .unwrap();
 
     parent.signal = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,

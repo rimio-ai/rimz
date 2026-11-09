@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::{CompactCommand, CompactInstruction, LaunchSpec, PromptStyle, program_names_kind};
-use crate::agents::AskKind;
 use crate::agents::registry::BUILTINS;
+use crate::agents::{AskKind, ToolEffect};
 
 #[test]
 fn permission_settlement_defaults_and_maps_each_kind() {
@@ -534,13 +534,13 @@ fn compact_command_renders_supported_instructions_on_one_line() {
 #[test]
 fn descriptor_classifies_mutating_editing_and_blocking_tools() {
     let claude = crate::agents::registry::spec_by_kind("claude").unwrap();
-    assert!(claude.tool_mutates(&json!({ "tool_name": "Edit" })));
-    assert!(claude.tool_mutates(&json!({ "tool_name": "Bash" })));
-    assert!(!claude.tool_mutates(&json!({ "tool_name": "Read" })));
-    assert!(!claude.tool_mutates(&json!({})));
+    let effect = |name| claude.tool_effect(&json!({ "tool_name": name }));
+    assert_eq!(effect("Edit"), ToolEffect::Editing);
     // Command runners mutate but do not edit — the reasoning phase survives.
-    assert!(!claude.tool_edits_files(&json!({ "tool_name": "Bash" })));
-    assert!(claude.tool_edits_files(&json!({ "tool_name": "Write" })));
+    assert_eq!(effect("Bash"), ToolEffect::Mutating);
+    assert_eq!(effect("Read"), ToolEffect::Observed);
+    assert_eq!(claude.tool_effect(&json!({})), ToolEffect::Observed);
+    assert_eq!(effect("Write"), ToolEffect::Editing);
     assert_eq!(
         claude.blocking_tool_kind(Some("ExitPlanMode")),
         Some(AskKind::PlanApproval)
@@ -552,9 +552,14 @@ fn descriptor_classifies_mutating_editing_and_blocking_tools() {
     assert_eq!(claude.blocking_tool_kind(Some("request_user_input")), None);
 
     let codex = crate::agents::registry::spec_by_kind("codex").unwrap();
-    assert!(codex.tool_mutates(&json!({ "tool_name": "apply_patch" })));
-    assert!(codex.tool_edits_files(&json!({ "tool_name": "apply_patch" })));
-    assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
+    assert_eq!(
+        codex.tool_effect(&json!({ "tool_name": "apply_patch" })),
+        ToolEffect::Editing
+    );
+    assert_eq!(
+        codex.tool_effect(&json!({ "tool_name": "shell" })),
+        ToolEffect::Mutating
+    );
     assert_eq!(
         codex.blocking_tool_kind(Some("request_user_input")),
         Some(AskKind::Question)

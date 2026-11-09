@@ -16,7 +16,7 @@ mod raised;
 
 #[test]
 fn codex_auto_review_hides_list_but_preserves_explicit_ask() {
-    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode};
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, ToolEffect};
     use rimz::store::event::EventEnvelope;
 
     for age in [10, 61] {
@@ -119,8 +119,7 @@ fn codex_auto_review_hides_list_but_preserves_explicit_ask() {
         assert!(source.is_awaiting_input());
         observation.signal = LifecycleSignal::ToolUsed {
             name: Some("shell".to_owned()),
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             native_key: None,
             turn_id: None,
         };

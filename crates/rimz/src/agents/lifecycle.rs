@@ -148,16 +148,14 @@ pub enum LifecycleSignal {
     /// A tool completed (`PostToolUse`) or non-blocking tool started
     /// (`PreToolUse`). Adapters emit this for every completed tool; a `name`
     /// makes the call durable for statistics, while unnamed proof needs a
-    /// mutation or state change. `edits` marks the file-editing subset (Claude
-    /// `Edit`/`Write`/…, Codex `apply_patch`): the first edit of a turn moves
-    /// it from reasoning to acting. Defaulted so a `tool_used` event written
-    /// before the bit existed still replays. A tool carrying the id of the
-    /// most recently closed turn (ended or interrupted) is ignored as trailing
+    /// mutation or state change. A [`ToolEffect::Editing`] tool (Claude
+    /// `Edit`/`Write`/…, Codex `apply_patch`) is the first edit of a turn that
+    /// moves it from reasoning to acting. A tool carrying the id of the most
+    /// recently closed turn (ended or interrupted) is ignored as trailing
     /// output rather than reopening that turn.
     ToolUsed {
-        mutates: bool,
-        #[serde(default)]
-        edits: bool,
+        #[serde(flatten)]
+        effect: ToolEffect,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,6 +212,48 @@ pub enum LifecycleSignal {
     /// The agent's pane disappeared because its mux session died. Retained so
     /// old `rimz.agent-lost` records remain parseable during log replay.
     Lost,
+}
+
+/// What a completed tool did to the workspace, ordered by strength. Editing
+/// implies mutating: a file edit is a mutation, so the strongest effect
+/// carries both facts. It rides the wire as the `mutates` and `edits` bits
+/// (`edits` defaulted for records written before it existed); a record
+/// carrying `edits` without `mutates` reads as editing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "ToolFlags", into = "ToolFlags")]
+pub enum ToolEffect {
+    /// Read, searched, or failed: no proof of work on its own.
+    Observed,
+    /// Changed the workspace without editing a file, such as a shell command.
+    Mutating,
+    /// Edited a file, the file-editing subset of mutating tools.
+    Editing,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ToolFlags {
+    mutates: bool,
+    #[serde(default)]
+    edits: bool,
+}
+
+impl From<ToolFlags> for ToolEffect {
+    fn from(flags: ToolFlags) -> Self {
+        match (flags.mutates, flags.edits) {
+            (_, true) => Self::Editing,
+            (true, false) => Self::Mutating,
+            (false, false) => Self::Observed,
+        }
+    }
+}
+
+impl From<ToolEffect> for ToolFlags {
+    fn from(effect: ToolEffect) -> Self {
+        Self {
+            mutates: effect != ToolEffect::Observed,
+            edits: effect == ToolEffect::Editing,
+        }
+    }
 }
 
 /// Supervised-run terminal classification, distinct from the reducer outcome.
@@ -728,8 +768,8 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         // never re-arms mid-turn, and a parked turn that runs a tool is
         // visibly back at work.
         LifecycleSignal::AskResolved { .. } => TurnPhase::Acting,
-        LifecycleSignal::ToolUsed { edits, .. } => {
-            if !edits && prior_phase == TurnPhase::Reasoning {
+        LifecycleSignal::ToolUsed { effect, .. } => {
+            if *effect != ToolEffect::Editing && prior_phase == TurnPhase::Reasoning {
                 TurnPhase::Reasoning
             } else {
                 TurnPhase::Acting
