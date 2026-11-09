@@ -26,13 +26,13 @@ Code outside `agents` reaches this module only through the provider-neutral faç
 `load_from_root` builds every plugin in one pass over `agents.d/*/agent.toml` under the RimZ home (`plugins_root`):
 
 1. Collect. List each subdirectory's `agent.toml` and sort the paths, so display order is deterministic. A missing `agents.d` yields no plugins.
-2. Validate. Parse the TOML and run `PluginManifest::validate`. The rules include protocol 1, the kind grammar (`valid_kind`), no collision with a `registry::BUILTINS` kind, a kind equal to the directory name, unique canonical `emits` that include `session_start`, editing tools that are a subset of mutating tools, a `{session_id}` placeholder in `resume`, a non-empty argv for each declared probe, and an existing `setup-doc` file. The reference's [manifest tables](../../reference/agent-plugins.md#manifest) state each rule as an author meets it.
+2. Validate. Parse the TOML and run `PluginManifest::validate`. An unreadable manifest is rejected at this step too. The rules include protocol 1, the kind grammar (`valid_kind`), the reserved kind `fallback` (a `harness.prompt_cache_ttl` key), no collision with a `registry::BUILTINS` kind, a kind equal to the directory name, unique canonical `emits` that include `session_start`, editing tools that are a subset of mutating tools, a `{session_id}` placeholder in `resume`, a non-empty argv for each declared probe, and an existing `setup-doc` file. The reference's [manifest tables](../../reference/agent-plugins.md#manifest) state each rule as an author meets it.
 3. Deduplicate. Reject a kind that an earlier path in sort order already took. Step 2 ties each kind to its directory name, so this check is a backstop that cannot fire today.
 4. Build. `build_adapter` builds and leaks the adapter and its spec, then `AgentDefinition::validate` runs. It repeats checks that step 2 already made, so it is a backstop too.
 
-The result is `LoadedPlugins`: the valid `definitions`, one `PluginLoadError` per rejected manifest, and one `PluginDiagnostic` per manifest either way. A load error's `kind_hint` is the bundle's directory name. The hook feed and `rimz agents check` use it to match a broken bundle to a kind.
+The result is `LoadedPlugins`: the valid `definitions`, one `PluginLoadError` per rejected manifest, one `PluginDiagnostic` per manifest either way, and the module-private `plugin_adapters` behind `definitions`, which `check_from_root` reads to reach a bundle's manifest and probes. A load error's `kind_hint` is the bundle's directory name. The hook feed and `rimz agents check` use it to match a broken bundle to a kind.
 
-`loaded()` runs the load once per process behind a `OnceLock` and logs one warning per rejected manifest. `registry::all_definitions()` chains `BUILTINS` with `loaded().definitions`, so a valid plugin reaches every consumer that resolves agents through the registry, with no plugin-specific branch. The authoring commands call `load_from_root` directly and get a fresh load.
+`loaded()` runs the load once per process behind a `OnceLock` and logs one warning per rejected manifest. `registry::all_definitions()` chains `BUILTINS` with `loaded().definitions`, so a valid plugin reaches every consumer that resolves agents through the registry, with no plugin-specific branch. `rimz agents register --check` and `rimz agents check` call `load_from_root` directly and get a fresh load.
 
 The once-per-process load means a long-lived process keeps the plugin set it saw at its first registry read. A bundle that is added, fixed, or broken later reaches that process only after it restarts. Short-lived commands, such as each `rimz hooks feed` and each `rimz hooks apply` child, see the change at once.
 
@@ -54,9 +54,9 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `capabilities.local_session_discovery` | `Unsupported` |
 | `capabilities.transcript_tail_context`, `daemon_hooked_sessions`, `prompt_context`, `hook_context`, `remote_control`, `permission_before_auto_review` | off |
 | `capabilities.same_pane_session` | `KeepPrimary` |
-| `launch` | `LaunchSpec::EMPTY` without a `[launch]` table: no program, so `launch_command` returns `None`; the three `launch.*` rows below hold only with one |
+| `launch` | `LaunchSpec::EMPTY` without a `[launch]` table: no program, so `launch_command` returns `None`. The three `launch.*` rows below hold only with one |
 | `launch.prompt` | positional after `--` |
-| `launch.resume`, `fork`, `max_turn_flag`, `interrupt_key`, `presets.auto_compact` | none; resume argv comes from `resume_command` instead |
+| `launch.resume`, `fork`, `max_turn_flag`, `interrupt_key`, `presets.auto_compact`, `presets.fast` | none. Resume argv comes from `resume_command` instead |
 | `launch.compact_command` | the manifest string, with `CompactInstruction::Unsupported` |
 | `default_model`, `default_context_window` | none |
 | `thread_key` | `[transcripts].thread-key`, default `PerFile` |
@@ -79,35 +79,36 @@ The installation, runtime-control, session, and transcript capability traits are
 
 ## Hook ingest
 
-The shim runs `rimz hooks feed --source <kind> --event <event>` with one envelope on stdin. The feed treats a plugin like any adapter ([adapter.md#the-feed](./adapter.md#the-feed)): it reads and parses the payload, appends a raw frame to the room's ingress log, and prints the reply. A plugin inherits the silent `payload_hook_reply`, so hook stdout stays empty. The envelope is decoded later, in the `rimz hooks apply` child that `process_frame` in [`cli/hooks.rs`](../../../crates/rimz/src/cli/hooks.rs) runs, through `PluginAdapter::decode_hook`.
+The shim runs `rimz hooks feed --source <kind> --event <event>` with one envelope on stdin. The feed treats a plugin like any adapter ([adapter.md#the-feed](./adapter.md#the-feed)): it reads and parses the payload, appends a raw frame to the room's ingress log, and prints the reply. A plugin inherits the silent `payload_hook_reply`, so hook stdout stays empty. The envelope is decoded later through `PluginAdapter::decode_hook`, which `process_frame` in [`cli/hooks.rs`](../../../crates/rimz/src/cli/hooks.rs) calls in the `rimz hooks apply` child that the drainer spawns. One exception: a feed under scoped isolation that cannot reach the host drainer calls `process_frame` inline and appends no frame.
 
 `decode_hook` runs these steps:
 
 1. Parse. `Envelope::parse` deserializes the payload once. It fails on a shape serde rejects (including a known event with malformed typed fields), a `protocol` other than 1, or a `hook_event_name` that differs from the feed's event name. A failure logs at debug level and returns class `Unknown` with no observation.
 2. Check `emits`. An event name absent from `emits` logs `warn_undeclared_once`, once per kind and event per process. A name outside `CANONICAL_EVENTS` parses as `CanonicalEvent::Unknown` and can never be in `emits`, so it takes this warning before it returns class `Unknown` with no signal.
 3. Classify tools. A `tool_use` counts as mutating when `is_error` is false and `tool_name` is in the spec's mutating tools, and as editing when the name is also in the editing tools.
-4. Normalize. `CanonicalEvent::normalize` maps the event to its class, ask kind, `LifecycleSignal`, ask questions, turn error, final message, and the progress and session-ended flags.
+4. Normalize. `CanonicalEvent::normalize` maps the event to its class, ask kind, `LifecycleSignal`, ask questions and detail, turn error, final message, and the progress and session-ended flags.
 5. Route. The route key is `agent_id`, falling back to `session_id`. The session is `session_id`, and `cwd` is the worktree.
 6. Attach context. A `context` event attaches a `ContextObservation`. `normalize_context` stamps `source` and `observed_at`, and folds top-level `model`, `total_cost_usd`, `rate_limits`, and token fields into the `AgentContext` shape where the record's own fields are absent. The observation needs a root identity, so a context envelope without a `session_id`, or with an `agent_id` that differs from it, is dropped. A `context` event carries no lifecycle signal and stops here.
-7. Resolve identity. The shared helpers in [`agents/identity.rs`](../../../crates/rimz/src/agents/identity.rs) decide. `subagent_start` and `subagent_end` need a child `agent_id` distinct from the parent `session_id`, and anything else is quarantined with an error on the `rimz::agent::lifecycle` target. A root event whose `agent_id` differs from its `session_id` is dropped as a foreign child.
+7. Resolve identity. The shared helpers in [`agents/identity.rs`](../../../crates/rimz/src/agents/identity.rs) decide. `subagent_start` and `subagent_end` need a child `agent_id` distinct from the parent `session_id`, and anything else is quarantined with an error on the `rimz::agent::lifecycle` target. A root event whose `agent_id` differs from its `session_id`, or that carries an `agent_id` and no `session_id`, is dropped as a foreign child. Both helpers trim the ids and treat an empty one as absent.
 8. Observe. The `AgentLifecycleObservation` carries model, effort, usage (`context_pct` capped at 100), the transcript path, and the `turn_start` prompt as both task and prompt.
 
-`native-ask-ui` decides what an `awaiting_input` does. The event always decodes as `AwaitingUser`, but `process_frame` records it only when the spec declares `native_ask_ui`. With the flag off, the raw frame still reaches the ingress log like any other, but its apply records nothing: no waiting state, no transcript ask, and no usage from that envelope. No native prompt exists for a waiting row to route the user to. Every built-in declares the flag, so this branch runs only for a plugin. [adapter.md#two-channels](./adapter.md#two-channels) describes the ask channel the flag gates, and the ask coverage rows go `Unsupported` in the same case.
+`native-ask-ui` decides what an `awaiting_input` does. The event always decodes as `AwaitingUser`, but `process_frame` records it only when the spec declares `native_ask_ui`. With the flag off, the raw frame still reaches the ingress log like any other (except on the inline path above), but its apply records nothing: no waiting state, no transcript ask, and no usage from that envelope. No native prompt exists for a waiting row to route the user to. Every built-in declares the flag, so this branch runs only for a plugin. [adapter.md#two-channels](./adapter.md#two-channels) describes the ask channel the flag gates, and the ask coverage rows go `Unsupported` in the same case.
 
 `rimz hooks feed` is the only delivery path that protocol 1 has. The envelope carries nothing specific to process execution, so the vocabulary does not depend on it.
 
 ## Probes
 
-Probes are pull-only enrichment. Every probe goes through `run_json_diagnostic` in `probes.rs`, which enforces the limits that the reference's [probe contracts](../../reference/agent-plugins.md#probe-contracts) publish: `PROBE_TIMEOUT` (3 s), `MAX_STDOUT` (1 MiB), and `MAX_STDERR` (16 KiB). Three properties of the runner are invisible from the contract:
+Probes are pull-only enrichment. Every probe goes through `run_json_diagnostic` in `probes.rs`, which enforces the limits that the reference's [probe contracts](../../reference/agent-plugins.md#probe-contracts) publish: `PROBE_TIMEOUT` (3 s), `MAX_STDOUT` (1 MiB), and `MAX_STDERR` (16 KiB). These properties of the runner are invisible from the contract:
 
-- It is synchronous, and the 3-second deadline bounds only the wait for exit. The runner writes the spend request first, then polls `try_wait` every 10 ms (`POLL_INTERVAL`) and kills the child at the deadline. After the exit it joins the two pipe readers with no bound, so a probe that blocks on its request or leaves a descendant holding a pipe open can hold the calling thread past 3 seconds.
+- It is synchronous, and the 3-second deadline bounds only the wait for exit. The runner writes the spend request, starts the deadline, polls `try_wait` every 10 ms (`POLL_INTERVAL`), and kills the child at the deadline. After the exit it joins the two pipe readers with no bound. A probe that never reads a request larger than the pipe buffer, or that leaves a descendant holding a pipe open, can therefore hold the calling thread past 3 seconds.
+- Each pipe reader stops after its cap plus one byte and closes its end. A probe that keeps writing past a cap then gets `SIGPIPE` or `EPIPE` on its next write, and it usually reports as a nonzero exit.
 - The child inherits the RimZ process environment. Every `PluginAdapter` method that takes a login environment ignores it, so the probes and the transcript globs read the same files whatever login a session runs under.
-- A failure logs a warning and yields the method's empty result, never an error. The causes are a spawn error, a failed request write, a timeout, a nonzero exit, oversized stdout, and, for spend and account, invalid JSON. The version probe's stdout is plain text.
+- A failure logs a warning and yields the method's empty result, never an error. The causes are a spawn error, a failed request write, a timeout, a failed wait, a nonzero exit, oversized stdout, and, for spend and account, invalid JSON. The version probe's stdout is plain text, and stdout that is not UTF-8 yields `None` with no warning.
 
 | Probe | Adapter method | Maps to | Empty result |
 | --- | --- | --- | --- |
-| spend | `SpendingCapability::parse_spend` | a `CachedEntry` per entry with an RFC 3339 timestamp; `cost_usd` taken verbatim (non-finite becomes 0) and the `PriceBook` ignored; `SpendCursor.state` round-trips the plugin's opaque cursor and `SpendCursor.offset` is the file length at parse time; `origin` passes through; the update is `SpendUpdate::Extend` | `SpendParse::default()` |
-| account | `AccountCapability::probe_account`, `probe_account_usage` | `AgentAccount` with plan and account id; usage adds `rate_limit_windows` and keys the account by `account_id`; `logged_out` or an all-empty response is `LoggedOut` or `NoCredentials` | `Unavailable` and `Failed`; with no account probe declared, `LoggedOut` and `Unsupported` |
+| spend | `SpendingCapability::parse_spend` | a `CachedEntry` per entry with an RFC 3339 timestamp, `cost_usd` taken verbatim (non-finite becomes 0), with the `PriceBook` ignored. `SpendCursor.state` round-trips the plugin's opaque cursor, and `SpendCursor.offset` is the file length at parse time. `origin` passes through, and the update is `SpendUpdate::Extend` | no entries, with `read_error` set (`Other` for a failed run, `InvalidData` for invalid JSON), so the spending refresh counts the file as unread. With no spend probe declared, `SpendParse::default()` |
+| account | `AccountCapability::probe_account`, `probe_account_usage` | `AgentAccount` with plan and account id. Usage adds `rate_limit_windows` and keys the account by `account_id`. `logged_out`, or a response with no plan, account id, or windows, is `LoggedOut` or `NoCredentials` | `Unavailable` and `Failed`. With no account probe declared, `LoggedOut` and `Unsupported` |
 | version | `LaunchCapability::probe_version` | the first non-empty stdout line | `None` |
 
 Spend discovery needs both halves. `spending_sources` returns sources only when the manifest has `[transcripts]` and a spend probe, while `transcript_files` lists the glob matches from `[transcripts]` alone. A glob that starts with `~/` expands from the process `HOME`, an absolute glob stands as written, and a relative glob resolves from the bundle directory.
@@ -120,14 +121,14 @@ A broken bundle warns at room entry and is absent from the agent registry:
 
 | Entry point | Behaviour |
 | --- | --- |
-| Managed room entry | [`room/judgment.rs`](../../../crates/rimz/src/room/judgment.rs) records one warning per rejected manifest, which names `rimz agents register --check`, and the room opens; launching the rejected kind refuses it as unknown |
-| Registry reads through `all_definitions()` | see valid plugins only; `loaded()` warned once per rejected manifest |
+| Managed room entry | [`room/judgment.rs`](../../../crates/rimz/src/room/judgment.rs) records one warning per rejected manifest, which names `rimz agents register --check`, and the room opens. Launching the rejected kind refuses it as unknown |
+| Registry reads through `all_definitions()` | see valid plugins only. `loaded()` warned once per rejected manifest |
 | `rimz hooks feed --source <kind>` | when the kind is not a definition and a load error's `kind_hint` matches, the feed warns and exits 0 with empty stdout, before it reads stdin |
 | `rimz doctor` | one row per `PluginDiagnostic`: validity, error, setup doc, and each probe's presence and executable bit |
 
 ## Authoring commands
 
-`rimz agents register <kind>` ([`cli/agents_cmd/register.rs`](../../../crates/rimz/src/cli/agents_cmd/register.rs)) checks the kind grammar and rejects a kind that `all_definitions()` already knows (a built-in or a loaded plugin) or whose directory exists. It then creates the bundle directory and writes `agent.toml`, `README.md`, `shim.sh`, `probes/spend`, and `probes/account`, each file atomically, and marks the shim and both probes executable. A failed write removes the directory. `register --check` runs a fresh `load_from_root` over the whole `agents.d` and exits nonzero listing every error.
+`rimz agents register <kind>` ([`cli/agents_cmd/register.rs`](../../../crates/rimz/src/cli/agents_cmd/register.rs)) checks the kind grammar. It rejects the reserved `fallback`, a kind that `all_definitions()` already knows (a built-in or a loaded plugin), and a kind whose directory exists. It then creates the bundle directory with a `probes/` subdirectory, writes `agent.toml`, `README.md`, `shim.sh`, `probes/spend`, and `probes/account` (each file atomically), and marks the shim and both probes executable. A failed write removes the directory. `register --check` runs a fresh `load_from_root` over the whole `agents.d` and exits nonzero listing every error.
 
 `rimz agents check <kind>` calls `check_from_root`. It refuses a built-in kind, loads fresh, and fails with the manifest error when that kind was rejected. The report counts both coverage matrices and checks every declared probe for presence and the executable bit. It runs the account and version probes for real, and the spend probe only with `--spend-file`.
 
