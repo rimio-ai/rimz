@@ -674,11 +674,32 @@ pub fn resolve_single_agent_launch(
     workspace: &crate::workspace::ResolvedWorkspace,
     login: &crate::store::writer::LaunchLogin,
 ) -> Result<ResolvedSingleAgentLaunch> {
-    if matches!(login, crate::store::writer::LaunchLogin::Pinned(_)) {
-        return ResolvedSingleAgentLaunch::for_booking(spec, workspace);
-    }
+    single_agent(spec, &routed_layout(spec, workspace, login)?)
+}
+
+/// Every agent cell a workflow step's `spec` launches, routed as
+/// [`resolve_single_agent_launch`] routes one, beside the account the cell pins.
+pub(crate) fn resolve_agent_cells(
+    spec: &str,
+    workspace: &crate::workspace::ResolvedWorkspace,
+    login: &crate::store::writer::LaunchLogin,
+) -> Result<Vec<(ResolvedSingleAgentLaunch, Option<crate::ids::LoginName>)>> {
+    Ok(routed_layout(spec, workspace, login)?
+        .agent_cells()
+        .map(|cell| (single_cell(cell), cell.launch.login.clone()))
+        .collect())
+}
+
+fn routed_layout(
+    spec: &str,
+    workspace: &crate::workspace::ResolvedWorkspace,
+    login: &crate::store::writer::LaunchLogin,
+) -> Result<crate::harness::spec::LayoutSpec> {
     let machine_config = crate::config::MachineConfig::load_lenient();
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
+    if matches!(login, crate::store::writer::LaunchLogin::Pinned(_)) {
+        return resolve_layout(spec, &launch, &machine_config.agents.commands);
+    }
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_state(&state)?;
     let availability = LaunchAvailability::read_as(
@@ -697,7 +718,7 @@ pub fn resolve_single_agent_launch(
         None,
         |kind, model| availability.unavailable(kind, model),
     )?;
-    resolve_single_agent_spec(spec, &launch, &machine_config.agents.commands)
+    resolve_layout(spec, &launch, &machine_config.agents.commands)
 }
 
 fn resolve_single_agent_spec(
@@ -705,6 +726,14 @@ fn resolve_single_agent_spec(
     launch: &crate::config::effective::LaunchAgents,
     commands: &crate::config::CommandsConfig,
 ) -> Result<ResolvedSingleAgentLaunch> {
+    single_agent(spec, &resolve_layout(spec, launch, commands)?)
+}
+
+fn resolve_layout(
+    spec: &str,
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+) -> Result<crate::harness::spec::LayoutSpec> {
     launch.block_set_failure()?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),
@@ -730,6 +759,13 @@ fn resolve_single_agent_spec(
         }
     };
     block_failed_kind_bases(launch, &launch.profiles, &layout, Some(spec), None)?;
+    Ok(layout)
+}
+
+fn single_agent(
+    spec: &str,
+    layout: &crate::harness::spec::LayoutSpec,
+) -> Result<ResolvedSingleAgentLaunch> {
     let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
     if cell_count != 1 {
         bail!("loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell");
@@ -737,11 +773,15 @@ fn resolve_single_agent_spec(
     let Cell::Agent(cell) = &layout.columns[0].rows[0] else {
         bail!("loop task `{spec}` must resolve to one agent; command cells are not supported");
     };
-    Ok(ResolvedSingleAgentLaunch {
+    Ok(single_cell(cell))
+}
+
+fn single_cell(cell: &crate::harness::spec::AgentCell) -> ResolvedSingleAgentLaunch {
+    ResolvedSingleAgentLaunch {
         kind: cell.kind.as_str().to_owned(),
         args: cell.args.clone(),
         model: cell.launch.model.clone(),
-    })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

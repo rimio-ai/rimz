@@ -732,15 +732,16 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     paths.ensure_dirs().unwrap();
     let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
     let mut homes = Vec::new();
-    for (state, age) in [
-        ("done", true),
-        ("failed", true),
-        ("canceled", true),
-        ("active", true),
-        ("parked", true),
-        ("done", false),
+    for (state, age, report) in [
+        ("done", true, "sent"),
+        ("failed", true, "none"),
+        ("canceled", true, "none"),
+        ("active", true, "none"),
+        ("parked", true, "none"),
+        ("done", false, "none"),
+        ("failed", true, "owed"),
     ] {
-        let record: RunRecord = serde_json::from_value(serde_json::json!({
+        let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
             "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
@@ -751,6 +752,8 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
             "terminal_at":null
         }))
         .unwrap();
+        record.task = Some("nightly".to_owned());
+        record.loop_report = serde_json::from_value(serde_json::json!(report)).unwrap();
         let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
         workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
         let home = paths.workflow(&record.id);
@@ -805,7 +808,10 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     .unwrap();
     assert_eq!(actual, preview);
     assert!(homes[..3].iter().all(|p| !p.home.exists()));
-    assert!(homes[3..].iter().all(|p| p.home.exists()));
+    assert!(
+        homes[3..].iter().all(|p| p.home.exists()),
+        "live, recent, unreported, and fresh recordless homes must stay"
+    );
     assert!(!orphan.home.exists(), "an old recordless home must go");
 }
 

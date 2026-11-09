@@ -898,7 +898,7 @@ fn a_late_replace_sigterm_cancels_the_run_before_draining() {
 }
 
 #[test]
-fn a_ladder_written_replacement_notifies_when_it_disables_the_task() {
+fn a_ladder_written_replacement_never_strikes_the_task() {
     let env = fixture("replace", None);
     let config_path = env.rimz_home().join("loop.toml");
     let config = std::fs::read_to_string(&config_path).unwrap();
@@ -943,20 +943,16 @@ fn a_ladder_written_replacement_notifies_when_it_disables_the_task() {
         "{rows:?}"
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("disabled after 1 consecutive failed fires"),
+        !String::from_utf8_lossy(&output.stdout).contains("disabled after"),
         "{output:?}"
     );
-    // The notify shell creates the log with `>>` before `printf` writes to it.
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while std::fs::read_to_string(&notify_log).unwrap_or_default() != "loop_disabled\n"
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    assert_eq!(
-        std::fs::read_to_string(notify_log).unwrap(),
-        "loop_disabled\n"
+    assert!(
+        !loop_strikes_path(&env).exists(),
+        "a replacement must not strike, even at max-strikes=1"
+    );
+    assert!(
+        !notify_log.exists(),
+        "no disable, so no loop_disabled notice"
     );
 }
 

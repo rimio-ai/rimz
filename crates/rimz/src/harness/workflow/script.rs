@@ -15,6 +15,8 @@ use crate::store::workflow::{self, RunRecord, RunState};
 
 mod condition;
 mod judge;
+#[cfg(test)]
+pub(super) use judge::declines;
 
 pub use condition::{CaseMark, CaseMarks, case_marks, unread_reasons};
 

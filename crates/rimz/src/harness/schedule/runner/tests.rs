@@ -235,7 +235,7 @@ fn cold_runtime_holder_is_visible_without_a_room_record() {
 }
 
 #[test]
-fn stop_marks_retype_the_holder_once_and_three_replacements_disable() {
+fn stop_marks_retype_the_holder_once_and_replacements_never_strike() {
     for cause in [backlog::StopCause::Stop, backlog::StopCause::Replace] {
         let root = tempfile::tempdir().unwrap();
         record_room(root.path()).unwrap();
@@ -287,9 +287,9 @@ fn stop_marks_retype_the_holder_once_and_three_replacements_disable() {
                 !backlog::load(&paths).unwrap().tasks.contains_key("pending"),
                 "the recording runner must clear its mark"
             );
-            assert_eq!(
-                done.transition == RunTransition::AutoDisabled { strikes: 3 },
-                cause == backlog::StopCause::Replace && strike == 3
+            assert!(
+                !matches!(done.transition, RunTransition::AutoDisabled { .. }),
+                "stop {strike} by {cause:?} must not strike"
             );
         }
     }
@@ -1336,6 +1336,54 @@ fn surplus_gate_covers_every_branch() {
         .as_deref(),
         Some("codex 7d window surplus 0.9x below 1.0x"),
         "a bare elapsed floor still demands sustainable headroom"
+    );
+}
+
+#[test]
+fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let workflow = format!("cells-{}", crate::ids::WorkflowRunId::new());
+    let dir = crate::disk::paths::workflows_dir().join(&workflow);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        crate::disk::paths::workflow_spec_file(&dir),
+        "[workflow]\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude,codex'\nprompt='fix'\nthen='@done'\n",
+    )
+    .unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        workflow: Some(workflow),
+        surplus: Some("1.5x".into()),
+        ..Default::default()
+    };
+    let mut fire = TaskFire::new(
+        "cells",
+        LoadedTask::new("cells", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Manual,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let plan = fire.prepare(&mut |_| Ok(()));
+    std::fs::remove_dir_all(&dir).unwrap();
+    let reason = match &plan {
+        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::SurplusSkipped => {
+            done.record.error.clone()
+        }
+        _ => None,
+    };
+    assert_eq!(
+        reason.as_deref(),
+        Some("no claude budget-window reading; surplus gate stays closed"),
+        "{:?}",
+        plan.err()
     );
 }
 
@@ -4212,4 +4260,43 @@ fn a_fresh_worktree_handed_to_a_launch_outlives_an_errored_or_budget_refused_eff
             "the launch keeps the agent's work (committed: {committed}, refused: {refused})"
         );
     }
+}
+
+#[test]
+fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
+    let root = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let step = |budget: &str| {
+        format!(
+            "[workflow]\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude'\nprompt='fix'\nbudget='{budget}'\nthen='@done'\n"
+        )
+    };
+    std::fs::write(
+        crate::disk::paths::workflow_spec_file(source.path()),
+        step("$3"),
+    )
+    .unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"review", "task":"sweep",
+        "spec_dir":source.path(), "spec_digest":"abc",
+        "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
+        "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
+        "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+        "deadline_fired":false, "next_seq":1, "spec_version":1
+    }))
+    .unwrap();
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    crate::store::workflow::initialize(&state, &record, step("$8").as_bytes(), &guard).unwrap();
+    drop(guard);
+    assert_eq!(live_reservation(root.path(), "sweep").unwrap(), 8.0);
+    std::fs::remove_file(crate::disk::paths::workflow_spec_file(
+        &state.workflow(&record.id).home,
+    ))
+    .unwrap();
+    let error = live_reservation(root.path(), "sweep").unwrap_err();
+    assert!(
+        format!("{error:#}").contains(&format!("reading run {}'s sealed definition", record.id)),
+        "{error:#}"
+    );
 }

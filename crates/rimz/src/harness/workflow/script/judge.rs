@@ -59,6 +59,7 @@ fn run(
         Timestamp::now(),
     )
     .map_err(|e| e.to_string())?;
+    let kind = profile.cell.kind.clone();
     let mut identity = ExecIdentity {
         params: profile.cell.launch.clone(),
         ..Default::default()
@@ -127,6 +128,7 @@ fn run(
     }
     let failure = match attempt.answer {
         Ok(object) => {
+            record_decline(spec, record, check, kind, &object, result.cost_usd);
             result.object = Ok(object);
             return Ok(());
         }
@@ -141,4 +143,64 @@ fn run(
         });
     }
     Err(failure.text)
+}
+
+/// A fresh answer from a loop task's judge that holds the task's act back is one assist,
+/// as a loop guard's decline was; a replayed answer never reaches here.
+fn record_decline(
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    check: &spec::Check,
+    kind: crate::ids::AgentKind,
+    object: &serde_json::Value,
+    cost_usd: Option<f64>,
+) {
+    let (Some(task), Some(outcome), Some(profile)) = (
+        record.task.as_ref(),
+        object["outcome"].as_str(),
+        check.agent.as_ref(),
+    ) else {
+        return;
+    };
+    if !declines(spec, &record.node, outcome) {
+        return;
+    }
+    crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+        at: Timestamp::now(),
+        assist: crate::harness::assist_log::Assist::JudgeDecline {
+            task: task.clone(),
+            checkout: record.scope.path.clone(),
+            profile: profile.clone(),
+            kind,
+            reason: object["reason"].as_str().unwrap_or_default().to_owned(),
+            cost_usd,
+        },
+    });
+}
+
+/// Whether a judge's verdict routes away from every step and agent check while its opposite
+/// verdict leads into one: the compiled decline of a loop task's guard.
+pub(in crate::harness::workflow) fn declines(
+    spec: &WorkflowSpec,
+    node: &str,
+    outcome: &str,
+) -> bool {
+    let opposite = match outcome {
+        "pass" => "fail",
+        "fail" => "pass",
+        _ => return false,
+    };
+    let edges = spec.edges(node);
+    let acts = |outcome: &str| {
+        edges
+            .iter()
+            .find(|edge| edge.outcome == outcome)
+            .map(|edge| {
+                spec.steps.contains_key(&edge.target)
+                    || spec.checks.get(&edge.target).is_some_and(|check| {
+                        matches!(check.kind(), Some(spec::CheckKind::Agent(_)))
+                    })
+            })
+    };
+    acts(outcome) == Some(false) && acts(opposite) == Some(true)
 }

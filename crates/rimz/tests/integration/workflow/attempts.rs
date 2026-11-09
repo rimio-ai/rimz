@@ -1042,10 +1042,10 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
         workflow_task_history(&room, "review")["workflow_runs"][0]["state"],
         "canceled"
     );
-    assert_eq!(
-        workflow_task_history(&room, "review")["runs"],
-        history["runs"]
-    );
+    let runs = workflow_task_history(&room, "review")["runs"].clone();
+    assert_eq!(runs.as_array().unwrap().len(), 1, "{runs}");
+    assert_eq!(runs[0]["run_id"], history["runs"][0]["run_id"], "{runs}");
+    assert_eq!(runs[0]["result"], "canceled", "{runs}");
     let manual = success(room.command(&["loop", "fire", "review"]).output().unwrap());
     let second = workflow_launches(&room)["tasks"]["review"][key]["run"]
         .as_str()
@@ -1295,8 +1295,13 @@ fn condition_project_workflow_covers_new_checkouts_even_after_finishing() {
     );
     fire(&second);
     let after = workflow_task_history(&room, "review");
+    let runs = after["runs"].as_array().unwrap();
     assert!(
-        live_unchanged && after["runs"] == before && records::list(&paths).unwrap().len() == 1,
+        live_unchanged
+            && runs.len() == 1
+            && runs[0]["run_id"] == before[0]["run_id"]
+            && runs[0]["result"] == "canceled"
+            && records::list(&paths).unwrap().len() == 1,
         "live_unchanged={live_unchanged}, {after}"
     );
     let entry = workflow_launches(&room)["tasks"]["review"]

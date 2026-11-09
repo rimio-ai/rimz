@@ -734,7 +734,8 @@ impl TaskEntry {
                     field: "budget-per-day",
                     source,
                 })?;
-            if self.budget.is_none() {
+            // A workflow task's runs reserve their agent steps' own budgets.
+            if self.budget.is_none() && self.workflow.is_none() {
                 return Err(TaskBudgetError::MissingRunBudget {
                     task: task.to_owned(),
                 });
@@ -761,6 +762,7 @@ impl TaskEntry {
         if (self.surplus.is_some() || self.surplus_after.is_some())
             && self.agent.is_none()
             && self.wait.is_none()
+            && self.workflow.is_none()
         {
             return Err(TaskBudgetError::SurplusNeedsAgent {
                 task: task.to_owned(),
@@ -787,7 +789,7 @@ pub enum TaskBudgetError {
         field: &'static str,
         detail: String,
     },
-    #[error("task `{task}` sets a surplus gate without `agent` or `wait`")]
+    #[error("task `{task}` sets a surplus gate without `agent`, `wait`, or `workflow`")]
     SurplusNeedsAgent { task: String },
 }
 

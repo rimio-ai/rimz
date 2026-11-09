@@ -1957,6 +1957,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,
+        acted: None,
     }
 }
 

@@ -677,4 +677,15 @@ fn task_budgets_validate_as_one_config_unit() {
         .validate_budget("nightly"),
         Err(TaskBudgetError::SurplusNeedsAgent { task }) if task == "nightly"
     ));
+    assert!(
+        TaskEntry {
+            surplus: Some("1.5x".to_owned()),
+            budget_per_day: Some("$5".to_owned()),
+            workflow: Some("review".to_owned()),
+            ..TaskEntry::default()
+        }
+        .validate_budget("nightly")
+        .is_ok(),
+        "a workflow task's daily cap and surplus gate its runs"
+    );
 }

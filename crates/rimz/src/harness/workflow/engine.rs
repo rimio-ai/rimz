@@ -220,6 +220,11 @@ fn publish(
         id,
         origin: start.origin,
         workflow: start.name,
+        loop_report: if start.task.is_some() {
+            workflow::LoopReport::Owed
+        } else {
+            workflow::LoopReport::None
+        },
         task: start.task,
         manual,
         spec_dir: start.spec_dir,
@@ -345,7 +350,25 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     }
     workflow::write(t.paths, &t.record, guard)?;
     accounting::transition(t);
+    report_to_loop(t.paths, &mut t.record, guard);
     Ok(())
+}
+
+/// Report a finished task-started run to its loop task once, after its terminal record is
+/// durable; a crash before the mark leaves the report to the scheduler's backstop advance.
+fn report_to_loop(paths: &WorkflowPaths, record: &mut RunRecord, guard: &WorkspaceLock) {
+    if !record.owes_loop_report() {
+        return;
+    }
+    let journal = workflow::journal(paths).unwrap_or_else(|error| {
+        tracing::warn!(run = %record.id, %error, "workflow journal unreadable for its loop report");
+        Vec::new()
+    });
+    crate::harness::schedule::run_log::report_run(record, &journal);
+    record.loop_report = workflow::LoopReport::Sent;
+    if let Err(error) = workflow::write(paths, record, guard) {
+        tracing::warn!(run = %record.id, %error, "workflow loop report mark not written");
+    }
 }
 
 fn window_wait(
@@ -501,7 +524,14 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let paths = state.workflow(id);
-    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
+    let record = workflow::load(&paths)?;
+    if record.owes_loop_report() {
+        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let mut record = workflow::load(&paths)?;
+        report_to_loop(&paths, &mut record, &guard);
+        return Ok(());
+    }
+    let spec = spec::load_run(&paths.home, &record)?;
     let mut seen = BTreeSet::new();
     let mut admission = Admission::default();
     loop {
@@ -1776,6 +1806,9 @@ pub(crate) fn reassign_task(
             continue;
         }
         record.task = new.map(str::to_owned);
+        if new.is_none() {
+            record.loop_report = workflow::LoopReport::None;
+        }
         workflow::write(&state.workflow(&record.id), &record, &guard)?;
         reassigned.push(record.id);
     }
