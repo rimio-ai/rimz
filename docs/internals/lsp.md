@@ -34,9 +34,9 @@ RimZ resolves every launch's checkout before any pane opens ([fleet.md § One la
 
 ## The rules that shape it
 
-Enrichment is the default, never a precondition. A configuration error or a memory refusal for an optional server, or a server that dies later, leaves agents on grep. `admission::admit_launch` warns once per launch. Untrusted project entries warn and stay inert, even when declared required, and same-named machine entries stay in effect. A required server's configuration error refuses the launch. An invalid machine-wide `[lsp]` policy refuses only when a required server's root markers match the checkout, and otherwise warns once and skips every server. Each warning is visible to the human ([Visibility](#visibility)).
+Enrichment is the default, never a precondition. A configuration error or a memory refusal for an optional or warm server, or a server that dies later, leaves agents on grep. `admission::admit_launch` warns once per launch. Untrusted project entries warn and stay inert, even when declared required, and same-named machine entries stay in effect. A required server's configuration error refuses the launch. An invalid machine-wide `[lsp]` policy refuses only when a required server's root markers match the checkout, and otherwise warns once and skips every server. Each warning is visible to the human ([Visibility](#visibility)).
 
-A server is registered at launch and started on demand. An optional launch creates a dormant broker with no server process. The first agent query or editor request runs memory admission and starts the server. A required launch admits and starts eagerly. Launch reminders name dormant and running servers alike, so an agent's instructions do not change when a server stops or restarts.
+A server is registered at launch and started on demand. An optional launch creates a dormant broker with no server process. The first agent query or editor request runs memory admission and starts the server. A warm launch starts eagerly when one memory check passes, with no queue, and otherwise creates a dormant broker as optional does. A required launch admits and starts eagerly. Launch reminders name dormant and running servers alike, so an agent's instructions do not change when a server stops or restarts.
 
 There is one server per key, and agents only read. The key is the canonical checkout root plus the server name. Attached editors own buffers ([Editors](#editors)). Disk is the truth for every file no editor holds, and the broker keeps the server's view of saved files current ([Freshness](#freshness)).
 
@@ -86,7 +86,7 @@ Admission for a live key joins it without starting another server. The wrapper t
 
 ### Admission
 
-Admission reads free memory and the machine-wide registry under one lock, `admission.lock` in the runtime directory ([State](#state)), so admission decisions are serialized across rooms. An optional launch skips memory admission, and the broker's main thread runs it on the first query and on every restart. A required launch admits its first lifetime before it spawns the eager broker.
+Admission reads free memory and the machine-wide registry under one lock, `admission.lock` in the runtime directory ([State](#state)), so admission decisions are serialized across rooms. An optional launch skips memory admission, and the broker's main thread runs it on the first query and on every restart. A required launch, and a warm launch whose memory check passes, admits its first lifetime before it spawns the eager broker. Within one launch, required servers are admitted before the rest, in name order within each group.
 
 ```text
 available  = MemAvailable, capped by the cgroup's memory.max headroom when RimZ runs under one
@@ -95,22 +95,23 @@ reserve    = max(reserve-percent × MemTotal / 100, reserve-min)
 admit when estimate + reserve ≤ available + swap (checked addition, overflow refuses)
 ```
 
-Running servers get no allowance for future growth. Several indexing servers can each pass admission and later cross the reserve together, and the watchdog then stops some of them. `estimate` is read again for each lifetime: the learned peak for this project, server, and settings, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)). The free figure that waits, timeouts, and refusals print is available plus swap minus the reserve, saturating at zero. Holders list running servers and their tree RSS.
+Query and required admission give running servers no allowance for future growth. Warm admission adds, for each other starting or indexing server with a live broker, its estimate minus its current tree RSS, saturating at zero, since MemAvailable already excludes what it has made resident. Several indexing servers can each pass admission and later cross the reserve together, and the watchdog then stops some of them. `estimate` is read again for each lifetime: the learned peak for this project, server, and settings, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)). The free figure that waits, timeouts, and refusals print is available plus swap minus the reserve, saturating at zero. Holders list running servers and their tree RSS.
 
 A refusal depends on the server's `policy`:
 
 | Policy | Refused admission |
 | --- | --- |
 | `optional` (default) | The launch does not check memory. A query-time refusal leaves the broker dormant, returns exit 4 with the memory figures, and records the shortfall. A later query tries again. |
-| `required` | The launch waits in first-come order among required waiters, before panes open. Admission polls every five seconds, and the launcher's terminal prints the wait when the queue position changes. No sidebar row exists before launch. At `wait-timeout` the launch fails with the fix, naming the memory needed, the memory free, and the holders. Optional launches do not queue behind required ones. |
+| `warm` | The launch checks memory once and never waits, retries, queues, or evicts. The server starts eagerly when its estimate plus the warm growth allowance fits and no required-queue ticket is live; otherwise the broker stays dormant, a `warm_deferred` record says why, and the first query admits it as for `optional`. A configuration error warns and skips the server. |
+| `required` | The launch waits in first-come order among required waiters, before panes open. Admission polls every five seconds, and the launcher's terminal prints the wait when the queue position changes. No sidebar row exists before launch. At `wait-timeout` the launch fails with the fix, naming the memory needed, the memory free, and the holders. Optional and warm launches do not queue behind required ones. |
 
-`required` gates the first launch admission only. Joining a live broker, dormant or not, skips eager admission. After any stop, both policies restart lazily, and a query-time refusal returns exit 4. RimZ never stops agents to honour required policy. Editor attachment exits 3 on an admission timeout or refusal.
+`required` gates the first launch admission only. Joining a live broker, dormant or not, skips eager admission. After any stop, every policy restarts lazily, and a query-time refusal returns exit 4. RimZ never stops agents to honour required policy. Editor attachment exits 3 on an admission timeout or refusal.
 
-`admission::admit_query` can evict other servers to make room. A candidate must be ready, have a live broker, have been ready for at least five minutes, and have had no request in the last 120 seconds, measured from the later of readiness and last request. Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`. Admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then samples again and stops evicting once the request fits. Required launch admission does not evict.
+`admission::admit_query` can evict other servers to make room. A candidate must be ready, have a live broker, have been ready for at least five minutes, and have had no request in the last 120 seconds, measured from the later of readiness and last request. Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`. Admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then samples again and stops evicting once the request fits. Warm and required launch admission do not evict.
 
 ### Readiness
 
-Launch admission waits up to five seconds, under the admission lock, for the broker to publish its entry. It does not wait for the index. If the entry does not appear, an optional server records a refusal and the launch proceeds, and a required server fails the launch with the server name and a command or configuration fix.
+Launch admission waits up to five seconds, under the admission lock, for the broker to publish its entry. It does not wait for the index. If the entry does not appear, an optional or warm server records a refusal and the launch proceeds, and a required server fails the launch with the server name and a command or configuration fix.
 
 After `initialize` and `initialized`, an open progress token means `indexing`. The server is `ready` when every token has closed, at least one has ended, and two seconds have passed since the last progress event. Without any progress the fallback is ten seconds after initialization. The settle window keeps a short initial token from claiming readiness before indexing begins. Later progress can return the server to `indexing`. Each lifetime resets readiness and the start and ready timestamps, and broker readiness also waits for the router's editor replay ([Ownership and replay](#ownership-and-replay)).
 
@@ -511,8 +512,9 @@ Automation here is internal repair, so it keeps diagnostic records, never assist
 
 | Event | Written by | Details |
 | --- | --- | --- |
-| `refused` | Admission: an optional or untrusted server's configuration error, an invalid policy with no matching required server, an optional server that did not publish within five seconds, a query-time memory shortfall | `reason`, or the `Shortfall` figures |
+| `refused` | Admission: an optional, warm, or untrusted server's configuration error, an invalid policy with no matching required server, an optional or warm server that did not publish within five seconds, a query-time memory shortfall | `reason`, or the `Shortfall` figures |
 | `queue_timeout` | A required launch reaching `wait-timeout` | The `Shortfall` figures |
+| `warm_deferred` | A warm launch leaving its server dormant | `cause`: `memory` with the `Shortfall` figures and `pending_bytes` (the growth allowance), `required queue`, or `error` with `reason` |
 | `killed` | The watchdog | `reason`, `peak_rss_kb`, `free_before_bytes`, `free_after_bytes`, `swap_free_before_bytes`, `swap_free_after_bytes`, `victim_rss_kb`, `reserve_bytes`, `pressure_some_avg10`, `pressure_full_avg10` |
 | `evicted` | Query-time admission | The `killed` fields plus the requester's `estimate_bytes` and `for: {root, server}` |
 | `recycled` | Housekeeping | `rss_kb`, `swap_kb`, `ready_footprint_kb`, `ceiling_kb` |
