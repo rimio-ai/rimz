@@ -36,7 +36,6 @@ fn run_scoped_rebuild(
     let mut run = RebuildRun::new(scope);
     let result = fixture.walker.walk_inner(
         &fixture.runtime.shared_spending_cursor_path(),
-        true,
         &WalkRequest {
             history: &fixture.runtime.spending_history,
             files,
@@ -47,8 +46,8 @@ fn run_scoped_rebuild(
             scope: None,
             spec: &HeadlineSpec::default(),
         },
+        FleetWalk::Rebuild(&mut run),
         &mut Progress(progress),
-        Some(&mut run),
     );
     (result, run.report)
 }
