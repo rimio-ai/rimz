@@ -901,7 +901,7 @@ impl std::fmt::Display for TrunkFetchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "could not fetch {} for the team worktree ({}); branching from ",
+            "could not fetch {} for the worktree ({}); branching from ",
             self.remote_ref, self.error
         )?;
         if self.fallback == self.remote_ref {
