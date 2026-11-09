@@ -351,40 +351,19 @@ fn row_severity_color(
     )
 }
 
-fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {
-    let tokens = ctx(row)?.tokens.as_ref()?;
-    let usage = tokens.current_usage.as_ref()?;
-    let filled = usage.input_tokens.unwrap_or(0)
-        + usage.cache_creation_input_tokens.unwrap_or(0)
-        + usage.cache_read_input_tokens.unwrap_or(0);
-    (tokens.current_context_tokens.is_none() || tokens.current_context_tokens == Some(filled))
-        .then_some(usage)
-}
-
 /// The context bar's color segments, when the per-message breakdown is known,
 /// left to right: cache reads (the row health tone), cache writes
 /// (compaction/delegation violet), fresh `input` (the expense vermilion). The
 /// flat composition tones match the context line's markers, so the line legends
-/// the bar by construction. The rich statusline blob is preferred; the
-/// row-level [`SidebarRow::call_split`] stands in when the blob carries no split.
-/// `None` when neither source reported one (a fresh session, or a
-/// post-compaction reading with no split), so a measured bar falls back to a
-/// single-color ramp.
+/// the bar by construction. The composition is the latest call's
+/// [`SidebarRow::call_split`]; `None` when it is unknown or empty (a fresh
+/// session, or a post-compaction reading with no split), so a measured bar
+/// falls back to a single-color ramp.
 pub(super) fn gauge_segments(
     theme: &Theme,
     row: &SidebarRow,
     health: Color,
 ) -> Option<[(u64, Color); 3]> {
-    if let Some(usage) = correlated_current_usage(row) {
-        let input = usage.input_tokens.unwrap_or(0);
-        let writes = usage.cache_creation_input_tokens.unwrap_or(0);
-        let reads = usage.cache_read_input_tokens.unwrap_or(0);
-        return (input + writes + reads > 0).then_some([
-            (reads, health),
-            (writes, theme.component(Component::CacheWrite)),
-            (input, theme.component(Component::Input)),
-        ]);
-    }
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
         (split.cache_read, health),
@@ -591,11 +570,9 @@ pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'sta
 /// occupancy scalar with no matching composition renders as a bare `▤` total
 /// and flat meter. When no current-window occupancy is available but the
 /// provider exposes cumulative session counters, the line instead uses that
-/// shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The
-/// rich statusline blob is preferred; the row-level
-/// [`SidebarRow::call_split`] stands in when the blob carries no split. The
-/// exact latest-call `▤` composition wins over cumulative `◇` session totals;
-/// the scalar wins over both when the split disagrees.
+/// shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The composition is
+/// the latest call's [`SidebarRow::call_split`], which already yields to the
+/// scalar when they disagree; it wins over cumulative `◇` session totals.
 /// Falls back to the bare `▤` rollup total when no categorized source exists,
 /// using zero before the first token measurement. At L2 the age rides the
 /// meter; below L2 the meter has no room for it, so this line pins it right.
@@ -608,23 +585,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     // gauge percent folds to 0 and lets the token overlay alone speak.
     let severity = row_severity_color(theme, row, bands, row_severity(row, bands));
     let mut left = vec![Span::raw("  ")];
-    if let Some(usage) = correlated_current_usage(row) {
-        let input = usage.input_tokens.unwrap_or(0);
-        let output = usage.output_tokens.unwrap_or(0);
-        let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
-        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-        left.extend(context_breakdown_spans(
-            theme,
-            severity,
-            input + cache_write + cache_read,
-            cache_read,
-            cache_write,
-            input,
-            output,
-            compact_count,
-        ));
-    } else if let Some(split) = row.call_split() {
-        // The row-level split — the lifecycle rail's per-call composition.
+    if let Some(split) = row.call_split() {
         left.extend(context_breakdown_spans(
             theme,
             severity,
