@@ -181,6 +181,7 @@ fn payload_handle(
 mod tests {
     use super::*;
     use crate::address::{addressable_agents, resolve_one, team_cohorts};
+    use crate::agents::state::TransitionMode;
     use crate::agents::{AskKind, TurnPhase};
     use crate::ids::{AgentSessionId, EventId, WorkspaceId};
     use crate::store::message::DeliveryGate;
@@ -558,8 +559,8 @@ mod tests {
         let mut seat = member("coder", "auth", AgentStatus::Success);
         seat.phase = TurnPhase::Idle;
         let rows = [seat.clone(), member("judge", "auth", AgentStatus::Idle)];
-        let audit = |prior: &AgentState, signal: LifecycleSignal, keepalive_prompt| {
-            let transition = AgentState::transition(Some(prior), &signal, keepalive_prompt, false);
+        let audit = |prior: &AgentState, signal: LifecycleSignal, mode| {
+            let transition = AgentState::transition(Some(prior), &signal, mode);
             LifecycleEvent::new(
                 EventId::new(),
                 jiff::Timestamp::UNIX_EPOCH,
@@ -573,7 +574,11 @@ mod tests {
                 transition,
             )
         };
-        let opened = audit(&seat, LifecycleSignal::TurnStarted { turn_id: None }, true);
+        let opened = audit(
+            &seat,
+            LifecycleSignal::TurnStarted { turn_id: None },
+            TransitionMode::KeepaliveEdge,
+        );
         assert_eq!(opened.status, AgentStatus::Success);
         assert!(derive(&opened, &rows, &[]).is_empty());
         seat.ping_turn = true;
@@ -585,7 +590,7 @@ mod tests {
                 turn_id: None,
             },
         ] {
-            let closed = audit(&seat, signal, false);
+            let closed = audit(&seat, signal, TransitionMode::Edge);
             assert_eq!(closed.prior_status, Some(closed.status));
             assert!(
                 derive(&closed, &rows, &[]).is_empty(),

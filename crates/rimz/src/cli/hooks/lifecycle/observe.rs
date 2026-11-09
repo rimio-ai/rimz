@@ -51,7 +51,7 @@ pub(super) fn record_lifecycle_observation(
     }
     attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
-    if observation.state_snapshot != Some(true) {
+    if !observation.is_state_snapshot() {
         correlate_subagent_observation(workspace, store, agent, &mut observation);
     }
     record_mapped_lifecycle_observation(

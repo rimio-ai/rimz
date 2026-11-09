@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::AgentStatus;
+use crate::agents::state::TransitionMode;
 use crate::ids::WorkspaceId;
 
 fn paths(dir: &tempfile::TempDir) -> StatePaths {
@@ -75,8 +76,7 @@ fn retirement_does_not_report_an_already_human_closed_ask_again() {
             Some(AgentState::transition(
                 None,
                 &observation.signal,
-                false,
-                false
+                TransitionMode::Edge
             )),
             Timestamp::from_second(1).unwrap(),
             true,

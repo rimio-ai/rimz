@@ -640,6 +640,12 @@ impl AgentLifecycleObservation {
         }
     }
 
+    /// Whether this observation reports current state rather than an edge:
+    /// the one reading of the raw `state_snapshot` bit.
+    pub fn is_state_snapshot(&self) -> bool {
+        self.state_snapshot == Some(true)
+    }
+
     /// Fill the worktree fields every adapter reads identically from the payload
     /// (`worktree_path` falls back to `cwd`). Returns `self` for chaining off
     /// [`new`](Self::new).
