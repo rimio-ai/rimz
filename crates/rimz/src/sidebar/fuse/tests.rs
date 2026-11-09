@@ -405,6 +405,9 @@ fn command_events_keep_pane_slots_and_preserve_process_sinks() {
             row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
                 crate::store::snapshot::AgentCard::default(),
             ));
+        } else {
+            let card = row.as_process_mut().unwrap();
+            (card.rss_kb, card.cpu_pct, card.io_bps) = (Some(4_096), Some(55), Some(1_024));
         }
         let mut events = EventStore::default();
         append(
@@ -420,6 +423,8 @@ fn command_events_keep_pane_slots_and_preserve_process_sinks() {
         assert_eq!(row.id, "zellij:terminal_1");
         assert_eq!(row.name, "cargo");
         assert!(row.process_is_busy());
+        let card = row.as_process().unwrap();
+        assert_eq!((card.rss_kb, card.cpu_pct, card.io_bps), (None, None, None));
         assert_eq!(
             (row.attention_at_ms, row.inactive, row.archived),
             (Some(9_000), true, true),
@@ -480,7 +485,7 @@ fn command_events_keep_pane_slots_and_preserve_process_sinks() {
 }
 
 #[test]
-fn command_overlay_keeps_tracking_note_and_process_sinks_only_for_an_agent() {
+fn command_overlay_keeps_tracking_note_only_for_an_agent_and_process_sinks_for_both() {
     let note = crate::agents::NotTracked {
         reason: crate::agents::NotTrackedReason::HooksBlocked,
         fix: "enable hooks, then restart".to_owned(),
@@ -523,6 +528,113 @@ fn command_overlay_keeps_tracking_note_and_process_sinks_only_for_an_agent() {
     assert_eq!(
         actual,
         [(true, Some(note), true, true), (true, None, true, true)]
+    );
+}
+
+#[test]
+fn command_events_start_an_agent_on_a_process_pane_awake_with_the_pane_unread_mark() {
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+    snapshot.wired_kinds = vec!["claude".to_owned()];
+    let row = snapshot.rows_mut().next().unwrap();
+    assert!(row.is_process());
+    row.unread = true;
+    row.inactive = true;
+    row.archived = true;
+    row.attention_at_ms = Some(9_000);
+    let mut events = EventStore::default();
+    append(
+        &mut events,
+        11,
+        SidebarEvent::CommandChanged {
+            pane_id: pane_id.clone(),
+            command: "claude".to_owned(),
+        },
+    );
+    let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    let row = fused.rows().next().unwrap();
+    assert_eq!(
+        (
+            row.id.as_str(),
+            row.name.as_str(),
+            row.is_agent(),
+            row.unread,
+            row.inactive,
+            row.archived,
+            row.attention_at_ms,
+        ),
+        (
+            pane_id.as_str(),
+            "claude",
+            true,
+            true,
+            false,
+            false,
+            Some(9_000)
+        )
+    );
+}
+
+#[test]
+fn command_events_projecting_nothing_keep_the_row_and_set_the_pane_command() {
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    // Prior rows: a shell, launch plumbing, and Zellij's unbound agent row.
+    for prior in [
+        "zsh",
+        "rimz agents exec claude --worktree-path /repo/main",
+        "claude",
+    ] {
+        let mut live = pane("terminal_1", prior);
+        live.pane_process_start = Some(jiff::Timestamp::UNIX_EPOCH);
+        let mut snapshot = pulled(vec![live], 10);
+        snapshot.wired_kinds = vec!["claude".to_owned()];
+        let row = snapshot.rows_mut().next().unwrap();
+        row.unread = true;
+        row.attention_score = 7;
+        let before = row.clone();
+        let mut events = EventStore::default();
+        append(
+            &mut events,
+            11,
+            SidebarEvent::CommandChanged {
+                pane_id: pane_id.clone(),
+                command: String::new(),
+            },
+        );
+        let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+        let mut expected = before;
+        let pane = expected.pane.as_mut().unwrap();
+        pane.command = Some(String::new());
+        pane.pane_process_start = None;
+        assert_eq!(fused.rows().next().unwrap(), &expected, "{prior}");
+    }
+}
+#[test]
+fn command_events_keep_the_plumbing_worktree_when_the_new_tenant_has_none() {
+    let mut live = pane(
+        "terminal_1",
+        "rimz agents exec claude --worktree-path /repo/feature",
+    );
+    live.cwd = None;
+    let snapshot = pulled(vec![live], 10);
+    assert_eq!(
+        snapshot.rows().next().unwrap().worktree_path.as_deref(),
+        Some("/repo/feature")
+    );
+    let mut events = EventStore::default();
+    append(
+        &mut events,
+        11,
+        SidebarEvent::CommandChanged {
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            command: "cargo build".to_owned(),
+        },
+    );
+    let (fused, _, _) = fuse_owned(snapshot, events, None, 11);
+    let row = fused.rows().next().unwrap();
+    assert_eq!(
+        (row.name.as_str(), row.worktree_path.as_deref()),
+        ("cargo", Some("/repo/feature"))
     );
 }
 
