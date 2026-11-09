@@ -52,7 +52,7 @@ The ping interval is long on purpose. ttyd hands libwebsockets a hang-up deadlin
 | Rooms reachable | Every room with a workspace record and a live session | Rooms on the allowlist |
 | Record | `web-ttyd.json` | `web-ttyd-share.json` |
 | Lock | `web-ttyd.lock` | `web-ttyd-share.lock` |
-| Attach | `tmux -S <socket> -u attach -t <session>` or `zellij attach <session>` (`attach_existing_command`) | tmux adds `-r -f ignore-size`, and Zellij attaches normally (`attach_readonly_command`) |
+| Attach | `tmux -S <socket> -u attach -t <session>`, or `zellij attach <session>` with `options --default-mode locked` added under the `rimz` room style (`attach_existing_command`) | tmux adds `-r -f ignore-size`, and Zellij attaches as the writable daemon does (`attach_readonly_command`) |
 
 Every state file lives under `~/.rimz/web/` (`disk::paths::web_dir`, which follows `RIMZ_HOME`).
 
@@ -61,7 +61,7 @@ Every state file lives under `~/.rimz/web/` (`disk::paths::web_dir`, which follo
 `ensure_daemon` (writable) and `ensure_broadcast_locked` (broadcast) converge the machine on one process that matches the current config. The writable path runs in this order:
 
 1. Validate config with `desired_spec`: `interface` must parse as an IP address, each `trusted_proxies` entry must parse as an IP or CIDR, `auth_users` requires a non-empty `auth_header`, and no user may be empty after trimming. Each failure is a typed `WebErr` that names the fix.
-2. Resolve ttyd from `RIMZ_TTYD_BIN`, then `PATH`, and require `ttyd --version` to parse at or above `MIN_TTYD_VERSION` (1.7.5). A missing binary reports the Homebrew and apt install, and an old or unparseable version reports the floor and the upgrade.
+2. Resolve ttyd from `RIMZ_TTYD_BIN`, then `PATH`, and require `ttyd --version` to parse at or above `MIN_TTYD_VERSION` (1.7.5). A missing binary reports the Homebrew and apt install, and an old or unparseable version reports the floor and the upgrade. `rimz doctor` resolves the same binary through `web::ttyd_diagnostic` and prints its path and version string without applying the floor.
 3. Take `web-ttyd.lock`, so concurrent room starts converge on one process and a credential rotation cannot race stale-record cleanup.
 4. Read the record and check it is live (see [the record](#the-record)). A stale record is removed, and any of its processes still running are terminated.
 5. Check that the configured listener is free unless the live record already holds it (`prepare_fresh_start`). An occupied port is `ConfiguredPortInUse`, which points at `[web] port`. Then build the client profile, which may generate the index page.
@@ -69,7 +69,7 @@ Every state file lives under `~/.rimz/web/` (`disk::paths::web_dir`, which follo
 
 A fresh start binds ttyd to `127.0.0.1:<ephemeral>` and waits up to 5 seconds (`START_TIMEOUT`) for it, then spawns the hidden `rimz web gate` on the configured listener, pointed at that upstream. It waits up to 5 seconds more for the public listener, writes the record only after it accepts, and stops every process it started when a later step fails.
 
-Both ttyd processes and the gate spawn with null stdio in their own process group. Before spawning ttyd, `without_ttyd_launch_context` removes multiplexer membership through `CommandSpec::without_mux_context`, then the launching pane's room, worktree, and agent variables, the client size, and remote-attach markers through `TTYD_AMBIENT_CONTEXT_ENV`. Machine environment such as `HOME`, `XDG_*`, `PATH`, locale, logging, and the `RIMZ_*_BIN` overrides passes through, so every browser attach sees the machine and none sees the pane that happened to start the daemon.
+Every process the module starts (both daemons' ttyd, the gate, and the throwaway ttyd that [fetches the stock page](#the-generated-page)) goes through `ttyd::spawn_detached`: null stdio, its own process group, the user's temp environment, and the global reaper. Each spec first passes through `without_ttyd_launch_context`. It removes multiplexer membership (`TMUX`, `TMUX_PANE`, `ZELLIJ`, `ZELLIJ_PANE_ID`, `ZELLIJ_SESSION_NAME`) through `CommandSpec::without_mux_context`, then the keys in `TTYD_AMBIENT_CONTEXT_ENV`: the room identity pin (workspace id, project root, worktree path, channel), the launching agent's run id, kind, name, profile, role, team, launch group and ordinal, model, effort, and budget, and `mux::REMOTE_CLIENT_ENV` (remote client version, lineage, reconnect, supervision, forced version, client size, and the outer scroll bracket). Machine environment such as `HOME`, `XDG_*`, `PATH`, locale, logging, and the `RIMZ_*_BIN` overrides passes through, so every browser attach sees the machine and none sees the pane that happened to start the daemon (`web::tests::ttyd_launch_context_scrub_preserves_machine_environment`).
 
 The broadcast path is the same without the gate or the credential. It validates only `interface`, and its port check reports `[web] share_port`.
 
@@ -100,18 +100,18 @@ A live record is reused only when every desired value matches (`record_matches`)
 | Caller | Writable daemon | Broadcast daemon |
 | --- | --- | --- |
 | `rimz start` with `[web] enabled = true` | Ensures it after the room is ready. Any failure, including a missing or old ttyd, prints `rimz: browser daemon was not started: …` and the room starts anyway. | Untouched. |
-| `rimz web open` | Preflights ttyd, births the room if it is not live, waits up to 5 seconds for the session to be addressable, then ensures the daemon. | Untouched. |
+| `rimz web open` | Refuses when `[web] enabled = false`. Otherwise preflights ttyd, births the room if it is not live, waits up to 5 seconds for the session to be addressable, then ensures the daemon. | Untouched. |
 | `rimz web open --no-start` | Runs the same preflight, birth, and wait, then requires a live record with `token_auth` and a token store. A record without `token_auth` fails with `TtydOffline` rather than returning an incompatible upstream pair. It skips the config-drift comparison. | Untouched. |
 | `rimz web url` | Reads the record without credentials and changes nothing beyond stale-record cleanup. | Untouched. |
 | `rimz web start` | Refuses when `[web] enabled = false`, and otherwise ensures it. | Untouched. |
-| `rimz web restart` | Refuses when `[web] enabled = false`, and otherwise starts a fresh process, stopping the live one first. | Untouched when disabled. Otherwise restarts it when the allowlist is non-empty, or stops it. |
+| `rimz web restart` | Refuses when `[web] enabled = false`, and otherwise starts a fresh process, stopping the live one first. | Untouched when disabled. Otherwise starts a fresh one when the allowlist is non-empty, online or not, or stops it. |
 | `rimz web stop` | Stops it. | Stops it. The allowlist stays. |
 | `rimz reload` | Restarts it only when it is online, whatever `[web] enabled` says. | Restarts it only when online, or stops it when the allowlist is empty. |
 | `rimz web token create <NAME>` | Restarts it when online. | Untouched. |
 | `rimz web token revoke <NAME>` | Restarts it when online, or stops it when no tokens remain. | Untouched. |
 | `rimz web token revoke-all` | Stops it. | Untouched. |
 | `rimz web share` | Untouched. | Ensures it. |
-| `rimz web unshare` | Untouched. | Restarts it, or stops it when the list becomes empty. |
+| `rimz web unshare` | Untouched. | When the room was shared, stops it and starts a fresh one, online or not, or leaves it stopped when the list becomes empty. |
 | `rimz web unshare --all` | Untouched. | Stops it. |
 
 `rimz start` is best-effort because browser access is enrichment on a room the user asked to open. The explicit web commands treat the same checks as fatal preconditions. `rimz reload` continues its other work and names a failed web restart in its closing block, then exits 1. Its restart path (`web::restart_if_online`) checks liveness before it validates config, so a config error there leaves a live daemon running. A writable error also skips the broadcast restart, since the two run in sequence.
@@ -153,7 +153,7 @@ When trusted-header auth binds a non-loopback interface with an empty proxy list
 
 A room URL is `<base>/?room=<percent-encoded-session>` (`join_session_url`). ttyd only understands `arg`, so the generated page's `ws_url.js` rewrites the WebSocket URL: when the page has `?room=`, the socket carries `?arg=<session>`, and otherwise the page's own query passes through, so a `?arg=` link still works. ttyd appends the decoded value to the command, and the browser session runs `rimz web exec <session>`.
 
-`rimz web exec` never treats the browser value as argv. `live_session_target` accepts it only when the session has a durable workspace record and a live session in one mux probe, and the attach command comes from that backend's `attach_existing_command`. What happens next depends on whether stdin and stdout are terminals, which they are under ttyd:
+`rimz web exec` never treats the browser value as argv. `web::existing_session_attach_command` accepts it only when the session has a durable workspace record and is live in one `LiveSessions` probe, and the attach command comes from that backend's `attach_existing_command`. What happens next depends on whether stdin and stdout are terminals, which they are under ttyd:
 
 | Target | Terminal stdio | Non-terminal stdio |
 | --- | --- | --- |
@@ -169,7 +169,7 @@ The picker in `cli/sessions/picker.rs` is the same list `rimz sessions` shows in
 
 Every 2 seconds (`PROBE_INTERVAL`) the picker joins durable workspace records with one live mux probe. Rooms with a prompt in the last 24 hours (the newest `turn_started_at` among non-subagent agents) rank first by that prompt time, and the rest follow by the workspace record's `updated_at`. `/` opens a filter over the repository display name and path, and with it closed `j` and `k` move the selection and `n` opens the new-room view. Each card's agent counts per kind, attention count, and headline spend window come from the room's published snapshot through `PublishedSnapshotReader`, one reader per live session. An unreadable snapshot leaves the card without them.
 
-On a full-size screen the list box is 40% of the terminal width, clamped to 58 through 84 columns, and 24 rows tall beneath a RIMZ banner. A screen too small for the banner gets the compact full-frame layout.
+On a full-size screen the list box is 40% of the terminal width, clamped to 58 through 84 columns (the full width on a terminal narrower than 58), and up to 24 rows tall beneath a RIMZ banner. A screen too small for the banner and a 5-row box gets the compact full-frame layout.
 
 Selecting a room hands the terminal off without leaving the alternate screen or turning off mouse reporting (`TerminalModeGuard::handoff_keep_screen`), runs the attach as a child with inherited stdio, and restores the picker when the child exits. Keeping both closes the gap in which a terminal turns a residual wheel tick into an arrow key for the attach. A failed or non-zero attach becomes a notice on the list.
 
@@ -209,7 +209,7 @@ These commands behave the same in Basic and trusted-header modes. An online toke
 
 ## The browser client
 
-`client::profile` builds the ttyd options and the page. Every daemon gets `-t macOptionIsMeta=true`, `-t cursorBlink=false`, `-t titleFixed=RimZ`, and `-t disableLeaveAlert=true`. With `[web] enabled = false`, that is all: no theme, no font, and no generated page.
+`client::profile` builds the ttyd options and the page. Every daemon gets `-t macOptionIsMeta=true`, `-t cursorBlink=false`, `-t titleFixed=RimZ`, and `-t disableLeaveAlert=true`. With `[web] enabled = false`, that is all: no theme, no font, and no generated page. A daemon that a token change or `rimz reload` restarts while web access is disabled therefore serves ttyd's stock page, with no `pixel_protocol` or `index_key` in its record.
 
 With `style_client = true`, the profile adds `fontFamily=<font>,monospace` and a `theme=` object projected from the resolved [palette](./theme.md#resolving-a-palette), and resolves font faces (`resolve_font`). A non-empty `font_source` wins over the built-in families:
 
@@ -249,17 +249,17 @@ The handlers survive `term.reset`, which reinstalls the key, wheel, and cursor h
 
 ### Mouse pacing and drag re-arm
 
-tmux can repaint the whole pane for each drag coordinate, and ttyd keeps its output pump running after the browser sends a flow-control pause: its PTY starts with a `paused` flag that resume never clears, so every later pause returns early (`tsl0922/ttyd@1.7.7:src/pty.c::pty_pause`, unchanged since 1.7.5). A fast drag therefore floods the browser with repaints and the pane-border resize lags far behind the pointer. `mouse_flow.js` paces motion reports on the WebSocket send path, with the interval tuned at a 179x38 terminal. The first report goes out immediately, motion slower than one report per 50 ms (`MOTION_INTERVAL_MS`) passes through, and faster motion keeps only the newest coordinate for the rest of each 50 ms slice. A button press or release, or any non-mouse input, flushes the pending coordinate first, so a drag ends exactly where the pointer stopped. Reads from the WebSocket are never delayed, and each new socket resets the pacing state.
+tmux can repaint the whole pane for each drag coordinate, and ttyd keeps its output pump running after the browser sends a flow-control pause: its PTY starts with a `paused` flag that resume never clears, so every later pause returns early (`tsl0922/ttyd@1.7.7:src/pty.c::pty_pause`, unchanged since 1.7.5). A fast drag therefore floods the browser with repaints and the pane-border resize lags far behind the pointer. `mouse_flow.js` paces motion reports on the WebSocket send path, with the interval tuned at a 179x38 terminal. The first report goes out immediately, motion slower than one report per 50 ms (`MOTION_INTERVAL_MS`) passes through, and faster motion keeps only the newest coordinate for the rest of each 50 ms slice. A button press or release, or any non-mouse input, flushes the pending coordinate first, so a drag ends exactly where the pointer stopped. A press or release also resets the slice, so the first motion after it goes out at once. Reads from the WebSocket are never delayed, and each new socket resets the pacing state.
 
 tmux clears every xterm mouse mode before re-enabling the set it wants whenever a pane changes tracking mode. xterm.js 5.4.0 and 5.5.0 remove their document-level held-drag listeners on `?1002l`, and the following `?1002h` restores the protocol flags without reinstalling the listeners, which only a mousedown does (`xtermjs/xterm.js@5.4.0:src/browser/Terminal.ts::Terminal::bindMouse`). A held drag across such a mode change would otherwise stop reporting.
 
-`installMouseDragRearm` repairs it. It tracks the primary button in its own capture-phase listeners and subscribes to `coreMouseService.onProtocolChange`. When drag reporting returns while the button is still held, it dispatches one synthetic mousedown to reinstall xterm's listeners, and swallows the press report that mousedown produces before it reaches the pacing state or the socket. A release that lands while xterm's mouseup listener is detached (with reporting off, or before the re-arm runs) never reaches xterm, so re-arm remembers it. Once drag reporting returns, re-arm follows the swallowed mousedown with a synthetic mouseup at the last pointer position, so tmux does not keep a drag the user already ended. If the private `coreMouseService` API is missing, re-arm installs nothing and records `rearm-unavailable`. The live test `backend::web::tmux_mouse_mode_churn_keeps_held_drag_tracking` then fails, and `tests/fixtures/mouse-flow/harness.mjs` covers the same logic without a browser.
+`installMouseDragRearm` repairs it. It tracks the primary button in its own capture-phase listeners and subscribes to `coreMouseService.onProtocolChange`. When drag reporting returns while the button is still held, it dispatches one synthetic mousedown to reinstall xterm's listeners, and swallows the press report that mousedown produces before it reaches the pacing state or the socket. A release that lands while xterm's mouseup listener is detached (with reporting off, or before the re-arm runs) never reaches xterm, so re-arm remembers it. Once drag reporting returns, re-arm follows the swallowed mousedown with a synthetic mouseup at the last pointer position, so tmux does not keep a drag the user already ended. If the private `coreMouseService` API is missing, re-arm installs nothing and records `rearm-unavailable`. The live test `backend::web::tmux_mouse_mode_churn_keeps_held_drag_tracking` (`-P live`, in `crates/rimz/tests/integration/backend/web/mod.rs`) then fails. Without a browser, the integration test `web::ttyd_mouse_flow_paces_drag_reports` runs `crates/rimz/tests/fixtures/mouse-flow/harness.mjs` under Node over the same scripts, and sibling harnesses cover `input_guard.js` and `pixel_layer.js` the same way.
 
 Adding `rimzdebug=1` to the page URL exposes the pacing state and the last 256 decisions (sends, coalesces, flushes, re-arms, swallowed presses, replayed releases) at `window.__rimzWeb`.
 
 ### The pixel layer
 
-`pixel_layer.js` renders the sidebar's Kitty graphics in the browser. It wraps `term.write`, so it sees output before xterm parses it, and consumes RimZ's subset of the Kitty protocol: PNG transmits (`a=t`, `f=100`, including chunked continuations), virtual placements (`a=p`, `U=1`), and deletes by image id (`a=d`, `d=i` or `d=I`). Both delete forms remove the image and its placement. It keeps at most 128 decoded images, and each image is limited to 4 MiB of payload.
+`pixel_layer.js` renders the sidebar's Kitty graphics in the browser. It wraps `term.write`, so it sees output before xterm parses it, and consumes RimZ's subset of the Kitty protocol: PNG transmits (`a=t`, `f=100`, including chunked continuations), virtual placements (`a=p`, `U=1`), and deletes by image id (`a=d`, `d=i` or `d=I`). Both delete forms remove the image and its placement. Every Kitty APC is cut out of the stream, so xterm never parses one, and an unterminated APC past 8 MiB is dropped to its terminator. It keeps at most 128 decoded images and 128 placements, evicting the oldest, and each image is limited to 4 MiB of base64 payload.
 
 Each placeholder cell (U+10EEEE plus the row and column combining marks) is wrapped in SGR 8 and 28 as it enters xterm. xterm keeps the full cluster and the RGB image id in its buffer, while its WebGL renderer paints the cell's real background instead of a fallback glyph. A DPR-scaled canvas above the screen draws each image clipped to the cells of its placement. A placement of more than one row scales the image to fit with its aspect kept, centred horizontally and aligned to the bottom row. A one-row placement stretches the image across its cells.
 
@@ -273,7 +273,7 @@ The sidebar only sends Kitty graphics to a tmux client it trusts to render them.
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `enabled` | `true` | Allows `rimz web open`, `share`, `start`, and `restart`, the ensure on `rimz start`, and the styled client. Does not stop a running daemon: use `rimz web stop`. `status`, `stop`, and all `token` operations, including revocation, remain usable while disabled. |
+| `enabled` | `true` | Allows `rimz web open`, `share`, `start`, and `restart`, the ensure on `rimz start`, and the styled client. Does not stop a running daemon: use `rimz web stop`. `url`, `status`, `stop`, `unshare`, and all `token` operations, including revocation, remain usable while disabled. |
 | `interface` | `127.0.0.1` | Bind address for both daemons. Must parse as an IP address. |
 | `port` | `8200` | Writable listener. |
 | `share_port` | `8201` | Broadcast listener. |
@@ -297,7 +297,7 @@ The local side runs two loopback ports:
 1. The relay port, which the browser uses. `bind_local_relay` derives it from a CRC32 of the session name in 8300 through 8399, scans upward with wraparound on collision, and keeps the listener bound so no other process can take the port between selection and use. `--web-port` binds exactly that port instead.
 2. An ephemeral forward port, which SSH forwards to `127.0.0.1:<tunnel_port>` on the remote.
 
-The relay (`gate::serve_tunnel`) accepts only loopback peers, drops any `Authorization` header from the browser, and adds the returned Basic credential to every request before forwarding it to the SSH forward. Safari needs this: it sends the WebSocket upgrade without the cached Basic credential, and ttyd authenticates the upgrade (`web/gate/tests.rs::safari_websocket_without_authorization_is_injected_and_spliced` pins the shape). The user never sees a password prompt, and no second SSH call is needed to fetch a token.
+The relay (`gate::serve_tunnel`) accepts only loopback peers, applies the gate's [head limits](#the-gate), drops any `Authorization` header from the browser, and adds the returned Basic credential to every request before forwarding it to the SSH forward. Safari needs this: it sends the WebSocket upgrade without the cached Basic credential, and ttyd authenticates the upgrade (`crates/rimz/src/web/gate/tests.rs::safari_websocket_without_authorization_is_injected_and_spliced` pins the shape). The user never sees a password prompt, and no second SSH call is needed to fetch a token.
 
 The relay stays bound across recovery rounds. Each round repeats prep, so it can rebirth the room, restart the daemon, or pick up a changed port or credential, opens a fresh forward, and swaps the relay's target atomically. The local URL stays the same for the whole connection.
 
@@ -307,5 +307,5 @@ The browser session is shell access as the serving user. The defaults keep it on
 
 - The writable ttyd always requires the separate upstream credential. The [gate](#the-gate) authenticates named tokens or a proxy's identity header, then presents the upstream credential to ttyd itself. No peer address, loopback included, skips that authentication.
 - The remote tunnel relay accepts unauthenticated requests on local loopback and presents the remote credential. That matches the trust boundary of a raw `ssh -L`: any process that can connect as, or run as, the tunnel owner can use it, so shared hosts need user isolation.
-- Secrets stay out of URLs, store events, workspace records, and logs. Human-facing passwords appear only in `token create` and `token show`, and `open` points at `token show`. Only `open --json` includes the private upstream pair for the remote relay. URL, status, and token-list payloads contain no secrets. The remote tunnel holds its credential in memory and does not print it, with one exception: a prep reply that fails to parse as JSON is quoted, up to its first 300 bytes and unredacted, in the error (`cli/remote/web.rs::remote_output_context`).
+- Secrets stay out of URLs, store events, workspace records, and logs. Human-facing passwords appear only in `token create` and `token show`, and `open` points at `token show`. Only `open --json` includes the private upstream pair for the remote relay. URL, status, and token-list payloads contain no secrets. The remote tunnel holds its credential in memory and does not print it, with one exception: a prep reply that fails to parse as JSON is quoted, up to its first 300 bytes and unredacted, in the error (`crates/rimz/src/cli/remote/web.rs::remote_output_context`).
 - The broadcast listener has no authentication by design. Its allowlist limits which rooms are served, not who watches: anyone who reaches `share_port` can read every allowlisted room. RimZ warns each time it ensures or restarts the broadcast daemon on a non-loopback interface, and a public deployment puts HTTPS, viewer authentication, and network filtering in front of `share_port`.
