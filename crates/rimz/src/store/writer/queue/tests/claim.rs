@@ -324,48 +324,55 @@ fn boundary_batch_reclaims_expired_compatible_tail() {
 
 #[test]
 fn release_batch_resets_every_claim_field() {
-    let q = Queue::new();
-    let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
-    let retry_after = Timestamp::now() + Duration::from_secs(60);
-    let mut first = q
-        .record(1)
-        .with_pane_id(pane_id.clone())
-        .with_auto_compact(Some(AutoCompact::Percent(70)));
-    let mut second = q
-        .record(2)
-        .with_pane_id(pane_id)
-        .with_auto_compact(Some(AutoCompact::Percent(70)));
-    first.batch_id = Some(first.message_id.clone());
-    second.batch_id = Some(first.message_id.clone());
-    first.retry_after = Some(retry_after);
-    second.retry_after = Some(retry_after);
-    for record in [&first, &second] {
-        q.queue_message(record, "session").unwrap();
-    }
-    let claimed = q
-        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
-        .unwrap()
-        .expect("batch claimed");
+    for compacted in [true, false] {
+        let q = Queue::new();
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
+        let retry_after = Timestamp::now() + Duration::from_secs(60);
+        let mut first = q
+            .record(1)
+            .with_pane_id(pane_id.clone())
+            .with_auto_compact(Some(AutoCompact::Percent(70)));
+        let mut second = q
+            .record(2)
+            .with_pane_id(pane_id)
+            .with_auto_compact(Some(AutoCompact::Percent(70)));
+        first.batch_id = Some(first.message_id.clone());
+        second.batch_id = Some(first.message_id.clone());
+        first.retry_after = Some(retry_after);
+        second.retry_after = Some(retry_after);
+        for record in [&first, &second] {
+            q.queue_message(record, "session").unwrap();
+        }
+        let claimed = q
+            .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .expect("batch claimed");
 
-    let released = q
-        .release_message_claims(&claimed, "waiting for compaction", "session")
-        .unwrap();
+        let released = q
+            .release_message_claims(&claimed, "waiting for compaction", compacted, "session")
+            .unwrap();
 
-    assert_eq!(released.len(), 2);
-    for message in released {
-        assert_eq!(message.status, MessageStatus::Queued);
-        assert_eq!(message.attempts, 0);
-        assert_eq!(message.last_attempt_at, None);
-        assert_eq!(message.pane_id, None);
-        assert_eq!(message.batch_id, None);
-        assert_eq!(message.retry_after, None);
-        // Pinned by 2c95a54df: a released claim clears auto_compact so the
-        // fresh-window delivery does not re-fire a compact that already ran.
-        assert_eq!(message.auto_compact, None);
-        assert_eq!(
-            message.last_error.as_deref(),
-            Some("waiting for compaction")
-        );
+        assert_eq!(released.len(), 2);
+        for message in released {
+            assert_eq!(message.status, MessageStatus::Queued);
+            assert_eq!(message.attempts, 0);
+            assert_eq!(message.last_attempt_at, None);
+            assert_eq!(message.pane_id, None);
+            assert_eq!(message.batch_id, None);
+            assert_eq!(message.retry_after, None);
+            if compacted {
+                // Pinned by 2c95a54df: a released claim clears auto_compact so the
+                // fresh-window delivery does not re-fire a compact that already ran.
+                assert_eq!(message.auto_compact, None);
+            } else {
+                // A release whose compact never fired keeps the intent for the next claim.
+                assert_eq!(message.auto_compact, Some(AutoCompact::Percent(70)));
+            }
+            assert_eq!(
+                message.last_error.as_deref(),
+                Some("waiting for compaction")
+            );
+        }
     }
 }
 
@@ -680,7 +687,7 @@ fn stale_hold_gives_up_nothing_and_the_new_claims_sent_lands() {
         .record_send_error(&stale, "pane vanished", "session")
         .unwrap();
     let released = q
-        .release_message_claims(std::slice::from_ref(&stale), "parked", "session")
+        .release_message_claims(std::slice::from_ref(&stale), "parked", false, "session")
         .unwrap();
 
     assert!(!failure.head_sent);

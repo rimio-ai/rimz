@@ -434,7 +434,7 @@ fn attempt_delivery(
                     "deferring message: cannot check or cancel obsolete message"
                 );
                 let reason = moot_check_failure_reason(message);
-                store.release_message_claims(&claimed, reason, &workspace.session_name)?;
+                store.release_message_claims(&claimed, reason, false, &workspace.session_name)?;
                 return Ok(DeliveryReport::Stopped);
             }
         }
@@ -568,6 +568,7 @@ pub(super) fn execute_attempt(
                 store.release_message_claims(
                     records,
                     "parked: waiting for compaction to finish",
+                    false,
                     &workspace.session_name,
                 )?;
                 return Ok(AttemptOutcome::Queued);
@@ -661,6 +662,7 @@ pub(super) fn execute_attempt(
             store.release_message_claims(
                 records,
                 "parked: waiting for compaction to finish",
+                true,
                 &workspace.session_name,
             )?;
             Ok(AttemptOutcome::CompactionPending)
