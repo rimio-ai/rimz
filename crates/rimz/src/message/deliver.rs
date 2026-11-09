@@ -779,29 +779,20 @@ pub fn sweep(
     }
     // An acknowledgement after this queue read must not free a card in a snapshot that still has it idle.
     let live = store.list_messages()?;
-    let needs_snapshot = live
-        .iter()
-        .any(|message| message.status.is_open() || message.status == MessageStatus::Sent);
-    let snapshot = if needs_snapshot {
-        let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
-        Some(snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime)))
-    } else {
-        None
-    };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT");
+    // Built on first need, after the first queue read: a record enqueued between
+    // the two reads can be a deliverable head the first read never showed.
+    let mut built = None;
     let card_status = CardStatus::new(store);
     if live
         .iter()
         .any(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
-        let snapshot = snapshot
-            .as_ref()
-            .expect("unmet delivery conditions require a resolution snapshot");
+        let snapshot = sweep_snapshot(&mut built, workspace, store, mux, &runtime)?;
         evaluate_delivery_conditions(workspace, store, snapshot, &live, now, &card_status)?;
     }
     let pending = store.list_pending_messages()?;
-    let snapshot = snapshot.as_ref();
     let mut heads_seen = std::collections::BTreeSet::new();
     for message in pending.iter().filter(|message| {
         message.is_deliverable(now)
@@ -830,7 +821,7 @@ pub fn sweep(
             }
         };
         if heads_seen.insert(head.message_id.to_string()) {
-            let snapshot = snapshot.expect("queued delivery requires a resolution snapshot");
+            let snapshot = sweep_snapshot(&mut built, workspace, store, mux, &runtime)?;
             let report = if policy == DeliveryPolicy::Boundary
                 && !head.typing_hold.is_some_and(|hold| hold.until > now)
                 && older_ready_blocker(live.iter(), head, now, |message| {
@@ -929,6 +920,21 @@ pub fn sweep(
     }
     store.rearm_message_wake(Timestamp::now());
     Ok(())
+}
+
+fn sweep_snapshot<'a>(
+    built: &'a mut Option<SidebarSnapshot>,
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    mux: Option<MuxName>,
+    runtime: &RuntimePaths,
+) -> Result<&'a SidebarSnapshot> {
+    if built.is_none() {
+        let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
+        *built = Some(snapshot.with_agent_context(crate::store::agent_context::read_all(runtime)));
+    }
+    // Set just above when it was empty.
+    Ok(built.as_ref().expect("sweep snapshot is built"))
 }
 
 fn evaluate_delivery_conditions(

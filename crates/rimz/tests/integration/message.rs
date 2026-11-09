@@ -8874,6 +8874,51 @@ fn sweep_does_not_claim_command_acknowledged_after_idle_snapshot() {
 }
 
 #[test]
+fn sweep_delivers_a_record_enqueued_after_its_first_queue_read() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-sweep-late",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Idle);
+    let mut prompt = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "arrived mid-sweep".to_owned(),
+        DeliveryGate::Done,
+    );
+    prompt.message_id = fixed_message_id(1);
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let after_snapshot = DeliveryRendezvous::new(&env, "sweep-snapshot");
+    let trace = env.project_root.join("sweep-late-trace.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT", &after_snapshot.path)
+        .args(["message", "sweep"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = after_snapshot.arrive();
+    queue_messages(&env, &[&prompt]);
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let sent = message_by_id(&env, &prompt.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent, "{output:?}");
+}
+
+#[test]
 fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let env = Env::new();
     env.record(&env.project_root);
