@@ -16,6 +16,7 @@ This page owns the push path: who decides a notification, who delivers it on eac
 | [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
 | [`config/notifications.rs`](../../../crates/rimz/src/config/notifications.rs) | `NotificationsPrefs`, `NotificationKind`, handler conditions, template rendering and validation |
 | [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `audit/notify.log.jsonl` record schema |
+| [`cli/remote/supervisor.rs`](../../../crates/rimz/src/cli/remote/supervisor.rs), [`cli/loop_cmd/run.rs`](../../../crates/rimz/src/cli/loop_cmd/run.rs), [`cli/sidebar.rs`](../../../crates/rimz/src/cli/sidebar.rs) | The CLI emitters: remote link alerts, `loop_disabled`, and `notify-test` |
 
 ## Channels
 
@@ -46,15 +47,13 @@ Only the agent episode path applies triggers, debounce, and coalescing. Agent no
 
 ## The host
 
-Displayed raised asks reopen unread at the later of their opening time and the card's clean rest (turn end or admitted provider settle marker); displayed card alerts use their raise time, including over an existing episode. A read before clean rest cannot absorb a question that was raised while the card was working or otherwise unable to display it. A genuinely new overlay bypasses status debounce and replaces an older pending notification for that session during coalescing. Their push title is `RimZ: {label} needs you`; the body is the ask line or alert text. A raised ask supplies its own ask id to `RIMZ_NOTIFY_ASK`. Native waiting takes precedence over these overlays. Templates and the user's notification preferences still apply.
-
-The room host's fetch worker decides agent notifications once for all its panes ([state.md → The cycle](./state.md#the-cycle)). It evaluates on every final fold, before publication, and delivers after publication. The worker wakes for a pending batch's coalesce flush or an armed room reminder at its due, plus that cycle's fold time, even in an unwatched room with a 5 s idle backstop. The 250 ms post-cycle floor still applies: a due that lands after a cycle has decided, and before it returns, starts the next cycle at the floor. A due at or before the preceding cycle's start retries after one data tick if a failed fold or missing Final left it pending ([state.md → Requests](./state.md#requests)). Debounce drops a rejected episode rather than scheduling a retry.
+The room host's fetch worker decides agent notifications once for all its panes ([state.md → The cycle](./state.md#the-cycle)). `FetchWorker::publish_fold` evaluates them on every final fold, before publication, and delivers them after publication. The worker also wakes at the earlier of a pending batch's coalesce flush and an armed reminder's due (`FetchWorker::attention_due_ms`), never sooner than the 250 ms post-cycle floor. The retry and floor rules for those dues are [state.md → Requests](./state.md#requests). Debounce schedules no due: an episode it rejects is dropped, never retried.
 
 `evaluate_notifications` first calls `sidebar::unread::reconcile_snapshot`, which loads the room read marks, prunes them, and then loads, reconciles, and replaces `unread.json` under `unread.lock`. When another writer holds that lock past 250 ms, the pass only derives each row's `unread` bit from the file, opens and prunes nothing, and writes nothing; the next final fold opens those episodes and notifies them. A snapshot without a produced pane frame neither opens nor prunes, since a missing frame says nothing about which rows left the room. On a framed snapshot, reconcile does three things:
 
 1. It prunes read marks whose rows left the room.
-2. It prunes episodes a receipt reaches, silently, and episodes whose row has left the snapshot, with an `unread_cleared` record of cause `row_gone`.
-3. It opens an episode for each row whose displayed status needs a look (`AgentStatus::needs_a_look`), that no receipt reaches at its activity or overlay stamp, and that has no episode or an older episode replaced by a new overlay.
+2. It prunes episodes a receipt reaches, silently, and episodes whose row has left the snapshot, with an `unread_cleared` record of cause `row_gone`. A receipt-reached episode takes the silent prune even when its row is also gone.
+3. It opens an episode for each row whose displayed status needs a look (`AgentStatus::needs_a_look`: `waiting`, `failed`, `paused`, or `success`), that no receipt reaches at its episode stamp, and that has no episode yet, or only one older than a new overlay stamp. The episode stamp is the row's `overlay_raised_at` when it has one, else for a `waiting` row the instant an auto-reviewed permission becomes visible (`AgentState::permission_review_until`), else `last_activity`.
 
 The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz agents mark TARGET unread` or the renderer's `m` key goes straight to `unread.json` through `mark_rows_unread`, never appears in that list, and pushes nothing.
 
@@ -64,20 +63,27 @@ A missing `unread.json` makes every open in that pass `silent`. Attaching to a b
 
 `NotificationState::evaluate` applies the user's policy to each opened episode, in this order:
 
-1. With `enabled = false`, drop everything pending and push nothing. Episodes still open, so the sidebar still shows unread.
-2. Skip a silent open, and a status outside `triggers` (default `waiting` and `failed`).
-3. With `suppress_focused`, skip a row whose pane is in the snapshot's `viewed_panes`. That list comes from live mux focus, so this is a conservative visibility hint with no durable record behind it.
-4. Skip an agent notified less than `debounce_ms` ago. Debounce is keyed by agent kind and session id, and a key is forgotten once its row leaves the snapshot.
-5. Skip an agent already pending. Otherwise add it to the pending batch with its open ask id, if any.
+1. Drop pending entries whose row is no longer unread, so a row read within the coalesce window pushes nothing.
+2. With `enabled = false`, drop everything pending and push nothing. Episodes still open, so the sidebar still shows unread.
+3. Skip a silent open, and a status outside `triggers` (default `waiting` and `failed`).
+4. With `suppress_focused`, skip a row whose pane is in the snapshot's `viewed_panes`. That list holds the pane each attached client views, folded from the pane frame, so this is a visibility hint with no durable record behind it.
+5. Skip an agent notified less than `debounce_ms` ago, unless the row carries an overlay. Debounce is keyed by agent kind and session id, and a key is forgotten once its row leaves the snapshot.
+6. Skip an agent already pending, unless the row carries an overlay, which replaces the agent's pending entry. Otherwise add it to the pending batch with its open ask id, if any.
 
-The first addition to an empty batch starts the coalesce window, and the batch flushes once `coalesce_ms` has passed (at once when it is 0). A pending entry whose row is no longer unread is dropped before the flush, so a row read within the window pushes nothing. Flushing stamps every batched agent's debounce clock.
+The first addition to an empty batch starts the coalesce window, and the batch flushes once `coalesce_ms` has passed (at once when it is 0). Flushing stamps every batched agent's debounce clock.
 
 | Batch | Notification |
 | --- | --- |
-| One agent | The agent's status kind, with built-in text such as `RimZ: <label> needs you` |
+| One agent | The agent's status kind, titled `RimZ: <label> needs you`, `failed`, `paused`, or `finished` for `waiting`, `failed`, `paused`, and `success` |
 | Several agents | One `coalesced` notification titled `RimZ: <N> agents need attention`, its body joining `<label>: <status>` pairs with ` \| ` |
 
-`[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`. Reminders, link alerts, and `loop_disabled` keep their built-in text. A template that fails to render leaves the built-in text in place.
+`[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`. Reminders, link alerts, `loop_disabled`, and `notify-test` keep their own text. A template that fails to render leaves the built-in text in place.
+
+#### Raised asks and card alerts
+
+An overlay is attention RimZ raises on a card from its own records: a raised ask projects the row to `waiting`, and a card alert projects it to `failed` (`store/snapshot/view/aggregate/status.rs`). The card alert applies over any provider status. The raised ask applies only when the provider status would display `idle` or `success` and the turn is not parked, so native waiting takes precedence over it. Each sets the card's `overlay_raised_at`, and [sidebar.md → Unread and read receipts](./sidebar.md#unread-and-read-receipts) owns how that stamp is chosen.
+
+Reconcile opens an overlay row only when its stamp is newer than the row's episode, if it has one, so an overlay that reaches push policy is new. It bypasses debounce and replaces the agent's pending entry, as steps 5 and 6 say. Its title is `RimZ: <label> needs you` for both kinds. Its body is the alert text, or else the ask's detail line. A raised ask supplies its own ask id for `RIMZ_NOTIFY_ASK`, and a card alert supplies none. Triggers, focus suppression, and templates apply as for any other open.
 
 ### Delivery
 
@@ -105,7 +111,7 @@ The bell is bound to current unread attention. A BEL sets a tab or window marker
 | A target pane is one of the view's working panes | `pane_not_in_view` |
 | With `recheck_unread`, a target pane in the view maps to a row with `SidebarRow::unread` set | `not_unread` |
 
-A bell that passes writes BEL when `sound = "bell"`. The unread bit stays set until a read receipt reaches the episode, so the row stays unread exactly as long as the marker has something to point at. A `Notify` event with no panes (`loop_disabled`) never rings. Agent notifications send `recheck_unread: true`. Reminders and `notify-test --force-bell` send `false`, a reminder because its scope is already unread.
+A bell that passes writes BEL when `sound = "bell"`. The unread bit stays set until a read receipt reaches the episode, so the row stays unread exactly as long as the marker has something to point at. A `Notify` event with no panes (`loop_disabled`) never rings. The host sends `recheck_unread: true` for every kind but `reminder`, whose scope is already unread. Reminders, `loop_disabled`, and `notify-test --force-bell` send `false`.
 
 ### The desktop banner
 
@@ -148,7 +154,7 @@ A link that is degraded but still passing bytes raises no bell, OSC, or handler.
 
 ## Handlers
 
-A handler is a user command spawned when a notification matches. `[[notifications.handler]]` entries run in config order, and the `[notifications].command` key is shorthand for one more handler with an empty `when`, appended last (`NotificationsPrefs::effective_handlers`). With `enabled = false`, `spawn_notify_handlers` spawns nothing.
+A handler is a user command spawned when a notification matches. `[[notifications.handler]]` entries run in config order, and the `[notifications].command` key is shorthand for one more handler with an empty `when`, appended last (`NotificationsPrefs::effective_handlers`). A blank `command` adds no handler. With `enabled = false`, `spawn_notify_handlers` spawns nothing.
 
 ### Matching
 
@@ -164,7 +170,7 @@ For a coalesced notification each clause may be satisfied by a different agent. 
 
 ### Templates
 
-Handler commands and the `title` and `body` templates substitute `{{name}}` from a closed set. In a handler command each value is shell-quoted with `shlex`, so a template writes variables bare as arguments. The `title` and `body` templates substitute plain text.
+Handler commands and the `title` and `body` templates substitute `{{name}}` from a closed set, with spaces inside the braces allowed (`render_template`). In a handler command each value is shell-quoted with `shlex`, so a template writes variables bare as arguments. The `title` and `body` templates substitute plain text.
 
 | Variable | Value |
 | --- | --- |
@@ -181,11 +187,11 @@ Handler commands and the `title` and `body` templates substitute `{{name}}` from
 
 | Loader | On an invalid `[notifications]` table |
 | --- | --- |
-| Strict load (`MachineConfig::load`) | Fails with the error |
+| Strict load (`MachineConfig::load`): subagent launches, `rimz teams list`, `rimz accounts add`, and the other commands that propagate its error | Fails with the error, whatever `enabled` says. Room entry calls it too, but warns and continues |
 | Lenient load (`MachineConfig::load_lenient`): the sidebar, `rimz loop`, `notify-test`, the remote supervisor | Logs a warning and uses the built-in defaults, which have no handlers and `enabled = true` |
 | The per-file health check (`config::broken_machine_files`): room entry and `rimz doctor` | Reports the error, even beside a parse-broken theme file, and room entry opens with a warning. It validates the table only when `enabled = true` |
 
-A disabled table with an invalid template is therefore reported nowhere, yet the lenient load replaces it with defaults that are enabled.
+A disabled table with an invalid template is therefore missing from the health check and `rimz doctor`, yet it fails the commands that load strictly, and the lenient load replaces it with defaults that are enabled.
 
 ### Environment
 
@@ -202,7 +208,7 @@ Every handler receives these variables, set to the empty string when the value i
 
 ### Process
 
-`spawn_notify_handlers` runs each rendered command as `sh -c` with stdin, stdout, and stderr on `/dev/null`, hands the child to the global reaper (`child_process::spawn_detached_reaped`), and does not wait. A render or spawn failure logs at debug and skips that handler. Handlers inherit no hook stdout, so they can never write into a hook's decision channel.
+`spawn_notify_handlers` runs each rendered command as `sh -c` with stdin, stdout, and stderr on `/dev/null`, hands the child to the global reaper (`child_process::spawn_detached_reaped`), and does not wait. The child gets the user's temp environment. On Linux, a spawner that runs inside a `rimz-agent-*.scope` cgroup starts the handler in its own helper scope, so the handler outlives the agent's teardown. A render or spawn failure logs at debug and skips that handler. Handlers inherit no hook stdout, so they can never write into a hook's decision channel.
 
 ### Trust
 
@@ -225,7 +231,7 @@ All keys live in `[notifications]` of `~/.rimz/config.toml` (`NotificationsPrefs
 | `coalesce_ms` | `1000` | Window that batches host pushes into one, where `0` flushes on each final fold |
 | `remind_secs` | `60` | Reminder interval, where `0` disables reminders |
 | `title`, `body` | unset | Templates for status and `coalesced` banner text |
-| `command` | unset | One unconditional handler |
+| `command` | unset | One unconditional handler, appended after `[[notifications.handler]]`. Blank adds none |
 | `[[notifications.handler]]` | none | `name` (optional), `command`, `when` |
 
 RimZ writes no dock badge escape, because badge APIs differ per terminal and OS. A handler that wants a badge reads `RIMZ_NOTIFY_UNREAD` from reminders.
@@ -238,7 +244,7 @@ The trace log records what reached delivery, because a tab `[!]` with no matchin
 | --- | --- | --- |
 | `notification_emitted` | The host, per delivered agent notification or reminder | `notification_kind`, `agents` (`kind`, `agent_id`, `label`, `pane_id`, `new_status`), `panes`, `unread_count` |
 | `bell_ring` | A renderer, per `Notify` event it handles | `notification_kind`, `fired`, `recheck_unread`, `panes`, `suppressed` (`notifications_disabled`, `no_own_view`, `daemon_view`, `pane_not_in_view`, `not_unread`) |
-| `unread_marked` | The host on reconcile opens; the renderer and `rimz agents mark TARGET unread` on manual opens | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, the reached `status`, `episode_ms` |
+| `unread_marked` | The host on reconcile opens, silent ones included. The renderer and `rimz agents mark TARGET unread` on manual opens | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, the reached `status`, `episode_ms` |
 | `unread_cleared` | The renderer (`focus`, `tab_view`, `mark_read`), `rimz agents mark TARGET read` (`mark_read`), the host (`row_gone`) | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, `cause`, `cleared_at_ms` |
 
 The log has gaps by design. Push policy writes no record for an open it skips (silent, untriggered, focused, debounced, or pending). The host prunes receipt-reached episodes without a record, because the renderer or CLI that wrote the receipt already logged the clear. `rimz loop` and `notify-test` write no `notification_emitted`, though their renderer-side `bell_ring` records land. Remote link alerts write nothing here.
