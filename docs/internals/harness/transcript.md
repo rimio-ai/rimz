@@ -21,14 +21,15 @@ Routine reads use a 30-day floor, `transcript::recent_floor`. `read_since` selec
 
 | Reader | Window |
 | --- | --- |
-| `rimz transcript`, `rimz agents logs`, and their follow polls | 30 days. `--all` reads every bucket (`read_all`) and includes the prior-session archive |
+| `rimz transcript`, `rimz agents logs`, the transcript on `rimz agents show`, and the follow polls | 30 days. `--all` reads every bucket (`read_all`) and includes the prior-session archive |
 | Channel discovery (`transcript::channels`, `workspaces_with_channel`) | 30 days |
 | Open-ask lookup, ask materialization, answer deduplication, `rimz answer` confirmation | 30 days |
 | `rimz agents wait`, for a turn's final message (`latest_assistant`) | Buckets from the turn's start |
+| Raised attention, for the reply it quotes (`latest_assistant` in `crates/rimz/src/store/raised.rs::prepare_raise` and `observe`) | Buckets from the agent's last prompt (else its registration) when raised, and from the raise time when the ask opens |
 | Hook redo and replay deduplication | Buckets from the ingress frame's timestamp |
 | `rimz agents attribution` | Every bucket |
 
-A windowed view that skipped older buckets says so. It sets `older_omitted` in non-follow JSON, or prints a faint stderr hint that names the `--all` command (`crates/rimz/src/cli/transcript/mod.rs::write_older_history_hint`), even when the selected scope is empty. The flag reports that the workspace has older files, not that the scope has older entries, since the skipped files are never opened.
+A windowed view that skipped older buckets says so. It sets `older_omitted` in non-follow JSON, or prints a faint stderr hint that names the `--all` command (`crates/rimz/src/cli/transcript/mod.rs::write_older_history_hint`), even when the selected scope is empty. The text view drops that hint when it prints the archive hint, which names the same command. The flag reports that the workspace has older files, not that the scope has older entries, since the skipped files are never opened.
 
 Hook redo and replay deduplication read from the ingress frame's timestamp (`hook_drain::frame_timestamp`) instead of the floor. An earlier apply attempt stamped its entries at apply time, at or after ingress, so the buckets from the frame's timestamp hold them. A redo matches its earlier copy by entry kind and `ingress` key. This assumes the host clock does not step backward across a bucket boundary between ingress and apply.
 
@@ -63,7 +64,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | Any remaining kind | `"user"` (`HUMAN_FROM`) | `Human` |
 | Any remaining kind | Any other sender | `Agent` |
 
-Answers record `from: "user"`, and typed human prompts carry no `from`. `is_harness()` delegates to the projection, and conversation counts count only human-origin prompts as input from the user. Every human-origin entry renders as `user`. Stage lines take their origin from the flip's author instead: the operator is human, and any other author is an agent.
+Answers record `from: "user"`, and typed human prompts carry no `from`. `is_harness()` delegates to the projection, and conversation counts count only human-origin prompts as input from the user. Every human-origin entry renders as `user`. Stage lines take their origin from the flip's author instead: a flip by `user` is human, and any other author is an agent.
 
 ## Writing entries
 
@@ -80,7 +81,9 @@ The receiver's turn-start hook (`cli/hooks/lifecycle/mod.rs`) runs these steps i
 5. Classify the submitted sections once, against the confirmed and in-flight records.
 6. Record spend user input, then write the transcript entries (`record_conversation`).
 
-The fold in step 1 runs before any record is read, so it uses the record-less classifier (`prompt_is_harness_delivered`). A headerless system prompt can therefore restart `user_turn_started_at`. Spend and transcript consume the same record-aware sections after confirmation. Spend counts a human section only when its record, if any, passes `is_user_input()`, which excludes automated and `Resume`-gated records, and only when the turn carries no run. Classification changes no message status: `TurnStarted` confirms only prompts, and `Compaction` only commands.
+The fold in step 1 runs before any record is read, so it uses the record-less classifier (`prompt_is_harness_delivered`). A headerless system prompt can therefore restart `user_turn_started_at`. Spend and transcript consume the same record-aware sections after confirmation. `crates/rimz/src/store/message.rs::human_opened_turn` decides whether the human opened the turn, and spend records user input only when it says so and the turn carries no run (step 2 or 4). It answers false for any signal other than `TurnStarted`, a provider-native child's observation, a supervised turn, and a task-notification turn. Otherwise it needs one human section whose record, if any, passes `is_user_input()`, which excludes automated and `Resume`-gated records. A turn with no readable prompt text counts when nothing was confirmed or a confirmed record passes `is_user_input()`. Classification changes no message status: `TurnStarted` confirms only prompts, and `Compaction` only commands.
+
+Step 6 also appends one [session-effort](../agents/spending.md#session-effort-ledger) record per written entry that counts as conversation: `FromUser` for a human-origin `Prompt` and `FromAgent` for a `Message`.
 
 ### Section classification
 
@@ -99,7 +102,7 @@ A header's origin wins over a matched record's sender. An unaligned section matc
 
 Three cases change the mapping:
 
-- While the agent has an open blocking question, the first direct human `Prompt` section becomes that ask's id-stamped `Answer`. An attributed queue record never answers a question.
+- When this turn start cleared the agent's waiting state and the transcript holds its unanswered `Ask` (`transcript::latest_open_ask`), the first direct human `Prompt` section becomes that ask's id-stamped `Answer`. An attributed queue record never answers a question. A question that wrote no `Ask` entry gets no fallback answer. When an `Answer` with that id is already on record (`rimz answer` or a native hook got there first), the section is written as the human `Prompt` it was.
 - A record-less human section that matches the turn's run prompt takes the run's origin ([run launch prompts](#run-launch-prompts)).
 - Text around a confirmed headered batch becomes separate direct-input `Prompt` entries ([messaging.md § Confirmation and retry](./messaging.md#confirmation-and-retry)).
 
@@ -143,7 +146,7 @@ Three optional field groups link entries. Each defaults empty, so older JSONL li
 
 `message_id` stamps an entry with its matched queue record. Confirmation returns every confirmed record in the submitted batch, and each section takes the record that [section classification](#section-classification) matched to it. A headerless in-flight match also supplies `message_id` and `reply_to`, even while the record remains `Sent`. Hand-typed prompts and unmatched text carry no `message_id`.
 
-`enqueued_at` accompanies a matched `message_id` and copies the queue record's creation time, however long delivery took. The entry's `at` stays the record time, which for a message is delivery confirmation, so bucket placement is unchanged. The reader derives `ChatLine.at` from `enqueued_at` when it is present and exposes the record time as `delivered_at`. `ChatLine.at` is the stamp: it drives the header, `--json`, header grouping, and the flip window. Order is arrival, `ChatLine::arrived_at` (`delivered_at`, else `at`), which for every log entry is the entry's own `at`. The sort and the live-cohort split key on arrival, so a line that waited sits where it landed. Nothing is backfilled from the message store, so entries written before the field keep their delivery stamp. A scheduled message is stamped with its creation time, with no floor at the scheduled moment, and sorts at its delivery. A requeue is a new record with its own creation time.
+`enqueued_at` accompanies a matched `message_id` and copies the queue record's creation time, however long delivery took. The entry's `at` stays the record time, which for a message is delivery confirmation, so bucket placement is unchanged. The reader derives `ChatLine.at` from `enqueued_at` when it is present and exposes the record time as `delivered_at`. `ChatLine.at` is the stamp: it drives the header, `--json`, header grouping, and the flip window. A header also prints the delivery time when delivery lagged creation by 60 seconds or more (`DELIVERY_STAMP_SECS` in `crates/rimz/src/cli/transcript/chat.rs`). Order is arrival, `ChatLine::arrived_at` (`delivered_at`, else `at`), which for every log entry is the entry's own `at`. The sort and the live-cohort split key on arrival, so a line that waited sits where it landed. Nothing is backfilled from the message store, so entries written before the field keep their delivery stamp. A scheduled message is stamped with its creation time, with no floor at the scheduled moment, and sorts at its delivery. A requeue is a new record with its own creation time.
 
 `reply_to` carries parent message ids. The loop that fills it runs through the agent context:
 
@@ -157,15 +160,23 @@ A requeued message keeps `in_reply_to`, so retried text keeps its causal positio
 
 ## Reading it back
 
-`rimz transcript` renders a channel or one agent as a threaded chat, and `rimz agents logs` renders the same view. The reader in [`cli/transcript/`](../../../crates/rimz/src/cli/transcript) applies the rules below in this order.
+`rimz transcript` renders a channel or one agent as a threaded chat. `rimz agents logs` and the transcript on `rimz agents show` render the same view. `crates/rimz/src/cli/transcript/mod.rs::chat_view_with_mode` builds it in this order, and the sections below give each rule:
+
+1. Read the buckets: the 30-day window, or every bucket under `--all`. Collect the `reply_to` ids of every `Ask`, for harness-turn hiding.
+2. Drop [superseded asks](#superseded-asks).
+3. Resolve the scope and keep the entries in it, then join the lane's [stage flips](#stage-lines).
+4. Sort by arrival (`ChatLine::arrived_at`, see [causality](#causality)).
+5. [Hide harness turns](#harness-turn-hiding). The `--json` view keeps every hidden entry and skips this step.
+6. Split off the [prior-session archive](#scope-and-the-current-life) at the live boundary.
+7. At render: [assemble threads](#thread-assembly), [resolve answers](#answer-resolution), and [cut the tail](#tails-and-follow-mode).
 
 ### Scope and the current life
 
-The reader computes a current-life boundary: the earliest `registered_at` among the live agents in scope (`crates/rimz/src/cli/transcript/scope.rs::live_boundary`). For a channel view those are the channel's live root agents, and for an agent view they are the focused sessions, a child included. Entries that arrived before the boundary are the prior-session archive, so a message created earlier and delivered after the boundary stays in the live view. The archive is hidden by default, with a stderr hint that counts the hidden entries and names the `--all` command, and `--all` renders it under a dated marker. When every selected entry predates the boundary, or no live agent is in scope, the whole view renders as archive. The buckets are never rewritten.
+The reader computes a current-life boundary: the earliest `registered_at` among the live agents in scope (`crates/rimz/src/cli/transcript/scope.rs::live_boundary`). For a channel view those are the channel's live root agents, and for an agent view they are the focused sessions, a child included. Entries that arrived before the boundary are the prior-session archive, so a message created earlier and delivered after the boundary stays in the live view. The archive is hidden by default, and `--all` renders it under a dated marker. A text view that shows its whole live part prints a stderr hint that counts the hidden entries and names the `--all` command, and `--json` reports the count as `archived_count`. When every selected entry predates the boundary, or no live agent is in scope, the whole view renders as archive. The buckets are never rewritten.
 
 ### Superseded asks
 
-`crates/rimz/src/cli/transcript/scope.rs::dedup_asks` keeps, for each agent, only its newest `Ask` and every `Ask` that an `Answer` closes by id. An unanswered ask that a newer one replaced leaves the view.
+`crates/rimz/src/cli/transcript/scope.rs::dedup_asks` keeps, for each agent, only its newest `Ask` and every `Ask` that an `Answer` in the read closes by id. An unanswered ask that a newer one replaced leaves the view. It runs on the whole read, before scoping.
 
 ### Harness-turn hiding
 
@@ -173,9 +184,9 @@ The human view drops harness turns as units before assembly (`crates/rimz/src/cl
 
 ### Thread assembly
 
-The reader makes one pass in view order (`crates/rimz/src/cli/transcript/thread.rs::assemble_threads`). Prompts, messages, subagent reports, waits, and flips are ordered entries. Each joins its link target's thread only while that thread is current, otherwise it starts a thread at the margin, and each ordered entry makes its thread current. A message targets its latest preceding eligible `reply_to` parent: the parent is not human-authored, and its sender is the message's receiver, so a hand-off to a third agent starts a new exchange. Turn output (`Assistant`, `Ask`, `Error`) joins its latest preceding opener's thread. An `Answer` takes its ask's lane, block, and archive membership, without changing the current thread or the sender a flip attaches to. Missing or forward anchors leave entries at the margin. Two openers answered by one turn therefore stay separate, with the output under the later opener.
+The reader makes one pass in view order (`crates/rimz/src/cli/transcript/thread.rs::assemble_threads`). Prompts, messages, subagent reports, waits, and flips are ordered entries. Each joins its link target's thread only while that thread is current, otherwise it starts a thread at the margin, and each ordered entry makes its thread current. An ordered log entry targets its latest preceding eligible `reply_to` parent: the parent is not human-authored, and its sender is the entry's receiver, so a hand-off to a third agent starts a new exchange (`thread_edge`). Turn output (`Assistant`, `Ask`, `Error`) joins its latest preceding opener's thread. An `Answer` takes its ask's lane, block, and archive membership, without changing the current thread or the sender a flip attaches to. Missing or forward anchors leave entries at the margin. Two openers answered by one turn therefore stay separate, with the output under the later opener.
 
-Threads emit in the order of their first entry, with members in view order. This keeps arrival order among ordered entries while late output sits under its opener. `--flat` skips assembly. `--last` then cuts this display order, not arrival order (`keep_last_blocks`): it keeps the last N cards, counting an ask and its folded answer once, and widens the cut back to the head of the block it lands in, so a shown thread keeps the entry that opened it.
+Threads emit in the order of their first entry, with members in view order. This keeps arrival order among ordered entries while late output sits under its opener. `--flat` skips assembly and renders arrival order.
 
 ### Answer resolution
 
@@ -183,7 +194,13 @@ One resolver links each answer to an earlier ask (`crates/rimz/src/cli/transcrip
 
 ### Stage lines
 
-The reader joins the lane's `team.stage` flips (`harness::team_stage::stage_flips`) by time as flip lines. A flip targets the flipping agent's latest preceding non-answer line within the five-minute grouping window (`crates/rimz/src/cli/transcript/chat.rs::GROUP_WINDOW_SECS`). It inherits that line's lane only when the line belongs to the current thread, and otherwise opens at the margin ([loops.md § Team signals](./loops.md#team-signals)).
+The reader joins the lane's `team.stage` flips (`harness::team_stage::stage_flips`) by time as flip lines. A flip targets the flipping agent's latest preceding line that is neither an answer nor another flip, within the five-minute grouping window (`crates/rimz/src/cli/transcript/chat.rs::GROUP_WINDOW_SECS`). It inherits that line's lane only when the line belongs to the current thread, and otherwise opens at the margin ([loops.md § Team signals](./loops.md#team-signals)).
+
+### Tails and follow mode
+
+The text view of `rimz transcript` keeps the last 20 cards by default (`DEFAULT_TAIL_ENTRIES`) and prints a faint `⋯ last N of M entries · -n 0 for all` hint when that cut drops any. `--last N` (`-n`) sets the count, `-n 0` keeps everything, and `--json` keeps everything unless `--last` is given. The cut runs on display order, not arrival order (`crates/rimz/src/cli/transcript/thread.rs::keep_last_blocks`). It keeps the last N cards, counting an ask and its folded answer once, and widens the cut back to the head of the block it lands in, so a shown thread keeps the entry that opened it.
+
+`--follow` (`crates/rimz/src/cli/transcript/follow.rs::follow`), shared with `rimz agents logs -f`, rebuilds the whole view from the 30-day window once a second. The rebuilt view is not append-only: an archive split can shrink it, a later entry can hide an earlier turn, and a late arrival can sort before the tail. Progress is therefore a set of fingerprints of printed entries (`FollowCursor`), and each poll prints the entries whose fingerprint is new. `rimz transcript` refuses `--follow` with `--all`. JSON follow prints one line per new entry.
 
 ## Asks and answers
 
@@ -197,19 +214,19 @@ A blocking hook gets an `ask_` id at ingestion (`crates/rimz/src/cli/hooks/lifec
 - A question with no parsed questions, such as a Pi extension dialog, opens `open_ask` and writes no `Ask` entry.
 - A permission hook keeps a short tool summary on `open_ask` and writes no `Ask` entry. The adapter's safe options are synthesized at read time through `ask_options`.
 
-A blocking ask closes in the transcript in one of two ways. An adapter that reports the native answer (Claude's `PostToolUse`, OpenCode's `permission_replied`) writes an id-stamped `Answer` through `record_native_answer`. Otherwise the next turn start classifies the first direct human prompt as the `Answer` ([section classification](#section-classification)), which closes the durable ask even when the provider emits no answer event. Every id-stamped answer goes through `transcript::append_answer_if_missing`, which checks and appends under one workspace lock, so a native hook racing `rimz answer` yields one record.
+A blocking ask closes in the transcript in one of two ways. An adapter that reports the native answer writes an `Answer` through `record_native_answer`: Claude's and Codex's `PostToolUse`, Codex's `UserPromptSubmit`, OpenCode's `permission_replied` and `question_replied`, and Pi's `tool_execution_end` for `ask_user_question`. The writer acts only while the agent counts as asking: this hook cleared its waiting state, the row `is_awaiting_input()`, or the transcript holds an unanswered `Ask`. It stamps the id of the agent's newest `Ask`, even one already closed, so a native answer that lands after `rimz answer` is deduplicated instead of written id-less. A replay writes nothing when no `Ask` id is found. Otherwise the next turn start classifies the first direct human prompt as the `Answer` ([section classification](#section-classification)), which closes the durable ask even when the provider emits no answer event. Every id-stamped answer goes through `transcript::append_answer_if_missing`, which checks and appends under one workspace lock, so a native hook racing `rimz answer` yields one record.
 
 A Codex async question arrives as an `ask_queue` edit on an ordinary observation, not as a waiting signal. Ingestion gives each queued question an ask id, reusing the id of a listed question with the same native key, and maps each answered key to its listed id. The writer then appends one `Ask` entry per queued question, with empty text and no `reply_to`, and one id-stamped `Answer` per answered key. A replay writes no queued `Ask`. The fold keeps the list on `AgentState.queued_asks` ([model.md § Waiting and asks](../agents/model.md#waiting-and-asks)), and the Codex wire is in [adapter_codex.md § Asks and answers](../agents/adapter_codex.md#asks-and-answers).
 
 ### Reading an ask
 
-[`AgentState::actionable_asks`](../../../crates/rimz/src/agents/state.rs) is the one list of open asks: the blocking `open_ask` while `is_awaiting_input` holds, then queued async questions and raised attention, tagged `blocking`, `async`, or `raised`. `rimz asks` lists it, and `agents::read_open_ask` materializes one entry for both commands. Native questions and the ask-time assistant text, exposed as `context`, join from the transcript by exact ask id only. When no native `Ask` entry matches, and always for a permission ask, the materializer synthesizes one question from the ask's detail and the adapter's `ask_options`. Raised questions instead use their side record's text and option labels; answering dispatches a normal attributed prompt rather than native keys. Attention audit events are not transcript entries.
+[`AgentState::actionable_asks`](../../../crates/rimz/src/agents/state.rs) is the one list of open asks, in this order, tagged `blocking`, `async`, or `raised`: the blocking `open_ask` while the row `holds_open_turn()` and `is_awaiting_input()`, then every queued async question, then the raised ask while the row has not ended. `rimz asks` lists it, and `agents::read_open_ask` materializes one entry for both commands. Native questions and the ask-time assistant text, exposed as `context`, join from the transcript by exact ask id only. When no native `Ask` entry matches, and always for a permission ask, the materializer synthesizes one question from the ask's detail and the adapter's `ask_options`. Raised questions instead use their side record's text and option labels, and answering one dispatches a normal attributed prompt in place of native keys. Attention audit events are not transcript entries.
 
-The materializer also computes one route (`AskRoute`). An async question routes to the pane (`AsyncPane`). So does a native ask whose adapter has no answer planner, and a permission or plan ask without options (`Pane`). Raised questions route to the shell without consulting an adapter. Every other ask is answerable from a shell. `rimz answer` refuses a pane-routed ask with exit 3 and a focus command, before it sends anything.
+The materializer also computes one route (`AskRoute`). An async question routes to the pane (`AsyncPane`). So does a native ask whose adapter has no answer planner, and a permission or plan ask without options (`Pane`). Raised questions route to the shell without consulting an adapter. Every other ask is answerable from a shell. `rimz answer` refuses a pane-routed ask with exit 3 and a focus command, before it sends anything. A shell-answerable ask can still carry the adapter's `pane_actions`, the choices only the pane offers (Claude's deny and persistent grants on a permission, for example). `rimz asks show` prints them on an `in the pane:` footer line under the shell answer command (`crates/rimz/src/cli/ask_commands.rs::AskCommands::show_footer`).
 
 ### Answering
 
-For a raised question, `rimz answer` validates the same selectors or text, dispatches the label or text as a normal Boundary/Done message from the caller, then withdraws only the answered ask id and audits `ask.closed` with cause `answered`. Dispatch failure leaves it open; replacing the ask during dispatch preserves the replacement. No native keys, transcript answer entry, or native confirmation wait belongs to this path.
+For a raised question, `rimz answer` validates the same selectors or text and re-reads the row, refusing with exit 2 when the raised ask was answered or replaced. It then dispatches the label or text as a normal `Boundary` message gated on `Done`, from the caller (`crates/rimz/src/cli/answer.rs::answer_raised`). Last, it withdraws only the answered ask id and audits `ask.closed` with cause `answered`. A dispatch failure leaves the ask open, and an ask that replaced it during dispatch stays, unaudited. No native keys, transcript answer entry, or native confirmation wait belongs to this path.
 
 For a native ask, `rimz answer` drives the prompt UI through the adapter's `answer_plan`, which maps validated replies to keys, typed text, and pastes. Claude, Codex, and Pi implement it, and the trait default refuses. The key mapping for each lives on its adapter page: [Claude](../agents/adapter_claude.md#asks-and-answers), [Codex](../agents/adapter_codex.md#asks-and-answers), [Pi](../agents/adapter_pi.md#hooks-and-lifecycle). The command runs in this order:
 
