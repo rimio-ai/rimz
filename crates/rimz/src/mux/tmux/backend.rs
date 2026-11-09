@@ -14,7 +14,7 @@ use super::options::{
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::{SplitAxis, TmuxPaneGeometry, sanitize_window_name};
-use crate::ids::{MuxName, PaneId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::LayoutPanes;
 use crate::mux::tab_name::TabNameIntent;
 use crate::mux::width::sidebar_width_off_spec;
@@ -23,10 +23,10 @@ use crate::mux::{
     CompanionAppendErr, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture,
     PaneListOptions, PaneListing, ReconcileAddErr, ReconcileAddOutcome, ReconcilePane,
     ReconcilePaneRole, ReconcileScope, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed,
-    SessionOptions, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery, SplitDirection,
-    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
-    confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
-    memoized_version,
+    SessionOptions, SidebarLiveness, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, ViewSidebars,
+    WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend, execute_close_plan,
+    execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -482,6 +482,36 @@ impl TmuxBackend {
             }
         }
         resized
+    }
+
+    /// The session's panes grouped by window for the sidebar planner, with
+    /// `live` sampled once after the listing.
+    fn sidebar_views(
+        &self,
+        session_name: &str,
+        live: &dyn SidebarLivenessSource,
+    ) -> Result<(Vec<ViewSidebars>, SidebarLiveness)> {
+        let panes = self.list_panes(PaneListOptions {
+            session_name: Some(session_name.to_owned()),
+            ..Default::default()
+        })?;
+        let live = live.sample();
+        let views = group_reconcile_panes(panes.panes.iter().filter_map(|pane| {
+            if pane.session_name != session_name {
+                return None;
+            }
+            let view = pane.view_id.clone()?;
+            let role = ReconcilePaneRole::from_evidence(
+                pane.is_rimz_sidebar(),
+                crate::pane::pane_is_host(pane),
+            );
+            Some(ReconcilePane {
+                view,
+                pane_id: pane.pane_id.clone(),
+                role,
+            })
+        }));
+        Ok((views, live))
     }
 }
 
@@ -1078,26 +1108,7 @@ impl MuxBackend for TmuxBackend {
         // backend must (its detached screen thread drops the mount). Surviving panes
         // outside the cross-backend stop band snap to their per-window targets
         // after the close/add phases.
-        let panes = self.list_panes(PaneListOptions {
-            session_name: Some(opts.session_name.clone()),
-            ..Default::default()
-        })?;
-        let live = live.sample();
-        let views = group_reconcile_panes(panes.panes.iter().filter_map(|pane| {
-            if pane.session_name != opts.session_name {
-                return None;
-            }
-            let view = pane.view_id.clone()?;
-            let role = ReconcilePaneRole::from_evidence(
-                pane.is_rimz_sidebar(),
-                crate::pane::pane_is_host(pane),
-            );
-            Some(ReconcilePane {
-                view,
-                pane_id: pane.pane_id.clone(),
-                role,
-            })
-        }));
+        let (views, live) = self.sidebar_views(&opts.session_name, live)?;
         let plan = super::super::plan_reconcile(&views, &live, scope);
         let planned_closes = plan.close_panes();
         let mutated_views = plan.add_views();
@@ -1166,6 +1177,27 @@ impl MuxBackend for TmuxBackend {
                     "sidebar reconcile: probing pane geometry failed; leaving widths unchanged",
                 ),
             }
+        }
+        Ok(report)
+    }
+
+    fn close_duplicate_sidebars(
+        &self,
+        session_name: &str,
+        _workspace_id: &WorkspaceId,
+        live: &dyn SidebarLivenessSource,
+    ) -> Result<SidebarRecovery> {
+        let (views, live) = self.sidebar_views(session_name, live)?;
+        let plan = super::super::plan_reconcile(&views, &live, ReconcileScope::CloseDuplicates);
+        let mut report = SidebarRecovery::default();
+        if let Some(failure) = execute_close_plan(plan, &mut report, |pane| self.kill_pane(pane)) {
+            tracing::warn!(
+                session = %session_name,
+                view = %failure.view,
+                tags.operation = "tmux.reconcile.close_duplicates",
+                error = &failure.error as &dyn std::error::Error,
+                "duplicate sidebar close aborted; leaving remaining views unchanged",
+            );
         }
         Ok(report)
     }

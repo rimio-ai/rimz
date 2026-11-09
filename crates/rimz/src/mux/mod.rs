@@ -32,8 +32,8 @@ pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub(crate) use keymap::register_room_keys;
 pub use pane_writer::{PaneWriter, exclude_pane_input};
 use reconcile::{
-    ReconcileAddErr, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
-    group_reconcile_panes, plan_reconcile,
+    ReconcileAddErr, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, ViewSidebars,
+    execute_close_plan, execute_reconcile_plan, group_reconcile_panes, plan_reconcile,
 };
 pub use reconcile::{
     ReconcileScope, SidebarLiveness, SidebarLivenessSource, SidebarRecovery, SidebarRepairFailure,
@@ -1364,6 +1364,20 @@ pub trait MuxBackend: Send + Sync {
         opts: &SidebarPaneOptions,
         live: &dyn SidebarLivenessSource,
         scope: ReconcileScope,
+    ) -> Result<SidebarRecovery>;
+    /// Close duplicate sidebar panes in `session_name`: the host's heal. Lists
+    /// the session's panes as [`Self::reconcile_sidebars`] does, samples `live`
+    /// exactly once after that listing, plans [`ReconcileScope::CloseDuplicates`],
+    /// and runs only its closes, so it never adds, replaces, or closes a view's
+    /// last sidebar. It re-asserts no hook or width, reads no build, proves no
+    /// mount, and converges no geometry. A failed close stops the pass and is
+    /// listed in [`SidebarRecovery::failures`]. Zellij then returns a single
+    /// viewed client to its tab's work pane, as reconcile does after a close.
+    fn close_duplicate_sidebars(
+        &self,
+        session_name: &str,
+        workspace_id: &WorkspaceId,
+        live: &dyn SidebarLivenessSource,
     ) -> Result<SidebarRecovery>;
     /// Launch the daemon dashboard in one dedicated, named background view (tmux
     /// window / Zellij tab) of an existing session, born `sidebar | content |

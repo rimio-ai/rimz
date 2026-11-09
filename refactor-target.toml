@@ -4881,7 +4881,8 @@ allowed-dependencies = [
 # ReconcileScope narrows a pass to adds or duplicate closes; SidebarRepairFailure
 # records each failed operation; ReconcileAddErr and its unproven constructor carry
 # a failed add's pane and cleanup result from the backends (+4).
-surface-budget = 23
+# execute_close_plan runs the host heal's close-only plan on both backends (+1).
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"

@@ -189,6 +189,14 @@ impl m::MuxBackend for Backend {
     ) -> m::Result<m::SidebarRecovery> {
         panic!("unexpected reconcile_sidebars")
     }
+    fn close_duplicate_sidebars(
+        &self,
+        _session_name: &str,
+        _workspace_id: &rimz::ids::WorkspaceId,
+        _live: &dyn m::SidebarLivenessSource,
+    ) -> m::Result<m::SidebarRecovery> {
+        panic!("unexpected close_duplicate_sidebars")
+    }
     fn open_background_view(
         &self,
         _opts: &m::BackgroundViewOptions,

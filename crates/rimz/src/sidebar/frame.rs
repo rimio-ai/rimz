@@ -174,6 +174,21 @@ impl PaneMetrics {
 }
 
 impl PaneFrame {
+    /// Views holding two or more sidebar chrome panes, by the predicate
+    /// [`SidebarOwnView::from_frame`] tells siblings apart with.
+    pub(crate) fn duplicate_sidebar_views(&self) -> impl Iterator<Item = &ViewId> {
+        self.tabs
+            .iter()
+            .filter(|tab| {
+                tab.panes
+                    .iter()
+                    .filter(|pane| pane_is_sidebar_chrome(pane))
+                    .nth(1)
+                    .is_some()
+            })
+            .map(|tab| &tab.view_id)
+    }
+
     pub fn to_pane_refs(&self) -> Vec<PaneRef> {
         self.tabs
             .iter()

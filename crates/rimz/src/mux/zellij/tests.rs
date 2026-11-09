@@ -3019,6 +3019,81 @@ fn reconcile_samples_liveness_once_after_the_native_listing() {
 
 #[cfg(unix)]
 #[test]
+fn close_duplicates_closes_unkept_sidebars_by_stable_tab_and_records_a_failed_close() {
+    let room = TestRoom::new();
+    let roster = r#"[{"id":1,"tab_id":10,"tab_position":0,"pane_columns":40,"pane_x":0,"title":"rimz-sidebar"},{"id":2,"tab_id":10,"tab_position":0,"pane_columns":120,"pane_x":40,"title":"work"},{"id":3,"tab_id":10,"tab_position":0,"pane_columns":40,"pane_x":160,"title":"rimz-sidebar"},{"id":4,"tab_id":11,"tab_position":1,"pane_columns":40,"pane_x":0,"title":"rimz-sidebar"},{"id":5,"tab_id":11,"tab_position":1,"pane_columns":40,"pane_x":40,"title":"rimz-sidebar"},{"id":6,"tab_id":11,"tab_position":1,"pane_columns":120,"pane_x":80,"title":"work"}]"#;
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n' ;;
+  *" action list-panes --all --json "*) printf '%s\n' '{roster}' ;;
+  *" close-pane --pane-id terminal_5 "*) echo refused >&2; exit 1 ;;
+esac
+exit 0
+"#
+    ));
+    let zellij = |id| {
+        PaneId::from(crate::mux::zellij::pane_topology::ZellijPaneId::Terminal(
+            id,
+        ))
+    };
+    let live = SidebarLiveness {
+        claimed_panes: [zellij(1), zellij(4)].into(),
+        ..SidebarLiveness::default()
+    };
+
+    let report = room
+        .backend(&shim)
+        .close_duplicate_sidebars("rimz-test", &room.workspace_id, &live)
+        .unwrap();
+
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "action list-panes --all --json"), 1);
+    assert_eq!(command_count(&log, "close-pane --pane-id terminal_3"), 1);
+    assert_eq!(command_count(&log, "close-pane --pane-id terminal_5"), 1);
+    assert_eq!(command_count(&log, "close-pane"), 2, "{log}");
+    assert!(
+        !log.contains("new-pane") && !log.contains("resize") && !log.contains("move-pane"),
+        "close-only: {log}"
+    );
+    assert_eq!((report.closed, report.failed), (1, 1));
+    assert_eq!(
+        report.repairs,
+        [crate::mux::SidebarViewRepair {
+            view: "10".to_owned(),
+            closed: vec![zellij(3)],
+            added: None,
+        }],
+    );
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].view, "11", "views key by stable tab id");
+    assert_eq!(report.failures[0].pane, Some(zellij(5)));
+    assert_eq!(
+        report.failures[0].step,
+        crate::diag::record::SidebarRepairStep::Close
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_attached_sidebar_claims_the_pane_id_the_reconcile_listing_names() {
+    let mut sidebar = terminal_pane(7, 0, 40, 0, crate::pane::SIDEBAR_CHROME_TITLE);
+    sidebar.stable_tab_id = Some(3);
+    let listed = reconcile_pane(&sidebar)
+        .expect("sidebar is structural")
+        .pane_id;
+    assert_eq!(
+        crate::mux::pane_from_env_value(crate::MuxName::Zellij, "7"),
+        listed,
+        "a host subscriber's own pane comes from ZELLIJ_PANE_ID",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn reconcile_rejects_a_terminal_without_a_stable_tab_id() {
     let room = TestRoom::new();
     room.write_cache(9_999_999_999_999, None, None, vec![]);

@@ -121,6 +121,12 @@ trait SidebarMux {
         live: &dyn SidebarLivenessSource,
         scope: ReconcileScope,
     ) -> crate::mux::Result<SidebarRecovery>;
+    fn close_duplicate_sidebars(
+        &self,
+        session_name: &str,
+        workspace_id: &crate::ids::WorkspaceId,
+        live: &dyn SidebarLivenessSource,
+    ) -> crate::mux::Result<SidebarRecovery>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,6 +163,15 @@ impl<T: MuxBackend + ?Sized> SidebarMux for T {
         scope: ReconcileScope,
     ) -> crate::mux::Result<SidebarRecovery> {
         MuxBackend::reconcile_sidebars(self, opts, live, scope)
+    }
+
+    fn close_duplicate_sidebars(
+        &self,
+        session_name: &str,
+        workspace_id: &crate::ids::WorkspaceId,
+        live: &dyn SidebarLivenessSource,
+    ) -> crate::mux::Result<SidebarRecovery> {
+        MuxBackend::close_duplicate_sidebars(self, session_name, workspace_id, live)
     }
 }
 
@@ -507,6 +522,47 @@ fn reconcile_session<B: SidebarMux + ?Sized>(
         session_name: &opts.session_name,
     };
     let report = backend.reconcile_sidebars(opts, &live, scope)?;
+    record_sidebar_repairs(&report, make_sink);
+    Ok(Some(report))
+}
+
+/// The host's heal: close duplicate sidebars in one session, skipping
+/// (`None`) while a launch, repair, or replacement holds the session's
+/// reconcile lock, and recording each landed close and failure.
+pub(crate) fn close_duplicate_sidebars(
+    backend: &dyn MuxBackend,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    workspace_id: &crate::ids::WorkspaceId,
+    live: &dyn SidebarLivenessSource,
+    make_sink: impl FnOnce() -> crate::diag::DiagSink,
+) -> Result<Option<SidebarRecovery>, SidebarReconcileErr> {
+    heal_session(
+        backend,
+        runtime,
+        session_name,
+        workspace_id,
+        live,
+        make_sink,
+    )
+}
+
+fn heal_session<B: SidebarMux + ?Sized>(
+    backend: &B,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    workspace_id: &crate::ids::WorkspaceId,
+    live: &dyn SidebarLivenessSource,
+    make_sink: impl FnOnce() -> crate::diag::DiagSink,
+) -> Result<Option<SidebarRecovery>, SidebarReconcileErr> {
+    let lock_path = runtime.sidebar_reconcile_lock(backend.name(), session_name);
+    let _guard =
+        match crate::disk::lock::WorkspaceLock::acquire_with_timeout(&lock_path, Duration::ZERO) {
+            Ok(guard) => guard,
+            Err(crate::disk::lock::LockErr::Timeout { .. }) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+    let report = backend.close_duplicate_sidebars(session_name, workspace_id, live)?;
     record_sidebar_repairs(&report, make_sink);
     Ok(Some(report))
 }
