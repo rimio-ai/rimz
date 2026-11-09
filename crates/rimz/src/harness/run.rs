@@ -152,6 +152,8 @@ pub struct SupervisedRunRequest {
     pub prompt: String,
     pub description: Option<String>,
     pub worktree: Option<String>,
+    /// Cut a created worktree with `LaunchBase::Team` rather than `LaunchBase::Configured`.
+    pub from_trunk: bool,
     pub fresh: bool,
     pub cwd: Option<PathBuf>,
     pub add_dirs: Vec<PathBuf>,
@@ -220,6 +222,7 @@ impl SupervisedRunRequest {
             prompt,
             description: None,
             worktree: None,
+            from_trunk: false,
             fresh: false,
             cwd: None,
             add_dirs: Vec::new(),

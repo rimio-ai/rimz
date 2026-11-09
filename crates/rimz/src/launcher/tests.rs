@@ -885,6 +885,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,
+        from_trunk: false,
         fresh: false,
         cwd: None,
         add_dirs: Vec::new(),

@@ -410,7 +410,7 @@ fn prepare(
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
         cwd.as_deref(),
-        if team_name.is_some() {
+        if team_name.is_some() || request.from_trunk {
             crate::worktree::LaunchBase::Team
         } else {
             crate::worktree::LaunchBase::Configured

@@ -1207,6 +1207,45 @@ mod parse {
     }
 
     #[test]
+    fn from_trunk_needs_a_worktree_and_reaches_both_launch_paths() {
+        let bare = parse_agents(&["rimz", "claude", "-w", "--from-trunk", "fix it"]);
+        assert_eq!(
+            (
+                bare.launch.cohort.worktree.as_deref(),
+                bare.launch.from_trunk,
+                bare.launch.prompt.as_deref(),
+            ),
+            (Some(""), true, Some("fix it"))
+        );
+        let supervised = parse_agents(&[
+            "rimz",
+            "claude",
+            "ship",
+            "-w",
+            "topic",
+            "--from-trunk",
+            "-p",
+        ]);
+        assert!(into_supervised_request(supervised).is_ok_and(|(request, _)| request.from_trunk));
+        assert_clap_error(
+            &["rimz", "claude", "--from-trunk"],
+            clap::error::ErrorKind::MissingRequiredArgument,
+        );
+        for conflict in [&["--from-pr", "1"][..], &["--continue"], &["--cwd", "/tmp"]] {
+            let argv = [
+                &["rimz", "claude", "-w", "topic", "--from-trunk"][..],
+                conflict,
+            ]
+            .concat();
+            assert_clap_error(&argv, clap::error::ErrorKind::ArgumentConflict);
+        }
+        assert_clap_error(
+            &["rimz", "claude", "--channel", "docs", "--from-trunk"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
+    }
+
+    #[test]
     fn lane_resume_forms_parse_public_contract() {
         let scoped = parse_agents(&["rimz", "resume", "#docs"]);
         let pr = parse_agents(&[
