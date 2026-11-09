@@ -3118,3 +3118,87 @@ fn timed_out_loser_refreshes_at_most_its_own_selection_and_writes_nothing() {
         "a local fallback never writes the shared cache"
     );
 }
+
+const RETIRED_NOW_MS: u64 = 10 * 3_600_000;
+
+fn retirement_pass(
+    runtime: &crate::RuntimePaths,
+    needed: &[String],
+    pass: GitPass,
+) -> DiffStatsCache {
+    refresh_diff_stats(
+        &runtime.diff_stats_path(),
+        runtime,
+        needed,
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+        RETIRED_NOW_MS,
+        None,
+        pass,
+        &mut GitRefreshState::default(),
+    )
+}
+
+/// Two entries no caller needs: one stamped past `DIFF_STATS_RETIRED_TTL`
+/// (its commit stamp is the newer and still too old), one inside it.
+fn retired_entries(cache: &mut DiffStatsCache) {
+    let retired_ttl = DIFF_STATS_RETIRED_TTL.as_millis() as u64;
+    cache.entries.insert(
+        "/retired-old".into(),
+        DiffStatsCacheEntry {
+            refreshed_at_ms: 0,
+            commit_refreshed_at_ms: Some(RETIRED_NOW_MS - retired_ttl - 1),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+    cache.entries.insert(
+        "/retired-young".into(),
+        DiffStatsCacheEntry {
+            refreshed_at_ms: 0,
+            commit_refreshed_at_ms: Some(RETIRED_NOW_MS - retired_ttl),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+}
+
+#[test]
+fn the_elected_writer_drops_only_long_retired_entries() {
+    // Every needed entry is due and older than the bound; the host cap leaves
+    // two of them unrefreshed, and those stay because a caller needs them.
+    let total = MAX_HOST_PASS_ENTRIES + 2;
+    let (root, needed, mut cache) = backlog_fixture(total);
+    retired_entries(&mut cache);
+    let (_dir, runtime) = runtime_for(root.path());
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+
+    let result = retirement_pass(&runtime, &needed, GitPass::Host);
+
+    let published: DiffStatsCache = atomic::read_json_cache(&runtime.diff_stats_path());
+    let mut kept: Vec<&str> = needed.iter().map(String::as_str).collect();
+    kept.push("/retired-young");
+    kept.sort_unstable();
+    for cache in [&result, &published] {
+        assert_eq!(
+            cache.entries.keys().map(String::as_str).collect::<Vec<_>>(),
+            kept
+        );
+    }
+}
+
+#[test]
+fn a_pass_with_nothing_due_keeps_retired_entries() {
+    let (root, needed, mut cache) = backlog_fixture(1);
+    let entry = cache.entries.get_mut(&needed[0]).unwrap();
+    entry.refreshed_at_ms = RETIRED_NOW_MS;
+    entry.commit_refreshed_at_ms = Some(RETIRED_NOW_MS);
+    retired_entries(&mut cache);
+    let (_dir, runtime) = runtime_for(root.path());
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    let before = std::fs::read(runtime.diff_stats_path()).unwrap();
+
+    let result = retirement_pass(&runtime, &needed, GitPass::Host);
+
+    assert!(result.entries.contains_key("/retired-old"));
+    assert_eq!(std::fs::read(runtime.diff_stats_path()).unwrap(), before);
+}

@@ -16,6 +16,13 @@ pub(crate) const HIBERNATED_CHECK_TTL: Duration = Duration::from_secs(60);
 
 pub(super) const DIFF_STATS_HIBERNATED_TTL: Duration = Duration::from_secs(10 * 60);
 
+/// How long a published diff-stats entry outlives the last pass that needed
+/// it before the elected writer drops it: six times
+/// [`DIFF_STATS_HIBERNATED_TTL`], the longest TTL a needed entry runs under, so
+/// a one-shot pass with narrower demand never drops an entry the host still
+/// refreshes, and a wrong drop costs one re-probe.
+pub(super) const DIFF_STATS_RETIRED_TTL: Duration = Duration::from_secs(60 * 60);
+
 pub(super) const TRUNK_STATE_TTL: Duration = Duration::from_secs(5);
 
 use jiff::SignedDuration;
