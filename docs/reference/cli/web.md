@@ -25,7 +25,19 @@ Two preconditions apply across the command:
 | Precondition | Checked by | Refusal |
 | --- | --- | --- |
 | `[web] enabled = true` (the default) | `open`, `share`, `start`, `restart` | ``Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing.`` |
-| ttyd 1.7.5 or newer on `PATH` (or at `RIMZ_TTYD_BIN`) | `open`, `share`, `start`, `restart`, and `token create` while the writable daemon is online | `ttyd 1.7.5 or newer is required for browser access; ...` when missing, `ttyd <version> is too old for browser access; ...` when older. Both name the install or upgrade command. |
+| ttyd 1.7.5 or newer on `PATH` (or at `RIMZ_TTYD_BIN`) | `open` (before the room is born, `--no-start` included), `share`, `start`, `restart`, and `unshare` of one room while others remain shared | `ttyd 1.7.5 or newer is required for browser access; ...` when missing, `ttyd <version> is too old for browser access; ...` when older or unparseable. Both name the install or upgrade command. |
+
+A verb that starts or replaces a daemon also refuses a `[web]` setting that daemon cannot use. `open --no-start`, `url`, `status`, and `stop` start nothing and check none of these. A token change restarts the daemon without refusing: see [Manage sign-in tokens](#manage-sign-in-tokens).
+
+| Setting | Daemon | Error |
+| --- | --- | --- |
+| `interface` is not an IP address | both | ``[web] interface `<value>` is not an IP address; set it to an IPv4 or IPv6 address in `rimz config path` `` |
+| `auth_users` set without `auth_header` | writable | `[web] auth_users requires trusted-header authentication; set [web] auth_header or remove [web] auth_users` |
+| `auth_users` holds an empty name | writable | `[web] auth_users contains an empty username; remove it or set it to the IdP's canonical username` |
+| A `trusted_proxies` entry is not an IP or CIDR | writable | ``[web] trusted proxy `<value>` is invalid: <reason>; use an IP address or CIDR in `rimz config path` `` |
+| `port` is taken by another process | writable | ``[web] port <port> is already in use by another process; choose a free port in `rimz config path` `` |
+| `share_port` is taken by another process | broadcast | ``[web] share_port <port> is already in use by another process; choose a free port in `rimz config path` `` |
+| The listener does not accept connections within 5 seconds | each | `the writable browser daemon did not accept connections on <address> within 5 seconds`, or the same for `the broadcast daemon` |
 
 Every verb exits `0` on success and `1` with the error on stderr; an invalid command line exits `2`.
 
@@ -34,9 +46,9 @@ Every verb exits `0` on success and `1` with the error on stderr; an invalid com
 `rimz web open` takes you from a directory or session name to a browser tab on that room:
 
 1. Check the preconditions above.
-2. Resolve the room. A `PATH` whose room is not running is born, like `rimz start` without attaching, and recovers its prior agents unless you pass `--no-resume` (see [Resume on rebirth](./getting-started.md#resume-on-rebirth)). `--session` needs a session RimZ already knows and births it the same way when it is not running.
+2. Resolve the room. A `PATH` whose room is not running is born, like `rimz start` without attaching, and handles its prior agents as [Resume on rebirth](./getting-started.md#resume-on-rebirth) describes unless you pass `--no-resume`. `--session` needs a session RimZ already knows and births it the same way when it is not running.
 3. Wait up to 5 seconds for the session to appear on its backend.
-4. Ensure the writable daemon: start it when it is offline, and replace it when its listener, auth settings, or browser page no longer match the config.
+4. Ensure the writable daemon (with `--no-start`, use the running one as it is): start it when it is offline, and replace it when its listener, auth settings, or browser page no longer match the config.
 5. Print the URL and sign-in instructions, then report the browser launch outcome.
 
 ```console
@@ -62,8 +74,7 @@ Other refusals:
 | Situation | Error |
 | --- | --- |
 | `--session` names a session with no RimZ workspace record | ``session `<name>` is not a known RimZ workspace session; run `rimz list` or open the workspace with `rimz start` first`` |
-| The session did not appear within 5 seconds | ``<mux> session `<name>` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`.`` |
-| `[web] port` is taken by another process | ``[web] port <port> is already in use by another process; choose a free port in `rimz config path` `` |
+| The session did not appear within 5 seconds | ``<mux> session `<name>` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`.`` When listing the backend's sessions kept failing, the cause follows `preparation` as `: <detail>`. |
 | The token store is gone while using `--no-start` | ``the browser token store is missing; run `rimz web token create <name>`, then retry`` |
 
 A remote room opens in your local browser through [`rimz remote connect --web`](./remote.md#open-a-remote-room-in-the-browser), which runs `rimz web open` on the host for you.
@@ -110,7 +121,7 @@ http://127.0.0.1:8201/?room=rimz-query-engine-a1b2c3
 
 On a non-loopback `[web] interface`, stderr also gets `rimz: warning: broadcast is unauthenticated; anyone reaching <interface>:<port> can watch`. `--json` prints the [`rimz.web.share.v1` payload](#share-payload).
 
-`share` needs a room RimZ has born and that is running now. A room with no record fails like `url`; a stopped room fails with ``<session> is not running, and only a running room can be shared; start it with `rimz start`, then retry``. The share list survives `rimz web stop` and a reboot, and the next `share` or `restart` serves every room on it again.
+`share` needs a room RimZ has born and that is running now. A room with no record fails like `url`; a stopped room fails with ``<session> is not running, and only a running room can be shared; start it with `rimz start`, then retry``. When the broadcast daemon fails to start, the room is taken off the list again. The share list survives `rimz web stop` and a reboot, and the next `share` or `restart` serves every room on it again.
 
 A viewer URL whose room is not on the list, not known to RimZ, or not running shows `this room is not shared` and nothing else, so a viewer cannot discover other rooms by editing `?room=`. tmux viewers attach read-only and cannot resize the room; Zellij has no read-only attach, so ttyd's dropped input is the only barrier and a viewer's window size can change the room's layout.
 
@@ -121,7 +132,7 @@ A viewer URL whose room is not on the list, not known to RimZ, or not running sh
 | `unshare [PATH]` or `unshare --session <name>` | Removes that room. The room need not be running. Restarts the broadcast when rooms remain, otherwise stops it. | ``stopped sharing `<session>`; viewers of <n> other shared rooms were disconnected and will reconnect`` (singular for 1), or ``stopped sharing `<session>`; the broadcast daemon is stopped`` for the last room. An unchanged list prints `` `<session>` was not shared ``. |
 | `unshare --all` | Empties the list and stops the broadcast daemon. | `stopped sharing all rooms`, or `no rooms were shared`. |
 
-Removing one room stops the old broadcast process before checking the config, so an invalid `[web]` setting fails the command with viewers already disconnected and no broadcast daemon running.
+Removing one room stops the old broadcast process before checking the config, so an invalid `[web]` setting or a missing ttyd fails the command with viewers already disconnected and no broadcast daemon running.
 
 ## Manage sign-in tokens
 
@@ -136,15 +147,15 @@ Each token name is a Basic-auth username: 1-64 characters from `[A-Za-z0-9._-]`,
 | `token revoke <NAME>` | Removes one token and restarts the writable daemon, disconnecting its sessions; the last token stops it. | `revoked token <name> and restarted the writable daemon`, `revoked token <name> and stopped the writable daemon (no tokens remain)`, or `revoked token <name>; the writable daemon is offline`. |
 | `token revoke-all` | Removes all tokens and stops the writable daemon. | `revoked <n> tokens and stopped the writable daemon`, `revoked <n> tokens; the writable daemon is offline`, or `no tokens to revoke`. |
 
-A duplicate name fails with ``token `<name>` already exists; revoke it first or pick another name``. A missing name fails with ``token `<name>` does not exist; existing tokens: <names>``, or `; no tokens exist`. These operations leave the broadcast daemon untouched and behave the same in trusted-header mode. Read-only viewing is a per-room broadcast: use `rimz web share`.
+An invalid name fails with ``invalid token name `<name>`; use 1-64 characters of [A-Za-z0-9._-], starting with a letter or digit``. A duplicate name fails with ``token `<name>` already exists; revoke it first or pick another name``. A missing name fails with ``token `<name>` does not exist; existing tokens: <names>``, or `; no tokens exist`. These operations leave the broadcast daemon untouched and behave the same in trusted-header mode. Read-only viewing is a per-room broadcast: use `rimz web share`.
 
-An online token change stops the writable daemon before attempting its replacement. If restart fails, the token change still succeeds, the daemon stays stopped, and stderr reports the cause. Revocation then reports `revoked token <name> and stopped the writable daemon (restart failed)` instead of claiming that no tokens remain. Fix the reported problem and run `rimz web start` to restore access with the remaining tokens.
+An online token change stops the writable daemon before attempting its replacement. If the restart fails (a missing ttyd or a `[web]` setting from the table above), the token change still succeeds, the daemon stays stopped, the command exits `0`, and stderr reports `rimz: warning: tokens saved; the writable daemon is stopped because restart failed: <error>`. Revocation then reports `revoked token <name> and stopped the writable daemon (restart failed)` instead of claiming that no tokens remain. `token create` then reports `created token <name>; the writable daemon is offline`. Fix the reported problem and run `rimz web start` to restore access with the remaining tokens.
 
 ## JSON output
 
 ### Open payload
 
-`open --json` keeps the remote tunnel contract, `rimz.web.v2`:
+`open --json` prints `rimz.web.v2`, the payload [`rimz remote connect --web`](./remote.md#open-a-remote-room-in-the-browser) reads to build its tunnel:
 
 ```json
 {"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?room=rimz-query-engine-a1b2c3","session":"rimz-query-engine-a1b2c3","port":8200,"tunnel_port":41820,"auth":{"mode":"basic"},"credential":{"username":"rimz-upstream","secret":"..."}}
@@ -152,7 +163,7 @@ An online token change stops the writable daemon before attempting its replaceme
 
 | Field | Meaning |
 | --- | --- |
-| `version` | Always `rimz.web.v2`, unchanged for mixed-version remote clients. |
+| `version` | Always `rimz.web.v2`. A remote client refuses any other version. |
 | `url`, `session` | The public browser URL and room session name. |
 | `port` | The public writable listener. |
 | `tunnel_port` | The private loopback port where ttyd listens; the remote relay forwards here, bypassing the public gate. |
@@ -192,7 +203,7 @@ Neither block includes a credential.
 
 ### Share payload
 
-`share --json` is unchanged:
+`share --json` prints `rimz.web.share.v1`:
 
 ```json
 {"version":"rimz.web.share.v1","url":"http://127.0.0.1:8201/?room=rimz-query-engine-a1b2c3","session":"rimz-query-engine-a1b2c3","port":8201}
