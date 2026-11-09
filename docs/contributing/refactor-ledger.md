@@ -45,7 +45,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/kiro` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/amp` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant payload decode (now the shared `decode_or_default`) holds. |
 | `agents/attribution` | holds | `2f84d791a` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
-| `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
+| `agents/lifecycle` | holds; landed pass-22c; pass-33a | `e7a1369ee` | 30 | tool effect typed; turn and compaction flags hold as orthogonal facts. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
 | `agents/spending` | holds; landed pass-13; pass-33 | `21e72ec88` | 30 | one writer per cache, one engine election, one mode through the walk with one persisted acknowledgement, keyed fold windows; walker, ledger and migration residuals are fix-pinned state machines. |
 | `agents/capabilities` | holds; landed pass-32a | `6ea09c504` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |

@@ -5966,8 +5966,8 @@ reason = "The map tracks unknown models; pricing, CachedEntry, deduplication, an
 
 [[verdict]]
 kind = "shape"
-key = "auto_flag+blocking_tool_kind+optional_payload_string+session_start_signal+tool_edits_files+tool_mutates"
-reason = "The callees live once in AgentSpec, payload, SessionSource, and CompactTrigger; the three mappers retain fix-pinned per-event provider policy (pass 2)."
+key = "auto_flag+blocking_tool_kind+optional_payload_string+session_start_signal+tool_effect"
+reason = "The callees live once in AgentSpec, payload, SessionSource, and CompactTrigger; the three mappers retain fix-pinned per-event provider policy (pass 2; re-keyed pass 33a)."
 
 [[verdict]]
 kind = "shape"
@@ -9028,6 +9028,11 @@ reason = "The pub Transition::next field and AgentState::lifecycle return it, an
 kind = "item"
 key = "agents::lifecycle::tag"
 reason = "The binary's hook reactors and active-time accounting read the signal tag (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::lifecycle::LifecycleSignal"
+reason = "The turn bits and the compaction trigger and outcome are independent produced facts the wire freezes (pass 33a)."
 
 [[verdict]]
 kind = "item"
