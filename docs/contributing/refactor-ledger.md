@@ -4,12 +4,12 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `1986a3caa`, pass 32a: 4828 scoped commits (pace window 1207), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32a and left open: the pending restamp of the pass 32b `harness/launch_plan` row (`survey --restamp` writes it), and one open shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts/report.rs::write_comparison`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
+- **Survey:** base `5e7280b9f`, pass 33b: 7025 scoped commits (pace window 1757), 24 admission intents, 239 holds; no parse failures or ledger problems. Left open: 58 stale verdict keys (53 item, 5 shape; `sidebar::fuse::fuse` among them, which pass 33d re-keys), one ambiguous key (`harness::schedule::run_log::new`, two visible items), and the pending restamps of `agents/definition`, `agents/adapters/claude`, `agents/capabilities` and `harness/launch_plan` (`survey --restamp` writes them).
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** none.
-- **Never reviewed:** none. Binary modules and test-only rows carry no hold.
-- **Unreviewed admissions:** none; no unadmitted upward sites.
-- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
+- **Reopened:** 61 rank rows reached their reopen count, led by `mux/zellij`, `agents/adapters/claude`, `sidebar/refresh`, `sidebar_pane/render/sections` and `mux/tmux`.
+- **Never reviewed:** 151 library rank rows carry no hold, led by `launcher`, `harness/schedule/runner`, `sidebar_pane/app/loop_state` and `lsp/broker`; some ledger rows (`harness/schedule`, `lsp`, `store/snapshot`) sit above the granularity the survey ranks and so hold no rank row. Binary modules and test-only rows carry no hold.
+- **Unreviewed admissions:** the `crates/rimz/src/message` and `crates/rimz/src/message/send.rs` rules' upward edge to `harness::hibernate` (2 sites each); no unadmitted upward sites.
+- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `agents ↔ trust`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree` and `harness ↔ room`.
 - **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 31, `cli/agents_cmd/mod.rs` 23, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 4); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
@@ -196,7 +196,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/cache` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/unread` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/read_marks` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
-| `sidebar/fuse` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
+| `sidebar/fuse` | holds; landed pass-23c; pass-33b | `5e7280b9f` | 30 | command events reach rows only through the snapshot's tenant transition, so fusion keeps no carry list. |
 | `sidebar/meter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/event_store` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/body_filter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
@@ -225,6 +225,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b; pass-27b | — | — | owns every record it persists, imports nothing above it. |
 | `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
 | `store/snapshot` | holds; landed pass-28d | `b93ab174a` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
+| `store/snapshot/view` | holds; landed pass-33b | `5e7280b9f` | 30 | a command overlay keeps a row whose tenant stays and starts a new tenant with only the pane slot. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
 | `store/message` | holds; landed pass-21b; pass-29g | `0df251b8a` | 30 | submitted-prompt classifier, header grammar and codec hold; author vocabulary lives in `transcript`. |
