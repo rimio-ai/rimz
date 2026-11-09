@@ -125,6 +125,8 @@ The last commit, `docs(refactor): record pass N`, carries the durable state, eve
 6. The ledger's Status bullets rewritten for the tree the pass ships. Status holds state, not history: the pass's figures (cx and SLOC before and after, budgets moved, what was judged) go in the PR description and the record commit's message, never in the ledger. Status cites no SHA except the survey base line, since a prose SHA misleads row resolution ([caveat 16](./atlas.md#caveats)).
 7. Doc updates the change implies: the module's `AGENTS.md`, its internals page, the [code map](../../AGENTS.md#code-map) when a module moved, [ARCHITECTURE.md](../../ARCHITECTURE.md) when the runtime shape changed, and the prose naming any item whose visibility changed. `CHANGELOG.md` stays untouched.
 
+A `surface-budget` raise lands in the commit that adds the escaping item, never in the record commit.
+
 A review fix after the record commit means re-measuring and amending it.
 
 ## Merging
