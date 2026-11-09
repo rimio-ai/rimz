@@ -123,6 +123,7 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
         ("keys.prefix", "Ctrl+m"),
         ("keys.prefix", "Alt+Space"),
         ("keys.prefix", "42"),
+        ("keys.prefix", "Alt+Left"),
     ] {
         assert!(editor.set(key, value).is_err(), "{key} accepted {value}");
     }
@@ -132,6 +133,8 @@ fn keymap_scalars_round_trip_but_binding_containers_refuse_config_set() {
         "keys.bind.prefix",
         "keys.bind.resize",
         "keys.bind.move",
+        "keys.bind.pane",
+        "keys.bind.tab",
         "keys.bind.normal.Alt+x",
         "keys.sidebar",
         "keys.sidebar.j",

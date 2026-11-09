@@ -45,6 +45,8 @@ fn table(mode: KeyMode) -> &'static str {
     match mode {
         KeyMode::Normal => "root",
         KeyMode::Prefix => "rimz-prefix",
+        KeyMode::Pane => "rimz-pane",
+        KeyMode::Tab => "rimz-tab",
         KeyMode::Resize => "rimz-resize",
         KeyMode::Move => "rimz-move",
     }
@@ -63,6 +65,18 @@ fn keys(key: KeyChord) -> Vec<String> {
         KeyChord::Character(key) => vec![key.to_string()],
         KeyChord::Esc => vec!["Escape".into()],
         KeyChord::Enter => vec!["Enter".into()],
+        KeyChord::Arrow(direction) => vec![arrow_key(direction).into()],
+        KeyChord::AltArrow(direction) => vec![format!("M-{}", arrow_key(direction))],
+        KeyChord::CtrlArrow(direction) => vec![format!("C-{}", arrow_key(direction))],
+    }
+}
+
+fn arrow_key(direction: KeyDirection) -> &'static str {
+    match direction {
+        KeyDirection::Left => "Left",
+        KeyDirection::Right => "Right",
+        KeyDirection::Up => "Up",
+        KeyDirection::Down => "Down",
     }
 }
 
@@ -77,9 +91,16 @@ fn keymap_commands(
     for key in root_keys.split_whitespace() {
         commands.push(words(&["unbind-key", "-T", "root", key]));
     }
-    for mode in [KeyMode::Prefix, KeyMode::Resize, KeyMode::Move] {
+    for mode in [
+        KeyMode::Prefix,
+        KeyMode::Pane,
+        KeyMode::Tab,
+        KeyMode::Resize,
+        KeyMode::Move,
+    ] {
         commands.push(words(&["unbind-key", "-a", "-T", table(mode)]));
     }
+    let prefix = keymap.style.map(|style| style.prefix);
     if keymap.style.is_some() {
         if prior_mode_keys.is_none() {
             commands.push(words(&[
@@ -101,12 +122,14 @@ fn keymap_commands(
     let mut root_keys = Vec::new();
     for (&mode, bindings) in &keymap.modes {
         for (&key, action) in bindings {
-            let body = action_command(action, rimz_bin);
+            let body = action_command(action, rimz_bin, prefix);
             for key in keys(key) {
                 let mut bind = words(&["bind-key", "-T", table(mode), &key]);
-                bind.extend(body.iter().cloned());
-                if matches!(mode, KeyMode::Resize | KeyMode::Move)
-                    && !matches!(action, KeyAction::Named(name) if name.changes_mode())
+                bind.extend(body.iter().map(|word| bind_body_word(word)));
+                if matches!(
+                    mode,
+                    KeyMode::Pane | KeyMode::Tab | KeyMode::Resize | KeyMode::Move
+                ) && matches!(action, KeyAction::Named(name) if name.is_motion())
                 {
                     bind.extend(words(&[";", "switch-client", "-T", table(mode)]));
                 }
@@ -126,7 +149,16 @@ fn keymap_commands(
     commands.into_iter().map(|command| vec![command]).collect()
 }
 
-fn action_command(action: &KeyAction, rimz_bin: &Path) -> Vec<String> {
+/// `bind-key` reparses its body words as a command list, where a word ending in `;` ends the
+/// command (`send-keys M-;` binds `send-keys M-`), so that `;` is escaped as `\;`.
+fn bind_body_word(word: &str) -> String {
+    match word.strip_suffix(';') {
+        Some(head) => format!("{head}\\;"),
+        None => word.to_owned(),
+    }
+}
+
+fn action_command(action: &KeyAction, rimz_bin: &Path, prefix: Option<KeyChord>) -> Vec<String> {
     let name = match action {
         KeyAction::Run { args } => {
             return run_command(rimz_bin, args, false, false);
@@ -137,6 +169,11 @@ fn action_command(action: &KeyAction, rimz_bin: &Path) -> Vec<String> {
         KeyActionName::Command { args, .. } => run_command(rimz_bin, &words(args), true, false),
         KeyActionName::Palette(mode) => run_command(rimz_bin, &words(&mode.command()), true, true),
         KeyActionName::PaneFocus(direction) => words(&["select-pane", direction_flag(direction)]),
+        KeyActionName::PaneFocusNext => words(&["select-pane", "-t", ":.+"]),
+        // Native style resolves no prefix and binds no `pane.send_prefix`.
+        KeyActionName::PaneSendPrefix => std::iter::once("send-keys".to_owned())
+            .chain(prefix.and_then(|prefix| keys(prefix).into_iter().next()))
+            .collect(),
         KeyActionName::PaneSwap(direction) => words(&[
             "swap-pane",
             "-s",
@@ -217,7 +254,10 @@ mod tests {
         for name in KeyActionName::vocabulary() {
             let action = KeyAction::Named(KeyActionName::parse(name).expect(name));
             assert_eq!(action.to_string(), name);
-            assert!(!action_command(&action, Path::new("/bin/rimz")).is_empty());
+            assert!(
+                !action_command(&action, Path::new("/bin/rimz"), Some(KeyChord::Ctrl('b')))
+                    .is_empty()
+            );
         }
     }
 
@@ -322,6 +362,98 @@ mod tests {
                     .to_vec()
             )
         );
+    }
+
+    fn bind<'a>(commands: &'a [Vec<String>], table: &str, key: &str) -> &'a [String] {
+        let bind = commands
+            .iter()
+            .find(|cmd| cmd[0] == "bind-key" && cmd[2] == table && cmd[3] == key);
+        assert!(bind.is_some(), "{table} {key} must be bound");
+        &bind.unwrap()[4..]
+    }
+
+    #[test]
+    fn sticky_modes_reenter_only_after_a_motion_and_prefix_stays_one_shot() {
+        let commands = commands(
+            "[room]\nstyle='rimz'\n[keys.bind.pane]\nh='pane.focus.left'\nz='pane.zoom'\n\
+             [keys.bind.tab]\nn='tab.next'\nc='tab.new'\n[keys.bind.resize]\nz='pane.zoom'\n\
+             [keys.bind.move]\nz='pane.zoom'\n",
+            "",
+            None,
+        );
+        for table in [
+            "rimz-prefix",
+            "rimz-pane",
+            "rimz-tab",
+            "rimz-resize",
+            "rimz-move",
+        ] {
+            assert!(
+                commands.contains(&words(&["unbind-key", "-a", "-T", table])),
+                "{table} must be cleared on every apply"
+            );
+        }
+        let sticky = |table: &str| words(&[";", "switch-client", "-T", table]);
+        assert_eq!(
+            bind(&commands, "rimz-pane", "h"),
+            [words(&["select-pane", "-L"]), sticky("rimz-pane")].concat()
+        );
+        assert_eq!(
+            bind(&commands, "rimz-tab", "n"),
+            [words(&["next-window"]), sticky("rimz-tab")].concat()
+        );
+        assert_eq!(
+            bind(&commands, "rimz-move", "h"),
+            [
+                words(&["swap-pane", "-s", "{left-of}"]),
+                sticky("rimz-move")
+            ]
+            .concat()
+        );
+        for (table, key) in [
+            ("rimz-pane", "z"),
+            ("rimz-tab", "c"),
+            ("rimz-resize", "z"),
+            ("rimz-move", "z"),
+            ("rimz-prefix", "h"),
+        ] {
+            assert!(
+                !bind(&commands, table, key).contains(&";".to_owned()),
+                "{table} {key} must return to normal"
+            );
+        }
+    }
+
+    #[test]
+    fn send_prefix_focus_next_and_arrow_keys_compile() {
+        for (prefix, sent) in [("Ctrl+b", "C-b"), ("Alt+w", "M-w"), ("Alt+;", "M-\\;")] {
+            let commands = commands(
+                &format!(
+                    "[room]\nstyle='rimz'\n[keys]\nprefix='{prefix}'\n[keys.bind.prefix]\n\
+                     b='pane.send_prefix'\no='pane.focus.next'\nLeft='pane.focus.left'\n\
+                     'Alt+Up'='pane.focus.up'\n'Ctrl+Down'='pane.focus.down'\n"
+                ),
+                "",
+                None,
+            );
+            assert_eq!(bind(&commands, "rimz-prefix", "b"), ["send-keys", sent]);
+            assert_eq!(
+                bind(&commands, "rimz-prefix", "o"),
+                ["select-pane", "-t", ":.+"]
+            );
+            assert_eq!(
+                bind(&commands, "rimz-prefix", "Left")[..2],
+                ["select-pane", "-L"]
+            );
+            assert_eq!(
+                bind(&commands, "rimz-prefix", "M-Up")[..2],
+                ["select-pane", "-U"]
+            );
+            assert_eq!(
+                bind(&commands, "rimz-prefix", "C-Down")[..2],
+                ["select-pane", "-D"]
+            );
+        }
     }
 
     #[test]

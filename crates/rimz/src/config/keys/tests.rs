@@ -36,6 +36,11 @@ fn key_grammar_preserves_case_and_terminal_aliases() {
         ("Alt+=", "Alt+="),
         ("Alt++", "Alt++"),
         ("-", "-"),
+        ("Left", "Left"),
+        ("alt+Left", "Alt+Left"),
+        ("Ctrl+Up", "Ctrl+Up"),
+        ("M-Down", "Alt+Down"),
+        ("Right", "Right"),
     ] {
         let chord = KeyChord::parse(raw);
         assert!(chord.is_some(), "{raw} must parse");
@@ -51,8 +56,17 @@ fn key_grammar_preserves_case_and_terminal_aliases() {
         "Ctrl+Alt+p",
         "é",
         "Alt+Enter",
+        "Ctrl+Alt+Left",
+        "PageUp",
     ] {
         assert_eq!(KeyChord::parse(raw), None, "{raw}");
+    }
+    for raw in ["Alt+Left", "Ctrl+Up", "Left"] {
+        assert_eq!(
+            KeyChord::parse_prefix(raw),
+            None,
+            "{raw} cannot be a prefix"
+        );
     }
     for code in b'!'..=b'~' {
         for raw in [
@@ -107,9 +121,15 @@ fn embedded_keymap_matches_every_spec_binding() {
     ];
     assert_eq!(
         map.modes.len(),
-        expected.len(),
-        "rimz must resolve all four data modes"
+        expected.len() + 2,
+        "rimz must carry all six modes"
     );
+    for mode in [KeyMode::Pane, KeyMode::Tab] {
+        assert!(
+            map.modes[&mode].is_empty(),
+            "{mode:?} binds nothing in rimz"
+        );
+    }
     for (mode, rows) in expected {
         assert_eq!(map.modes[&mode].len(), rows.lines().count(), "{mode:?}");
         for row in rows.lines() {
@@ -194,6 +214,7 @@ fn invalid_bindings_drop_only_themselves_under_strict_and_lenient_loads() {
         ("'Alt+x'={run='rimz \"unclosed'}", "quot"),
         ("'Alt+x'={run=42}", "string"),
         ("'Alt+x'=[true]", "action name or { run"),
+        ("'Left'='pane.focus.left'", "modifier"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -228,7 +249,14 @@ fn invalid_bindings_drop_only_themselves_under_strict_and_lenient_loads() {
 
 #[test]
 fn bad_prefix_and_unknown_keymap_warn_and_use_defaults() {
-    for prefix in ["'x'", "'Esc'", "'Alt+Space'", "'Ctrl+m'", "42"] {
+    for prefix in [
+        "'x'",
+        "'Esc'",
+        "'Alt+Space'",
+        "'Ctrl+m'",
+        "'Alt+Left'",
+        "42",
+    ] {
         let machine = config(&format!("[room]\nstyle='rimz'\n[keys]\nprefix={prefix}\n"));
         assert_eq!(
             machine.notices.key_bindings.len(),
@@ -368,4 +396,63 @@ fn rimz_actions_carry_commands_and_typed_palette_modes() {
     );
     assert_eq!(KeyActionName::parse("card.slot.0"), None);
     assert_eq!(KeyActionName::parse("card.slot.10"), None);
+}
+
+#[test]
+fn pane_and_tab_tables_accept_arrows_and_the_new_actions() {
+    let machine = config(
+        "[room]\nstyle='rimz'\n[keys.bind.pane]\nLeft='pane.focus.left'\no='pane.focus.next'\n\
+         [keys.bind.tab]\n'Alt+Right'='tab.next'\n[keys.bind.prefix]\np='mode.pane'\nt='mode.tab'\n\
+         b='pane.send_prefix'\n[keys.bind.typo]\nx='card.close'\n",
+    );
+    assert_eq!(
+        machine.notices.key_bindings["keys.bind.typo"],
+        "keys.bind.typo: expected normal, prefix, pane, tab, resize, or move; bindings ignored"
+    );
+    let map = machine.room_keymap();
+    for (mode, key, expected) in [
+        (KeyMode::Pane, "Left", "pane.focus.left"),
+        (KeyMode::Pane, "o", "pane.focus.next"),
+        (KeyMode::Tab, "Alt+Right", "tab.next"),
+        (KeyMode::Prefix, "p", "mode.pane"),
+        (KeyMode::Prefix, "t", "mode.tab"),
+        (KeyMode::Prefix, "b", "pane.send_prefix"),
+    ] {
+        assert_eq!(
+            action(&map, mode, key).as_deref(),
+            Some(expected),
+            "{mode:?} {key}"
+        );
+    }
+}
+
+#[test]
+fn motion_actions_are_exactly_the_sticky_set() {
+    let motion: Vec<_> = KeyActionName::vocabulary()
+        .filter(|name| KeyActionName::parse(name).unwrap().is_motion())
+        .collect();
+    assert_eq!(
+        motion,
+        [
+            "pane.focus.left",
+            "pane.focus.right",
+            "pane.focus.up",
+            "pane.focus.down",
+            "pane.focus.next",
+            "pane.swap.left",
+            "pane.swap.right",
+            "pane.swap.up",
+            "pane.swap.down",
+            "pane.resize.left",
+            "pane.resize.right",
+            "pane.resize.up",
+            "pane.resize.down",
+            "tab.next",
+            "tab.prev",
+            "card.next",
+            "card.prev",
+            "worktree.next",
+            "worktree.prev",
+        ]
+    );
 }

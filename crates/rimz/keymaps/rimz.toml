@@ -49,6 +49,10 @@ d = "session.detach"
 "?" = "keys.help"
 Esc = "mode.exit"
 
+[pane]
+
+[tab]
+
 [resize]
 h = "pane.resize.left"
 j = "pane.resize.down"

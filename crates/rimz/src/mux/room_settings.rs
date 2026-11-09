@@ -100,6 +100,8 @@ fn classes(config: &MachineConfig, mux: MuxName) -> BTreeMap<&'static str, Appli
         "keys.bind.prefix",
         "keys.bind.resize",
         "keys.bind.move",
+        "keys.bind.pane",
+        "keys.bind.tab",
     ] {
         table.insert(key, Reload);
     }

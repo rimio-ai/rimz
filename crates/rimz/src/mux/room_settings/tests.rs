@@ -72,6 +72,8 @@ fn every_room_setting_has_its_apply_class() {
         "keys.bind.prefix",
         "keys.bind.resize",
         "keys.bind.move",
+        "keys.bind.pane",
+        "keys.bind.tab",
     ] {
         assert_eq!(table.get(key), Some(&Reload), "{key}");
     }

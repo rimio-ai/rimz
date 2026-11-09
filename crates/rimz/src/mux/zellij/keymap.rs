@@ -7,15 +7,15 @@ use serde_json::{Value, json};
 
 pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String {
     let rimz = keymap.style.is_some();
+    let prefix = keymap.style.map(|style| style.prefix);
     let mut commands = Vec::new();
     let mut modes = Vec::new();
     for (&mode, bindings) in &keymap.modes {
         let binds: Vec<_> = bindings
             .iter()
             .map(|(&key, action)| {
-                let mut steps = vec![step(action, session, root, &mut commands)];
-                let changes_mode = matches!(action, KeyAction::Named(name) if name.changes_mode());
-                if mode == KeyMode::Prefix && !changes_mode {
+                let mut steps = vec![step(action, prefix, session, root, &mut commands)];
+                if returns_to_normal(mode, action) {
                     steps.push(json!({"mode":"locked"}));
                 }
                 json!({"key": key_label(key), "steps": steps})
@@ -35,10 +35,26 @@ pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String 
         .replace(',', "%2C")
 }
 
+/// Prefix mode is one-shot; pane, tab, resize, and move stay entered only after
+/// a motion. A mode action names its own next mode.
+fn returns_to_normal(mode: KeyMode, action: &KeyAction) -> bool {
+    let (changes_mode, motion) = match action {
+        KeyAction::Named(name) => (name.changes_mode(), name.is_motion()),
+        KeyAction::Run { .. } => (false, false),
+    };
+    match mode {
+        KeyMode::Normal => false,
+        KeyMode::Prefix => !changes_mode,
+        KeyMode::Pane | KeyMode::Tab | KeyMode::Resize | KeyMode::Move => !changes_mode && !motion,
+    }
+}
+
 fn mode_word(mode: KeyMode) -> &'static str {
     match mode {
         KeyMode::Normal => "locked",
         KeyMode::Prefix => "tmux",
+        KeyMode::Pane => "pane",
+        KeyMode::Tab => "tab",
         KeyMode::Resize => "resize",
         KeyMode::Move => "move",
     }
@@ -51,10 +67,29 @@ fn key_label(key: KeyChord) -> String {
         KeyChord::Character(key) => key.to_string(),
         KeyChord::Esc => "Esc".into(),
         KeyChord::Enter => "Enter".into(),
+        KeyChord::Arrow(direction) => direction_word(direction).into(),
+        KeyChord::AltArrow(direction) => format!("Alt {}", direction_word(direction)),
+        KeyChord::CtrlArrow(direction) => format!("Ctrl {}", direction_word(direction)),
     }
 }
 
-fn step(action: &KeyAction, session: &str, root: &Path, commands: &mut Vec<Vec<String>>) -> Value {
+/// The bytes a terminal sends for the prefix chord, which `parse_prefix` limits
+/// to `Alt` or `Ctrl` with one ASCII graphic character.
+fn chord_bytes(chord: KeyChord) -> Vec<u8> {
+    match chord {
+        KeyChord::Ctrl(key) => vec![(key.to_ascii_lowercase() as u8) & 0x1f],
+        KeyChord::Alt(key) => vec![0x1b, key as u8],
+        _ => Vec::new(),
+    }
+}
+
+fn step(
+    action: &KeyAction,
+    prefix: Option<KeyChord>,
+    session: &str,
+    root: &Path,
+    commands: &mut Vec<Vec<String>>,
+) -> Value {
     let name = match action {
         KeyAction::Run { args } => {
             return command_step(commands, args.clone(), "run", root);
@@ -74,7 +109,19 @@ fn step(action: &KeyAction, session: &str, root: &Path, commands: &mut Vec<Vec<S
             let args = ["keys", "--wait"].map(str::to_owned).to_vec();
             return command_step(commands, args, "float", root);
         }
+        KeyActionName::PaneSendPrefix => {
+            let write = std::iter::once("Write".to_owned())
+                .chain(
+                    prefix
+                        .into_iter()
+                        .flat_map(chord_bytes)
+                        .map(|byte| byte.to_string()),
+                )
+                .collect::<Vec<_>>();
+            return json!({"action":write});
+        }
         KeyActionName::PaneFocus(direction) => &["MoveFocus", direction_word(direction)],
+        KeyActionName::PaneFocusNext => &["FocusNextPane"],
         KeyActionName::PaneSwap(direction) => &["MovePane", direction_word(direction)],
         KeyActionName::PaneSplit(direction) => &[
             "NewPane",
@@ -169,7 +216,14 @@ mod tests {
         for name in KeyActionName::vocabulary() {
             let action = KeyAction::Named(KeyActionName::parse(name).expect(name));
             assert_eq!(action.to_string(), name);
-            let compiled = step(&action, "room", Path::new("/project"), &mut Vec::new());
+            let prefix = Some(KeyChord::Ctrl('b'));
+            let compiled = step(
+                &action,
+                prefix,
+                "room",
+                Path::new("/project"),
+                &mut Vec::new(),
+            );
             assert!(compiled.is_object(), "{name}: {compiled}");
         }
     }
@@ -224,14 +278,116 @@ mod tests {
         }
     }
 
+    fn steps(wire: &Value, mode: &str, key: &str) -> Value {
+        let bind = wire["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["mode"] == mode)
+            .flat_map(|entry| entry["binds"].as_array().unwrap())
+            .find(|bind| bind["key"] == key);
+        assert!(bind.is_some(), "{mode} {key} must be bound");
+        bind.unwrap()["steps"].clone()
+    }
+
     #[test]
-    fn rimz_wire_clears_seven_modes_exits_prefix_and_keeps_literal_run_arguments() {
+    fn sticky_modes_stay_only_after_a_motion_and_prefix_stays_one_shot() {
+        let wire = wire(
+            "[room]\nstyle='rimz'\n[keys.bind.pane]\nh='pane.focus.left'\nz='pane.zoom'\n\
+             [keys.bind.tab]\nn='tab.next'\nc='tab.new'\n[keys.bind.resize]\nz='pane.zoom'\n\
+             [keys.bind.move]\nz='pane.zoom'\n[keys.bind.prefix]\np='mode.pane'\n",
+        );
+        assert_eq!(
+            steps(&wire, "pane", "h"),
+            json!([{"action":["MoveFocus","Left"]}])
+        );
+        assert_eq!(
+            steps(&wire, "tab", "n"),
+            json!([{"action":["GoToNextTab"]}])
+        );
+        assert_eq!(
+            steps(&wire, "move", "h"),
+            json!([{"action":["MovePane","Left"]}])
+        );
+        assert_eq!(
+            steps(&wire, "tab", "c"),
+            json!([{"action":["NewTab"]},{"mode":"locked"}])
+        );
+        for mode in ["pane", "resize", "move"] {
+            let steps = steps(&wire, mode, "z");
+            assert_eq!(
+                steps[1],
+                json!({"mode":"locked"}),
+                "{mode} z must return to normal"
+            );
+        }
+        assert_eq!(steps(&wire, "tmux", "p"), json!([{"mode":"pane"}]));
+        assert_eq!(
+            steps(&wire, "tmux", "h"),
+            json!([{"action":["MoveFocus","Left"]},{"mode":"locked"}])
+        );
+    }
+
+    #[test]
+    fn send_prefix_focus_next_and_arrow_keys_encode() {
+        for (prefix, bytes) in [
+            ("Ctrl+b", json!(["Write", "2"])),
+            ("Alt+w", json!(["Write", "27", "119"])),
+        ] {
+            let wire = wire(&format!(
+                "[room]\nstyle='rimz'\n[keys]\nprefix='{prefix}'\n[keys.bind.prefix]\n\
+                 b='pane.send_prefix'\no='pane.focus.next'\nLeft='pane.focus.left'\n\
+                 'Alt+Up'='pane.focus.up'\n'Ctrl+Down'='pane.focus.down'\n"
+            ));
+            assert_eq!(
+                steps(&wire, "tmux", "b")[0],
+                json!({"action":bytes}),
+                "{prefix}"
+            );
+            assert_eq!(
+                steps(&wire, "tmux", "o")[0],
+                json!({"action":["FocusNextPane"]})
+            );
+            assert_eq!(
+                steps(&wire, "tmux", "Left")[0],
+                json!({"action":["MoveFocus","Left"]})
+            );
+            assert_eq!(
+                steps(&wire, "tmux", "Alt Up")[0],
+                json!({"action":["MoveFocus","Up"]})
+            );
+            assert_eq!(
+                steps(&wire, "tmux", "Ctrl Down")[0],
+                json!({"action":["MoveFocus","Down"]})
+            );
+        }
+    }
+
+    #[test]
+    fn rimz_wire_clears_every_enterable_mode_exits_prefix_and_keeps_literal_run_arguments() {
         let wire = wire(
             "[room]\nstyle='rimz'\n[keys.bind.normal]\n\"Alt+,\"={run=\"rimz message @coder -- 'a,%2C=word'\"}",
         );
         assert_eq!(wire["report_modes"], true);
         let modes = wire["modes"].as_array().expect("mode array");
-        assert_eq!(modes.len(), 7);
+        let words: Vec<_> = modes
+            .iter()
+            .map(|mode| mode["mode"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "locked",
+                "tmux",
+                "pane",
+                "tab",
+                "resize",
+                "move",
+                "scroll",
+                "entersearch",
+                "search"
+            ]
+        );
         assert!(modes.iter().all(|mode| mode["clear"] == true));
         let normal = &modes[0];
         assert_eq!(normal["mode"], "locked");

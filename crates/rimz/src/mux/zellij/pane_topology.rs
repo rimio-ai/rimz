@@ -84,6 +84,8 @@ pub(super) fn read_client_mode(
         .as_str()
     {
         "tmux" => Some(RoomMode::Prefix),
+        "pane" => Some(RoomMode::Pane),
+        "tab" => Some(RoomMode::Tab),
         "resize" => Some(RoomMode::Resize),
         "move" => Some(RoomMode::Move),
         "scroll" | "search" | "entersearch" => Some(RoomMode::Scrollback),

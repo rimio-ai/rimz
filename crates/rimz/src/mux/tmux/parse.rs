@@ -124,6 +124,8 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
         let mode = match (pane_mode, key_table) {
             ("copy-mode", _) => Some(RoomMode::Scrollback),
             (_, "rimz-prefix") => Some(RoomMode::Prefix),
+            (_, "rimz-pane") => Some(RoomMode::Pane),
+            (_, "rimz-tab") => Some(RoomMode::Tab),
             (_, "rimz-resize") => Some(RoomMode::Resize),
             (_, "rimz-move") => Some(RoomMode::Move),
             _ => None,
@@ -424,7 +426,8 @@ mod tests {
             b"a|%1|100|rimz-prefix||\nb|%2|101|rimz-resize||\n\
               c|%3|102|rimz-move||\nd|%4|103|rimz-prefix|copy-mode|\n\
               e|%5|104|prefix||\nf|%6|105|root|view-mode|\n\
-              watch|%7|106|rimz-resize||ignore-size,no-output\n",
+              watch|%7|106|rimz-resize||ignore-size,no-output\n\
+              g|%8|107|rimz-pane||\nh|%9|108|rimz-tab||\n",
         );
         assert_eq!(
             view.presence.client_modes,
@@ -433,10 +436,12 @@ mod tests {
                 (MuxClientId::Tmux("b".into()), RoomMode::Resize),
                 (MuxClientId::Tmux("c".into()), RoomMode::Move),
                 (MuxClientId::Tmux("d".into()), RoomMode::Scrollback),
+                (MuxClientId::Tmux("g".into()), RoomMode::Pane),
+                (MuxClientId::Tmux("h".into()), RoomMode::Tab),
             ]
             .into()
         );
-        assert_eq!(view.presence.human_clients, 6);
+        assert_eq!(view.presence.human_clients, 8);
     }
 
     #[test]

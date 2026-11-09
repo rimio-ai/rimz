@@ -47,6 +47,8 @@ pub(crate) fn attended_until(
 #[serde(rename_all = "snake_case")]
 pub enum RoomMode {
     Prefix,
+    Pane,
+    Tab,
     Resize,
     Scrollback,
     Move,

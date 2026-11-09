@@ -137,22 +137,41 @@ enum Step {
 fn valid_mode(mode: &str) -> bool {
     matches!(
         mode,
-        "normal" | "locked" | "tmux" | "resize" | "move" | "scroll" | "entersearch" | "search"
+        "normal"
+            | "locked"
+            | "tmux"
+            | "pane"
+            | "tab"
+            | "resize"
+            | "move"
+            | "scroll"
+            | "entersearch"
+            | "search"
     )
 }
 
 fn valid_key(key: &str) -> bool {
-    if matches!(key, "Esc" | "Enter") {
+    if matches!(key, "Esc" | "Enter" | "PageUp" | "PageDown") {
         return true;
     }
     let key = key
         .strip_prefix("Alt ")
         .or_else(|| key.strip_prefix("Ctrl "))
         .unwrap_or(key);
-    key.len() == 1 && key.as_bytes()[0].is_ascii_graphic()
+    matches!(key, "Left" | "Right" | "Up" | "Down")
+        || (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic())
 }
 
 fn action_kdl(args: &[String]) -> Option<String> {
+    if let [name, bytes @ ..] = args
+        && name == "Write"
+    {
+        let valid = (1..=8).contains(&bytes.len())
+            && bytes.iter().all(|byte| {
+                byte.bytes().all(|digit| digit.is_ascii_digit()) && byte.parse::<u8>().is_ok()
+            });
+        return valid.then(|| format!("Write {};", bytes.join(" ")));
+    }
     let valid = match args {
         [name] => matches!(
             name.as_str(),
@@ -168,6 +187,9 @@ fn action_kdl(args: &[String]) -> Option<String> {
                 | "ScrollToTop"
                 | "ScrollToBottom"
                 | "EditScrollback"
+                | "FocusNextPane"
+                | "PageScrollDown"
+                | "PageScrollUp"
         ),
         [name, arg] => match name.as_str() {
             "MoveFocus" | "MovePane" => matches!(arg.as_str(), "Left" | "Right" | "Up" | "Down"),
@@ -178,6 +200,9 @@ fn action_kdl(args: &[String]) -> Option<String> {
             "NewPane" => matches!(arg.as_str(), "Right" | "Down"),
             "Search" => matches!(arg.as_str(), "Up" | "Down"),
             "SearchInput" => arg == "0",
+            "SearchToggleOption" => {
+                matches!(arg.as_str(), "CaseSensitivity" | "Wrap" | "WholeWord")
+            }
             _ => false,
         },
         _ => false,
@@ -281,6 +306,71 @@ mod tests {
     }
 
     #[test]
+    fn pane_and_tab_modes_and_the_wider_actions_render() {
+        let map = map(json!([
+            {"mode":"pane","clear":true,"binds":[
+                {"key":"p","steps":[{"action":["FocusNextPane"]}]},
+                {"key":"Alt Left","steps":[{"action":["MoveFocus","Left"]}]},
+                {"key":"Ctrl Up","steps":[{"mode":"tab"}]},
+                {"key":"Down","steps":[{"action":["Write","27","119"]}]}
+            ]},
+            {"mode":"tab","clear":true,"binds":[
+                {"key":"Right","steps":[{"action":["Write","2"]}]}
+            ]},
+            {"mode":"scroll","clear":true,"binds":[
+                {"key":"PageDown","steps":[{"action":["PageScrollDown"]}]},
+                {"key":"PageUp","steps":[{"action":["PageScrollUp"]}]},
+                {"key":"c","steps":[{"action":["SearchToggleOption","CaseSensitivity"]}]},
+                {"key":"w","steps":[{"action":["SearchToggleOption","Wrap"]}]},
+                {"key":"o","steps":[{"action":["SearchToggleOption","WholeWord"]}]}
+            ]}
+        ]));
+        let kdl = map.kdl(42, "/bin/rimz");
+        assert_eq!(kdl.matches("bind ").count(), 10, "{kdl}");
+        for expected in [
+            "pane clear-defaults=true {",
+            "tab clear-defaults=true {",
+            "FocusNextPane;",
+            "bind \"Alt Left\"",
+            "SwitchToMode \"tab\";",
+            "Write 27 119;",
+            "Write 2;",
+            "PageScrollDown;",
+            "PageScrollUp;",
+            "SearchToggleOption \"CaseSensitivity\";",
+            "SearchToggleOption \"Wrap\";",
+            "SearchToggleOption \"WholeWord\";",
+        ] {
+            assert!(kdl.contains(expected), "{expected}: {kdl}");
+        }
+    }
+
+    #[test]
+    fn write_takes_one_to_eight_decimal_bytes_only() {
+        for args in [
+            json!(["Write"]),
+            json!(["Write", "256"]),
+            json!(["Write", "-1"]),
+            json!(["Write", "0x1b"]),
+            json!(["Write", "1; Run sh"]),
+            json!(["Write", "1", "2", "3", "4", "5", "6", "7", "8", "9"]),
+            json!(["SearchToggleOption", "Bogus"]),
+        ] {
+            let map = map(json!([{"mode":"locked","clear":true,"binds":[
+                {"key":"Alt x","steps":[{"action":args}]}
+            ]}]));
+            assert!(!map.kdl(42, "/bin/rimz").contains("bind "), "{args}");
+        }
+        let map = map(json!([{"mode":"locked","clear":true,"binds":[
+            {"key":"Alt x","steps":[{"action":["Write","0","1","2","3","4","5","6","255"]}]}
+        ]}]));
+        assert!(
+            map.kdl(42, "/bin/rimz")
+                .contains("Write 0 1 2 3 4 5 6 255;")
+        );
+    }
+
+    #[test]
     fn command_payload_selects_only_an_index_into_complete_argv() {
         let map = map(json!([]));
         assert_eq!(
@@ -309,7 +399,21 @@ mod tests {
     #[test]
     fn key_labels_admit_graphic_and_named_keys_but_not_raw_chord_grammar() {
         for key in [
-            "Alt p", "Ctrl S", "Alt j", "Alt `", "Alt ,", "Alt =", "Esc", "Enter", "p",
+            "Alt p",
+            "Ctrl S",
+            "Alt j",
+            "Alt `",
+            "Alt ,",
+            "Alt =",
+            "Esc",
+            "Enter",
+            "p",
+            "Left",
+            "Alt Right",
+            "Ctrl Up",
+            "Down",
+            "PageUp",
+            "PageDown",
         ] {
             let map = map(json!([{"mode":"tmux","clear":true,"binds":[
                 {"key":key,"steps":[{"mode":"locked"}]}
@@ -326,6 +430,9 @@ mod tests {
             "ctrl-S",
             "  m+j  ",
             "Ctrl Alt p",
+            "Alt PageUp",
+            "left",
+            "Shift Left",
         ] {
             let map = map(json!([{"mode":"tmux","clear":true,"binds":[
                 {"key":key,"steps":[{"mode":"locked"}]}

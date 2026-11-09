@@ -2771,9 +2771,10 @@ fn client_mode_lane_maps_raw_words_and_rejects_foreign_identity() {
         ("scroll", Some(RoomMode::Scrollback)),
         ("search", Some(RoomMode::Scrollback)),
         ("entersearch", Some(RoomMode::Scrollback)),
+        ("pane", Some(RoomMode::Pane)),
+        ("tab", Some(RoomMode::Tab)),
         ("normal", None),
         ("locked", None),
-        ("pane", None),
         ("unknown", None),
     ] {
         let path = room.runtime.zellij_client_mode_paths("rimz-test", 7).0;
