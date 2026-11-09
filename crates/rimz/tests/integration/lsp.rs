@@ -3038,7 +3038,7 @@ fn lsp_broker_started_from_an_agent_gives_its_server_the_user_tmpdir() {
 fn lsp_attach_refuses_an_optional_server_that_never_starts() {
     let env = Env::new();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
-    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'optional'\n").unwrap();
     let mut child = env
         .rimz()
         .args(["lsp", "attach", "--server", "rust"])
@@ -4323,7 +4323,10 @@ fn lsp_retire_during_admission_wait_keeps_the_started_server_usable() {
 #[test]
 fn lsp_attach_adopts_lost_broker_leases() {
     let env = Env::new();
-    let (directory, _, previous) = lost_stub_broker(&env);
+    let (directory, request, previous) = lost_stub_broker(&env);
+    // Attach re-admits the lost row; pin memory so the default warm start does not
+    // depend on the host's free memory.
+    write_unreserved_config(&env, &request);
     let mut editor = env
         .rimz()
         .args(["lsp", "attach", "--server", "rust", "--stdio"])
@@ -4771,7 +4774,7 @@ fn lsp_admission_warns_for_untrusted_and_optional_configuration_once() {
 
     let env = Env::new();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
-    let machine: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+    let machine: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'optional'").unwrap();
     let runtime = env.runtime_paths();
     let request = AdmissionRequest {
         root: &env.project_root,
@@ -4945,7 +4948,7 @@ fn assert_entry_errors_are_isolated(env: &Env, policy: &str) {
 fn lsp_attach_optional_configuration_error_exits_three() {
     let env = Env::new();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
-    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'optional'").unwrap();
     let mut child = env
         .rimz()
         .args(["lsp", "attach", "--server", "rust", "--stdio"])
@@ -5036,10 +5039,16 @@ fn launch_with_lsp(env: &Env, lsp: &str) -> std::process::Output {
         .unwrap()
 }
 
+/// A stub server entry; an empty `policy` leaves the key out so the default applies.
 fn stub_server(name: &str, policy: &str, estimate: &str) -> String {
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let policy = if policy.is_empty() {
+        String::new()
+    } else {
+        format!("policy = '{policy}'\n")
+    };
     format!(
-        "[lsp.servers.{name}]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = '{policy}'\nmemory-estimate = '{estimate}'\nwait-timeout = '1s'\n",
+        "[lsp.servers.{name}]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n{policy}memory-estimate = '{estimate}'\nwait-timeout = '1s'\n",
         serde_json::to_string(&stub).unwrap()
     )
 }
@@ -5059,20 +5068,22 @@ fn lsp_entry(env: &Env, server: &str) -> Value {
 
 #[test]
 fn lsp_warm_launch_starts_a_server_that_fits_before_any_query() {
-    let env = Env::new();
-    let lsp = format!(
-        "[lsp]\nreserve-percent = 0\nreserve-min = '0'\n{}",
-        stub_server("rust", "warm", "1M")
-    );
-    let output = launch_with_lsp(&env, &lsp);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("language server"), "{stderr}");
-    let entry = lsp_entry(&env, "rust");
-    assert!(
-        entry["state"].get("dormant").is_none(),
-        "a warm server that fits starts at launch: {entry}"
-    );
-    assert!(lsp_records(&env, "warm_deferred").is_empty());
+    for policy in ["warm", ""] {
+        let env = Env::new();
+        let lsp = format!(
+            "[lsp]\nreserve-percent = 0\nreserve-min = '0'\n{}",
+            stub_server("rust", policy, "1M")
+        );
+        let output = launch_with_lsp(&env, &lsp);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("language server"), "{policy:?}: {stderr}");
+        let entry = lsp_entry(&env, "rust");
+        assert!(
+            entry["state"].get("dormant").is_none(),
+            "a {policy:?} server that fits starts at launch: {entry}"
+        );
+        assert!(lsp_records(&env, "warm_deferred").is_empty());
+    }
 }
 
 #[test]

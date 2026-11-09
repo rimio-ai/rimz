@@ -223,7 +223,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 # tmp_floor_min = "10GiB"             # minimum free-space reserve; zero both reserves to disable
 
 [lsp]
-# Shared language servers are off until declared, then start on the first query. Memory and idle policy are machine-only; trusted projects may override server entries by name.
+# Shared language servers are off until declared, then start at launch when memory allows. Memory and idle policy are machine-only; trusted projects may override server entries by name.
 # reserve-percent = 10                # keep at least this percentage of RAM free (free swap counts as free)
 # reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
 # idle-timeout = "10m"                # stop ready servers after this long without queries (s/m/h)
@@ -236,7 +236,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 ## editor-check-on-save = false       # enable cargo checks only while an editor is attached
 # Include functions and raise rust-analyzer's 128-result fuzzy-search cap for symbol-name queries, and drop the `needs Drop` hover line.
 ## init-options = { checkOnSave = false, hover = { dropGlue = { enable = false } }, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
-## policy = "optional"                # lazy start; "required" admits and starts before panes open
+## policy = "warm"                    # start at launch when memory fits; "optional" waits for the first query; "required" admits and starts before panes open
 ## wait-timeout = "10m"                # required-server queue deadline
 ## memory-estimate = "8G"              # used until this server's peak has been measured
 
