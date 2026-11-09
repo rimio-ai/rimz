@@ -2891,13 +2891,15 @@ fn effect_keys_carry_the_selected_rows_pane_or_their_own_effect() {
         handle_key(KeyAction::Close, &mut ui, &mut pane_ui, &snapshot).effects,
         vec![InputEffect::Close(row_pane.clone())]
     );
-    assert_eq!(
-        handle_key(KeyAction::Palette, &mut ui, &mut pane_ui, &snapshot).effects,
-        vec![InputEffect::Palette {
-            args: vec!["--mode".into(), "commands".into()],
-            from_pane: Some(row_pane),
-        }]
-    );
+    for args in [&["--mode", "commands"][..], &["--repeat"]] {
+        assert_eq!(
+            handle_key(KeyAction::Palette(args), &mut ui, &mut pane_ui, &snapshot).effects,
+            vec![InputEffect::Palette {
+                args: args.iter().map(|&arg| arg.to_owned()).collect(),
+                from_pane: Some(row_pane.clone()),
+            }]
+        );
+    }
     assert_eq!(
         handle_key(KeyAction::WidthReset, &mut ui, &mut pane_ui, &snapshot).effects,
         vec![InputEffect::WidthReset]

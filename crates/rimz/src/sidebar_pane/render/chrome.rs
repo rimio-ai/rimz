@@ -825,6 +825,15 @@ fn help_body_rows(
         (
             key_entry(
                 theme,
+                None,
+                pair(A::PaletteNewAgent, A::PaletteNewAgentWorktree),
+                "new agent",
+            ),
+            Some(key_entry(theme, None, key(A::PaletteRepeat), "repeat")),
+        ),
+        (
+            key_entry(
+                theme,
                 icon(GlyphRole::KeysFocus),
                 key(A::PaneReturn),
                 "return",

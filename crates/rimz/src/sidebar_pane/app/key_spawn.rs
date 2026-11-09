@@ -1,7 +1,7 @@
-//! Key effects that run a `rimz` command (`dd`'s close, `:`'s palette popup)
-//! on a worker thread, off the views lock and the frame loop. A run that writes
-//! to stderr or exits non-zero sends its first stderr line back to the pane as
-//! a [`Wakeup::Notice`].
+//! Key effects that run a `rimz` command (`dd`'s close, the palette popup of
+//! `:`, `o`, `O` and `.`) on a worker thread, off the views lock and the frame
+//! loop. A run that writes to stderr or exits non-zero sends its first stderr
+//! line back to the pane as a [`Wakeup::Notice`].
 
 use std::process::{Command, Stdio};
 use std::sync::mpsc::SyncSender;
