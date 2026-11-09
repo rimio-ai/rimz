@@ -39,8 +39,8 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | `Interrupt` | none | `TurnInterrupted { turn_id }` |
 | `PermissionRequest` | `.*` | `AwaitingInput { Permission }` |
 | `PreToolUse`, tool `request_user_input` | `.*` | `AwaitingInput { Question }` |
-| `PreToolUse`, any other tool | `.*` | `ToolUsed` with no name, `mutates` and `edits` false |
-| `PostToolUse` | `.*` | `ToolUsed` with the tool name, `mutates`, `edits`, and `turn_id` |
+| `PreToolUse`, any other tool | `.*` | `ToolUsed` with no name and the `Observed` effect |
+| `PostToolUse` | `.*` | `ToolUsed` with the tool name, its effect, and `turn_id` |
 | `PostToolUse`, accepted `request_user_input_async` | `.*` | the same `ToolUsed`, plus one queued question per input question |
 | `PreCompact` | `.*` | `Compacting` |
 | `PostCompact` | `.*` | `CompactionEnded` with the auto or manual trigger |
@@ -53,7 +53,7 @@ Codex has no `Notification` hook and no background-task parking, so `parked_on_b
 
 ### Tool events
 
-`PostToolUse` carries the tool name, so the store appends every one and replay counts it into `tool_calls`. The unnamed `PreToolUse` signal is proof of work: it keeps the heartbeat current and is appended only under the rule in [model.md](./model.md#the-state-machine), so one call counts once. `apply_patch` sets `edits`.
+`PostToolUse` carries the tool name, so the store appends every one and replay counts it into `tool_calls`. The unnamed `PreToolUse` signal is proof of work: it keeps the heartbeat current and is appended only under the rule in [model.md](./model.md#the-state-machine), so one call counts once. `apply_patch` carries the `Editing` effect.
 
 The hooks are a progress signal, not an enforcement boundary. Upstream routes shell calls (reported as `Bash`), `apply_patch`, and MCP calls through `PreToolUse` and `PostToolUse`, while web search and some other tool paths bypass both. Those calls also fire both hooks when nested in a code-mode cell, carry their originating turn's id, and can complete after `Stop`. The [spend parser](#cost) reads tool calls from the rollout, so historical counts stay complete.
 

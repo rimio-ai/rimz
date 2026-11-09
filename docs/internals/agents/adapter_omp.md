@@ -44,7 +44,7 @@ Launch reminders arrive in `RIMZ_LAUNCH_REMINDERS`, the `SystemTextChannel::Exte
 | `message_update` | `message_update` | Progress when the gauge changed, at most once per second |
 | `after_provider_response` | `after_provider_response` | Context only, including rate-limit windows |
 | `tool_call` for `ask`, with UI | `tool_call` | `AwaitingInput { Question }`, keyed by `tool_call_id`. Questions and options come from `tool_input`; the summary is the first line of the first question, and the card adds ` +N` for the other questions |
-| `tool_execution_end` | `tool_execution_end` | Named `ToolUsed { mutates, edits }`, keyed by `tool_call_id`. Completes an ask wait |
+| `tool_execution_end` | `tool_execution_end` | Named `ToolUsed { effect }`, keyed by `tool_call_id`. Completes an ask wait |
 | `tool_approval_requested`, with UI | `tool_approval_requested` | `AwaitingInput { Permission }`, keyed by `tool_call_id`. The detail is the reason, else the tool name |
 | `tool_approval_resolved` | `tool_approval_resolved` | Unnamed keyed `ToolUsed`, which clears the permission wait |
 | `session_before_compact` | `session_before_compact` | `Compacting` |
@@ -58,8 +58,8 @@ Every neutral reply is empty stdout. The catalog marks `tool_call` and `tool_app
 
 | Tool set | Tools | Feeds |
 | --- | --- | --- |
-| Editing | `edit`, `write`, `ast_edit` | `ToolUsed { edits }` |
-| Mutating | the editing set, plus `bash`, `eval`, `debug`, `ida`, `github`, `lsp`, `rewind`, `learn`, `manage_skill`, `security_scan`, `task` | `ToolUsed { mutates }` |
+| Editing | `edit`, `write`, `ast_edit` | `ToolUsed { effect: Editing }` |
+| Mutating | the editing set, plus `bash`, `eval`, `debug`, `ida`, `github`, `lsp`, `rewind`, `learn`, `manage_skill`, `security_scan`, `task` | `ToolUsed { effect: Mutating }`, or `Editing` for the editing set |
 
 Named `tool_execution_end` events feed the card's live tool counts. History tool counts come from `toolCall` blocks in the session files (see [Cost](#cost)).
 

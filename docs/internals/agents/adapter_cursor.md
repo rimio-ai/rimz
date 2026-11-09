@@ -57,7 +57,7 @@ A displaced user statusline goes to a RimZ-owned sidecar, `~/.rimz/cursor-status
 | --- | --- | --- |
 | `sessionStart` | `Registered` | `conversation_id`, model, `transcript_path` |
 | `beforeSubmitPrompt` | `TurnStarted` | sanitized `prompt` |
-| `postToolUse` for `Shell`, `Write`, or `Delete` | `ToolUsed { mutates: true }`, with `edits` for `Write` and `Delete` | `tool_name` |
+| `postToolUse` for `Shell`, `Write`, or `Delete` | `ToolUsed { effect: Mutating }`, or `Editing` for `Write` and `Delete` | `tool_name` |
 | `postToolUse` for any other tool | none | |
 | `postToolUseFailure` | none: progress only, for active time | |
 | `afterAgentResponse` | none: the final assistant text | `text`, token counts |

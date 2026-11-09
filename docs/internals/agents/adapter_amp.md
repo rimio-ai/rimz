@@ -50,7 +50,7 @@ The permission path observes Amp's own approval UI without joining its decision 
 
 ### Tool events
 
-Every `tool_result` is a mutating `ToolUsed` (`mutates: true`), whatever its status, so any completed tool counts as proof of work. The signal carries no tool name. Edit proof comes from `files_modified`, which the plugin derives from `amp.helpers.filesModifiedByToolCall`: true when the helper names at least one file, which covers Amp's edit tools and in-place `sed` edits. When the helper returns `null` or throws, the plugin omits the field, and the adapter falls back to the descriptor's `editing` list (`apply_patch`, `create_file`, `edit_file`) through `AgentSpec::tool_edits_files`.
+Every `tool_result` is a `ToolUsed` whose effect is at least `Mutating`, whatever its status, so any completed tool counts as proof of work. The signal carries no tool name. Edit proof comes from `files_modified` (`true` is `Editing`, `false` is `Mutating`), which the plugin derives from `amp.helpers.filesModifiedByToolCall`: true when the helper names at least one file, which covers Amp's edit tools and in-place `sed` edits. When the helper returns `null` or throws, the plugin omits the field, and the adapter falls back to the descriptor's `editing` list (`apply_patch`, `create_file`, `edit_file`) through `AgentSpec::tool_effect`.
 
 ### Events Amp lacks
 

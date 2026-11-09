@@ -73,7 +73,7 @@ Pi hot-reloads discovered extensions on `/reload`, which fires `session_shutdown
 | `message_update` | none | envelope only, throttled ([Context and transcript](#context-and-transcript)) |
 | `session_info_changed` | none | envelope only: publishes the new `session_name` |
 | `model_select`, `thinking_level_select` | none | `model`, `effort` |
-| `tool_execution_end` | `ToolUsed { mutates, edits, name, native_key }` | `tool_name`, `tool_call_id`, `is_error`, plus `tool_details` for `ask_user_question` |
+| `tool_execution_end` | `ToolUsed { effect, name, native_key }` | `tool_name`, `tool_call_id`, `is_error`, plus `tool_details` for `ask_user_question` |
 | `tool_call` | `AwaitingInput { Question }` for `ask_user_question` with UI, else none | `tool_name`, `tool_input`, `tool_call_id`, `has_ui` |
 | `ui_prompt_start` | `AwaitingInput { Question, detail }` | `ui_prompt_id`, `ui_prompt_kind`, `ui_prompt_title`, `has_ui` |
 | `ui_prompt_end` | `ToolUsed` with no name | `ui_prompt_id` |

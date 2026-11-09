@@ -109,9 +109,9 @@ While a ping is open, a turn report carrying the id of a real turn the row knows
 
 ## The state machine
 
-The shared [`AgentState::transition`](../../../crates/rimz/src/agents/state.rs) decision folds observations onto the prior `LifecycleState`: real edges use the pure, total [`step`](../../../crates/rimz/src/agents/lifecycle.rs), with separate snapshot and keepalive rules. Roots and subagents share it. The reducer calls it on replay, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store persists that transition for drainer recovery and returns it in its receipt, so hook ingestion can log anomalies without re-reading state. Every `agent.lifecycle` event carries its signal explicitly, and a payload without one folds to nothing.
+The shared [`AgentState::transition`](../../../crates/rimz/src/agents/state.rs) decision folds observations onto the prior `LifecycleState`: real edges use the pure, total [`step`](../../../crates/rimz/src/agents/lifecycle.rs), and the caller's `TransitionMode` selects the snapshot or keepalive rule instead (`store::message::transition_mode`: a state snapshot first, then a keepalive-only prompt). Roots and subagents share it. The reducer calls it on replay, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store persists that transition for drainer recovery and returns it in its receipt, so hook ingestion can log anomalies without re-reading state. Every `agent.lifecycle` event carries its signal explicitly, and a payload without one folds to nothing.
 
-Store does not append every observation. An unnamed `tool_used` that neither mutates nor edits is proof of work only. The writer appends it only when it is child-owned or its transition closes a compaction bracket, clears a wait, or reconciles a stale status ([`store/writer/lifecycle.rs`](../../../crates/rimz/src/store/writer/lifecycle.rs)). A named `tool_used` is always appended, and replay counts it into `tool_calls`.
+Store does not append every observation. An unnamed `tool_used` with the `Observed` [`ToolEffect`](../../../crates/rimz/src/agents/lifecycle.rs) (`mutates` and `edits` both false on the wire) is proof of work only. The writer appends it only when it is child-owned or its transition closes a compaction bracket, clears a wait, or reconciles a stale status ([`store/writer/lifecycle.rs`](../../../crates/rimz/src/store/writer/lifecycle.rs)). A named `tool_used` is always appended, and replay counts it into `tool_calls`.
 
 ```text
  ●
@@ -231,7 +231,7 @@ Adding a signal variant costs an edge in this one table, so the bar is deliberat
 
 ### Turn phase
 
-The phase is the running turn's shape, derived only from hook signals, never from prompt or transcript content. `turn_started` and `subagent_started` open `reasoning`, where the sidebar paints the thinking head. The first file-editing tool moves the turn to `acting`: a `tool_used` with `edits` set, from each adapter's file-writing subset read through `tool_edits_files`.
+The phase is the running turn's shape, derived only from hook signals, never from prompt or transcript content. `turn_started` and `subagent_started` open `reasoning`, where the sidebar paints the thinking head. The first file-editing tool moves the turn to `acting`: a `tool_used` with the `Editing` effect, from each adapter's file-writing subset read through `AgentSpec::tool_effect`.
 
 ```text
 turn starts ──► reasoning ──first file-editing tool──► acting ──► turn ends
