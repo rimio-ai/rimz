@@ -13,9 +13,11 @@ rimz worktree remove <NAME> [--force]
 rimz worktree sweep [--dry-run] [--json]
 ```
 
-Every verb must run inside a Git repository, and elsewhere refuses with `rimz worktree requires a git repository; cd into a repo checkout`. The [global flags](../cli.md#global-flags) apply to every verb.
+Every verb must run inside a Git repository, and elsewhere refuses with `rimz worktree requires a git repository; cd into a repo checkout`. `new`, `remove`, and `sweep` without `--dry-run` also need the repository's room, and without one refuse with ``no room at ROOT: run `rimz start` there, or pass --root <room>``. `list`, `cd`, `path`, and `merge` work without a room. The [global flags](../cli.md#global-flags) apply to every verb.
 
 `list` has alias `ls`; `remove` has alias `rm`. Bare `rimz worktree` runs `list`.
+
+A refusal exits 1 and a usage error exits 2 ([exit codes](../cli.md#exit-codes)). A declined or unanswered prompt prints `nothing changed.` on stderr and exits 0.
 
 ## Names and paths
 
@@ -26,7 +28,7 @@ A name is one or more segments of ASCII letters, digits, `_`, or `-`, separated 
 | `feat-a` | `feat-a` | `feat-a` |
 | `feat/login` | `feat-login` | `feat/login` |
 | `feat-a --branch spike/a` | `feat-a` | `spike/a` |
-| nothing | a generated adjective-noun pair, such as `swift-harbor` | the same |
+| nothing | a generated adjective-noun pair, such as `swift-harbor`, with a `-N` suffix when that directory exists | the same |
 | nothing, with `--from-pr 42` | The existing marked tree holding the same-repository head branch, otherwise `pr-42` | [from the pull request](#check-out-a-pull-request) |
 
 Trees live under the `[agents.worktree] dir` template, `../{repo}-worktrees` by default, where `{repo}` is the repository's directory name and a relative path resolves from the repository root ([configuration](../../guide/configuration.md#worktrees)). `cd`, `path`, `merge`, and `remove` take the same name and resolve it the same way, so `feat/login` and `feat-login` both reach the `feat-login` tree.
@@ -36,8 +38,6 @@ For those four verbs, a missing name reports ``no worktree `NAME` in DIR; did yo
 Explicit `--channel` lanes and worktrees share one namespace in a repository room ([`--channel`](./agents.md#channel-worktree-and-placement)).
 
 ## Create a worktree
-
-The hook event names `worktree.created` and `worktree.removed` are also [loop signals](./events.md#reserved-families).
 
 ```console
 $ rimz worktree new feat-a
@@ -49,15 +49,26 @@ created feat-a
   next   : rimz agents <spec> -w feat-a    or    rimz worktree cd feat-a
 ```
 
-`new` runs `git worktree add --no-track -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). The new branch does not track its base. It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
+`new` runs `git worktree add --no-track -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). The new branch does not track its base. It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure removes the tree and fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived, and the `worktree.created` [signal](./events.md#reserved-families) fires.
 
-The branch receipt uses the recorded base branch and seven-character commit prefix, or just the prefix when no base branch was recorded. `new --json` prints one object with `name`, normalized absolute `path`, `branch`, `base_branch` (string or `null`), full `base_ref`, and `reused` (boolean). Warnings stay on stderr.
+The `branch` line gives the recorded base branch and the base commit's first seven characters, or only the commit when no base branch was recorded. `seeded` and `linked` print only when nonzero.
+
+`new --json` prints one object instead of the report:
+
+| Field | Value |
+| --- | --- |
+| `name` | The worktree name. |
+| `path` | The normalized absolute checkout path. |
+| `branch` | The branch created or reused. |
+| `base_branch` | The branch or ref the tree was cut from, or `null` when there is none to name, such as a detached `HEAD`. |
+| `base_ref` | The full commit the tree was cut from. |
+| `reused` | `true` when a [pull request checkout](#check-out-a-pull-request) reused an existing tree. |
+
+Warnings stay on stderr. Whether the tree's work has landed is later measured against `base_branch` ([choosing the comparison ref](../../internals/harness/worktrees.md#choosing-the-comparison-ref)).
 
 Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands as an untracked change in every tree it reaches, which is enough for `sweep` to keep that tree with `uncommitted changes` and for `remove` to refuse it. Linked directories need no `.gitignore` entry: `new` adds each one to the exclude file `git rev-parse --git-path info/exclude` names, which for a linked worktree is usually the main checkout's `.git/info/exclude`.
 
 `--base` picks the commit the branch starts from. Without it, `new` uses the `[agents.worktree] base` setting; unset means `head` here.
-
-When a fresh tree's local base branch tracks an upstream and is behind it, creation succeeds with a stderr warning: `warning: base branch main is 4 commits behind origin/main as last fetched; fast-forward main first, or pass --base origin/main` (with the actual branch, upstream, and count; `1 commit` for one). The count uses local upstream refs as last fetched; creation does not fetch. Reused trees, PR checkouts, detached HEADs, bases without an upstream, and failed checks produce no warning.
 
 | `--base` | Branch starts from |
 | --- | --- |
@@ -65,14 +76,18 @@ When a fresh tree's local base branch tracks an upstream and is behind it, creat
 | `fresh` | `origin/HEAD`, the remote's default branch as last fetched. [`Team launches`](./teams.md#launch-a-team) fetch it first; `new` does not. |
 | any other value | That Git ref, such as `main` or `v2.1.0`. |
 
-`base` is the full commit the tree was cut from, and `base branch` the branch or ref it was cut from; `base branch` is omitted when there is none to name, such as a detached `HEAD`. `seeded` and `linked` print only when nonzero. Whether the tree's work has landed is later measured against that base branch ([choosing the comparison ref](../../internals/harness/worktrees.md#choosing-the-comparison-ref)).
+When the local base branch tracks an upstream and is behind it, creation succeeds with a stderr warning: `warning: base branch main is 4 commits behind origin/main as last fetched; fast-forward main first, or pass --base origin/main` (with the actual branch, upstream, and count; `1 commit` for one). The count uses local upstream refs as last fetched; creation does not fetch. PR checkouts, detached HEADs, bases without an upstream, and failed checks produce no warning.
 
 | Refusal | When |
 | --- | --- |
-| ``worktree `NAME` already exists at PATH`` | The directory exists, marked or not. A launch with `-w NAME` reuses a marked tree instead. |
-| ``channel `NAME` is held by live agents; pick another name, or stop them with `rimz agents stop` `` | Live agents launched with `--channel NAME` hold the name you passed. |
+| ``cannot create a worktree: MESSAGE; correct PATH, then retry; `rimz config get` shows the strict error`` | The per-machine `config.toml` cannot be read. |
 | ``invalid worktree name `NAME`; ...`` | The name breaks the [name rules](#names-and-paths). |
-| `base ref cannot be empty` | `--base ''`. |
+| ``channel `NAME` is held by live agents; pick another name, or stop them with `rimz agents stop` `` | Live agents launched with `--channel NAME` hold the name you passed. |
+| ``agents.worktree.hooks.EVENT cannot be empty; set a command or remove the key`` | A `created` or `removed` hook is set to a blank command. `remove` and `sweep` refuse the same way. |
+| ``worktree `NAME` already exists at PATH`` | The directory exists, marked or not. A launch with `-w NAME` reuses a marked tree instead. |
+| `git command failed in ROOT: git rev-parse --verify ...` | `--base` names no commit. |
+| ``worktree.created hook failed: REASON`` | The `created` hook exited nonzero or ran past 10 minutes. The message quotes the tail of the hook's stdout and stderr and ends with `tree removed; fix agents.worktree.hooks.created`, or with why the rollback failed. |
+| `invalid value '' for '--base <BASE>': base ref cannot be empty` | `--base ''`. This is a usage error and exits 2. |
 
 ## Check out a pull request
 
@@ -88,15 +103,17 @@ What the branch tracks depends on whether RimZ can ask the forge who owns the he
 | Situation | Checkout | Branch | Pushes |
 | --- | --- | --- | --- |
 | `--branch` given, or a name containing `/` | Review-only | That branch, at the exact PR head | Not configured |
-| `origin` is on another host (GitLab, GitHub Enterprise), or its CLI is not installed | Review-only | The worktree name, at the exact PR head | Not configured; the report prints a `review` line with the reason |
+| `origin` is on another host (GitLab, GitHub Enterprise) or a local path, or its CLI is not installed | Review-only | The worktree name, at the exact PR head | Not configured; the report prints `review : review-only checkout (REASON); ...`, where `REASON` is `origin has no supported forge CLI` or `` `gh` is not installed `` (or `tea`) |
 | The CLI reports a head branch in `origin` | Same repository | The PR's head branch | Upstream is `origin/<branch>` |
 | The CLI reports a head branch in a fork | Fork | The head branch, or `<owner>/<branch>` when a local branch already has that name | To the fork; the report prints `pushes : <fork-url> refs/heads/<branch>` |
 
-When a fork checkout's local branch name differs from the PR's head branch, the report adds a `push :` line with the exact command to push back, such as `git push <fork-url> HEAD:<branch>`.
+When a fork checkout's local branch name differs from the PR's head branch, the report adds a `push   :` line with the exact command to push back, such as `git push <fork-url> HEAD:<branch>`.
 
-A same-repository checkout reuses the marked worktree holding the PR's head branch, including a tree created with `-w` and no recorded PR number. Otherwise it adopts an existing local branch into a fresh tree, or creates a tracking branch when none exists. A marker recording another PR number refuses. An explicit name must match the tree holding the branch; omit the name to find that tree automatically. Reuse records the PR number when missing, preserves the tree's creation time, and prints `reused NAME` with only the path and branch lines. It does not seed the tree, rerun its created hook, or archive channel messages.
+Every pull request tree records the trunk (`main`, `master`, or the `origin/HEAD` branch, the first that resolves) as its base branch, so `merge` and the landed check compare against the trunk.
 
-When the local tip differs, RimZ warns on stderr with the commit counts, the worktree path when present, and a reminder that the previous tip stays in the reflog. In a terminal it asks `Continue from the PR head (remote) or the local tip (local)?`. The default is `remote` when the branch is behind or its local-only commits are patch-equivalent to commits in the PR head; otherwise the default is `local`, even when the two tips merge cleanly. EOF aborts. Choosing `remote` moves the branch to the PR head, using `git reset --keep` in an existing tree so changes that would be overwritten refuse with a commit-or-stash hint. Choosing `local` keeps the tip. Both choices set the upstream to `origin/<branch>`.
+A same-repository checkout reuses the marked worktree holding the PR's head branch, including a tree created with `-w` and no recorded PR number. Otherwise it adopts an existing local branch into a fresh tree, or creates a tracking branch when none exists. A marker recording another PR number refuses. An explicit name must match the tree holding the branch; omit the name to find that tree automatically. Reuse records the PR number when missing, preserves the tree's creation time, and prints `reused NAME` with only the `path`, `branch`, and `next` lines. It does not seed the tree, rerun its created hook, or archive channel messages.
+
+When the local tip differs, RimZ warns on stderr with the commit counts, the worktree path when present, and a reminder that the previous tip stays in the reflog. In a terminal it asks `Continue from the PR head (remote) or the local tip (local)? (remote/local) [DEFAULT]:`, and an empty answer takes the default. The default is `remote` when the branch is behind or its local-only commits are patch-equivalent to commits in the PR head; otherwise the default is `local`, even when the two tips merge cleanly. EOF or an answer matching neither choice changes nothing. Choosing `remote` moves the branch to the PR head, using `git reset --keep` in an existing tree so changes that would be overwritten refuse with a commit-or-stash hint. Choosing `local` keeps the tip. Both choices set the upstream to `origin/<branch>`.
 
 Without terminal stdin, only a behind branch advances automatically, with a `fast-forwarding` warning. Rebased or locally changed tips refuse with commands to take the PR head or push the local tip, then rerun; rerunning in a terminal offers the choice instead.
 
@@ -106,7 +123,10 @@ Without terminal stdin, only a behind branch advances automatically, with a `fas
 | ``local PR branch `BRANCH` conflicts with the remote head (DETAIL); resolve the local branch or pass --branch <name> for a review-only checkout`` | The branch is held by the main checkout or an unmanaged checkout, or the explicit name differs from its marked tree's name. For a fork, both the bare and the owner-prefixed name are taken. |
 | ``local PR branch `BRANCH` differs from the PR head: DIVERGENCE; ...`` | Without terminal stdin, a rebased tip or local-only patches require a decision. The message gives `git -C PATH reset --keep origin/BRANCH` for a held branch or `git branch -f BRANCH origin/BRANCH` otherwise, plus `git push origin BRANCH` as the local-tip alternative. A merely behind branch fast-forwards with a warning. |
 | ``could not move local PR branch `BRANCH` to the PR head in PATH; commit or stash changes there first: ...`` | You chose the PR head for a branch a reused worktree holds, and `git reset --keep` refused because that worktree's uncommitted changes touch files the reset would change. |
-| ``PR URL targets `REPO` but origin is `ORIGIN` `` | The URL names another repository. |
+| ``worktree `NAME` was created from PR Some(N), not requested PR M; use another --worktree name or remove it first`` | The tree holding the PR's head branch records another PR number. |
+| ``PR URL targets `REPO` but origin is `ORIGIN` `` | The URL names another host or repository. |
+| ``could not parse git output: could not fetch PR #N: git remote `origin` is not configured`` | The repository has no `origin` remote. |
+| `PR must be a number or a GitHub, Gitea, Forgejo, or GitLab PR URL` | The value is neither a number nor a URL with a `pull`, `pulls`, or `merge_requests` segment. This is a usage error and exits 2. |
 | ``could not fetch PR #N from REMOTE: ...`` | The fetch failed or ran past 120 seconds. Git never prompts for credentials here. |
 
 ## List worktrees
@@ -120,16 +140,16 @@ auth      auth    unlanded · dirty  @coder#auth
 feat-a    feat-a  landed            -
 ```
 
-`list` prints one row per RimZ-owned worktree of the repository, sorted by name. Bare `rimz worktree` does the same. The summary counts removable trees, occupied trees, and unlanded or unknown trees that are not occupied; zero counts are omitted. With none, it prints `no worktrees in DIR`.
+`list` prints one row per RimZ-owned worktree of the repository, sorted by name. Bare `rimz worktree` does the same. After `N worktrees in DIR`, the summary counts `removable (rimz worktree sweep)` trees, `in use` trees (any holder), and trees `with unlanded work` (unlanded or unknown, and not in use); zero counts are omitted. With none, it prints `no worktrees in DIR`. A tree whose Git status cannot be read lists as `unknown`.
 
 | Column | Value |
 | --- | --- |
 | `WORKTREE` | The name, which is also the channel. |
 | `BRANCH` | The branch checked out now, or `-` on a detached `HEAD`. |
 | `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included. |
-| `HOLDERS` | Holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, `loop task NAME` for each holding task, `team NAME` for each holding board, then `workflow run ADDRESS` for each unfinished run, or `-`. Ended agents are omitted. |
+| `HOLDERS` | Holders using the sweep's occupancy rules, so an agent RimZ cannot prove dead still counts: at most three handles then `+N`, `pane` when open panes hold the tree and no agent does, `loop task NAME` for each holding task, `team NAME` for each holding board, then `workflow run ADDRESS` for each unfinished run, or `-`. Ended agents are omitted. |
 
-`--json` prints an array of objects, `[]` when there are none.
+`--json` prints an array of objects in the same order, `[]` when there are none.
 
 | Field | Value |
 | --- | --- |
@@ -137,8 +157,8 @@ feat-a    feat-a  landed            -
 | `path` | The absolute checkout path. |
 | `branch` | The branch checked out now; `null` on a detached `HEAD`. |
 | `base_ref` | The full commit the tree was cut from. |
-| `base_branch` | The recorded base branch, or `null` for an older marker without one. |
-| `dirty` | `true` or `false`. |
+| `base_branch` | The recorded base branch, or `null` when none was recorded (a detached `HEAD` base, or an older marker). |
+| `dirty` | `true` when `git status --porcelain` prints any line. |
 | `landed` | `true`, `false`, or `null` when unknown. |
 | `reasons` | All keep reason ids in precedence order: `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. Empty means removable. |
 | `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), `loop_tasks` (deduplicated task names), `teams` (deduplicated team names), then `workflow_runs` (`{id, address}` objects, deduplicated by id). Arrays are `[]` when none. |
@@ -169,28 +189,28 @@ landed auth on main
   the worktree stays at ~/code/query-engine-worktrees/auth; `rimz worktree remove auth` reclaims it
 ```
 
-`merge` starts from the recorded base while it remains a live destination, otherwise the trunk. This supports `master` and stacked feature branches. A remote-tracking base such as `origin/main` maps to the local branch whose upstream is that ref, otherwise the trunk's local branch; with neither, landing refuses. The prompt and receipt name the local destination. `list` still measures against the remote-tracking base, so the tree remains `unlanded` until that local branch is pushed.
+`merge` lands on the recorded base branch while it still resolves and its own commits have not landed on the trunk, otherwise on the trunk. This supports `master` and stacked feature branches. A remote-tracking base such as `origin/main` maps to the local branch whose upstream is that ref, otherwise the trunk's local branch; with neither, landing refuses. The prompt and receipt name the local destination. `list` still measures against the remote-tracking base, so the tree remains `unlanded` until that local branch is pushed.
 
 The target must be a branch checked out somewhere in this repository; a snapshot commit is not a landing target. RimZ rebases the tree's branch onto the target, then advances that branch in its own checkout with `git merge --ff-only`. It never creates a merge commit and has no `--force`. The tree stays in place afterwards; `sweep` or `remove` reclaims it.
 
 Unfinished workflow runs do not block `merge`: it leaves their checkout in place, and a workflow step may land its own work.
 
-Without `--yes`, terminal stdin prompts `land NAME on TARGET? [y/N]`. Declining prints `nothing changed.` on stderr and succeeds. Without a terminal it refuses with ``rimz worktree merge needs a terminal to confirm; pass --yes to land `NAME` on `TARGET` without asking``. `--yes` skips confirmation, not the preconditions.
+Without `--yes`, terminal stdin prompts `land NAME on TARGET? [y/N]`; only `y` or `yes` proceeds. Declining prints `nothing changed.` on stderr and succeeds. Without a terminal it refuses with ``rimz worktree merge needs a terminal to confirm; pass --yes to land `NAME` on `TARGET` without asking``. `--yes` skips confirmation, not the preconditions.
 
-Every precondition is checked before anything moves. Each refusal begins ``cannot merge worktree `NAME`: ``.
+Every precondition is checked before anything moves, in the order of the table. The first two are checked before the prompt, the rest after it. Each refusal begins ``cannot merge worktree `NAME`: ``.
 
 | Refusal | When |
 | --- | --- |
-| `it is in use by HANDLES` | A live agent or another open pane is in the tree. A stale record from a crashed agent does not count. |
-| `TARGET must be checked out in a worktree` | No checkout holds the target branch. |
 | `no branch landing target; land it yourself` | The comparison is not a branch (for example, a snapshot commit), no comparison ref is available, or a remote-tracking base has no local destination. |
+| `TARGET must be checked out in a worktree` | No checkout holds the target branch. |
+| `it is in use by HOLDERS` | A live agent or an open pane other than your own is in the tree. A stale record from a crashed agent does not count. Loop tasks, team boards, and workflow runs do not block a merge. |
 | `the TARGET checkout has a Git operation in progress` | A rebase, merge, cherry-pick, or revert is under way there. The same refusal names `the worktree checkout`. |
 | `the TARGET checkout has local changes; commit or stash them first` | The target checkout is dirty. |
 | `its checkout has local changes; commit or stash them first` | The tree is dirty. |
-| ``expected branch `BRANCH`, found `OTHER` `` | The tree has switched away from the branch it was created on. |
+| ``expected branch `BRANCH`, found `OTHER` `` | The tree has switched away from the branch it was created on. `OTHER` is `detached HEAD` on a detached checkout. |
 | `rebase onto TARGET failed; no commits were landed on TARGET: ...` | The rebase conflicted. RimZ aborts it, so neither checkout is left mid-rebase. |
-| `TARGET changed while the worktree was rebasing; rerun the command` | The target moved, changed branch, or became dirty during the rebase. |
 | `the worktree was rebased onto TARGET but now has local changes; TARGET was not updated` | The tree changed during the rebase. |
+| `TARGET changed while the worktree was rebasing; rerun the command` | The target moved, changed branch, or became dirty during the rebase. |
 | `fast-forwarding TARGET failed: ...` | Git could not advance the target branch. |
 
 ## Remove a worktree
@@ -202,20 +222,21 @@ $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-`remove` runs `git worktree remove` on the tree, runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook), deletes its branch, ends the store sessions bound to it, and archives the channel's queued messages. It refuses first, in this order:
+`remove` runs `git worktree remove` on the tree, stops any shared language server for it, runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook) (a failing hook does not stop the removal), deletes its branch, ends the store sessions bound to it, archives the channel's queued messages, and fires the `worktree.removed` [signal](./events.md#reserved-families). It refuses first, in this order:
 
 | Refusal | When |
 | --- | --- |
-| ``worktree `NAME` is in use by HOLDERS; ...`` | A live agent, an open pane, or an unfinished workflow run holds the tree. Pane-only occupancy reads `an open pane`; runs read `workflow run ADDRESS`. A run refusal adds `rimz workflow cancel <run-id>` for each run and the `--force` alternative. A stale record from a crashed agent does not count. |
+| ``worktree `NAME` is in use by HOLDERS; use --force to remove it`` | A live agent or an open pane other than your own holds the tree. `HOLDERS` lists handles, then `an open pane` or `N open panes` for panes with no agent, separated by commas. A stale record from a crashed agent does not count. Loop tasks and team boards do not block `remove`. |
+| ``worktree `NAME` is in use by HOLDERS; cancel with `rimz workflow cancel ID`, or use --force to remove it and cancel its unfinished workflow runs`` | An unfinished workflow run is scoped inside the tree; `HOLDERS` includes `workflow run ADDRESS`. Several runs are joined with `and`. |
 | ``worktree `NAME` has uncommitted changes (N files); commit or stash them, or pass --force to discard them`` | The tree is dirty. |
 | ``worktree `NAME` has N commits not landed on TARGET; run `rimz worktree merge NAME`, or pass --force to delete them`` | The work is unlanded on its comparison ref. |
-| ``worktree `NAME` has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch`` | RimZ cannot prove whether the work landed. |
+| ``worktree `NAME` has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch`` | RimZ cannot prove whether the work landed, or it is unlanded with no commit count to report. |
 
 Without `--force`, the branch is deleted when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `  branch kept: its work is not proven landed on TARGET`.
 
-`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HOLDERS; removing it anyway`` on stderr. Holders include agent handles, unassociated open panes, and unfinished workflow runs.
+`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HOLDERS; removing it anyway`` on stderr, with the same `HOLDERS` list as the refusal.
 
-After a successful forced removal, RimZ re-reads unfinished workflow runs across every room and cancels those scoped inside the removed tree. Runs that finished during removal are skipped; newly arrived runs are included. The receipt adds `canceled workflow run ADDRESS · worktree removed` for each cancellation, and the workflow history records that reason. No run is canceled if removal fails. If cancellation fails, stderr names the run, error, and `rimz workflow cancel <run-id>` to finish it; other runs are still attempted, the tree stays removed, and the command exits 1.
+After a successful forced removal, RimZ re-reads unfinished workflow runs across every room and cancels those scoped inside the removed tree. Runs that finished during removal are skipped; newly arrived runs are included. The receipt adds `canceled workflow run ADDRESS · worktree removed` for each cancellation, and the workflow history records that reason. No run is canceled if removal fails. If a cancellation fails, stderr prints ``failed to cancel workflow run ADDRESS (ID): ERROR; run `rimz workflow cancel ID` to finish it``; other runs are still attempted, the tree stays removed, and the command exits 1 with `could not cancel every workflow run after removing the worktree`.
 
 `remove` also exits 1 if ending the sessions or archiving the messages fails, even though the checkout is already gone. Forced-removal cancellations are attempted even when that retirement fails. A failure to append the message history only warns and leaves the exit code 0 ([write classes](../../internals/store.md#write-classes)).
 
@@ -243,7 +264,7 @@ An enabled machine or instance task holds its root and its run directory until r
 
 A board behind the checkout-root `.rimz/team` link holds the tree until its first `Stage:` line says `Done`. A board with no stage, or one that cannot be read for a reason other than not-found, also holds it. A missing board, a dangling link, a `.rimz` shared through `.worktreelink`, and a legacy root `blackboard.md` hold nothing. Boards in subdirectories are not checked. The holder prints as `team NAME`, or `team unknown` when the run's team cannot be read. It also protects unattended agent-exit cleanup and `gc`; explicit `remove` and `merge` ignore board holders. Release it with `rimz teams flip TEAM#LANE Done "finished"`.
 
-Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook); `--dry-run` runs no hooks.
+Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook) and fires `worktree.removed`, as `remove` does; `--dry-run` runs no hooks and fires nothing.
 
 | `kept` reason | Meaning |
 | --- | --- |
@@ -252,10 +273,20 @@ Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare
 | `unlanded work` | The work has not landed. |
 | `unknown` | RimZ cannot prove whether the work landed. |
 
-The report groups each kept tree under its first reason, then names additional reasons with `· also REASON`. The removed names wrap to the terminal width; the directory prints once. `--json` prints `dry_run`, `removed`, `kept`, and `failed`. Removed entries carry `name`, `branch`, `path`, `bytes`, `branch_deleted` (`null` on a dry run), and `archive_error`; kept entries carry `name`, `path`, `reasons`, and `holders` with the same ids and holder shape as `list --json`. A dry run with no store adds `skipped: "no_store"` and empty arrays.
+The report groups each kept tree under its first reason, with the groups in the order `in use`, `unlanded work`, `uncommitted changes`, `unknown`. An `in use` row names its holders: up to four handles then `+N`, `N open pane(s)`, `loop task NAME`, `team NAME`, and `workflow run ADDRESS`. A row then names each further reason as `also REASON`, with `also dirty` for uncommitted changes, all joined by ` · `. Outside `in use`, a group whose trees each have only that one reason prints just their names, wrapped to the terminal width. The removed names wrap the same way, and the directory prints once.
 
-Quitting the agent that worked in a tree reclaims nothing: its pane says the worktree was kept and names `rimz worktree sweep`, then drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
+`--json` prints one object:
 
-A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, any workspace's instance-task file, any workflow record or workflows directory, or the owned-worktree listing cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`, a failed board enumeration contributes no team holders, and unreadable workflow records or directories are skipped while readable runs still hold (the listing itself still requires Git's worktree list).
+| Field | Value |
+| --- | --- |
+| `dry_run` | `true` for `--dry-run`. |
+| `skipped` | `"no_store"` on a dry run in a repository with no RimZ store, with empty arrays; absent otherwise. |
+| `removed` | Trees removed, or that would be: `name`, `branch`, `path`, `bytes`, `branch_deleted` (`true`, `false` when the branch was kept, `null` on a dry run), and `archive_error` (string or `null`). |
+| `failed` | Trees whose removal failed: `path` and `error`. |
+| `kept` | Trees kept: `name`, `path`, `reasons`, and `holders`, with the same ids and holder shape as `list --json`. |
+
+Quitting an agent normally reclaims nothing: the pane prints how to resume or relaunch the agent, then drops to a shell in the tree. Closing the pane, or the end of a supervised `-p` run, checks the tree instead and can remove it ([cleanup](../../guide/worktrees.md#cleanup-once-work-lands)). Otherwise a tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
+
+A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` after the removed names. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, any workspace's instance-task file, any workflow record or workflows directory, or the owned-worktree listing cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`, a failed board enumeration contributes no team holders, and unreadable workflow records or directories are skipped while readable runs still hold (the listing itself still requires Git's worktree list).
 
 [`rimz gc`](./maintenance.md#sweep-stale-state) runs the same sweep as one area of its report.
