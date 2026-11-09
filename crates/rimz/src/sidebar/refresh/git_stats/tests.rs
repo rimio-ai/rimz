@@ -65,6 +65,7 @@ fn rowless_active_and_parked_groups_supply_the_run_scope_to_git_demand() {
         repo_root: dir.path().to_path_buf(),
         worktree_path: dir.path().to_path_buf(),
         created_at: Timestamp::UNIX_EPOCH,
+        loop_task: None,
     };
     std::fs::create_dir(dir.path().join(".git")).unwrap();
     std::fs::write(
@@ -1252,6 +1253,7 @@ fn write_rimz_worktree_marker_with_pr(
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
         created_at: jiff::Timestamp::now(),
+        loop_task: None,
     };
     let git_dir = crate::worktree::git_admin_dir_from_checkout_metadata(repo.path())
         .unwrap()

@@ -68,6 +68,37 @@ fn add_team_boards(
     Ok(())
 }
 
+/// Hold each owned per-fire tree whose marker names a loop task while that task's run
+/// lock in the tree's room is held: the fire still owns it. Wrapper cleanup runs inside
+/// that fire, so only unattended reclamation takes this hold.
+fn add_fire_trees(
+    protection: &mut RuntimeProtection,
+    repo_root: &Path,
+) -> std::result::Result<(), ProtectionErr> {
+    let mut locks = std::collections::BTreeMap::new();
+    for tree in rimz::worktree::discover_owned(repo_root).map_err(ProtectionErr::WorktreeListing)? {
+        let Some(task) = tree.marker.loop_task.as_deref() else {
+            continue;
+        };
+        let root = tree.marker.repo_root.clone();
+        let locks = match locks.entry(root) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let listed = rimz::harness::schedule::runner::RunLocks::list(entry.key())
+                    .map_err(ProtectionErr::LoopTasks)?;
+                entry.insert(listed)
+            }
+        };
+        if !matches!(
+            locks.state(task),
+            Ok(rimz::harness::schedule::runner::RunLockState::Available)
+        ) {
+            protection.protections.insert_loop_task(task, &tree.path);
+        }
+    }
+    Ok(())
+}
+
 /// Best-effort occupancy, task, team-board, and workflow-run facts, with gc's own-pane policy.
 pub(super) fn for_listing(
     workspace: &ResolvedWorkspace,
@@ -154,6 +185,7 @@ pub(super) fn for_automatic_gc(
         .map_err(ProtectionErr::WorkflowRuns)?;
     add_team_boards(&mut protection, &workspace.project_root)
         .map_err(ProtectionErr::WorktreeListing)?;
+    add_fire_trees(&mut protection, &workspace.project_root)?;
     Ok(protection)
 }
 

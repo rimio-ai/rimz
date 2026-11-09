@@ -856,6 +856,7 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
         repo_root: dir.path().to_path_buf(),
         worktree_path: worktree.clone(),
         created_at: "2026-06-02T10:00:00Z".parse().unwrap(),
+        loop_task: None,
     };
     rimz::disk::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
         .unwrap();

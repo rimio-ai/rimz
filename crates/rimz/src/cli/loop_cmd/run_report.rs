@@ -533,6 +533,16 @@ pub(super) fn write_record_forensics(
     if let Some(checkout) = &record.checkout {
         write_detail_link(out, "checkout", &checkout.display().to_string())?;
     }
+    if let Some(worktree) = &record.worktree {
+        let name = worktree
+            .path
+            .file_name()
+            .unwrap_or(worktree.path.as_os_str());
+        write_detail_link(out, "worktree", &name.to_string_lossy())?;
+        if let Some(fallback) = &worktree.base_fallback {
+            write_detail_link(out, "warning", fallback)?;
+        }
+    }
     let (holder, count) = match detail {
         Forensics::Folded { holder, count } => (Some(holder), count),
         _ => (record.holder, 1),

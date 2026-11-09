@@ -41,6 +41,7 @@ fn checkout_labels_use_room_identity_and_linked_metadata_only() {
         repo_root: project.clone(),
         worktree_path: linked.clone(),
         created_at: jiff::Timestamp::now(),
+        loop_task: None,
     };
     std::fs::write(
         admin.join("rimz-worktree.json"),

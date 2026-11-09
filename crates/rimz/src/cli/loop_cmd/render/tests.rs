@@ -211,6 +211,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             .into(),
         worktrees_error: None,
         workflow_runs: Vec::new(),
+        kept_worktrees: Vec::new(),
         all: false,
     }
 }
@@ -1931,6 +1932,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         kind: None,
         judge: Vec::new(),
         checkout: None,
+        worktree: None,
         task: "wait".to_owned(),
         root: None,
         at: Timestamp::from_second(second).expect("timestamp"),
@@ -5036,4 +5038,44 @@ fn workflow_log_blocks_show_their_runs_state_and_command() {
         "{failures}"
     );
     assert!(!failures.contains(done.id.as_str()), "{failures}");
+}
+
+fn kept_tree(name: &str, second: i64) -> rimz::worktree::ManagedWorktree {
+    let path = PathBuf::from(format!("/repo-worktrees/{name}"));
+    rimz::worktree::ManagedWorktree {
+        marker: rimz::worktree::WorktreeMarker {
+            version: 4,
+            name: name.to_owned(),
+            branch: name.to_owned(),
+            base_branch: Some("main".to_owned()),
+            from_pr: None,
+            base_ref: "main".to_owned(),
+            repo_root: "/repo".into(),
+            worktree_path: path.clone(),
+            created_at: Timestamp::from_second(second).unwrap(),
+            loop_task: Some("sweeper".to_owned()),
+        },
+        path,
+        branch: Some(format!("{name}-renamed")),
+    }
+}
+
+#[test]
+fn kept_worktrees_section_lists_each_tree_and_is_left_out_when_empty() {
+    let mut view = show_view(false);
+    assert!(!show_text(&view).contains("KEPT WORKTREES"));
+    view.kept_worktrees = vec![kept_tree("night-b", 40), kept_tree("night-a", 10)];
+    let text = show_text(&view);
+    let section = text
+        .split("\nKEPT WORKTREES\n")
+        .nth(1)
+        .expect("kept worktrees section");
+    let rows: Vec<&str> = section.lines().take(3).collect();
+    let header: Vec<&str> = rows[0].split_whitespace().collect();
+    assert_eq!(header, ["WORKTREE", "BRANCH", "AGE"], "{text}");
+    let first: Vec<&str> = rows[1].split_whitespace().collect();
+    assert_eq!(first[..2], ["night-b", "night-b-renamed"], "{text}");
+    assert_eq!(rows[1].find("night-b-renamed"), rows[0].find("BRANCH"));
+    assert!(rows[2].trim_start().starts_with("night-a "), "{text}");
+    assert_eq!(text.matches("night-a").count(), 2, "{text}");
 }

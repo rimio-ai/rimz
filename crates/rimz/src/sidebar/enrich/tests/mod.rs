@@ -595,6 +595,7 @@ fn write_worktree_marker(path: &Path, name: &str) {
         repo_root: path.to_path_buf(),
         worktree_path: path.to_path_buf(),
         created_at: Timestamp::now(),
+        loop_task: None,
     };
     atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker).unwrap();
 }

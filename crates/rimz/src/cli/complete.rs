@@ -478,6 +478,7 @@ mod tests {
                 repo_root: "/repo".into(),
                 worktree_path: path.clone(),
                 created_at: jiff::Timestamp::UNIX_EPOCH,
+                loop_task: None,
             },
             path,
             branch: Some(branch.to_owned()),

@@ -4093,3 +4093,123 @@ fn spawn_request_carries_the_task_fast_mode_beside_effort() {
         assert_eq!(request.fast, fast);
     }
 }
+
+fn fresh_worktree_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("repair".to_owned()),
+        every: Some("1h".to_owned()),
+        root: root.to_owned(),
+        fresh_worktree: Some("night".to_owned()),
+        ..TaskEntry::default()
+    };
+    TaskFire::new(
+        "nightly",
+        LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
+        catalog,
+        LoopRunMode::Scheduled,
+        false,
+        "2026-01-02T03:04:05Z".parse().unwrap(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap()
+}
+
+fn git_in(dir: &Path, args: &[&str]) {
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .status()
+            .unwrap()
+            .success(),
+        "git {args:?}"
+    );
+}
+
+fn fresh_worktree_repo(dir: &Path) -> PathBuf {
+    let root = dir.join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    root
+}
+
+#[test]
+fn a_fresh_worktree_fire_runs_in_its_tree_and_removes_it_unless_an_agent_opened_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fresh_worktree_repo(dir.path());
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let mut kept = None;
+    for launched in [false, true] {
+        let mut fire = fresh_worktree_fire(&root, &catalog);
+        fire.prepare_fire_tree().unwrap();
+        let tree = fire.fire_dir();
+        assert_ne!(tree, root);
+        assert_eq!(fire.launch_checkout(), root, "scope keys stay at the root");
+        let request = fire
+            .compile_spawn_request(
+                "claude".to_owned(),
+                "repair".to_owned(),
+                ManagedLaunchState::Unsupported,
+            )
+            .unwrap();
+        let name = tree.file_name().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(request.worktree.as_deref(), Some(name.as_str()));
+        assert!(name.starts_with("night-20260102-030405"), "{name}");
+        if launched {
+            fire.hand_over_fire_tree();
+        }
+        drop(fire);
+        assert_eq!(tree.exists(), launched, "{name}");
+        if launched {
+            kept = Some(tree);
+        }
+    }
+    let kept = kept.unwrap();
+    let marker = crate::worktree::read_marker_for_worktree(&kept)
+        .unwrap()
+        .unwrap();
+    assert_eq!(marker.loop_task.as_deref(), Some("nightly"));
+}
+
+#[test]
+fn a_fresh_worktree_handed_to_a_launch_outlives_an_errored_or_budget_refused_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fresh_worktree_repo(dir.path());
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    for (committed, refused) in [(false, false), (true, false), (true, true)] {
+        let mut fire = fresh_worktree_fire(&root, &catalog);
+        fire.prepare_fire_tree().unwrap();
+        fire.hand_over_fire_tree();
+        let tree = fire.fire_dir();
+        std::fs::write(tree.join("work.txt"), "agent output").unwrap();
+        if committed {
+            git_in(&tree, &["add", "work.txt"]);
+            git_in(&tree, &["commit", "-q", "-m", "agent work"]);
+        }
+        if refused {
+            // A retry the budget refuses comes after an attempt that worked in the tree.
+            fire.pending = Some(PendingEffect::Spawn { stream: false });
+            fire.finish(TaskFireEffect::Spawn(
+                SupervisedRunOutcome::BudgetExceeded {
+                    reason: "over the daily cap".to_owned(),
+                },
+            ))
+            .unwrap();
+        } else {
+            let finished = fire.finish_error(&anyhow::anyhow!("verify command failed"));
+            assert_eq!(finished.record.result, LoopRunResult::Errored);
+        }
+        drop(fire);
+        assert!(
+            tree.join("work.txt").exists(),
+            "the launch keeps the agent's work (committed: {committed}, refused: {refused})"
+        );
+    }
+}

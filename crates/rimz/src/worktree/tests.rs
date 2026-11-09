@@ -66,6 +66,7 @@ fn mark_lane(path: &Path, created_at: Timestamp) {
         repo_root: path.to_owned(),
         worktree_path: path.to_owned(),
         created_at,
+        loop_task: None,
     };
     std::fs::write(
         git_dir.join("rimz-worktree.json"),
@@ -1369,6 +1370,7 @@ fn sweep_entry(
                 repo_root: PathBuf::from("/repo"),
                 worktree_path: path.clone(),
                 created_at: jiff::Timestamp::now(),
+                loop_task: None,
             },
             path,
             branch: Some(name.to_owned()),
@@ -1598,6 +1600,57 @@ fn marker_v3_json_parses_without_pr_provenance() {
 
     assert_eq!(marker.version, 3);
     assert_eq!(marker.from_pr, None);
+    assert_eq!(marker.loop_task, None);
+}
+
+#[test]
+fn loop_fire_trees_take_a_utc_stamped_name_and_mark_their_task() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let at: Timestamp = "2026-01-02T03:04:05Z".parse().expect("timestamp");
+    git_run(&repo, ["branch", "night-20260102-030405-2"]).expect("branch");
+
+    let first = create_for_loop_fire(&repo, &config, "night", "nightly", at).expect("first");
+    let second = create_for_loop_fire(&repo, &config, "night", "nightly", at).expect("second");
+
+    assert_eq!(first.marker.name, "night-20260102-030405");
+    assert_eq!(first.marker.branch, "night-20260102-030405");
+    assert_eq!(second.marker.name, "night-20260102-030405-3");
+    assert_eq!(second.marker.branch, "night-20260102-030405-3");
+    let stored = read_marker_for_worktree(&second.marker.worktree_path)
+        .expect("read")
+        .expect("marker");
+    assert_eq!(stored.loop_task.as_deref(), Some("nightly"));
+    let raw = serde_json::to_value(&stored).expect("json");
+    assert_eq!(raw["loop_task"], "nightly");
+    let plain = create(
+        &repo,
+        &config,
+        Some("plain"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("plain");
+    let raw = serde_json::to_value(&plain.marker).expect("json");
+    assert!(raw.get("loop_task").is_none(), "{raw}");
+}
+
+#[test]
+fn a_loop_fire_tree_with_an_invalid_prefix_names_the_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let at: Timestamp = "2026-01-02T03:04:05Z".parse().expect("timestamp");
+    for prefix in ["", "v1.2"] {
+        let error = create_for_loop_fire(&repo, &config, prefix, "nightly", at).unwrap_err();
+        assert!(
+            matches!(&error, WorktreeErr::InvalidName(name) if name == prefix),
+            "{prefix:?}: {error:?}"
+        );
+    }
 }
 
 #[test]
@@ -1618,6 +1671,7 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
         repo_root: dir.path().to_path_buf(),
         worktree_path: worktree.clone(),
         created_at: jiff::Timestamp::now(),
+        loop_task: None,
     };
     crate::disk::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
 
@@ -1658,6 +1712,7 @@ fn checkout_metadata_marker_memo_revalidates_files_and_preserves_errors() {
         repo_root: dir.path().to_path_buf(),
         worktree_path: worktree.clone(),
         created_at: at(20),
+        loop_task: None,
     };
     crate::disk::atomic::write_temp_then_rename(&marker_file, &marker).unwrap();
     std::thread::scope(|scope| {
@@ -1763,6 +1818,7 @@ fn checkout_metadata_marker_memo_evicts_the_oldest_parse_at_its_limit() {
                 repo_root: dir.path().to_path_buf(),
                 worktree_path: checkout.clone(),
                 created_at: at(20),
+                loop_task: None,
             };
             let marker = serde_json::to_vec(&marker).unwrap();
             std::fs::write(checkout.join(".git").join(MARKER_FILE), marker).unwrap();

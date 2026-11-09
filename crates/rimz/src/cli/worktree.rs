@@ -1323,6 +1323,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             worktree_path: PathBuf::from("/recorded/demo"),
             created_at: jiff::Timestamp::now(),
+            loop_task: None,
         }
     }
 }

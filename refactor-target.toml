@@ -2350,7 +2350,8 @@ path = "crates/rimz/src/harness"
 # headless::judge::Failure::timed_out words a loop judge's spent deadline as the core's own timeout (+1).
 # headless::judge::FailureKind::from_label reads workflow's journaled failure labels back; it had sat in slack that trunk's schedule::resolve_once_at has since taken (+1).
 # Workflow steps carry `share`, `message`, and `undelivered`, with `Step::subscriptions` and `Step::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack (+3).
-surface-budget = 1110
+# run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
+surface-budget = 1111
 
 [[verdict]]
 kind = "item"
@@ -2735,6 +2736,16 @@ reason = "Launch and relaunch callers share trust verdicts while consent UI stay
 kind = "item"
 key = "worktree::emit_worktree_created"
 reason = "Explicit worktree creation and launch checkout creation share the same signal."
+
+[[verdict]]
+kind = "item"
+key = "worktree::create_for_loop_fire"
+reason = "The loop runner creates each fresh-worktree fire's tree under one stamped, collision-free name with the task in its marker."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::FireWorktree"
+reason = "A fire's per-fire tree and its trunk fallback travel from the runner's record to loop logs."
 
 [[verdict]]
 kind = "item"
@@ -4652,7 +4663,8 @@ path = "crates/rimz/src/worktree"
 # CheckoutKind and classify_checkout expose metadata-only room-relative labels (+2).
 # WorkflowRunHolder and ProtectionSet::insert_workflow_run carry caller-gathered run pins (+2).
 # emit_worktree_created moves here from launcher::checkout so the harness can signal creation (+1).
-surface-budget = 87
+# create_for_loop_fire names and marks a loop fire's fresh tree for the scheduler (+1).
+surface-budget = 88
 
 [[verdict]]
 kind = "item"
@@ -5426,6 +5438,8 @@ allowed-dependencies = [
     "theme",
     "utils::time",
     "workspace",
+    # A fresh-worktree fire creates, signals and force-removes its own per-fire tree.
+    "worktree",
 ]
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
 # The hidden runner accepts typed condition evidence alongside signal evidence.

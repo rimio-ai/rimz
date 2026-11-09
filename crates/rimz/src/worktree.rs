@@ -214,6 +214,9 @@ pub struct WorktreeMarker {
     pub repo_root: PathBuf,
     pub worktree_path: PathBuf,
     pub created_at: jiff::Timestamp,
+    /// The loop task whose fire created this tree, for a per-fire tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_task: Option<String>,
 }
 
 /// What a linked worktree's `.git` metadata records about where it came from.
@@ -918,6 +921,80 @@ pub fn create(
     reuse_existing: bool,
     launch_base: LaunchBase,
 ) -> Result<CreatedWorktree> {
+    create_marked(
+        repo_root,
+        config,
+        name,
+        base,
+        branch,
+        reuse_existing,
+        launch_base,
+        None,
+    )
+}
+
+/// Create the fresh tree of one fire of loop task `task`: named
+/// `<prefix>-<yyyymmdd-hhmmss>` from `at` in UTC, taking `-2`, `-3`, ... while
+/// a tree or branch already has the name, branched from trunk as a team tree
+/// is, and marked with the task.
+pub fn create_for_loop_fire(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    prefix: &str,
+    task: &str,
+    at: jiff::Timestamp,
+) -> Result<CreatedWorktree> {
+    parse_requested_name(prefix)?;
+    let stem = format!("{prefix}-{}", at.strftime("%Y%m%d-%H%M%S"));
+    let name = (1..=64)
+        .map(|n| match n {
+            1 => stem.clone(),
+            n => format!("{stem}-{n}"),
+        })
+        .find(|candidate| {
+            worktree_path(repo_root, config, candidate).is_ok_and(|path| !path.exists())
+                && git_stdout(
+                    repo_root,
+                    [
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{candidate}"),
+                    ],
+                )
+                .is_err()
+        })
+        .ok_or_else(|| {
+            WorktreeErr::Parse(format!(
+                "could not find an unused worktree name for `{stem}`"
+            ))
+        })?;
+    create_marked(
+        repo_root,
+        config,
+        Some(&name),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+        Some(task),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "create's arguments plus the loop task marker"
+)]
+fn create_marked(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    name: Option<&str>,
+    base: Option<WorktreeBase>,
+    branch: Option<&str>,
+    reuse_existing: bool,
+    launch_base: LaunchBase,
+    loop_task: Option<&str>,
+) -> Result<CreatedWorktree> {
     config.hooks.validate()?;
     ensure_repo(repo_root)?;
     let FreshWorktree {
@@ -970,6 +1047,7 @@ pub fn create(
             base_branch,
             base_ref,
             from_pr: None,
+            loop_task: loop_task.map(str::to_owned),
         },
         Checkout::NewBranch(&checkout_base_ref),
         &config.hooks,
@@ -2127,6 +2205,7 @@ struct MarkerProvenance {
     base_branch: Option<String>,
     base_ref: String,
     from_pr: Option<u64>,
+    loop_task: Option<String>,
 }
 
 enum WorktreeCreateTarget {
@@ -2241,6 +2320,7 @@ fn finish_worktree(
         base_branch,
         base_ref,
         from_pr,
+        loop_task,
     } = provenance;
     let marker = WorktreeMarker {
         version: MARKER_VERSION,
@@ -2252,6 +2332,7 @@ fn finish_worktree(
         repo_root: repo_root.to_path_buf(),
         worktree_path: path.clone(),
         created_at: jiff::Timestamp::now(),
+        loop_task,
     };
     write_marker(&path, &marker)?;
     let included = include::copy_includes(repo_root, &path);

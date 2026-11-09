@@ -244,6 +244,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         kind: None,
         judge: Vec::new(),
         checkout: None,
+        worktree: None,
         task: task.to_owned(),
         root: None,
         at: Timestamp::from_second(second).expect("timestamp"),
@@ -815,6 +816,18 @@ fn new_fields_round_trip_and_task_records_filter() {
     with_detail.transcript_path = Some("/tmp/rimz/sessions/wait.jsonl".to_owned());
     with_detail.last_message = Some("last words".to_owned());
     with_detail.target = Some("@coder".to_owned());
+    with_detail.worktree = Some(FireWorktree {
+        path: PathBuf::from("/repo-worktrees/night-20260101-000000"),
+        base_fallback: Some("origin unreachable; branched from local main".to_owned()),
+    });
+    let encoded = serde_json::to_value(&with_detail).unwrap();
+    assert_eq!(
+        encoded["worktree"],
+        serde_json::json!({
+            "path": "/repo-worktrees/night-20260101-000000",
+            "base_fallback": "origin unreachable; branched from local main",
+        })
+    );
     append_to(dir.path(), &with_detail);
     append_to(dir.path(), &record("other", 11, LoopRunResult::Completed));
 
@@ -876,7 +889,9 @@ fn old_minimal_records_still_parse() {
     assert_eq!(record.transcript_path, None);
     assert_eq!(record.watch, None);
     assert_eq!(record.throttle_wait_ms, None);
+    assert_eq!(record.worktree, None);
     assert!(!serde_json::to_string(&record).unwrap().contains("throttle"));
+    assert!(!serde_json::to_string(&record).unwrap().contains("worktree"));
     let line = r#"{"task":"wait","at":"1970-01-01T00:00:10Z","result":"completed","check":{"code":0,"timed_out":false,"output":"ok"}}"#;
     let record: LoopRunRecord = serde_json::from_str(line).expect("legacy check record");
     assert_eq!(record.watch, None);

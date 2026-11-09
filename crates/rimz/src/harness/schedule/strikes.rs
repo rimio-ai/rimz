@@ -158,6 +158,7 @@ mod tests {
             kind: None,
             judge: Vec::new(),
             checkout: None,
+            worktree: None,
             task: "nightly".to_owned(),
             root: None,
             at: Timestamp::from_second(1).expect("timestamp"),

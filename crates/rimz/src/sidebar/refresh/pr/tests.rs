@@ -1231,6 +1231,7 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
         created_at: marker_created_at,
+        loop_task: None,
     };
     std::fs::write(
         repo.path().join(".git/rimz-worktree.json"),
