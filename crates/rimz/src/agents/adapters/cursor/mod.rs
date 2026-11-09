@@ -32,7 +32,7 @@ use super::definition::{
     RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation,
     LocallyPricedTurnCost, PriceBook, Result, SanitizedPrompt, SubagentIdentity,
@@ -417,12 +417,12 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
         let turn_usage = (event_name == "stop")
             .then(|| parsed.turn_usage())
             .flatten();
+        let effect = self.spec().tool_effect(payload);
         let signal = match event_name {
             "sessionStart" => LifecycleSignal::Registered,
             "beforeSubmitPrompt" => LifecycleSignal::TurnStarted { turn_id: None },
-            "postToolUse" if self.spec().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: self.spec().tool_edits_files(payload),
+            "postToolUse" if effect != ToolEffect::Observed => LifecycleSignal::ToolUsed {
+                effect,
                 name: None,
                 native_key: None,
                 turn_id: None,

@@ -78,9 +78,8 @@ fn turn_start_sanitizes_the_transcript_prompt() {
 #[test]
 fn native_hooks_normalize_lifecycle() {
     let common = hook_payload();
-    let tool = |mutates, edits| LifecycleSignal::ToolUsed {
-        mutates,
-        edits,
+    let tool = |effect| LifecycleSignal::ToolUsed {
+        effect,
         name: None,
         native_key: None,
         turn_id: None,
@@ -115,17 +114,17 @@ fn native_hooks_normalize_lifecycle() {
         (
             "PostToolUse:edit",
             with(&common, [("error", json!(""))]),
-            Some(tool(true, true)),
+            Some(tool(ToolEffect::Editing)),
         ),
         (
             "PostToolUse:mutating",
             with(&common, [("error", json!(null))]),
-            Some(tool(true, false)),
+            Some(tool(ToolEffect::Mutating)),
         ),
         (
             "PostToolUse:edit",
             with(&common, [("error", json!("write failed"))]),
-            Some(tool(false, false)),
+            Some(tool(ToolEffect::Observed)),
         ),
         (
             "Stop",
@@ -166,8 +165,7 @@ fn native_hooks_normalize_lifecycle() {
 #[test]
 fn post_tool_use_tool_call_names_the_tool_when_present() {
     let named = |name: Option<&str>| LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: name.map(ToOwned::to_owned),
         native_key: None,
         turn_id: None,
@@ -200,7 +198,7 @@ fn post_tool_use_tool_call_names_the_tool_when_present() {
     );
     assert!(matches!(
         edited,
-        LifecycleSignal::ToolUsed { mutates: true, edits: true, name: Some(ref name), .. }
+        LifecycleSignal::ToolUsed { effect: ToolEffect::Editing, name: Some(ref name), .. }
             if name == "write_to_file"
     ));
 }

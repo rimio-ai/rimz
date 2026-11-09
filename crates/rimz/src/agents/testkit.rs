@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use crate::agents::capabilities::HookCapability;
-use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::lifecycle::{LifecycleSignal, ToolEffect};
 use crate::agents::{AgentLifecycleObservation, AskKind, HookOutput};
 
 pub(super) fn outdated_json_source(
@@ -239,16 +239,17 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
             });
         }
     }
-    for mutates in [false, true] {
-        for edits in [false, true] {
-            signals.push(LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
-                name: None,
-                native_key: None,
-                turn_id: Some("turn-1".to_owned()),
-            });
-        }
+    for effect in [
+        ToolEffect::Observed,
+        ToolEffect::Mutating,
+        ToolEffect::Editing,
+    ] {
+        signals.push(LifecycleSignal::ToolUsed {
+            effect,
+            name: None,
+            native_key: None,
+            turn_id: Some("turn-1".to_owned()),
+        });
     }
     signals
 }

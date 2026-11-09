@@ -561,8 +561,7 @@ fn maps_lifecycle_context_background_and_subagents() {
     assert_eq!(
         tool.signal,
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             name: None,
             native_key: Some("write-1".to_owned()),
             turn_id: None,

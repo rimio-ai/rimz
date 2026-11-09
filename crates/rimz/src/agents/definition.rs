@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::lifecycle::{AskKind, LifecycleSignalKind};
+use super::lifecycle::{AskKind, LifecycleSignalKind, ToolEffect};
 use super::{LaunchPreset, PresetArgMatcher, PresetErr, PresetField};
 
 #[cfg(unix)]
@@ -1096,6 +1096,18 @@ pub struct ToolClassification {
     pub blocking: &'static [(&'static str, AskKind)],
 }
 
+impl ToolClassification {
+    /// What the named tool did: editing when it is in `editing`, else
+    /// mutating when it is in `mutating`, else observed.
+    pub(super) fn effect(&self, name: &str) -> ToolEffect {
+        match (self.editing.contains(&name), self.mutating.contains(&name)) {
+            (true, _) => ToolEffect::Editing,
+            (false, true) => ToolEffect::Mutating,
+            (false, false) => ToolEffect::Observed,
+        }
+    }
+}
+
 macro_rules! integration_concerns {
     ($($variant:ident => $label:literal),+ $(,)?) => {
         /// Product-level integration concerns every adapter declares explicitly.
@@ -1604,10 +1616,14 @@ impl AgentSpec {
             .filter(|identity| identity.ambiguous.contains(&name))
     }
 
-    /// Whether a tool-use payload names a workspace-mutating tool. The tool
-    /// name rides `tool_name` in every provider's payload.
-    pub fn tool_mutates(&self, payload: &Value) -> bool {
-        self.tool_in(payload, self.tools.mutating)
+    /// What the tool a tool-use payload names did to the workspace. The tool
+    /// name rides `tool_name` in every provider's payload; a payload without
+    /// one is [`ToolEffect::Observed`].
+    pub(super) fn tool_effect(&self, payload: &Value) -> ToolEffect {
+        payload
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .map_or(ToolEffect::Observed, |name| self.tools.effect(name))
     }
 
     /// A stable digest of a tool call's identity: its name plus its arguments.
@@ -1633,11 +1649,6 @@ impl AgentSpec {
         )
     }
 
-    /// Whether a tool-use payload names a *file-editing* tool.
-    pub fn tool_edits_files(&self, payload: &Value) -> bool {
-        self.tool_in(payload, self.tools.editing)
-    }
-
     /// Whether a pre-tool-use payload names a blocking ask tool.
     pub fn blocking_tool_kind(&self, tool_name: Option<&str>) -> Option<AskKind> {
         let name = tool_name?;
@@ -1645,13 +1656,6 @@ impl AgentSpec {
             .blocking
             .iter()
             .find_map(|(tool, kind)| (*tool == name).then_some(*kind))
-    }
-
-    fn tool_in(&self, payload: &Value, set: &[&str]) -> bool {
-        payload
-            .get("tool_name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| set.contains(&name))
     }
 }
 

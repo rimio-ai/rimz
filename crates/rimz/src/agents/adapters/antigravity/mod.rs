@@ -33,7 +33,7 @@ use super::definition::{
     SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
     SanitizedPrompt, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
@@ -620,17 +620,16 @@ fn decode_lifecycle_fields(
                 return DecodedLifecycleFields::default();
             };
             let failed = tool.failed();
-            let (mutates, edits) = match event_name {
-                "PostToolUse:edit" if !failed => (true, true),
-                "PostToolUse:mutating" if !failed => (true, false),
-                _ => (false, false),
+            let effect = match event_name {
+                "PostToolUse:edit" if !failed => ToolEffect::Editing,
+                "PostToolUse:mutating" if !failed => ToolEffect::Mutating,
+                _ => ToolEffect::Observed,
             };
             let name = tool.tool_name();
             (
                 tool.common,
                 Some(LifecycleSignal::ToolUsed {
-                    mutates,
-                    edits,
+                    effect,
                     name,
                     native_key: None,
                     turn_id: None,

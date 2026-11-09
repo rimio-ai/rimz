@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ToolEffect;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::WorkspaceId;
 use crate::store::{Store, writer::AgentLifecycleIntent};
@@ -316,8 +317,7 @@ fn snapshots_update_live_and_replayed_state_without_emitting_edges_or_changing_t
                 append(
                     &store,
                     LifecycleSignal::ToolUsed {
-                        mutates: true,
-                        edits: false,
+                        effect: ToolEffect::Mutating,
                         name: Some("bash".into()),
                         native_key: None,
                         turn_id: Some("current".into()),
@@ -521,8 +521,7 @@ fn trailing_tool_for_a_closed_turn_is_ignored_from_the_seed_and_the_log() {
     append(
         &store,
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
+            effect: ToolEffect::Mutating,
             name: Some("Bash".into()),
             native_key: None,
             turn_id: Some("closed".into()),
@@ -567,8 +566,7 @@ fn adapter_ask_without_id_does_not_hold_a_sibling_tool_waiting() {
     append(
         &store,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: Some("sibling-call".to_owned()),
             turn_id: None,

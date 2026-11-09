@@ -31,7 +31,7 @@ use super::definition::{
     RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
-use super::lifecycle::{AskKind, LifecycleSignal};
+use super::lifecycle::{AskKind, LifecycleSignal, ToolEffect};
 use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
@@ -726,15 +726,13 @@ fn lifecycle_signal(
                 .then_some(LifecycleSignal::TurnStarted { turn_id: None })
         }
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
-            mutates: spec.tool_mutates(payload),
-            edits: spec.tool_edits_files(payload),
+            effect: spec.tool_effect(payload),
             name: None,
             native_key: parse_tool_use(payload).tool_use_id,
             turn_id: None,
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: parse_tool_use(payload).tool_use_id,
             turn_id: None,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ToolEffect;
 
 fn codex_lifecycle(
     secs_ago: u64,
@@ -60,8 +61,7 @@ fn late_tool_of_interrupted_turn_does_not_keep_the_old_pane_root_running() {
             "PostToolUse",
             "old",
             LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("Bash".to_owned()),
                 native_key: None,
                 turn_id: Some("turn-1".to_owned()),

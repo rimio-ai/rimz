@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ToolEffect;
 
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::transcript::{AskOption, AskQuestion};
@@ -1030,8 +1031,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         (
             "edit",
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: true,
+                effect: ToolEffect::Editing,
                 name: Some("edit".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -1040,8 +1040,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         (
             "bash",
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("bash".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -1050,8 +1049,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         (
             "read",
             Some(LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("read".to_owned()),
                 native_key: None,
                 turn_id: None,

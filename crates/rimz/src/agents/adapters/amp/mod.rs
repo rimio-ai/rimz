@@ -21,7 +21,7 @@ use super::definition::{
     ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::managed_source::ManagedSource;
 use super::{
     AgentErr, AgentLifecycleObservation, AskKind, HookOutput, HookRouting, Result, SanitizedPrompt,
@@ -301,10 +301,11 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
             "session_start" => LifecycleSignal::Registered,
             "agent_start" => LifecycleSignal::TurnStarted { turn_id: None },
             "tool_result" => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: parsed
-                    .files_modified
-                    .unwrap_or_else(|| self.spec().tool_edits_files(payload)),
+                effect: match parsed.files_modified {
+                    Some(true) => ToolEffect::Editing,
+                    Some(false) => ToolEffect::Mutating,
+                    None => self.spec().tool_effect(payload).max(ToolEffect::Mutating),
+                },
                 name: None,
                 native_key: None,
                 turn_id: None,

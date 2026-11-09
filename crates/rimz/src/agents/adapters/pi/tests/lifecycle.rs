@@ -31,8 +31,7 @@ fn lifecycle_signals_map_every_wired_event() {
             "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_call_id": "sibling-call", "tool_name": "edit" }),
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: true,
+                effect: ToolEffect::Editing,
                 name: Some("edit".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
                 turn_id: None,
@@ -42,8 +41,7 @@ fn lifecycle_signals_map_every_wired_event() {
             "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_call_id": "sibling-call", "tool_name": "bash" }),
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("bash".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
                 turn_id: None,
@@ -53,8 +51,7 @@ fn lifecycle_signals_map_every_wired_event() {
             "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_call_id": "windows-call", "tool_name": "powershell" }),
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("powershell".to_owned()),
                 native_key: Some("windows-call".to_owned()),
                 turn_id: None,
@@ -64,8 +61,7 @@ fn lifecycle_signals_map_every_wired_event() {
             "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_name": "read" }),
             Some(LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("read".to_owned()),
                 native_key: None,
                 turn_id: None,

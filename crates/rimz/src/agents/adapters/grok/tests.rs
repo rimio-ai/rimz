@@ -551,10 +551,10 @@ fn launch_appends_reminders_through_rules_and_compacts_with_guidance() {
 #[test]
 fn lifecycle_classifies_tool_effects_and_compaction_source() {
     let adapter = GrokAdapter;
-    for (tool, mutates, edits) in [
-        ("apply_patch", true, true),
-        ("run_terminal_command", true, false),
-        ("read", false, false),
+    for (tool, effect) in [
+        ("apply_patch", ToolEffect::Editing),
+        ("run_terminal_command", ToolEffect::Mutating),
+        ("read", ToolEffect::Observed),
     ] {
         let observation = hook_lifecycle(
             &adapter,
@@ -564,8 +564,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
         assert_eq!(
             observation.signal,
             LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
+                effect,
                 name: None,
                 native_key: None,
                 turn_id: None,
@@ -579,8 +578,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             &json!({"sessionId":"s1","toolName":"apply_patch","error":"denied"})
         ),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,

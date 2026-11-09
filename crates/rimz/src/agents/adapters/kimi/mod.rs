@@ -26,7 +26,7 @@ use super::definition::{
     ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, AgentTurnError, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
@@ -403,15 +403,13 @@ fn kimi_root_signal(
             native_key: parsed.tool_call_id.clone(),
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: parsed.tool_call_id.clone(),
             turn_id: None,
         }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
-            mutates: adapter.spec().tool_mutates(payload),
-            edits: adapter.spec().tool_edits_files(payload),
+            effect: adapter.spec().tool_effect(payload),
             name: None,
             native_key: parsed.tool_call_id.clone(),
             turn_id: None,

@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::common::Env;
-use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal, ToolEffect};
 use rimz::harness::signal::SignalSelector;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{SignalEventPayload, SignalName, SignalSource};
@@ -312,8 +312,7 @@ fn events_follow_omits_snapshots_in_replay_and_live_output() {
     record(next_start.clone(), false);
     events.push(next_event(&recv));
     let tool = LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits: false,
+        effect: ToolEffect::Mutating,
         name: Some("bash".into()),
         native_key: None,
         turn_id: Some("next".into()),

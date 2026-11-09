@@ -1,6 +1,6 @@
 //! Durable attribution through the public CLI, including an exited teammate.
 
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, ToolEffect};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -141,8 +141,7 @@ fn attribution_scopes_to_the_checkout_branch() {
         "switched",
         Some("feat/x"),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: Some("exec".to_owned()),
             native_key: None,
             turn_id: None,

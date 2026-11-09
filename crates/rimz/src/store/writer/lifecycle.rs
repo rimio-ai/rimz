@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
 use crate::agents::{
-    AgentLifecycleObservation, AgentState, AgentStatus, SessionOrigin, SpawnedSubagent,
+    AgentLifecycleObservation, AgentState, AgentStatus, SessionOrigin, SpawnedSubagent, ToolEffect,
 };
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
@@ -409,8 +409,7 @@ fn derive_lifecycle_events(
         let observation = AgentLifecycleObservation::new(
             Some(parent_id.clone()),
             LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: Some(key.clone()),
                 turn_id: None,
@@ -782,25 +781,20 @@ fn stage(
     event_id
 }
 
-fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
-    matches!(
-        signal,
-        LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-            name: None,
-            ..
-        }
-    )
-}
-
 fn append_lifecycle_event(
     signal: &LifecycleSignal,
     transition: Option<Transition>,
     child_owned: bool,
 ) -> bool {
     child_owned
-        || !proof_of_work_tool(signal)
+        || !matches!(
+            signal,
+            LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Observed,
+                name: None,
+                ..
+            }
+        )
         || transition.is_some_and(|transition| {
             transition.compaction_closed
                 || transition.waiting_cleared

@@ -195,8 +195,7 @@ fn final_message_fallback_reads_only_at_output_checkpoints() {
     let ordinary = AgentLifecycleObservation::new(
         None,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -533,8 +532,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         (
             "Edit",
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: true,
+                effect: ToolEffect::Editing,
                 name: Some("Edit".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -543,8 +541,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         (
             "Bash",
             Some(LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("Bash".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -553,8 +550,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         (
             "Read",
             Some(LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("Read".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -563,8 +559,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         (
             "AskUserQuestion",
             Some(LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: Some("AskUserQuestion".to_owned()),
                 native_key: None,
                 turn_id: None,
@@ -587,8 +582,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
     assert_eq!(
         pre_tool.signal,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,

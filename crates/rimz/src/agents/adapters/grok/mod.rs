@@ -22,7 +22,7 @@ use super::definition::{
     RemoteControlCapability, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::{AskKind, LifecycleSignal};
+use super::lifecycle::{AskKind, LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch, HookOutput,
     HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
@@ -725,16 +725,14 @@ fn lifecycle_signal(
         "PostToolUse" => {
             let tool = payload.tool_name.as_deref();
             LifecycleSignal::ToolUsed {
-                mutates: tool.is_some_and(|tool| spec.tools.mutating.contains(&tool)),
-                edits: tool.is_some_and(|tool| spec.tools.editing.contains(&tool)),
+                effect: tool.map_or(ToolEffect::Observed, |tool| spec.tools.effect(tool)),
                 name: None,
                 native_key: payload.tool_use_id.clone(),
                 turn_id: None,
             }
         }
         "PostToolUseFailure" => LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: payload.tool_use_id.clone(),
             turn_id: None,

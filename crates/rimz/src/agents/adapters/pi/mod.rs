@@ -56,7 +56,7 @@ use super::definition::{
     ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::managed_source::ManagedSource;
 use super::observation::{payload_context_pct, payload_has_context_observation};
 use super::pricing::PriceBook;
@@ -639,24 +639,21 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
             // Unnamed, so the closed dialog clears only its own keyed wait and
             // never counts as a tool call.
             "ui_prompt_end" => Some(LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: optional_payload_string(payload, &["ui_prompt_id"]),
                 turn_id: None,
             }),
             "tool_execution_end" if tool_name == Some("ask_user_question") => {
                 Some(LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: tool_name.map(ToOwned::to_owned),
                     native_key: optional_payload_string(payload, &["tool_call_id"]),
                     turn_id: None,
                 })
             }
             "tool_execution_end" => Some(LifecycleSignal::ToolUsed {
-                mutates: self.spec().tool_mutates(payload),
-                edits: self.spec().tool_edits_files(payload),
+                effect: self.spec().tool_effect(payload),
                 name: tool_name.map(ToOwned::to_owned),
                 native_key: optional_payload_string(payload, &["tool_call_id"]),
                 turn_id: None,

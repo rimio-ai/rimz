@@ -200,9 +200,9 @@ fn malformed_payloads_are_tolerated_without_inventing_identity() {
         ));
     }
     insta::assert_snapshot!(rows.join("\n"), @r#"
-    None ToolUsed { mutates: false, edits: false, name: None, native_key: None, turn_id: None }
-    None ToolUsed { mutates: false, edits: false, name: None, native_key: None, turn_id: None }
-    None ToolUsed { mutates: false, edits: false, name: None, native_key: None, turn_id: None }
+    None ToolUsed { effect: Observed, name: None, native_key: None, turn_id: None }
+    None ToolUsed { effect: Observed, name: None, native_key: None, turn_id: None }
+    None ToolUsed { effect: Observed, name: None, native_key: None, turn_id: None }
     "#);
     assert_eq!(
         decode("unknown", json!({})).class(),

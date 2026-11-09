@@ -154,6 +154,7 @@ pub const CONDITION_CHECKPOINT: SignalSet = SignalSet::REGISTERED
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::ToolEffect;
     use crate::agents::lifecycle::{LifecycleState, TransitionKind};
 
     fn event(signal: LifecycleSignal, transition: Transition) -> LifecycleEvent {
@@ -236,8 +237,7 @@ mod tests {
             })
         );
         assert!(!CONDITION_CHECKPOINT.contains(&LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
+            effect: ToolEffect::Mutating,
             name: None,
             native_key: None,
             turn_id: None,

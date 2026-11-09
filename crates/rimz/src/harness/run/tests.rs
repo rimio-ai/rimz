@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::agents::AgentState;
-use crate::agents::LifecycleSignal;
+use crate::agents::{LifecycleSignal, ToolEffect};
 use crate::ids::{AgentKind, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
 use tempfile::tempdir;
@@ -49,8 +49,7 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
         for resume in [
             turn_started(),
             LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: None,
                 turn_id: None,
@@ -1461,8 +1460,7 @@ fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
 #[test]
 fn parked_run_resumes_and_completes_once() {
     assert_parked_run_resumes(LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
+        effect: ToolEffect::Observed,
         name: None,
         native_key: None,
         turn_id: None,
@@ -1590,8 +1588,7 @@ fn tool_use_prevents_settlement_by_a_stale_strand_check() {
         store.paths(),
         &record.run_id,
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -2263,8 +2260,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
     let mut tool = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             name: None,
             native_key: None,
             turn_id: None,
@@ -2324,8 +2320,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
     let mut tool = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
         LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: true,
+            effect: ToolEffect::Editing,
             name: None,
             native_key: None,
             turn_id: None,
@@ -3124,8 +3119,7 @@ fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
     let in_turn = [
         turn_started(),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -3205,8 +3199,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
     let observation = AgentLifecycleObservation::new(
         Some("child".into()),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,

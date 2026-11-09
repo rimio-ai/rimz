@@ -1,6 +1,7 @@
 //! Lifecycle observation ingestion and transition checks.
 
 use super::*;
+use rimz::agents::ToolEffect;
 use rimz::agents::{HookIngressOwner, SubagentCorrelationInput, SubagentSpawnInput};
 
 const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
@@ -117,8 +118,7 @@ pub(super) fn release_resolved_keyed_ask(
         AgentLifecycleObservation::new(
             Some(agent_id.clone()),
             LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: Some(open_key),
                 turn_id: None,

@@ -47,8 +47,7 @@ fn terminal_disposition_table_pins_every_signal() {
         (LifecycleSignal::SubagentStopped { errored: true }, None),
         (
             LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
+                effect: ToolEffect::Observed,
                 name: None,
                 native_key: None,
                 turn_id: None,
@@ -100,8 +99,11 @@ fn state(status: AgentStatus, phase: TurnPhase, compacting: bool) -> LifecycleSt
 
 fn tool(edits: bool) -> LifecycleSignal {
     LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits,
+        effect: if edits {
+            ToolEffect::Editing
+        } else {
+            ToolEffect::Mutating
+        },
         name: None,
         native_key: None,
         turn_id: None,
@@ -230,8 +232,7 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
     assert_eq!(interrupted.next, idle);
 
     let tool = |turn_id: Option<&str>| LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits: false,
+        effect: ToolEffect::Mutating,
         name: Some("Bash".to_owned()),
         native_key: None,
         turn_id: turn_id.map(ToOwned::to_owned),
@@ -282,8 +283,7 @@ fn closed_turns_ignore_only_their_own_trailing_tools() {
                 ));
                 for tool_id in [Some("closed"), Some("new"), None] {
                     let tool = LifecycleSignal::ToolUsed {
-                        mutates: true,
-                        edits: true,
+                        effect: ToolEffect::Editing,
                         name: Some("Bash".into()),
                         native_key: None,
                         turn_id: tool_id.map(str::to_owned),
@@ -330,7 +330,7 @@ fn closed_turns_ignore_only_their_own_trailing_tools() {
         state(AgentStatus::Running, TurnPhase::Acting, false),
         state(AgentStatus::Running, TurnPhase::Parked, false),
     ] {
-        for edits in [false, true] {
+        for effect in [ToolEffect::Mutating, ToolEffect::Editing] {
             let trailing = step(
                 Some(&prior),
                 None,
@@ -339,8 +339,7 @@ fn closed_turns_ignore_only_their_own_trailing_tools() {
                     ..PriorTurnIds::default()
                 },
                 &LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits,
+                    effect,
                     name: Some("Bash".into()),
                     native_key: None,
                     turn_id: Some("closed".into()),
@@ -371,8 +370,7 @@ fn trailing_tools_hold_an_open_compaction_bracket() {
                 ..PriorTurnIds::default()
             },
             &LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: false,
+                effect: ToolEffect::Mutating,
                 name: Some("Bash".into()),
                 native_key: None,
                 turn_id: id.map(str::to_owned),
@@ -560,8 +558,7 @@ fn parked_wait_and_answered_prompt_preserve_boundary_facts() {
         "answered prompt",
         Some(waiting),
         LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
+            effect: ToolEffect::Observed,
             name: None,
             native_key: None,
             turn_id: None,
@@ -575,8 +572,7 @@ fn parked_wait_and_answered_prompt_preserve_boundary_facts() {
 fn keyed_wait_clears_only_for_the_matching_tool() {
     let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
     let tool = |native_key: Option<&str>| LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits: false,
+        effect: ToolEffect::Mutating,
         name: None,
         native_key: native_key.map(ToOwned::to_owned),
         turn_id: None,
@@ -799,8 +795,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
         for (signal, existing_reason, missing_reason) in [
             (
                 LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: None,
                     turn_id: None,
@@ -812,8 +807,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
             // and Pi emit still proves activity and recovers a missed start.
             (
                 LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
+                    effect: ToolEffect::Observed,
                     name: None,
                     native_key: Some("ask-call".to_owned()),
                     turn_id: None,
@@ -1317,16 +1311,14 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
 
 #[test]
 fn flag_bearing_signals_keep_their_wire_bytes() {
-    let tool =
-        |mutates, edits, name: Option<&str>, native_key: Option<&str>, turn_id: Option<&str>| {
-            LifecycleSignal::ToolUsed {
-                mutates,
-                edits,
-                name: name.map(ToOwned::to_owned),
-                native_key: native_key.map(ToOwned::to_owned),
-                turn_id: turn_id.map(ToOwned::to_owned),
-            }
-        };
+    let tool = |effect, name: Option<&str>, native_key: Option<&str>, turn_id: Option<&str>| {
+        LifecycleSignal::ToolUsed {
+            effect,
+            name: name.map(ToOwned::to_owned),
+            native_key: native_key.map(ToOwned::to_owned),
+            turn_id: turn_id.map(ToOwned::to_owned),
+        }
+    };
     let compaction = |auto, failed| LifecycleSignal::CompactionEnded { auto, failed };
     let goldens = [
         (
@@ -1354,31 +1346,31 @@ fn flag_bearing_signals_keep_their_wire_bytes() {
             r#"{"signal":"turn_ended","errored":true,"parked_on_background":true,"turn_id":"t"}"#,
         ),
         (
-            tool(false, false, None, None, None),
+            tool(ToolEffect::Observed, None, None, None),
             r#"{"signal":"tool_used","mutates":false,"edits":false}"#,
         ),
         (
-            tool(true, false, None, None, None),
+            tool(ToolEffect::Mutating, None, None, None),
             r#"{"signal":"tool_used","mutates":true,"edits":false}"#,
         ),
         (
-            tool(true, true, None, None, None),
+            tool(ToolEffect::Editing, None, None, None),
             r#"{"signal":"tool_used","mutates":true,"edits":true}"#,
         ),
         (
-            tool(true, false, Some("Bash"), None, None),
+            tool(ToolEffect::Mutating, Some("Bash"), None, None),
             r#"{"signal":"tool_used","mutates":true,"edits":false,"name":"Bash"}"#,
         ),
         (
-            tool(true, false, None, Some("k"), None),
+            tool(ToolEffect::Mutating, None, Some("k"), None),
             r#"{"signal":"tool_used","mutates":true,"edits":false,"native_key":"k"}"#,
         ),
         (
-            tool(true, false, None, None, Some("t")),
+            tool(ToolEffect::Mutating, None, None, Some("t")),
             r#"{"signal":"tool_used","mutates":true,"edits":false,"turn_id":"t"}"#,
         ),
         (
-            tool(true, true, Some("Bash"), Some("k"), Some("t")),
+            tool(ToolEffect::Editing, Some("Bash"), Some("k"), Some("t")),
             r#"{"signal":"tool_used","mutates":true,"edits":true,"name":"Bash","native_key":"k","turn_id":"t"}"#,
         ),
         (
@@ -1430,7 +1422,7 @@ fn flag_bearing_signals_keep_their_wire_bytes() {
         ),
         (
             r#"{"signal":"tool_used","mutates":false,"edits":true}"#,
-            r#"{"signal":"tool_used","mutates":false,"edits":true}"#,
+            r#"{"signal":"tool_used","mutates":true,"edits":true}"#,
         ),
         (
             r#"{"signal":"subagent_stopped"}"#,

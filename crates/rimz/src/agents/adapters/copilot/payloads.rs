@@ -5,6 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
+use crate::agents::{ToolEffect, definition::ToolClassification};
 
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,10 +122,13 @@ impl<'a> NormalizedToolCalls<'a> {
             .or_else(|| self.calls.first().copied())
     }
 
-    pub(super) fn any_named(&self, names: &[&str]) -> bool {
+    /// The strongest effect over every named call, observed when none is.
+    pub(super) fn strongest_effect(&self, tools: &ToolClassification) -> ToolEffect {
         self.calls
             .iter()
-            .any(|call| call.name.is_some_and(|name| names.contains(&name)))
+            .filter_map(|call| call.name.map(|name| tools.effect(name)))
+            .max()
+            .unwrap_or(ToolEffect::Observed)
     }
 }
 
@@ -237,7 +241,8 @@ mod tests {
         let selected = calls.selected().unwrap();
         assert_eq!(selected.name, Some("ask_user"));
         assert_eq!(selected.args, Some(&json!({"question":"Ship?"})));
-        assert!(calls.any_named(&["edit"]));
+        let tools = &super::super::COPILOT_DESCRIPTOR.tools;
+        assert_eq!(calls.strongest_effect(tools), ToolEffect::Editing);
 
         let mixed = decode_or_default::<CopilotHookPayload>(&json!({
             "toolName":"view",
@@ -245,6 +250,6 @@ mod tests {
         }));
         let calls = mixed.normalized_tool_calls();
         assert_eq!(calls.selected().unwrap().name, Some("view"));
-        assert!(calls.any_named(&["create", "edit"]));
+        assert_eq!(calls.strongest_effect(tools), ToolEffect::Editing);
     }
 }

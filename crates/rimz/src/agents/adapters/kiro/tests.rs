@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ToolEffect;
 
 use std::ffi::OsStr;
 use std::io::Write as _;
@@ -402,8 +403,7 @@ fn native_hooks_decode_session_turn_tool_and_stop() {
             "PostToolUse" => assert!(matches!(
                 observation.signal,
                 LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits: true,
+                    effect: ToolEffect::Editing,
                     ..
                 }
             )),
