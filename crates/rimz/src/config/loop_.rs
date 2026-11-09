@@ -284,8 +284,8 @@ pub(crate) fn deserialize_judges<'de, D: Deserializer<'de>>(
     deserializer.deserialize_any(JudgesVisitor)
 }
 
-/// One triggered loop wake-up. `agent` names a supervised turn or resident
-/// layout; `wait` delivers to a pinned session.
+/// One triggered loop wake-up. `agent` names a turn or staying layout that its
+/// workflow run launches; `wait` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TaskEntry {

@@ -484,7 +484,7 @@ impl<'a> Graph<'a> {
         let mut on = routes([("failed", "@failed"), ("invalid", "@failed")]);
         let timed = if entry.stay {
             step.insert("lifecycle".into(), "stay".into());
-            // A resident launches beside its checkout's occupants unless it takes them over.
+            // A staying step launches beside its checkout's occupants unless it takes them over.
             step.insert(
                 if entry.takeover { "takeover" } else { "share" }.into(),
                 true.into(),

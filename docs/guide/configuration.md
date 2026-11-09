@@ -1026,7 +1026,7 @@ Each role's ordered binding list, selectors, matches, and prompts together, ente
 ### Loop tasks
 
 ```toml
-default-timeout = "2h"   # scheduled agent turns without a task timeout
+default-timeout = "2h"   # agent turns without a task timeout
 
 [tasks.morning]
 agent = "claude"
@@ -1052,11 +1052,11 @@ surplus-after = "3d"
 
 Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks take the same shape in `<repo>/.rimz/config.toml`, enter the trust hash, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (the shapes, the watchdogs, the self-waits) is the [loops guide](./loops.md); this section is the field shape, and [`rimz loop`](../reference/cli/loop.md) is the command that writes most of it for you.
 
-`default-timeout` bounds a scheduled run whose task omits `timeout`. It takes a positive `s`, `m`, `h`, or `d` duration, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it; `0s` is refused rather than accepted as a deadline no turn can meet. A task's own `timeout` wins, and a manual `rimz loop fire` without one stays unbounded.
+`default-timeout` bounds the agent turn of a task that omits `timeout`, on a scheduled or a manual fire. It takes a positive `s`, `m`, `h`, or `d` duration, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it; `0s` is refused rather than accepted as a deadline no turn can meet. A task's own `timeout` wins, and a `stay` task's layout gets no timeout.
 
-Every task you write here does one thing: `agent` runs one agent cell on a calendar, interval, cron, or one-shot schedule.
+Every task you write here starts a [workflow](./workflows.md) run on a calendar, interval, cron, or one-shot schedule: `agent` compiles to a graph whose one step runs that agent cell, with any `check`, judges, and `verify` as its checks. `rimz workflow show <task>` draws the graph.
 
-`check` guards that run. It is a shell command RimZ runs first: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. `check-timeout` caps it, else `timeout`, else five minutes. The output flows to any judges and then the agent's prompt when it fires. It runs at `root`, or in the fire's fresh worktree when the task sets `fresh-worktree = "<prefix>"` (what `rimz loop add --worktree <prefix>` writes), so the guard reads the tree the agent works in. A `dir`, which `rimz loop add` wrote with the worktree you ran it from in earlier versions and `--wait` still writes, keeps the check in that directory, and `worktree` on an agent task without `stay` still reuses one named worktree every fire; new adds write neither.
+`check` decides whether that turn happens. It is a shell command the run evaluates first: `on = "fail"` goes on to the agent on a non-zero exit, `on = "success"` on a zero exit, and the other answer ends the run `completed`. A check that times out ends the run `failed`. `check-timeout` caps it, else `timeout`, else five minutes. The agent's brief names the check and its answer. It runs at `root`, or in the fire's fresh worktree when the task sets `fresh-worktree = "<prefix>"` (what `rimz loop add --worktree <prefix>` writes), so the guard reads the tree the agent works in. A `dir`, which `rimz loop add` wrote with the worktree you ran it from in earlier versions and `--wait` still writes, keeps the check in that directory, and `worktree` on an agent task without `stay` still reuses one named worktree every fire; new adds write neither.
 
 When the guard also needs judgment, add `judge` beside `check`. The profile must resolve to one Claude or Codex agent, with exactly one of `prompt` and `prompt-file`, an action, and explicit `on` on the task:
 
@@ -1066,22 +1066,22 @@ agent = "haiku"
 prompt = "Does this failure need a code change?"
 timeout = "5m"           # optional; the judge's own cap over both attempts, independent of the task timeout
 # prompt-file = "prompts/judge.md"  # instead of prompt
-# recheck = "6h"         # optional; resident tasks only, no default
+# recheck = "6h"         # optional; `stay` tasks only, no default
 ```
 
-Judges run without a pane and answer an outcome, `pass` or `fail`, and a reason before the action. For several, use `[[tasks.pr_watch.judge]]` tables in the order they should run. The shell runs first, then each judge sees all earlier evidence; the first answered stage that misses `on` stops the chain. A judge that cannot answer is asked once more, unless it timed out or hit a provider limit; with no answer then, it continues the chain. An old agent table under `check` still reads as the first judge. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
+Judges run without a pane and answer an outcome, `pass` or `fail`, and a reason before the action. For several, use `[[tasks.pr_watch.judge]]` tables in the order they should run. The shell runs first, then each judge in order; the first answer that misses `on` ends the run. A judge that cannot answer is asked once more, unless it timed out or hit a provider limit; with no answer then, the run goes on to the next judge or the agent. An old agent table under `check` still reads as the first judge. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
 
 The rest tune what one fire is allowed to do:
 
 - `overlap` chooses what a busy repeating clock, signal, or condition task keeps: `skip` (default), `coalesce`, `queue`, or `replace` (cancels the active run and starts the newest trigger once that run has ended). `overlap-limit` bounds a queue, defaults to `10`, and must be at least `1`. Both are refused for one-shots and deliveries. See [overlapping triggers](../reference/cli/loop.md#overlapping-triggers).
 - `verify` runs a shell command after an agent turn and re-prompts that same session when it fails. `max-attempts` caps the agent turns one fire may take, and defaults to `3`.
 - `once-per-checkout` sets whether scheduled fires start at most one run per checkout, until `rimz loop remove` clears the memory. Left out, a `stay` task and a `workflow` task with `when` launch once per checkout and every other task fires each time; `rimz loop eject` writes it so the ejected task keeps its own answer. A run that acted or was canceled stays remembered, and one that failed or ended on its own without acting does not; [launch memory](../reference/cli/loop.md#launch-memory) has each case.
-- `max-strikes` disables the task after that many consecutive failed or no-progress fires. It defaults to `3`, and `0` turns the strike gate off. `rimz loop enable` clears the counter, which is machine-local.
+- `max-strikes` disables the task after that many consecutive failed runs. It defaults to `3`, and `0` turns the strike gate off. `rimz loop enable` clears the counter, which is machine-local.
 - `account` holds an `agent` task on one named [provider account](./accounts.md) instead of the room's current one, and `"default"` pins the provider's own home. It is refused beside `wait` and on a check-only task. In a project task it stays out of the trust hash, since it names an account and runs no command.
-- `budget` caps each run in dollars. `budget-per-day` requires `budget` and skips a fire when today's recorded spend for the task, plus the next run's cap, would pass the daily amount.
+- `budget` caps each run in dollars. `budget-per-day` requires `budget` and skips a fire when today's recorded spend for the task, plus what its live runs reserve and the next run's cap, would pass the daily amount.
 - `surplus` holds a task back unless the provider's usage window has room to spare: `"1.5x"` fires only while the budget left in the window outpaces the time left in it by half again. `surplus-after` adds an elapsed floor, and alone it still demands the break-even `1.0x`. Both fail closed when RimZ has no usable window reading, so a plain API key never fires a gated task. The model, worked through with numbers, is [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
-An automated task that starts an agent asks the [machine start throttle](#agent-start-limits), configured in `config.toml`, not this file. The task key `throttle = "off"` skips machine stagger, resource limits, and the capacity check, not the caps. The task key `capacity-wait` accepts a positive `s`/`m`/`h`/`d` duration or `forever`: conditions, signals, watches, and absolute one-shots default to forever; repeating clocks give up just before the next occurrence. The task's deadline still applies. Held conditions leave no ticket and retry every minute; other triggers wait in the queue. Manual `loop fire` never waits for capacity.
+A task's agent step asks the [machine start throttle](#agent-start-limits), configured in `config.toml`, not this file, before it launches. The task key `throttle = "off"` skips machine stagger, resource limits, and the capacity check, not the caps. The task key `capacity-wait` accepts a positive `s`/`m`/`h`/`d` duration or `forever`: conditions, signals, watches, and absolute one-shots default to forever; repeating clocks give up just before the next occurrence. The task's deadline still applies. A step that gives up records `throttle skipped`, never a strike. Manual `loop fire` never waits for capacity.
 
 A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts a run per worktree. With a `when` trigger, that launch happens once per checkout, even after its run finishes. `rimz loop add <task> --workflow <name>` writes it after checking the definition the way `rimz workflow run` does:
 
@@ -1102,9 +1102,9 @@ Four things are worth knowing before you edit the file by hand:
 - A project task runs at the project root implicitly. It resolves `prompt-file` and `system-prompt-file` relative to `.rimz/`, rejects `root`, `dir`, `wait`, and `deadline`, and requires `every`, `cron`, or `signal`, because a one-shot is machine state and does not belong in a committed file.
 - A trusted project task outranks a machine task of the same name, but starts disabled until you enable it locally. An untrusted or stale project task stays visible and inert, so the machine task keeps running until you run `rimz trust grant`. `rimz loop add --project` writes `.rimz/config.toml` and enables the task for whoever added it; removing or renaming a project task means editing that file.
 
-Two more task fields exist that you never write here. A `wait` task delivers to one live agent session rather than launching a cell: `rimz loop add --wait @handle` writes it into the workspace's instance state, and bare `--wait` or `--wait @me` targets the caller. `deadline` is what `rimz loop add --until 30m` wrote for a task that polls until a time; `loop add` no longer accepts it, and a stored one still runs. Both appear in `rimz loop show` and never in `loop.toml`.
+Two more task fields exist that you never write here. A `wait` task delivers to one live agent session rather than launching a cell: `rimz loop add --wait @handle` writes it into the workspace's instance state, and bare `--wait` or `--wait @me` targets the caller. `deadline` is what `rimz loop add --until 30m` wrote for a task that polls until a time; `loop add` refuses `--until`, and a stored `deadline` still runs. Both appear in `rimz loop show` and never in `loop.toml`.
 
-That instance state is one of two files outside `loop.toml`. Every session delivery, generated one-shot, and poll-until instance lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; machine-local enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
+That instance state is one of two files outside `loop.toml`. Every session delivery, generated one-shot, and stored `deadline` row lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; machine-local enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
 
 ## theme.toml: appearance and pets
 

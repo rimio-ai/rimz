@@ -76,7 +76,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 ### Keep it running without you
 
 - `rimz agents -p` is `claude -p` for every agent that can run headless, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows.
-- `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
+- `rimz loop` schedules workflow runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
 - `rimz wait` lets an agent arm its own timer, command, process, polled check, or file watch and end its turn instead of sleeping.
 - A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction asks a filling turn to wrap up before compacting and continuing, so agents keep working while you are gone.
 - Dollar budgets cap one turn, one agent, one loop task, the room, or a provider account. A turn that crosses a cap is stopped and parked.
@@ -247,7 +247,7 @@ rimz subagents fanout --wait <<'JSON'
 JSON
 ```
 
-**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget-per-day 20` to bound what hands-off work costs.
+**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. Each fire starts a [workflow](./docs/guide/workflows.md) run: the loop decides when, the workflow decides what, and `rimz workflow show <task>` draws the graph a task compiles to. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget-per-day 20` to bound what hands-off work costs.
 
 ```sh
 # 07:00 every weekday: overnight changes, summarized before you sit down

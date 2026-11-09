@@ -805,7 +805,7 @@ reason = "`RESTRICTED_FIX`: One saved-untrusted remediation shared by library re
 [[verdict]]
 kind = "item"
 key = "launcher::trust::preflight"
-reason = "One warning/refusal verdict for launch, relaunch, resident takeover and room start; the CLI renders returned notices."
+reason = "One warning/refusal verdict for launch, relaunch, a staying workflow step's takeover and room start; the CLI renders returned notices."
 
 [[verdict]]
 kind = "item"
@@ -1375,7 +1375,7 @@ reason = "Single legacy-aware guard reader for the scheduler and loop presentati
 [[verdict]]
 kind = "item"
 key = "config::loop_::TaskEntry::dedupes_checkout"
-reason = "Residents and condition workflows share checkout dedupe and sustained-condition retries."
+reason = "Staying tasks and condition workflows share checkout dedupe and sustained-condition retries."
 
 [[verdict]]
 kind = "item"
@@ -2453,12 +2453,12 @@ reason = "Planner, runner and CLI share strict versioned workflow launch reads."
 [[verdict]]
 kind = "item"
 key = "harness::schedule::launch_ledger::Launch"
-reason = "The launched query carries the selected resident or workflow record to its consumer."
+reason = "The launched query carries the selected workflow memory entry, or an older resident launch record, to its consumer."
 
 [[verdict]]
 kind = "item"
 key = "harness::schedule::launch_ledger::launched"
-reason = "One kind-aware checkout query shares resident and project-covering workflow admission."
+reason = "One kind-aware checkout query shares workflow memory, project-covering entries and older resident launch records across dedupe."
 
 [[verdict]]
 kind = "item"
@@ -2518,7 +2518,7 @@ reason = "Both worktree launch doorways share landed memo, Git inspection, and a
 [[verdict]]
 kind = "item"
 key = "harness::schedule::takeover::read"
-reason = "Loop takeover and workflow admission share owned-worktree discovery and occupancy over their caller-supplied runtime-scoped snapshot and card-status reader, treating spent provider pauses as settled."
+reason = "Staying-step takeover and workflow admission share owned-worktree discovery and occupancy over their caller-supplied runtime-scoped snapshot and card-status reader, treating spent provider pauses as settled."
 
 [[verdict]]
 kind = "item"
@@ -2569,11 +2569,6 @@ reason = "The exec wrapper carries only the inherited fd number; the lease owner
 kind = "item"
 key = "harness::hook_drain::DrainerLease::handover"
 reason = "The parked wrapper closes its inherited lease only after its own lease attempt, keeping socket mechanics in the lease owner."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::runner::agent_check::replay"
-reason = "Runner rebuilds a held tier's judge record from the stored decline without another process."
 
 [[verdict]]
 kind = "item"
@@ -2717,67 +2712,62 @@ reason = "A fire's per-fire tree and its trunk fallback travel from the runner's
 [[verdict]]
 kind = "item"
 key = "launcher::LaunchContext"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::LayoutRequest"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::LayoutLaunch"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::CohortRequest"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::LaunchOverrides"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::Selection"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::RoomEntry"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::Starter"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
-
-[[verdict]]
-kind = "item"
-key = "launcher::ResidentLoop"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::Preparation"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::LaunchOutcome"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::OpenedLayout"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
 key = "launcher::PreparedLaunch"
-reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+reason = "Layout commands and the workflow host share typed requests, preparation and launch facts without terminal output."
 
 [[verdict]]
 kind = "item"
@@ -2807,12 +2797,12 @@ reason = "One launch interaction preserves typed notices and the existing unatte
 [[verdict]]
 kind = "item"
 key = "launcher::prepare_layout"
-reason = "Preparation precedes resident takeover; execution owns live-room layout effects."
+reason = "Preparation precedes a staying step's takeover; execution owns live-room layout effects."
 
 [[verdict]]
 kind = "item"
 key = "launcher::execute"
-reason = "Preparation precedes resident takeover; execution owns live-room layout effects."
+reason = "Preparation precedes a staying step's takeover; execution owns live-room layout effects."
 
 [[verdict]]
 kind = "item"
@@ -12002,7 +11992,7 @@ reason = "Workflow waits retain typed comparison readings without reparsing rend
 [[verdict]]
 kind = "item"
 key = "harness::schedule::when::WhenExpr::scope_checkout_key"
-reason = "Resident loop admission names scope-reading keys without copying the condition vocabulary into the CLI."
+reason = "`loop add` admission of a `stay` task names scope-reading keys without copying the condition vocabulary into the CLI."
 
 [[verdict]]
 kind = "item"

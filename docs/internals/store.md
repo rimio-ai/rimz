@@ -113,8 +113,8 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/log-generation.json                  durable active-log generation
 records/messages/messages.jsonl               live message queue
 records/loop-instances.json                   loop and wait rows
-records/loop-launches.json                    resident loop launches by task and checkout
-records/loop-workflow-launches.json           condition workflow launches by task and checkout, version 1
+records/loop-launches.json                    older loop layout launches by task and checkout, read only
+records/loop-workflow-launches.json           remembering loop tasks' runs by task and checkout, version 1
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision
@@ -167,7 +167,7 @@ This page owns the log, the caches derived from it, hook ingress, and the worksp
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `owned/workflows/` | [workflow.md](./harness/workflow.md#storage-and-isolation-boundary) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
-| `records/loop-launches.json`, `records/loop-workflow-launches.json` | [loops.md](./harness/loops.md#the-launch-ledger) |
+| `records/loop-launches.json`, `records/loop-workflow-launches.json` | [loops.md](./harness/loops.md#launch-memory) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
 | `records/raised.json` | [Raised attention](#raised-attention) below |
 | `records/hibernation.json` | [hibernate.md](./harness/hibernate.md) |
@@ -335,7 +335,7 @@ Some row fields come from launch parameters or the workspace record rather than 
 - `AgentState.root_lane` derives from the workspace record: a row is on the root lane when its channel is unstamped and its worktree path equals the project root. Bound `PaneAgent` rows copy it, and sessionless panes derive it from the snapshot's project root. This display fact never comes from a lifecycle event and does not change routing channel values.
 - `LaunchParams.checkout` carries an empty-dir launch's original checkout, projected to `AgentState.checkout` and `SidebarRow.checkout`. Lane routing, root-lane stamps, and sidebar groups use the checkout before the process `worktree_path`, so a hook that updates the cwd does not lose the lane. A record without `checkout` keeps the plain worktree-path semantics.
 - `LaunchParams.add_dirs` persists canonical absolute host paths as an ordered, deduplicated list, defaulting to an omitted empty list. `untrusted_checkout` defaults to omitted false and records the undecided-cwd fallback rather than re-reading provider trust. Both project to `AgentState`, carry through lifecycle events, and follow `checkout` through restart, resume, and fork. Old events retain their shape.
-- `LaunchParams.loop_task` is stamped on a resident loop launch's prompt leader before its pane opens. The reducer carries it into `AgentState.loop_task` through provisional adoption, later observations, and event-log rotation, as it does the team identity. Registration reads that durable task name to arm subscriptions, never the launch ledger.
+- `LaunchParams.loop_task` is stamped on a loop run's agent step launch before its pane opens (`crates/rimz/src/cli/workflow/host.rs`), naming the task its tab and records carry. The reducer carries it into `AgentState.loop_task` through provisional adoption, later observations, and event-log rotation, as it does the team identity. Registration arms nothing from it: a staying step's subscriptions are its run's `subscribe` wakes.
 - `LaunchParams.molted_from` holds a molt successor's predecessor launch id (the session id for a row without one). The fold carries it onto the registered session and through sparse observations and session rotation.
 - `AgentState.soft_compact` holds `steered_at`, the wrap-up's sent-event timestamp; `compactions`, the completed-compaction count at that instant (`Some(count)`); and `progress` (`wrapping_up`, `turn_ended`, or `continued`). A `wrap_up` `message.sent` initializes it. A clean `TurnEnded` folded at or after the steer advances `wrapping_up` to `turn_ended`; neither an errored end nor a compaction close does. A `continue` `message.queued` advances it to `continued`. `TurnInterrupted` and `Registered` clear it; `CompactionEnded` does not, even at rest. Sparse observations and rotation carry it. A new compaction-continuation row inherits the mark from `compacted_from`, including an already queued continue, with `compactions: None` (JSON `null`): the compaction that created the row spent the predecessor's epoch, so this mark cannot block the new row's next wrap-up. The persisted snapshot and rollup cache versions are 64 and 49.
 
