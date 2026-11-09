@@ -77,14 +77,21 @@ pub fn read(
     at_ms: i64,
 ) -> atomic::Result<()> {
     super::read_marks::write_read_marks(runtime, rows.iter().map(|row| row.id.clone()), at_ms)?;
-    let cleared = super::unread::update_episodes(runtime, |episodes| {
-        let cleared = rows
-            .iter()
-            .filter(|row| episodes.remove_reached_for_row(row, at_ms))
-            .collect::<Vec<_>>();
+    let removed = super::unread::update_episodes(runtime, |episodes| {
+        let cleared = reached(episodes, rows, at_ms);
         let write = !cleared.is_empty();
         (cleared, write)
-    })?;
+    });
+    // The receipt is written either way, and reconcile prunes the episodes it
+    // reaches without a trace, so a timed-out transaction still traces and
+    // wakes before it fails the mark.
+    let (cleared, out) = match removed {
+        Ok(cleared) => (cleared, Ok(())),
+        Err(err) => {
+            let mut episodes = super::unread::UnreadEpisodes::load(runtime);
+            (reached(&mut episodes, rows, at_ms), Err(err))
+        }
+    };
     for row in cleared {
         diag.trace_notify(crate::diag::notify::NotifyTraceEvent::UnreadCleared {
             row_id: row.id.clone(),
@@ -103,7 +110,17 @@ pub fn read(
         });
     }
     wake(runtime);
-    Ok(())
+    out
+}
+
+fn reached<'a>(
+    episodes: &mut super::unread::UnreadEpisodes,
+    rows: &'a [SidebarRow],
+    at_ms: i64,
+) -> Vec<&'a SidebarRow> {
+    rows.iter()
+        .filter(|row| episodes.remove_reached_for_row(row, at_ms))
+        .collect()
 }
 
 pub fn unread(
@@ -144,7 +161,7 @@ mod tests {
     fn mark_read_waits_for_the_episode_transaction() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).expect("runtime");
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime");
         runtime.ensure_dirs().expect("runtime dirs");
         let row = SidebarRow {
             checkout: None,
@@ -173,12 +190,9 @@ mod tests {
         )
         .expect("unread lock");
 
-        let out = read(
-            &runtime,
-            std::slice::from_ref(&row),
-            &DiagSink::disabled(),
-            2_000,
-        );
+        let state_root = dir.path().join("state");
+        let diag = DiagSink::under(state_root.clone(), workspace, "s", None);
+        let out = read(&runtime, std::slice::from_ref(&row), &diag, 2_000);
 
         drop(lock);
         assert!(
@@ -189,6 +203,17 @@ mod tests {
             std::fs::read_to_string(runtime.unread_path())
                 .expect("episodes")
                 .contains("\"a\"")
+        );
+        let trace = crate::StatePaths::class_path(
+            &state_root,
+            crate::disk::paths::Class::Audit,
+            "notify.log.jsonl",
+        );
+        let trace = std::fs::read_to_string(trace).expect("notify trace");
+        assert!(
+            trace.contains(r#""kind":"unread_cleared""#)
+                && trace.contains(r#""cause":"mark_read""#),
+            "the written receipt still owns the clear trace: {trace}"
         );
     }
 }
