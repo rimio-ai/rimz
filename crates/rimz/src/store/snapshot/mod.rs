@@ -61,6 +61,7 @@ pub use view::{
     AgentWorktreeGroup, HookDrainerOutage, HookDrainerOutageAgent, NeedsYou, agent_idle_since,
     card_status, find_agent, group_live_agents_by_worktree, needs_you,
 };
+pub(crate) use view::{CreditDisplay, ProviderBar, ProviderBudget, WindowReading};
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, ProviderPlan, RedeemForecast,
     RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarInactive,

@@ -35,6 +35,7 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> Vec<&str> {
 
 // ── Provider dashboard aggregation ──────────────────────────────────────────
 
+mod budget;
 mod panels;
 mod pi;
 mod windows;

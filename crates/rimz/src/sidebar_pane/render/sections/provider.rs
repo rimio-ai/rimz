@@ -1,11 +1,14 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet store rows.
 
-use crate::agents::{BudgetWindow, Entitlement, ExtraCredits, RateLimitWindow};
+use crate::agents::{BudgetWindow, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
-use crate::store::snapshot::{RedeemForecast, RemoteControlBadge, SidebarProviderPanel};
+use crate::store::snapshot::{
+    CreditDisplay, ProviderBar, ProviderBudget, RedeemForecast, RemoteControlBadge,
+    SidebarProviderPanel, WindowReading,
+};
 use crate::theme::fmt::dollars_left;
 use crate::{SpendTally, SpendWindow};
 use jiff::Timestamp;
@@ -1194,19 +1197,12 @@ fn provider_token_detail(
     }
 }
 
-/// The provider's budget bars within `region`: a metered account drains "mana"
-/// bars for the two shortest windows, or every named quota. A spent longer cap
-/// replaces the second row, or leads usable extra credit;
-/// a metered account whose windows have not arrived yet shows one unknown-track
-/// row per definition-declared placeholder, or one anonymous fallback row when
-/// the shape is unknown; an unmetered account shows one `api` budget row, full
-/// with `∞` when uncapped. An undecided account has no budget row.
-/// Reported extra usage follows the longest spent window; unknown or disabled
-/// extra usage keeps the included-window pair instead.
-/// Model-scoped sub-caps partition their parent window's bar without another row.
-/// Lifted windows are omitted when an enforced bar candidate remains.
-/// Each reset reads a two-unit countdown scaled to its magnitude. Each row
-/// aligns front and back within `region`, so they line up across providers too.
+/// The provider's budget rows within `region`, drawn from the panel's
+/// [`SidebarProviderPanel::budget`] reading: the lapsed line, one `api` row,
+/// placeholder unknown tracks (one anonymous row when the shape is unknown),
+/// or the metered bars in the reading's order. Each reset reads a two-unit
+/// countdown scaled to its magnitude. Each row aligns front and back within
+/// `region`, so they line up across providers too.
 fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -1214,293 +1210,97 @@ fn provider_bar_rows(
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
-    if panel.undecided {
-        return Vec::new();
-    }
-    if let Entitlement::Lapsed { since_ms } = panel.entitlement {
-        let time = i64::try_from(since_ms)
-            .ok()
-            .and_then(|millis| Timestamp::from_millisecond(millis).ok())
-            .map(crate::utils::time::format_local_timestamp)
-            .unwrap_or_else(|| "unknown".to_owned());
-        let seam = value_seam(theme);
-        return vec![trim_spans_to_width(
-            vec![Span::styled(
-                format!(
-                    "plan lapsed{seam}no {} access{seam}since {time}",
-                    theme.provider_product_name(&panel.kind)
-                ),
-                theme.alarm(Modifier::BOLD),
-            )],
-            region,
-        )];
-    }
-    let credits = CreditDisplay::classify(panel.extra_credits.as_ref());
-    if !panel.metered {
-        return vec![extra_credits_bar_row(theme, "api", credits, region, zones)];
-    }
-    if panel.windows.is_empty() {
-        if panel.window_placeholders.is_empty() {
-            return vec![unknown_bar_row(theme, "", region)];
+    match panel.budget(now) {
+        ProviderBudget::Undecided => Vec::new(),
+        ProviderBudget::Lapsed { since } => {
+            let time = since
+                .map(crate::utils::time::format_local_timestamp)
+                .unwrap_or_else(|| "unknown".to_owned());
+            let seam = value_seam(theme);
+            vec![trim_spans_to_width(
+                vec![Span::styled(
+                    format!(
+                        "plan lapsed{seam}no {} access{seam}since {time}",
+                        theme.provider_product_name(&panel.kind)
+                    ),
+                    theme.alarm(Modifier::BOLD),
+                )],
+                region,
+            )]
         }
-        return panel
-            .window_placeholders
+        ProviderBudget::Api(credits) => {
+            vec![extra_credits_bar_row(theme, "api", credits, region, zones)]
+        }
+        ProviderBudget::Pending([]) => vec![unknown_bar_row(theme, "", region)],
+        ProviderBudget::Pending(labels) => labels
             .iter()
             .map(|label| unknown_bar_row(theme, label, region))
-            .collect();
-    }
-    let (sub_caps, mut windows): (Vec<_>, Vec<_>) = panel
-        .windows
-        .iter()
-        .partition(|window| window.scope.is_some() && window.duration_mins.is_some());
-    if windows.iter().any(|window| !window.lifted) {
-        windows.retain(|window| !window.lifted);
-    }
-    select_provider_bars(credits, &windows)
-        .into_iter()
-        .map(|bar| match bar {
-            ProviderBar::Window(window) => metered_bar_row(
-                theme,
-                window,
-                &sub_caps,
-                region,
-                longer_window_limit(panel, window, now),
-                zones,
-                now,
-            ),
-            ProviderBar::Extra => extra_credits_bar_row(theme, "ex", credits, region, zones),
-        })
-        .collect()
-}
-
-#[derive(Clone, Copy)]
-enum ProviderBar<'a> {
-    Window(&'a RateLimitWindow),
-    Extra,
-}
-
-#[derive(Clone, Copy)]
-enum CreditDisplay {
-    Off,
-    Missing,
-    Unknown,
-    Unlimited,
-    Balance(f64),
-    Drain { left: f64, percentage: u8 },
-}
-
-impl CreditDisplay {
-    fn classify(credits: Option<&ExtraCredits>) -> Self {
-        let credits = match credits {
-            Some(ExtraCredits::Unlimited) => return Self::Unlimited,
-            Some(credits) => credits,
-            None => return Self::Missing,
-        };
-        if credits.is_disabled() {
-            return Self::Off;
-        }
-        if let Some(left) = credits.remaining_usd_left() {
-            return match credits.remaining_percentage() {
-                Some(percentage) => Self::Drain {
-                    left,
-                    percentage: percentage.max(u8::from(left > 0.0)),
-                },
-                None => Self::Balance(left),
-            };
-        }
-        if credits.limit_usd().is_some() {
-            Self::Unknown
-        } else {
-            // Preserve the legacy uncapped reading, including Claude/Kimi's "figures unreported" Known values.
-            Self::Unlimited
-        }
-    }
-
-    /// Whether paid extra usage can still be spent: unlimited, or dollars left
-    /// above zero. Only available credit takes a metered row from a window.
-    fn is_available(self) -> bool {
-        match self {
-            Self::Unlimited => true,
-            Self::Balance(left) | Self::Drain { left, .. } => left > 0.0,
-            Self::Off | Self::Missing | Self::Unknown => false,
-        }
-    }
-}
-
-fn select_provider_bars<'a>(
-    credits: CreditDisplay,
-    windows: &[&'a RateLimitWindow],
-) -> Vec<ProviderBar<'a>> {
-    if windows.iter().any(|window| window.scope.is_some()) {
-        return windows.iter().copied().map(ProviderBar::Window).collect();
-    }
-    let Some(&first) = windows.first() else {
-        return Vec::new();
-    };
-    let second = windows.get(1).copied().unwrap_or(first);
-
-    if let Some(longest_spent) = windows
-        .iter()
-        .copied()
-        .filter(|window| window.is_spent())
-        .max_by_key(|window| window.duration_mins.unwrap_or(0))
-    {
-        if credits.is_available() {
-            return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
-        }
-        if !std::ptr::eq(first, longest_spent) {
-            return provider_window_pair(first, longest_spent);
-        }
-    }
-    provider_window_pair(first, second)
-}
-
-fn provider_window_pair<'a>(
-    left: &'a RateLimitWindow,
-    right: &'a RateLimitWindow,
-) -> Vec<ProviderBar<'a>> {
-    if std::ptr::eq(left, right) {
-        vec![ProviderBar::Window(left)]
-    } else {
-        vec![ProviderBar::Window(left), ProviderBar::Window(right)]
-    }
-}
-
-#[derive(Clone, Copy)]
-enum LongerWindowLimit {
-    None,
-    Spent,
-    Ceiling(u8),
-}
-
-fn longer_window_limit(
-    panel: &SidebarProviderPanel,
-    window: &RateLimitWindow,
-    now: Timestamp,
-) -> LongerWindowLimit {
-    if window.scope.is_some() {
-        return LongerWindowLimit::None;
-    }
-    let Some(mins) = window.duration_mins.filter(|mins| *mins > 0) else {
-        return LongerWindowLimit::None;
-    };
-    let ceiling_axis = window
-        .amount
-        .zip(window.remaining_percentage(now))
-        .filter(|_| !window.lifted);
-    let mut ceiling_remaining: Option<u64> = None;
-    for other in panel.windows.iter().filter(|other| {
-        other.scope.is_none()
-            && other
-                .duration_mins
-                .is_some_and(|other_mins| other_mins > mins)
-    }) {
-        if other.is_spent() {
-            return LongerWindowLimit::Spent;
-        }
-        let Some((short, shown_remaining)) = ceiling_axis else {
-            continue;
-        };
-        let Some(long) = other
-            .amount
-            .filter(|_| !other.lifted && other.used_percentage.is_some())
-        else {
-            continue;
-        };
-        let remaining = long.limit.saturating_sub(long.used);
-        if u128::from(remaining) * 100 < u128::from(shown_remaining) * u128::from(short.limit) {
-            ceiling_remaining =
-                Some(ceiling_remaining.map_or(remaining, |prior| prior.min(remaining)));
-        }
-    }
-    match (ceiling_remaining, ceiling_axis) {
-        (Some(remaining), Some((short, _))) => LongerWindowLimit::Ceiling(
-            (u128::from(remaining) * 100 / u128::from(short.limit)).max(1) as u8,
-        ),
-        _ => LongerWindowLimit::None,
+            .collect(),
+        ProviderBudget::Bars(bars) => bars
+            .into_iter()
+            .map(|bar| match bar {
+                ProviderBar::Window { window, reading } => {
+                    metered_bar_row(theme, window, reading, region, zones, now)
+                }
+                ProviderBar::Extra(credits) => {
+                    extra_credits_bar_row(theme, "ex", credits, region, zones)
+                }
+            })
+            .collect(),
     }
 }
 
 /// One metered budget bar row: the window's label (`5h`/`7d`/`mo`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
-/// the value column. The reset marker is toned by burn pace when the window
-/// carries enough timing data, cooling toward green only once the early-window
-/// gate has elapsed; the countdown text stays in the neutral soft tier. The
-/// label mirrors its bar's remaining-budget tone. A longer spent window paints
-/// an enforced row as fully spent — red, no countdown — regardless of its own
-/// reading. A window with no usage percentage paints as an unknown dim track,
-/// preserving the label but claiming no remaining budget. When no enforced
-/// bar candidate remains, a lifted window paints as an unlimited full bar with
-/// `∞` in the reset-marker cell.
-///
-/// A window that has **not started** drops its countdown — a full bar with no
-/// `↻` reads "send a message to start it" rather than a misleading ticking reset.
-/// These are sliding windows that begin counting only on the first token, so until
-/// then the provider keeps `resets_at` slid a full window-length ahead. Detect that
-/// by the reset distance ([`RateLimitWindow::not_started`]), not a 0% reading — a fresh 5h
-/// window still reports ~1% used, never 0. Codex reports a placeholder usedPercent
-/// (~99) with no `resets_at` before the first token; that variant reads full
-/// through [`RateLimitWindow::remaining_percentage`].
+/// the value column. The reset marker is toned by burn pace when the reading
+/// carries one; the countdown text stays in the neutral soft tier. The label
+/// mirrors its bar's remaining-budget tone. A lifted reading paints an
+/// unlimited full bar with `∞` in the reset-marker cell, and an unknown one a
+/// dim track that keeps the label but claims no remaining budget. Sub-cap
+/// ticks draw before the ceiling tick.
 fn metered_bar_row(
     theme: &Theme,
     window: &RateLimitWindow,
-    sub_caps: &[&RateLimitWindow],
+    reading: WindowReading,
     region: usize,
-    longer: LongerWindowLimit,
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Span<'static>> {
-    let force_exhausted = matches!(longer, LongerWindowLimit::Spent);
     let label = window_label(window);
-    if window.lifted {
-        let bar_width = provider_bar_width(region);
+    let bar_width = provider_bar_width(region);
+    let WindowReading::Draining {
+        remaining,
+        resets_at,
+        pace,
+        sub_caps,
+        ceiling,
+    } = reading
+    else {
+        if reading == WindowReading::Unknown {
+            return unknown_bar_row(theme, &label, region);
+        }
         return bar_row(
             &label,
             mana_style(theme, 100, zones),
             mana_bar_spans(theme, 100, bar_width, zones, &[]),
             unlimited_value_spans(theme),
         );
-    }
-    if !force_exhausted && window.used_percentage.is_none() {
-        return unknown_bar_row(theme, &label, region);
-    }
-
-    let not_started = !force_exhausted && window.not_started(now);
-    let remaining = if force_exhausted {
-        0
-    } else {
-        window.remaining_percentage(now).unwrap_or(0)
     };
-    let reset = if force_exhausted || not_started {
-        None
-    } else {
-        window.resets_at.map(|at| reset_countdown(at, now))
-    };
-    let mut ticks: Vec<_> = sub_caps
-        .iter()
-        .filter(|sub| sub.sub_cap_of(window))
-        .filter_map(|sub| {
-            Some(ManaTick {
-                remaining_pct: 100u8.saturating_sub(sub.used_percentage?),
-                role: GlyphRole::MeterManaTick,
-            })
+    let reset = resets_at.map(|at| reset_countdown(at, now));
+    let ticks: Vec<_> = sub_caps
+        .into_iter()
+        .map(|remaining_pct| ManaTick {
+            remaining_pct,
+            role: GlyphRole::MeterManaTick,
         })
-        .collect();
-    if let LongerWindowLimit::Ceiling(remaining_pct) = longer {
-        ticks.push(ManaTick {
+        .chain(ceiling.map(|remaining_pct| ManaTick {
             remaining_pct,
             role: GlyphRole::MeterManaCeiling,
-        });
-    }
-    let bar_width = provider_bar_width(region);
-    let reset_marker_style = if reset.is_none() {
-        theme.body()
-    } else {
-        window
-            .pace(now)
-            .map(|reading| pace_style(theme, reading, &zones.burn_rate))
-            .unwrap_or_else(|| theme.body())
-    };
+        }))
+        .collect();
+    let reset_marker_style = pace
+        .map(|reading| pace_style(theme, reading, &zones.burn_rate))
+        .unwrap_or_else(|| theme.body());
     bar_row(
         &label,
         mana_style(theme, remaining, zones),
