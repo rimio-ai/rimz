@@ -1525,6 +1525,57 @@ fn a_ping_only_turn_is_audited_as_a_no_op_and_moves_only_the_cache_clock() {
 }
 
 #[test]
+fn a_state_snapshot_folds_as_a_snapshot_before_its_keepalive_prompt() {
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    for (state_snapshot, ping_edge, kind) in [
+        (Some(true), None, TransitionKind::Normal),
+        (
+            Some(false),
+            Some(PingEdge::Open),
+            TransitionKind::Ignored {
+                reason: "cache keepalive turn",
+            },
+        ),
+        (
+            None,
+            Some(PingEdge::Open),
+            TransitionKind::Ignored {
+                reason: "cache keepalive turn",
+            },
+        ),
+    ] {
+        let (_dir, store) = test_store();
+        let append = |signal: LifecycleSignal, prompt: Option<&str>, state_snapshot| {
+            let mut observed = observation(signal);
+            observed.prompt = crate::agents::SanitizedPrompt::new(prompt);
+            observed.state_snapshot = state_snapshot;
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "test",
+                    observation: &observed,
+                    spawned_subagents: &[],
+                })
+                .expect("append lifecycle event")
+        };
+        append(LifecycleSignal::Registered, None, None);
+        let transition = append(
+            LifecycleSignal::TurnStarted { turn_id: None },
+            Some(ping),
+            state_snapshot,
+        )
+        .transition
+        .unwrap();
+        assert_eq!(
+            (transition.ping, transition.kind),
+            (ping_edge, kind),
+            "{state_snapshot:?}"
+        );
+    }
+}
+
+#[test]
 fn a_ping_to_a_row_parked_on_background_work_is_audited_as_a_no_op() {
     let (_dir, store) = test_store();
     let append = |signal: LifecycleSignal, prompt: Option<&str>| {
