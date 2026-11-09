@@ -3,4 +3,5 @@
 set -eu
 
 cargo install --locked \
-    cargo-insta
+    cargo-insta \
+    rust-code-analysis-cli
