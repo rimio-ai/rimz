@@ -1059,7 +1059,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `J` / `K` | select the first row of the next or previous worktree |
 | `g` / `G` | select the first or last row |
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
-| `H` / `L` | select the first or last row on screen |
+| `H` / `L` | select the first or last row on screen; when that row has left the room since the last paint, the nearest row on screen inward that is still listed, and nothing when none is |
 | `Enter`, `l` | focus the selected card or child; on `+K older`, open history and focus the parent, returning the cursor to the card |
 | `1` to `9` | focus that room-wide card slot, even if a filter or fold hides it |
 | `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
