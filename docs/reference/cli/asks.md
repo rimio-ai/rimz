@@ -13,11 +13,11 @@ rimz asks withdraw @coder
 
 A self raise (bare, `@me`, or your own address) arms for the current turn. It appears only after a clean end, with the explicit text or that turn's final reply. An errored or interrupted end, or a later turn without a clean end, drops the armed ask; a turn parked on background work leaves it armed. Providers with no captured final reply, including Hermes, may open an ask without text: inspect the pane. Kimi and Hermes report interrupts as clean ends, so those can open an ask too.
 
-An outside raise opens immediately. Without TEXT it uses the last reply recorded after the latest submitted prompt, and only on a cleanly resting agent, not one sleeping on a wait. It refuses when that reply was not captured. With TEXT it can target an agent that is still working; the ask stays listed while the card keeps its real status. Closed agents refuse raises. A later human prompt closes the ask, including a prompt that was already submitted but not yet observed when the raiser read the agent. Compaction (the provider's command as the first trimmed word: `/compact`, or `/compress` for Qwen and Droid, including `agents compact`) never closes it. Agent messages, harness notices, subagent reports and reading the card leave it open. Typing into a supervised child's pane does not close it; `answer`, `withdraw` or stopping it does.
+An outside raise opens immediately. Without TEXT it uses the last reply recorded after the latest submitted prompt, and only on a cleanly resting agent: status `idle` or `success`, with no in-flight wait and not parked on background work. It refuses when that reply was not captured. With TEXT it can target an agent that is still working; the ask stays listed while the card keeps its real status. A raise refuses when the user already replied to the turn it would ask about. Closed agents, provider subagents, and agents without a registered session of their own refuse both raise and withdraw. A later human prompt closes the ask, including a prompt that was already submitted but not yet observed when the raiser read the agent. Compaction (the provider's compaction command as the first word of the prompt: `/compact`, `/compress` for Qwen, Droid, and Hermes, or `/summarize` for Cursor, including `agents compact`) never closes it. Agent messages, harness notices, subagent reports and reading the card leave it open. Typing into a supervised child's pane does not close it; `answer`, `withdraw` or stopping it does.
 
 The answer commands printed for raised asks name the ask id, so they still answer that question when the agent also has a native prompt open.
 
-A sole positional starting with `@` is a target; other sole positionals are text for yourself. To raise text starting with `@`, put it after `@me`. Use `--` before text that looks like a flag. A plain user shell must name a target; omitting it exits `2` with the explicit command to use. `withdraw` is open to anyone, removes only a raised ask, and exits `1` when none exists. A new raise replaces the previous one. Receipts name the agent and ask id; a self raise also explains that the final reply becomes the ask.
+A sole positional starting with `@` is a target; other sole positionals are text for yourself. To raise text starting with `@`, put it after `@me`. Two positionals whose first does not start with `@` exit `2`, as do empty text and an empty `--option` label. Use `--` before text that looks like a flag. A plain user shell must name a target; omitting it exits `2` with the explicit command to use. `withdraw` is open to anyone, removes only a raised ask, and exits `1` when none exists. A new raise replaces the previous one. The receipts are `raised <ask_id> on <handle>`, with `; the turn's final reply becomes the ask` added for a self raise, and `withdrew <ask_id> from <handle>`. `raise` and `withdraw` ignore `--all` and `--json`.
 
 Raised asks show KIND `raised`. Their card line is the first question sentence, otherwise the first non-blank line, collapsed and capped at 160 characters; `show` keeps the full text, numbered options and answer footer. An agent raiser's handle appears as `raised by @handle`; user shells and scripts have no agent attribution. Raise, withdraw, answer closes, lifecycle closes and card marks leave audit events, not conversation entries.
 
@@ -40,7 +40,7 @@ A turn-ending error removes an older ask from the list in any mode, but only a r
 | `--all` | Include asks from every channel. Outside a channel the list already covers every channel. |
 | `--json` | Print a JSON array of [ask rows](#ask-json), `[]` when nothing is open. |
 
-The table has the columns `AGENT`, `KIND`, `AGE`, and `ASK`, oldest ask first. Each row has a second line with the next command to run. Permissions point to `rimz agents focus` first, so you can inspect the full tool call before deciding. Supported questions offer an `answer` command; unsupported prompts point to the pane. `ASK` previews the first question, with its numbered options for a question, or names how many additional questions follow. A plan previews the plan's first line rather than its approval header. With no open asks the command prints `no agent in #<channel> is asking anything — rimz asks --all shows every channel` and exits `0`; where the list already covers every channel (with `--all`, or outside a channel) the line is `no agent is asking anything`.
+The table has the columns `AGENT`, `KIND`, `AGE`, and `ASK`, oldest ask first, and ends with the line `rimz asks show <agent> prints the full prompt`. `KIND` is `permission`, `plan approval`, `question`, `question (async)`, or `raised`. Each row has a second line with the next command to run. Permissions point to `rimz agents focus` first, so you can inspect the full tool call before deciding. Supported questions offer an `answer` command; unsupported prompts point to the pane. `ASK` previews the first question, with its numbered options for a question, or names how many additional questions follow. A plan previews the plan's first line rather than its approval header. With no open asks the command prints `no agent in #<channel> is asking anything — rimz asks --all shows every channel` and exits `0`; where the list already covers every channel (with `--all`, or outside a channel) the line is `no agent is asking anything`.
 
 A provider subagent (a child the agent spawned inside its own session) that raises a prompt appears as `child-name (via @root)`, because the prompt is drawn in the root agent's pane. In JSON, `agent.handle` is the root's address and `agent.name` is the child. A child whose root agent is no longer live is left out of the list. Target a child's ask by its `ask_id`.
 
@@ -85,6 +85,7 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
   "delivery": "blocking",
   "since": "2026-07-09T12:00:00Z",
   "detail": "Choose a rollout",
+  "raised_by": null,
   "context": "A staged rollout limits the blast radius.",
   "questions": [
     {
@@ -108,10 +109,10 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
 | `agent.channel` | The agent's channel. Absent when it has none. |
 | `kind` | `permission`, `plan_approval`, or `question`. |
 | `delivery` | `blocking` owns the agent's input; `async` is a native question asked while continuing; `raised` is an explicitly raised question, independent of native input ownership. |
-| `raised_by` | The raising agent's handle, or `null` for a user shell or a native ask. |
 | `since` | When the prompt opened. |
-| `detail` | The shared prompt summary: the first line of the first structured question, otherwise the recorded summary, such as a permission ask's tool call. `null` when the agent recorded none. |
-| `context` | The message the agent wrote just before raising the prompt. Absent when it wrote none, and always absent on permission asks. |
+| `detail` | The shared prompt summary: the first line of the first structured question, otherwise the recorded summary, such as a permission ask's tool call. On a raised ask, the card line described in [Raise or withdraw an ask](#raise-or-withdraw-an-ask). `null` when there is none. |
+| `raised_by` | The raising agent's handle, or `null` for a user shell or a native ask. |
+| `context` | The message the agent wrote just before raising the prompt; on a raised ask, the ask's full text. Absent when there is none, and always absent on permission asks. |
 | `questions[].question` | The question text. |
 | `questions[].options[].label` | The option label, which `answer` accepts as a selector. |
 | `questions[].options[].description` | The option's description, or `null`. |
@@ -142,14 +143,14 @@ rimz answer ask_0123456789abcdef --json < answers.json
 
 The target is an agent address or an ask id, resolved as for [`show`](#show-one-ask). One command answers the whole ask, every question at once.
 
-For a raised ask, `answer` sends the selected option label or free text as a normal message at the next completed-turn boundary, attributed to the caller. A successful dispatch closes that ask and prints the message id; a failed dispatch leaves it open. A selector without options or an out-of-range choice exits `3`. With no options, use `--text` or reply in the pane. This path does not type native answer keys or wait for native confirmation.
+For a raised ask, `answer` sends the selected option label or free text as a normal message at the next completed-turn boundary, attributed to the caller. Several picks and text, given through `--json`, are joined one per line. A successful dispatch closes that ask and prints `answered <handle>: <choice>  <ask_id>  message <message_id>`. A failed dispatch leaves the ask open and exits `1`, and an ask answered or replaced before dispatch exits `2`. A selector without options or an out-of-range choice exits `3`. With no options, use `--text` or reply in the pane. This path does not type native answer keys or wait for native confirmation, so `--wait` and `--no-wait` have no effect.
 
 | Flag | Effect |
 | --- | --- |
 | `SELECTORS...` | One selector per question, in order. |
 | `--text <TEXT>` | A free-text answer. Only for an ask with exactly one question, and not together with selectors. |
 | `--json [FILE]` | Read [structured answers](#structured-answers) from `FILE`, or from stdin when `FILE` is omitted. Not together with selectors or `--text`. |
-| `--wait <DURATION>` | How long to wait for the agent to confirm. Default `30s`; takes `s`, `m`, or `h`. |
+| `--wait <DURATION>` | How long to wait for the agent to confirm. Default `30s`; takes `s`, `m`, or `h`. Not together with `--no-wait`. |
 | `--no-wait` | Return once the keys are sent, without waiting for confirmation. |
 
 A selector is a one-based option number or an option label. Labels match case-insensitively (ASCII only), and a selector made only of digits is always read as a number. Separate several options with commas (`1,3`) on a multi-select question. The number of selectors must equal the number of questions, and an option may be chosen only once.
@@ -173,12 +174,13 @@ Structured input is a JSON array with one object per question, in order. Use it 
 `answer` checks everything it can before it touches the pane, then sends the whole answer as one uninterrupted write:
 
 1. Validate every answer against the ask's questions and the agent's supported actions. A failure exits `3` and sends nothing.
-2. Wait up to 30 seconds for any other RimZ write to the same pane (a message, another answer) to finish, then hold the pane until the answer is sent. `--no-wait` does not skip this wait.
-3. Check that the ask read in step 1 is still the agent's open ask. A prompt answered or replaced in the meantime gets no keys, and the command exits `2`. This check runs for an address target too.
-4. Send the keys. A provider subagent's answer goes to its root agent's pane.
-5. Wait for confirmation: the blocking ask closes or the agent records an answer for it. `--no-wait` stops before this step.
+2. Find the agent's live pane, and wake it when the agent is hibernated.
+3. Wait up to 30 seconds for any other RimZ write to the same pane (a message, another answer) to finish, then hold the pane until the answer is sent. `--no-wait` does not skip this wait.
+4. Check that the ask read in step 1 is still the agent's open ask. A prompt answered or replaced in the meantime gets no keys, and the command exits `2`. This check runs for an address target too.
+5. Send the keys. A provider subagent's answer goes to its root agent's pane.
+6. Wait for confirmation: the blocking ask closes or the agent records an answer for it. When the agent recorded none, RimZ records the answer in the agent's transcript itself. `--no-wait` stops before this step.
 
-On success `answer` prints `answered <handle>: <choice>  <ask_id>`, or `sent answer to <handle>: <choice>  <ask_id>` with `--no-wait`. The choice includes selected labels, quoted free text, and any selected option's caution. A child appears as `child (via <root handle>)`. Errors print `error: <message>` on stderr. With no answer supplied, a supported ask lists its choices and the answer command. A blocking ask that closes during step 5 for any reason, including being dismissed in the pane, counts as confirmed.
+On success `answer` prints `answered <handle>: <choice>  <ask_id>`, or `sent answer to <handle>: <choice>  <ask_id>` with `--no-wait`. The choice includes selected labels, quoted free text, and any selected option's caution. A child appears as `child (via <root handle>)`. Errors print `error: <message>` on stderr. With no answer supplied, the error lists the ask's choices and the next command, and the command exits `3`. A blocking ask that closes during step 6 for any reason, including being dismissed in the pane, counts as confirmed.
 
 ### Exit codes
 
@@ -187,22 +189,22 @@ On success `answer` prints `answered <handle>: <choice>  <ask_id>`, or `sent ans
 | Code | Meaning |
 | --- | --- |
 | `0` | The agent confirmed the answer, or `--no-wait` sent it. |
-| `1` | No room, or the store could not be read or written. |
-| `2` | The target is not an agent or not asking, the ask id is malformed or matches no open ask, the ask was answered or replaced before sending, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`) also exits `2`. |
-| `3` | The answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer (including Codex async questions). |
+| `1` | No room, the store could not be read or written, a hibernated pane could not be woken, or a raised ask's message could not be dispatched. |
+| `2` | The target is not an agent or not asking, the ask id is malformed or matches no open ask, the ask was answered or replaced before sending, the agent's kind has no adapter, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`, or `--wait` with `--no-wait`) also exits `2`. |
+| `3` | No answer was given, the answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer, including an ask answered only in the pane and Codex async questions. |
 | `4` | A blocking ask's keys were sent, but the agent did not confirm before the `--wait` deadline. Do not resend. The error gives `rimz asks show` and `rimz pane capture` commands to check. |
 
 `rimz asks` follows the [CLI-wide exit codes](../cli.md#exit-codes).
 
 ## What each agent accepts
 
-`rimz answer` answers only what an agent's prompt UI lets it drive and confirm. Other supported agent kinds route you to their pane with `rimz agents focus` and exit `3`. Codex permissions do the same, with or without a selector. Unknown agent kinds retain their adapter lookup error.
+`rimz answer` answers only what an agent's prompt UI lets it drive and confirm. Other supported agent kinds route you to their pane with `rimz agents focus` and exit `3`. Codex permissions do the same, with or without a selector. An agent whose kind has no adapter fails with the adapter lookup error and exits `2`.
 
 | Agent | Question | Permission | Plan approval |
 | --- | --- | --- | --- |
 | Claude | Single picks, multi-select picks, and free text. Picks and text together only on a multi-select question, through `--json`. | `allow`, which approves the current tool call once. | `approve`, which approves the plan and turns on auto-accept edits. |
 | Codex | Blocking questions: one pick per question; free text and custom options are refused. Async questions: refused; focus the pane and press Shift+Left. No multi-select. | Refused. | `implement`, which picks "Yes, implement this plan" and switches Codex from Plan mode to Default mode. |
-| Pi | Single picks, multi-select picks, and free text, on every question shape. Picks and text together are refused. | Not raised. | Not raised. |
+| Pi | Single picks, multi-select picks, and free text, on every questionnaire question. Picks and text together are refused, and an extension dialog with no structured questions is answered in the pane. | Not raised. | Not raised. |
 
 Pi asks come from the [`@juicesharp/rpiv-ask-user-question`](https://github.com/juicesharp/rpiv-mono/tree/v2.7.1/packages/rpiv-ask-user-question) extension's questionnaire; Pi raises no permission or plan prompts of its own. Cancel and "Chat about this" stay in the Pi pane.
 
