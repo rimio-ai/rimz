@@ -1,6 +1,6 @@
 //! Process-local, frontier-bounded discovery of historical spend stores.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -388,7 +388,7 @@ impl SpendingDiscoveryIndex {
         now_secs: u64,
     ) -> Vec<SpendingFile> {
         self.stats = DiscoveryStats::default();
-        let force_complete = self.complete_due();
+        let force_complete = complete_due(self.force_complete, self.last_complete);
         let mut authoritative = true;
         let mut discovered = Vec::new();
         let mut seen_paths = HashSet::new();
@@ -411,18 +411,8 @@ impl SpendingDiscoveryIndex {
                     sources: declarations.clone(),
                 });
             }
-            let key = source_set_key(&declarations);
-            let changed = self
-                .adapters
-                .get(&login_key)
-                .is_none_or(|state| state.key != key);
-            if changed {
-                self.adapters
-                    .insert(login_key.clone(), AdapterState::new(key, declarations));
-            }
-            let Some(state) = self.adapters.get_mut(&login_key) else {
-                continue;
-            };
+            let (state, changed) =
+                adapter_state(&mut self.adapters, login_key.clone(), declarations);
             let full = force_complete && !changed;
             let before = self.stats.frontier_work();
             let complete = scan_adapter(state, now_secs, full, Some(&mut self.stats));
@@ -478,14 +468,6 @@ impl SpendingDiscoveryIndex {
         self.last_authoritative = false;
     }
 
-    fn complete_due(&self) -> bool {
-        if self.force_complete {
-            return true;
-        }
-        self.last_complete
-            .is_some_and(|last| last.elapsed() >= COMPLETE_RECONCILE_INTERVAL)
-    }
-
     #[cfg(test)]
     pub(crate) fn force_complete_for_test(&mut self) {
         self.force_complete = true;
@@ -523,20 +505,8 @@ impl SpendingDiscoveryIndex {
     ) -> Vec<PathBuf> {
         let kind = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind));
         self.stats = DiscoveryStats::default();
-        let key = source_set_key(&sources);
-        let changed = self
-            .adapters
-            .get(&kind)
-            .is_none_or(|state| state.key != key);
-        if changed {
-            self.adapters
-                .insert(kind.clone(), AdapterState::new(key, sources));
-        }
-        let full = self.complete_due() && !changed;
-        let state = self
-            .adapters
-            .get_mut(&kind)
-            .expect("declared state inserted");
+        let (state, changed) = adapter_state(&mut self.adapters, kind, sources);
+        let full = complete_due(self.force_complete, self.last_complete) && !changed;
         let before = self.stats.frontier_work();
         let authoritative = scan_adapter(state, now_secs, full, Some(&mut self.stats));
         if self.stats.frontier_work() != before {
@@ -571,31 +541,55 @@ impl AdapterState {
 
     fn materialized_paths(&mut self, stats: &mut DiscoveryStats) -> &[PathBuf] {
         let current = (self.frontier_generation, self.reconcile_generation);
-        let fresh = self.materialized.as_ref().is_some_and(|materialized| {
-            (
-                materialized.frontier_generation,
-                materialized.reconcile_generation,
-            ) == current
-        });
-        if !fresh {
-            let mut paths = Vec::new();
-            for source in &self.sources {
-                source.collect_active_paths(&mut paths);
+        let materialized = match self.materialized.take() {
+            Some(materialized)
+                if (
+                    materialized.frontier_generation,
+                    materialized.reconcile_generation,
+                ) == current =>
+            {
+                materialized
             }
-            paths.sort();
-            paths.dedup();
-            self.materialized = Some(MaterializedPaths {
-                frontier_generation: current.0,
-                reconcile_generation: current.1,
-                paths,
-            });
-            stats.materializations = stats.materializations.saturating_add(1);
-        }
-        &self
-            .materialized
-            .as_ref()
-            .expect("materialized paths installed")
-            .paths
+            _ => {
+                let mut paths = Vec::new();
+                for source in &self.sources {
+                    source.collect_active_paths(&mut paths);
+                }
+                paths.sort();
+                paths.dedup();
+                stats.materializations = stats.materializations.saturating_add(1);
+                MaterializedPaths {
+                    frontier_generation: current.0,
+                    reconcile_generation: current.1,
+                    paths,
+                }
+            }
+        };
+        &self.materialized.insert(materialized).paths
+    }
+}
+
+fn complete_due(force_complete: bool, last_complete: Option<Instant>) -> bool {
+    force_complete
+        || last_complete.is_some_and(|last| last.elapsed() >= COMPLETE_RECONCILE_INTERVAL)
+}
+
+/// The login's discovery state for `sources`, and whether it was installed fresh because the
+/// login was new or its source set changed.
+fn adapter_state(
+    adapters: &mut HashMap<LoginKey, AdapterState>,
+    login: LoginKey,
+    sources: Vec<SpendingSource>,
+) -> (&mut AdapterState, bool) {
+    let key = source_set_key(&sources);
+    match adapters.entry(login) {
+        Entry::Occupied(entry) if entry.get().key == key => (entry.into_mut(), false),
+        entry => (
+            entry
+                .insert_entry(AdapterState::new(key, sources))
+                .into_mut(),
+            true,
+        ),
     }
 }
 
