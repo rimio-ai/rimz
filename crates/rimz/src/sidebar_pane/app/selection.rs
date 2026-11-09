@@ -462,8 +462,8 @@ fn key_outcome(
             Some(pane) => effect(InputEffect::Close(pane)),
             None => notice(view, "sidebar close: no highlighted card"),
         },
-        KeyAction::Palette => effect(InputEffect::Palette {
-            args: vec!["--mode".into(), "commands".into()],
+        KeyAction::Palette(args) => effect(InputEffect::Palette {
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
             from_pane: selected_row_pane(view),
         }),
         KeyAction::PaneReturn => match ui.return_pane.take() {

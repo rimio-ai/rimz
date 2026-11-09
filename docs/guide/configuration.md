@@ -483,7 +483,7 @@ No bound sequence may be a prefix of another, so `"g" = "move.top"` is refused w
 | `card.last` | `Tab` |
 | `card.close` | `d d` |
 | `read.toggle` / `read.all` | `m` / `U` |
-| `palette.commands` | `:` |
+| `palette.commands` / `palette.new_agent` / `palette.new_agent_worktree` / `palette.repeat` | `:` / `o` / `O` / `.` |
 | `pane.return` | `q` |
 | `search.start` / `search.next` / `search.prev` | `/` / `n` / `N` |
 | `filter.asks`, `filter.failures`, `filter.unread`, `filter.working`, `filter.paused`, `filter.done`, `filter.sleeping`, `filter.idle` | `f ?`, `f !`, `f u`, `f w`, `f p`, `f d`, `f z`, `f i` |

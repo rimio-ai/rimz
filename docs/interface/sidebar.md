@@ -1040,6 +1040,7 @@ An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `Esc` c
 │   zi   inactive fold  ↕ </>   width       │
 │   za   card fold        zR/zM all groups  │
 │   dd   close            :     commands    │
+│   o/O  new agent        .     repeat      │
 │ ⏎ q    return         ↕ =     reset width │
 │   ^l   redraw                             │
 │                                           │
@@ -1081,6 +1082,8 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `=` | return the sidebar to its configured width in every tab of the room, dropping a width set with `<` / `>` |
 | `d d` | close the selected card's pane, as [`rimz sidebar close`](../reference/cli/sidebar.md#close-and-reopen) does |
 | `:` | open the [command palette](../reference/cli/palette.md) in a popup, starting on the selected card |
+| `o` / `O` | open the palette's [`+` mode](../reference/cli/palette.md#launch-an-agent) in a popup to launch an agent, starting on the selected card; `O` selects `new worktree from trunk` in the where step |
+| `.` | run the room's [last palette launch](../reference/cli/palette.md#repeat-the-last-launch) again in a popup |
 | `q` | focus the first work pane in the sidebar's tab, the pane `rimz sidebar focus --toggle` returns to; a notice says when the tab has none |
 | `Ctrl+l` | clear the pane and paint it again from scratch |
 | `R` | reload this tab's sidebar |
@@ -1088,7 +1091,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `/` | start or edit a text search |
 | `Esc` | peel one layer per press: a pending key sequence, then the search draft, then the committed text search, then a pane notice, then recovered alerts or an active `Sidebar degraded` alert; while help is open, close help only |
 
-`g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. The same row carries the room's mode on its left while a client viewing this sidebar is in one: `PREFIX`, `RESIZE`, `SCROLL` or `MOVE`, each mode once, in that order. The marks follow the mode within about a second. When the row is too narrow the key hint is cut and the marks stay. With no sequence pending and every viewer in normal mode the row is absent, and nothing else in the bottom chrome moves. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, `n` / `N`, `d d` or `q` shows as a `⚠` notice above the bottom row until the next key, and so does the first error line of a `d d` or `:` command that fails.
+`g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. The same row carries the room's mode on its left while a client viewing this sidebar is in one: `PREFIX`, `RESIZE`, `SCROLL` or `MOVE`, each mode once, in that order. The marks follow the mode within about a second. When the row is too narrow the key hint is cut and the marks stay. With no sequence pending and every viewer in normal mode the row is absent, and nothing else in the bottom chrome moves. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, `n` / `N`, `d d` or `q` shows as a `⚠` notice above the bottom row until the next key, and so does the first error line of a `d d`, `:`, `o`, `O` or `.` command that fails.
 
 | filter key | cards shown |
 |------------|-------------|

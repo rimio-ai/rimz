@@ -948,20 +948,31 @@ fn close_and_palette_keys_spawn_their_rimz_commands_for_the_selected_card() {
     rig.view().ui().selected_pane = Some(card.clone());
     let room = rig.state.pane.config.room.session_name.clone();
     rig.input(KeyAction::Close);
-    rig.input(KeyAction::Palette);
-    let mode = ["--mode".to_owned(), "commands".to_owned()];
+    let modes: [&[&str]; 4] = [
+        &["--mode", "commands"],
+        &["--mode", "new"],
+        &["--mode", "new", "--new-worktree"],
+        &["--repeat"],
+    ];
+    for key in [':', 'o', 'O', '.'] {
+        let press = Wakeup::Press {
+            code: ratatui::crossterm::event::KeyCode::Char(key),
+            mods: ratatui::crossterm::event::KeyModifiers::NONE,
+        };
+        rig.state.on_wakeup(&mut rig.terminal, press).unwrap();
+    }
+    let mut expected = vec![super::super::super::key_spawn::close_argv(
+        &card,
+        &room,
+        MuxName::Tmux,
+    )];
+    expected.extend(modes.map(|mode| {
+        let mode: Vec<String> = mode.iter().map(|&arg| arg.to_owned()).collect();
+        super::super::super::key_spawn::palette_argv(&mode, &room, MuxName::Tmux, Some(&card), None)
+    }));
     assert_eq!(
         super::super::super::key_spawn::take_spawned(),
-        vec![
-            super::super::super::key_spawn::close_argv(&card, &room, MuxName::Tmux),
-            super::super::super::key_spawn::palette_argv(
-                &mode,
-                &room,
-                MuxName::Tmux,
-                Some(&card),
-                None
-            ),
-        ],
+        expected,
         "no client views the pane, so the palette names none"
     );
 

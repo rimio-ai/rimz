@@ -105,8 +105,9 @@ pub(in crate::sidebar_pane) enum KeyAction {
     TabNext,
     /// Close the selected card through `rimz sidebar close --pane`.
     Close,
-    /// Open the command palette in a popup.
-    Palette,
+    /// Open the palette in a popup, with the `rimz palette` args that pick
+    /// what it opens.
+    Palette(&'static [&'static str]),
     /// Focus the work pane the sidebar toggle returns to.
     PaneReturn,
     /// Return the room width target to the configured, unpinned width.
@@ -257,7 +258,12 @@ fn key_action(action: SidebarAction) -> KeyAction {
         SidebarAction::DashboardPrev => KeyAction::TabPrev,
         SidebarAction::DashboardNext => KeyAction::TabNext,
         SidebarAction::CardClose => KeyAction::Close,
-        SidebarAction::PaletteCommands => KeyAction::Palette,
+        SidebarAction::PaletteCommands => KeyAction::Palette(&["--mode", "commands"]),
+        SidebarAction::PaletteNewAgent => KeyAction::Palette(&["--mode", "new"]),
+        SidebarAction::PaletteNewAgentWorktree => {
+            KeyAction::Palette(&["--mode", "new", "--new-worktree"])
+        }
+        SidebarAction::PaletteRepeat => KeyAction::Palette(&["--repeat"]),
         SidebarAction::PaneReturn => KeyAction::PaneReturn,
         SidebarAction::WidthReset => KeyAction::WidthReset,
         SidebarAction::ViewRedraw => KeyAction::Redraw,

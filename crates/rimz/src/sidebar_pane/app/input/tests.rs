@@ -456,16 +456,16 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::Other),
         ),
         (
-            "o → nothing",
+            "o → new agent",
             KeyCode::Char('o'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Other),
+            Wakeup::Key(KeyAction::Palette(&["--mode", "new"])),
         ),
         (
-            "O → nothing",
+            "O → new agent in a worktree",
             KeyCode::Char('O'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Other),
+            Wakeup::Key(KeyAction::Palette(&["--mode", "new", "--new-worktree"])),
         ),
         (
             "p → nothing",
@@ -516,10 +516,10 @@ fn keys_round_trip_through_the_wire() {
             Wakeup::Key(KeyAction::Other),
         ),
         (
-            ". → nothing",
+            ". → repeat launch",
             KeyCode::Char('.'),
             KeyModifiers::NONE,
-            Wakeup::Key(KeyAction::Other),
+            Wakeup::Key(KeyAction::Palette(&["--repeat"])),
         ),
     ];
     for (label, key, mods, wakeup) in cases {
@@ -782,7 +782,13 @@ fn the_effect_defaults_reach_their_actions() {
         [KeyAction::Other, KeyAction::Close]
     );
     for (key, action) in [
-        (ch(':'), KeyAction::Palette),
+        (ch(':'), KeyAction::Palette(&["--mode", "commands"])),
+        (ch('o'), KeyAction::Palette(&["--mode", "new"])),
+        (
+            ch('O'),
+            KeyAction::Palette(&["--mode", "new", "--new-worktree"]),
+        ),
+        (ch('.'), KeyAction::Palette(&["--repeat"])),
         (ch('q'), KeyAction::PaneReturn),
         (ch('='), KeyAction::WidthReset),
         (
