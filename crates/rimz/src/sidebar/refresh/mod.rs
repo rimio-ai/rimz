@@ -96,6 +96,9 @@ pub struct RefreshedLanes {
 #[derive(Debug, Default)]
 pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
+    /// Origin URL by repository common dir, keyed to its config file's stamp.
+    /// Bounded by the repositories the last PR target assembly reached: each
+    /// `build_targets` call drops the common dirs it did not visit.
     pr_origins: BTreeMap<PathBuf, (Option<crate::disk::parse_cache::FileStamp>, Option<String>)>,
     /// This thread's audit cursor, shared by cohort spend and the orphan sweep.
     rollup: crate::store::snapshot::RollupCursor,
