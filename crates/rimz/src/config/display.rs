@@ -77,8 +77,9 @@ pub enum CardDensityMode {
     Compact,
 }
 
-/// Sidebar render preferences. A personal, machine-wide tuning of how the
-/// renderer paints; it never affects store correctness.
+/// Sidebar render preferences, plus the palette popup's size. A personal,
+/// machine-wide tuning of how the renderer paints and the popup opens; it
+/// never affects store correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -151,6 +152,11 @@ pub struct DisplayConfig {
     /// How far the selected-card band and unread-row wash step off the
     /// `selection_bg` panel, in units of 0.01 OKLab lightness. Display-only.
     pub highlight_steps: HighlightStepsConfig,
+    /// The palette popup's size. Unlike the rest of the section it sizes the
+    /// `rimz palette --popup` window, not the sidebar, and applies at the next
+    /// open. An all-default table serializes no key.
+    #[serde(skip_serializing_if = "PopupConfig::is_default")]
+    pub popup: PopupConfig,
 }
 
 impl Default for DisplayConfig {
@@ -172,6 +178,7 @@ impl Default for DisplayConfig {
             context_meter: ContextMeterConfig::default(),
             budget_bar: BudgetBarConfig::default(),
             highlight_steps: HighlightStepsConfig::default(),
+            popup: PopupConfig::default(),
         }
     }
 }
@@ -350,6 +357,39 @@ impl Default for HighlightStepsConfig {
             wash: 1,
             indexed: 4,
         }
+    }
+}
+
+/// `[theme.display.popup]`: the palette popup's size target and ceiling, as
+/// written. Values outside their range are kept and clamped where the size is
+/// resolved (`mux::popup`), beside a built-in floor of 100 by 24 cells.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PopupConfig {
+    /// Target width as a percentage of the room's pane area, clamped to 10-100.
+    pub width_percent: u16,
+    /// Target height as a percentage of the room's pane area, clamped to 10-100.
+    pub height_percent: u16,
+    /// Ceiling on the popup width in cells, border included; at least 34.
+    pub max_cols: u16,
+    /// Ceiling on the popup height in cells, border included; at least 10.
+    pub max_rows: u16,
+}
+
+impl Default for PopupConfig {
+    fn default() -> Self {
+        Self {
+            width_percent: 60,
+            height_percent: 50,
+            max_cols: 160,
+            max_rows: 40,
+        }
+    }
+}
+
+impl PopupConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 

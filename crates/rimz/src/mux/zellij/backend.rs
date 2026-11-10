@@ -24,6 +24,7 @@ use super::{
 };
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::mux::popup::{PopupArea, PopupSize};
 use crate::mux::tab_name::{TabNameIntent, TabOwnerRecord, ViewNaming};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
@@ -45,6 +46,13 @@ pub(super) struct RawTab {
     tab_id: u64,
     #[serde(default)]
     selectable_tiled_panes_count: u64,
+    /// Some client is viewing this tab.
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    viewport_columns: u16,
+    #[serde(default)]
+    viewport_rows: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -886,6 +894,26 @@ impl ZellijBackend {
             },
         )
     }
+
+    /// The viewport a CLI floating pane opens over: the one every viewed tab
+    /// shares, since the pane lands in the last-active client's tab and the
+    /// listing cannot say which that is. One bounded attempt, not the retrying
+    /// [`Self::list_tabs`]; `None` when no tab is viewed, the viewed tabs
+    /// disagree, a size is zero, or the read fails.
+    fn popup_area(&self, session: &str) -> Option<PopupArea> {
+        let output = self
+            .zellij_action(session)
+            .args(["list-tabs", "--json"])
+            .run_with_timeout(crate::mux::popup::AREA_READ_TIMEOUT)
+            .ok()?;
+        let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout).ok()?;
+        let mut viewed = tabs.iter().filter(|tab| tab.active).map(|tab| PopupArea {
+            cols: tab.viewport_columns,
+            rows: tab.viewport_rows,
+        });
+        let area = viewed.next()?;
+        (area.cols > 0 && area.rows > 0 && viewed.all(|other| other == area)).then_some(area)
+    }
 }
 
 /// Each live tab's name and its work panes: the terminal panes still running,
@@ -936,6 +964,8 @@ impl MuxBackend for ZellijBackend {
         if already_open {
             return Ok(());
         }
+        let area = self.popup_area(&request.session_name);
+        let [width, height] = PopupSize::resolve(&request.size, area).words();
         self.zellij_action(&request.session_name)
             .args([
                 "new-pane",
@@ -944,9 +974,9 @@ impl MuxBackend for ZellijBackend {
                 "--name",
                 "rimz palette",
                 "--width",
-                "80%",
+                &width,
                 "--height",
-                "80%",
+                &height,
                 "--cwd",
             ])
             .arg(request.cwd.to_string_lossy())

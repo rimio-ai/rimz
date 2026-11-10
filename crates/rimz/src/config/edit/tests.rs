@@ -52,6 +52,30 @@ fn mux_status_bar_round_trips_with_config_set_and_get() {
 }
 
 #[test]
+fn display_popup_leaf_round_trips_and_the_table_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    editor.set("theme.display.popup.max_cols", "120").unwrap();
+    assert_eq!(
+        editor
+            .get(Some("theme.display.popup.max_cols"))
+            .unwrap()
+            .as_integer(),
+        Some(120)
+    );
+    assert!(
+        matches!(
+            editor.set("theme.display.popup", "{ max_cols = 120 }"),
+            Err(ConfigEditErr::UnknownKey { .. })
+        ),
+        "the whole table is refused as its sibling sub-tables are"
+    );
+}
+
+#[test]
 fn room_style_round_trips_with_config_set_and_get() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

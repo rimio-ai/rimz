@@ -13,6 +13,7 @@ pub mod focus_anchor;
 mod keymap;
 mod mount_proof;
 mod pane_writer;
+mod popup;
 mod reconcile;
 pub mod recovery;
 pub mod room_settings;
@@ -735,7 +736,8 @@ fn confirm_resume_tab_shapes(
         .collect()
 }
 
-/// An interactive palette job addressed to one room and its opening client.
+/// An interactive palette job addressed to one room and its opening client,
+/// with the `[theme.display.popup]` settings it is sized by, as written.
 #[derive(Clone, Debug, Default)]
 pub struct PopupRequest {
     pub session_name: String,
@@ -744,6 +746,7 @@ pub struct PopupRequest {
     pub cwd: PathBuf,
     pub client: Option<String>,
     pub anchor_pane: Option<PaneId>,
+    pub size: crate::config::PopupConfig,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1078,7 +1081,9 @@ pub enum SessionLiveness {
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
-    /// Open an interactive palette, closing it when its command exits.
+    /// Open an interactive palette, closing it when its command exits. The
+    /// backend reads the room's pane area once, bounded, and sizes the popup
+    /// by `request.size`; an unknown area opens it at the percentages alone.
     fn open_popup(&self, _request: &PopupRequest) -> Result<()> {
         Err(MuxErr::Output {
             program: self.name().to_string(),

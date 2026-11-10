@@ -16,6 +16,7 @@ use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::{SplitAxis, TmuxPaneGeometry, sanitize_window_name};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::LayoutPanes;
+use crate::mux::popup::PopupSize;
 use crate::mux::tab_name::TabNameIntent;
 use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
@@ -525,8 +526,22 @@ impl MuxBackend for TmuxBackend {
             ensure_pane_backend(pane, MuxName::Tmux)?;
             spec = spec.args(["-t", pane.raw()]);
         }
+        let area = request
+            .client
+            .as_deref()
+            .and_then(|client| self.popup_area(client));
+        let [width, height] = PopupSize::resolve(&request.size, area).words();
         spec = spec
-            .args(["-E", "-w", "80%", "-h", "80%", "-T", "rimz palette", "-d"])
+            .args([
+                "-E",
+                "-w",
+                &width,
+                "-h",
+                &height,
+                "-T",
+                "rimz palette",
+                "-d",
+            ])
             .arg(request.cwd.to_string_lossy())
             .arg(&request.program)
             .args(&request.args);

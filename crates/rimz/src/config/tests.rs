@@ -2046,6 +2046,48 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
 }
 
 #[test]
+fn display_popup_settings_parse_as_written_and_defaults_serialize_no_key() {
+    let dir = tempdir().expect("tempdir");
+    assert_eq!(
+        MachineConfig::default().theme.display.popup,
+        PopupConfig {
+            width_percent: 60,
+            height_percent: 50,
+            max_cols: 160,
+            max_rows: 40,
+        }
+    );
+    let config = load_no_fragments(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display.popup]\nwidth_percent = 250\nheight_percent = 0\nmax_cols = 1\nmax_rows = 90\n",
+    ))
+    .expect("load");
+    assert_eq!(
+        config.theme.display.popup,
+        PopupConfig {
+            width_percent: 250,
+            height_percent: 0,
+            max_cols: 1,
+            max_rows: 90,
+        },
+        "out-of-range values are kept as written"
+    );
+    let set = toml::to_string(&config.theme).expect("serialize theme");
+    assert!(set.contains("[display.popup]"), "{set}");
+
+    let other = load_no_fragments(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nmax_cols = 100\n",
+    ))
+    .expect("load");
+    let encoded = toml::to_string(&other.theme).expect("serialize theme");
+    assert!(encoded.contains("max_cols = 100"), "{encoded}");
+    assert!(!encoded.contains("popup"), "{encoded}");
+}
+
+#[test]
 fn display_enums_lists_and_nested_bands_parse() {
     let dir = tempdir().expect("tempdir");
     let defaults = MachineConfig::default().theme.display;

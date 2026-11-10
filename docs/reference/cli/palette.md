@@ -10,7 +10,7 @@ rimz palette --popup --mode new --new-worktree
 rimz palette --popup --repeat
 ```
 
-The popup is centred at 80% of the client's width and height on tmux and Zellij. Exiting closes it. This command installs no keybinding.
+The popup is centred over the room's panes on tmux and Zellij and sized per axis at 60% of the width and 50% of the height, at most 160 by 40 cells and at least 100 by 24, or the whole pane area when that is smaller. The size counts the border, so the palette's content is two cells smaller each way. The four [`[theme.display.popup]`](../../guide/theme.md#popup-size) settings change the target and the ceiling at the next open; a ceiling set below the floor wins. When the pane area cannot be read, the popup opens at the two percentages alone. Exiting closes it. This command installs no keybinding.
 
 ## Search and move
 

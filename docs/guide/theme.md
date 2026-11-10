@@ -208,7 +208,7 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 
 ## Display
 
-`[theme.display]` tunes the sidebar's sizing, render cadence, dashboard layout, and card detail.
+`[theme.display]` tunes the sidebar's sizing, render cadence, dashboard layout, and card detail, and its `popup` table sizes the palette popup.
 
 | key | default | what it does |
 | --- | --- | --- |
@@ -233,7 +233,7 @@ card_density = "compact"
 provider_list = ["claude", "codex", "all"]
 ```
 
-Width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `<` and `>` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
+Sidebar width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `<` and `>` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
 
 The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. Setting `pixel = "off"` opts out of both the pixel meter and pixel pets.
 
@@ -280,6 +280,23 @@ red = 200
 band = 5
 wash = 1
 indexed = 4
+```
+
+### Popup size
+
+`[theme.display.popup]` sizes the window `rimz palette --popup` opens. Each axis takes its percentage of the room's pane area, raised to a floor of 100 by 24 cells and capped at the ceiling and at the area itself, so a small terminal gets the whole area and a large one stops at the ceiling. A ceiling below the floor wins over it. Sizes count the popup's border. Values outside a key's range are kept in the file and clamped when the popup opens, and every open reads the file again, so an edit applies at the next open with no reload.
+
+| key | default | what it does |
+| --- | --- | --- |
+| `width_percent` | `60` | target width as a share of the pane area, clamped to 10 through 100 |
+| `height_percent` | `50` | target height as a share of the pane area, clamped to 10 through 100 |
+| `max_cols` | `160` | width ceiling in cells, at least 34 |
+| `max_rows` | `40` | height ceiling in cells, at least 10 |
+
+```toml
+[theme.display.popup]
+width_percent = 70
+max_cols = 140
 ```
 
 ## Provider styling
