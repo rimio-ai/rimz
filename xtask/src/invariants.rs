@@ -1573,7 +1573,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         missing.extend(
             sections
                 .iter()
-                .filter(|section| !text.contains(**section))
+                .filter(|section| !template_has_section_header(&text, section))
                 .map(|section| format!("{}: {section}", path.display())),
         );
     }
@@ -1584,6 +1584,15 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         "config templates are missing required sections: {}",
         missing.join(", ")
     );
+}
+
+/// Whether `section` (`[theme.display.popup]`) stands alone on a line of the
+/// template, as a live header or a commented-out one (`# [agents]`,
+/// `## [colors.primary]`). A comment that only mentions the section does not
+/// count, so it cannot hide the section's removal.
+fn template_has_section_header(text: &str, section: &str) -> bool {
+    text.lines()
+        .any(|line| line.trim().trim_start_matches('#').trim() == section)
 }
 
 fn ensure_presence_plugin_vendored(root: &Path) -> Result<()> {
