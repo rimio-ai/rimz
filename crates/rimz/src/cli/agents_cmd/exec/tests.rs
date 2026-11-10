@@ -7,6 +7,19 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::run::{RunRecord, RunStatus};
 use std::path::{Path, PathBuf};
 
+/// A restart that asked for a continue gets one after spawn, unless the stage re-wake stands
+/// in for it or the configured text is blank; a restart that did not ask gets none.
+#[test]
+fn a_restarted_session_takes_one_continue_unless_a_stage_rewake_stands_in() {
+    assert_eq!(
+        resume_continue_text(true, false, " continue\n"),
+        Some("continue")
+    );
+    assert_eq!(resume_continue_text(true, true, "continue"), None);
+    assert_eq!(resume_continue_text(true, false, "  "), None);
+    assert_eq!(resume_continue_text(false, false, "continue"), None);
+}
+
 /// A resumed session is bound to exactly one pane at a time, and the
 /// replacement stamps that binding before it spawns its provider. The
 /// exiting wrapper's argv-identity fallback therefore reads the binding to
@@ -224,6 +237,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: true,
+        continue_session: false,
         follow_up_message: None,
         reminder_section: None,
         headless: None,
@@ -379,6 +393,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        continue_session: false,
         follow_up_message: None,
         reminder_section: None,
         headless: None,
@@ -510,6 +525,7 @@ fn bare_exec_args() -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        continue_session: false,
         follow_up_message: None,
         reminder_section: None,
         headless: None,
@@ -603,6 +619,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         close_pane_on_exit: true,
         exit_on_run_completion: true,
         subagent: true,
+        continue_session: false,
         follow_up_message: None,
         reminder_section: None,
         headless: None,

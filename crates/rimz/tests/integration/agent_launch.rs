@@ -194,6 +194,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        continue_session: false,
         follow_up_message: None,
         reminder_section: None,
         headless: None,
@@ -3123,6 +3124,559 @@ fn publish_spent_window(env: &Env, kind: &AgentKind, reset: jiff::Timestamp) {
     });
 }
 
+/// A launched child bound to a live pane, with a resumable conversation and an open run, beside
+/// its planner parent. `working` starts the child's turn, so a restart reads it interrupted.
+#[cfg(unix)]
+struct RestartChild {
+    env: Env,
+    workspace: rimz::ResolvedWorkspace,
+    store: rimz::Store,
+    run: rimz::store::run::RunRecord,
+    parent_id: AgentSessionId,
+    shim: std::path::PathBuf,
+    shell: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl RestartChild {
+    fn new(working: bool) -> Option<Self> {
+        if crate::common::git::git_missing() {
+            return None;
+        }
+        let env = Env::new();
+        crate::common::git::init_repo(&env.project_root);
+        env.install_agent_hooks("claude");
+        crate::common::trust_claude_project(&env, &env.project_root);
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        let shim = write_env_dump_shim(&env, "claude");
+        let shell = write_fake_login_shell(&env, "restart-shell", &[]);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let store = env.store();
+        store.record_workspace(&workspace).unwrap();
+        let kind = AgentKind::new_unchecked("claude");
+        let parent_id = AgentSessionId::from("planner-session");
+        let child_id = AgentSessionId::from("child-session");
+        let transcript = env.home_root.join("child.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        for (id, name, pane, launch) in [
+            (&parent_id, "planner", "terminal_2", LaunchParams::default()),
+            (
+                &child_id,
+                "still-silver",
+                "terminal_3",
+                LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(kind.clone()),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut observation =
+                AgentLifecycleObservation::new(Some(id.clone()), LifecycleSignal::Registered);
+            observation.agent_name = Some(name.to_owned());
+            observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+                rimz::ids::MuxName::Zellij,
+                pane,
+            ));
+            observation.runtime_owner = Some(rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                id.as_str(),
+            ));
+            observation.worktree_path = Some(env.project_root.display().to_string());
+            observation.transcript_path = Some(transcript.display().to_string());
+            observation.launch = launch;
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    kind.as_str(),
+                    "SessionStart",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        if working {
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    kind.as_str(),
+                    "UserPromptSubmit",
+                    &AgentLifecycleObservation::new(
+                        Some(child_id.clone()),
+                        LifecycleSignal::TurnStarted { turn_id: None },
+                    ),
+                ))
+                .unwrap();
+        }
+        let mut run = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            kind,
+            rimz::agents::PermissionMode::Auto,
+            "review the change".to_owned(),
+            env.project_root.clone(),
+        );
+        run.agent_id = Some(child_id);
+        run.agent_name = Some("still-silver".to_owned());
+        run.subagent = true;
+        run.status = rimz::store::run::RunStatus::Running;
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        Some(Self {
+            env,
+            workspace,
+            store,
+            run,
+            parent_id,
+            shim,
+            shell,
+        })
+    }
+
+    fn mux_log(&self) -> std::path::PathBuf {
+        self.env.home_root.join("restart-mux.log")
+    }
+
+    /// Run `rimz agents restart @still-silver <flags>`, as `caller` when given.
+    fn restart(&self, flags: &[&str], caller: Option<&str>) -> std::process::Output {
+        self.restart_with_env(flags, caller, &[])
+    }
+
+    /// [`Self::restart`] with `env` set on the command.
+    fn restart_with_env(
+        &self,
+        flags: &[&str],
+        caller: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> std::process::Output {
+        let panes = serde_json::json!([
+            {"id": 2, "is_plugin": false, "tab_id": 1, "title": "claude"},
+            {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude"}
+        ]);
+        crate::common::room::seed_live_zellij_room(
+            &self.env.runtime_paths(),
+            &self.workspace.session_name,
+            serde_json::from_value(panes.clone()).unwrap(),
+        );
+        let mut command = self.env.rimz();
+        command
+            .args(["--mux", "zellij", "agents", "restart", "@still-silver"])
+            .args(flags)
+            .env("SHELL", &self.shell)
+            .env("PATH", path_with_front(&self.shim))
+            .env("ZELLIJ_SESSION_NAME", &self.workspace.session_name)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", self.mux_log())
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes.to_string())
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", self.workspace.session_name),
+            )
+            .envs(env.iter().copied());
+        if let Some(caller) = caller {
+            command
+                .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                .env(rimz::harness::launch::ENV_AGENT_ID, caller);
+        }
+        command.bounded_output().unwrap()
+    }
+
+    fn run_now(&self) -> rimz::store::run::RunRecord {
+        rimz::harness::run::load(self.store.paths(), &self.run.run_id).unwrap()
+    }
+
+    fn restart_notices(&self) -> Vec<rimz::store::message::MessageRecord> {
+        self.store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.sender
+                    == rimz::store::message::MessageSender::Harness {
+                        notice: rimz::store::message::HarnessNotice::SubagentRestarted,
+                    }
+            })
+            .collect()
+    }
+
+    /// The exec request the replacement pane was opened with.
+    fn replacement_request(&self) -> ExecRequest {
+        let trace = std::fs::read_to_string(self.mux_log()).unwrap();
+        let line = trace
+            .lines()
+            .find(|line| line.contains("--request-file"))
+            .unwrap_or_else(|| panic!("no replacement pane: {trace}"));
+        let argv = line.split('\t').collect::<Vec<_>>();
+        let after = |flag: &str| {
+            argv.windows(2)
+                .find(|pair| pair[0] == flag)
+                .map(|pair| pair[1])
+        };
+        let payload = std::fs::read_to_string(after("--request-file").unwrap()).unwrap();
+        rimz::harness::launch::decode_exec_request(
+            "claude",
+            after("--worktree-path").map(std::path::Path::new),
+            &payload,
+        )
+        .unwrap()
+    }
+
+    fn pane_actions(&self) -> Vec<String> {
+        std::fs::read_to_string(self.mux_log())
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("new-pane") || line.contains("close-pane"))
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_hands_a_working_childs_open_run_to_its_replacement_and_tells_the_parent_once() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    let output = fixture.restart(&[], None);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        receipt.contains("(resumed session child-session)")
+            && receipt.contains("; continue queued"),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("on account"), "{receipt}");
+
+    let run = fixture.run_now();
+    assert_eq!(run.status, rimz::store::run::RunStatus::Running, "{run:?}");
+    assert_eq!(
+        run.handed_over_from,
+        Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            "terminal_3"
+        ))
+    );
+    let request = fixture.replacement_request();
+    assert_eq!(request.run_id, Some(fixture.run.run_id.clone()));
+    assert!(request.continue_session);
+    assert_eq!(
+        (request.close_pane_on_exit, request.exit_on_run_completion),
+        rimz::harness::plan::run_exit_policy(true)
+    );
+
+    let notices = fixture.restart_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].agent_id, fixture.parent_id);
+    assert_eq!(notices[0].about_run, Some(fixture.run.run_id.clone()));
+    assert_eq!(
+        notices[0].text,
+        "@still-silver was restarted in a new pane and now runs on claude account `default`. \
+         Its run is still open and carries on; nothing is needed from you."
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_by_the_parent_sends_it_no_notice_and_a_child_at_rest_gets_no_continue() {
+    let Some(fixture) = RestartChild::new(false) else {
+        return;
+    };
+    let output = fixture.restart(&[], Some("planner-session"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(!receipt.contains("continue queued"), "{receipt}");
+    assert!(!fixture.replacement_request().continue_session);
+    assert_eq!(
+        fixture.run_now().status,
+        rimz::store::run::RunStatus::Running
+    );
+    assert!(
+        fixture.restart_notices().is_empty(),
+        "{:?}",
+        fixture.restart_notices()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_refuses_a_continue_on_a_spent_account_before_touching_any_pane() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(2 * 3600);
+    publish_spent_window(&fixture.env, &AgentKind::new_unchecked("claude"), reset);
+    let output = fixture.restart(&[], None);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "restart refused: claude account `default` is spent until {}, so the continue for \
+             @still-silver's interrupted turn would stop again; pass `--account <other>` to run \
+             it on another account, or `--no-continue` to reopen it at rest",
+            rimz::utils::time::format_local_timestamp(reset)
+        )),
+        "{stderr}"
+    );
+    assert!(
+        fixture.pane_actions().is_empty(),
+        "{:?}",
+        fixture.pane_actions()
+    );
+    let run = fixture.run_now();
+    assert_eq!(run.status, rimz::store::run::RunStatus::Running);
+    assert_eq!(run.handed_over_from, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_continues_on_a_spent_window_when_paid_credit_is_usable() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    publish_spent_window(
+        &fixture.env,
+        &AgentKind::new_unchecked("claude"),
+        jiff::Timestamp::now() + std::time::Duration::from_secs(3600),
+    );
+    std::fs::write(
+        fixture.env.runtime_paths().shared_credits_path(),
+        serde_json::json!({"refreshed_at_ms": 1, "logins": {"claude@default": {
+            "observed_at_ms": jiff::Timestamp::now().as_millisecond(),
+            "ok": true,
+            "extra_credits": {"known": {"used_usd": 7.0, "remaining_usd": 43.0, "limit_usd": 50.0}}
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = fixture.restart(&[], None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(receipt.contains("; continue queued"), "{receipt}");
+    assert!(fixture.replacement_request().continue_session);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_no_continue_on_an_interrupted_child_fails_its_run_before_the_pane_closes() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    // A spent account allows a restart that sends no continue.
+    publish_spent_window(
+        &fixture.env,
+        &AgentKind::new_unchecked("claude"),
+        jiff::Timestamp::now() + std::time::Duration::from_secs(3600),
+    );
+    let output = fixture.restart(&["--no-continue"], None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = fixture.run_now();
+    assert_eq!(run.status, rimz::store::run::RunStatus::Failed, "{run:?}");
+    assert_eq!(
+        run.failure_tail.as_deref(),
+        Some("restarted with --no-continue; its interrupted turn was abandoned")
+    );
+    assert_eq!(run.handed_over_from, None);
+    let request = fixture.replacement_request();
+    assert_eq!((request.run_id, request.continue_session), (None, false));
+    assert!(fixture.restart_notices().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_whose_split_fails_gives_the_run_back_to_the_old_pane() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    let output = fixture.restart_with_env(&[], None, &[("RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE", "1")]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("opening the replacement agent pane"),
+        "{stderr}"
+    );
+    let run = fixture.run_now();
+    assert_eq!(run.status, rimz::store::run::RunStatus::Running, "{run:?}");
+    assert_eq!(run.handed_over_from, None);
+    assert!(
+        fixture
+            .pane_actions()
+            .iter()
+            .all(|line| !line.contains("close-pane")),
+        "{:?}",
+        fixture.pane_actions()
+    );
+    assert!(fixture.restart_notices().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_with_a_blank_continue_text_queues_nothing_and_reads_as_no_continue() {
+    for spent in [true, false] {
+        let Some(fixture) = RestartChild::new(true) else {
+            return;
+        };
+        let config = fixture.env.rimz_home().join("config.toml");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[resume]\nauto_continue_text = '  '\n");
+        std::fs::write(&config, text).unwrap();
+        if spent {
+            publish_spent_window(
+                &fixture.env,
+                &AgentKind::new_unchecked("claude"),
+                jiff::Timestamp::now() + std::time::Duration::from_secs(3600),
+            );
+        }
+        let output = fixture.restart(&[], None);
+        assert!(
+            output.status.success(),
+            "spent={spent}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(!receipt.contains("continue queued"), "{receipt}");
+        let request = fixture.replacement_request();
+        assert_eq!((request.run_id, request.continue_session), (None, false));
+        let run = fixture.run_now();
+        assert_eq!(run.status, rimz::store::run::RunStatus::Failed, "{run:?}");
+        assert_eq!(
+            run.failure_tail.as_deref(),
+            Some(
+                "restarted with a blank `resume.auto_continue_text`; its interrupted turn was \
+                 abandoned"
+            )
+        );
+        assert_eq!(run.handed_over_from, None);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_account_runs_one_agent_on_the_named_account_without_moving_the_room() {
+    let Some(fixture) = RestartChild::new(false) else {
+        return;
+    };
+    let env = &fixture.env;
+    for (name, history) in [("second", "shared"), ("apart", "standalone")] {
+        let home = env.home_root.join(format!("claude-{name}"));
+        env.rimz()
+            .args([
+                "accounts",
+                "add",
+                "claude",
+                name,
+                "--history",
+                history,
+                "--home",
+            ])
+            .arg(&home)
+            .env("PATH", path_with_front(&fixture.shim))
+            .assert_success_within_timeout("add a claude account");
+    }
+    let selection = || {
+        rimz::workspace::record::read(&fixture.store.paths().workspace_record)
+            .unwrap()
+            .pins
+    };
+    let before = selection();
+
+    let refused = fixture.restart(&["--account", "apart"], None);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(
+            "restart refused: @still-silver's session belongs to claude account `default`, and \
+             `apart` keeps its history apart, so the session cannot resume there; pass an \
+             account that shares `default`'s history, or `default` itself"
+        ) && !stderr.contains("accounts use"),
+        "{stderr}"
+    );
+    assert!(
+        fixture.pane_actions().is_empty(),
+        "{:?}",
+        fixture.pane_actions()
+    );
+
+    let output = fixture.restart(&["--account", "second"], None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(receipt.contains("; on account `second`"), "{receipt}");
+    assert_eq!(
+        fixture
+            .replacement_request()
+            .identity
+            .params
+            .login
+            .map(|login| login.to_string()),
+        Some("second".to_owned())
+    );
+    assert_eq!(selection(), before, "the room's selection is unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_account_falls_back_to_a_fresh_launch_on_the_named_account() {
+    let Some(fixture) = RestartChild::new(true) else {
+        return;
+    };
+    let env = &fixture.env;
+    env.rimz()
+        .args(["accounts", "add", "claude", "second", "--home"])
+        .arg(env.home_root.join("claude-second"))
+        .env("PATH", path_with_front(&fixture.shim))
+        .assert_success_within_timeout("add a claude account");
+    std::fs::remove_file(env.home_root.join("child.jsonl")).unwrap();
+
+    let output = fixture.restart(&["--account", "second"], None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        receipt.starts_with("restarted fresh as @")
+            && receipt.contains("; on account `second`")
+            && !receipt.contains("continue queued"),
+        "{receipt}"
+    );
+    let request = fixture.replacement_request();
+    assert_eq!(
+        request.identity.params.login.map(|login| login.to_string()),
+        Some("second".to_owned())
+    );
+    assert_eq!((request.run_id, request.continue_session), (None, false));
+    let run = fixture.run_now();
+    assert_eq!(run.status, rimz::store::run::RunStatus::Failed, "{run:?}");
+    assert!(
+        run.failure_tail
+            .as_deref()
+            .is_some_and(|tail| tail.starts_with("restarted fresh (")
+                && tail.ends_with("); its session did not resume")),
+        "{run:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn limit_parked_child_past_the_hold_limit_fails_at_once_with_the_reason() {
@@ -5278,6 +5832,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: None,
             headless: None,
@@ -5435,6 +5990,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: None,
             headless: None,
@@ -5492,6 +6048,112 @@ fn resume_exec_exits_when_its_follow_up_expired() {
 #[test]
 fn resume_exec_triggers_queued_head_without_provider_registration() {
     resume_exec_cleanup_case(ResumeExecCleanupCase::QueuedHeadTrigger);
+}
+
+#[cfg(unix)]
+#[test]
+fn restarted_resume_wrapper_queues_exactly_one_continue() {
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-restarted");
+    let mut observation =
+        AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);
+    observation.agent_name = Some("otter".into());
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: kind.clone(),
+            event_name: "SessionStart",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let shim_dir = crate::common::write_long_lived_agent_shim(&env, "codex");
+    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+        .unwrap();
+    let delivery_trace = env.home_root.join("continue-delivery.log");
+    let rimz_shim = crate::common::write_path_shim(
+        &shim_dir,
+        "continue-delivery",
+        r#"case " $* " in
+  *' message deliver --message-id '*) printf '%s\n' "$@" >> "$RIMZ_TEST_DELIVERY_TRACE" ;;
+  *) exec "$RIMZ_TEST_REAL_BIN" "$@" ;;
+esac"#,
+    );
+    let mut request = ExecRequest {
+        isolation_default: None,
+        kind: kind.clone(),
+        action: ExecAction::Resume {
+            session_id: session_id.to_string(),
+            extra_args: Vec::new(),
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        no_skill_tool: false,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        subagent: false,
+        continue_session: true,
+        follow_up_message: None,
+        reminder_section: None,
+        headless: None,
+        identity: ExecIdentity::default(),
+    };
+    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    let mut wrapper = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .args([
+            "--root",
+            env.project_root.to_str().unwrap(),
+            "--mux",
+            "zellij",
+        ])
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim_dir))
+        .env("ZELLIJ_PANE_ID", "4")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .env("RIMZ_BIN", rimz_shim)
+        .env("RIMZ_TEST_DELIVERY_TRACE", &delivery_trace)
+        .env("RIMZ_TEST_REAL_BIN", env.rimz_bin())
+        .spawn()
+        .unwrap();
+    // The wrapper spawns the queued head's deliverer after it queues the continue.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while std::fs::read_to_string(&delivery_trace)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        assert!(
+            wrapper.try_wait().unwrap().is_none(),
+            "the wrapper exited before it queued the continue"
+        );
+        assert!(Instant::now() < deadline, "no continue was delivered");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let continues = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .filter(|message| message.sender == rimz::store::message::MessageSender::System)
+        .collect::<Vec<_>>();
+    let _ = wrapper.kill();
+    let _ = wrapper.wait();
+    assert_eq!(continues.len(), 1, "{continues:?}");
+    assert_eq!(continues[0].text, "continue");
+    assert_eq!(continues[0].agent_id, session_id);
 }
 
 #[cfg(unix)]
@@ -5648,6 +6310,7 @@ esac"#,
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        continue_session: false,
         follow_up_message: failed_follow_up,
         reminder_section: None,
         headless: None,

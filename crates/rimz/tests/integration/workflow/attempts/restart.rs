@@ -589,6 +589,25 @@ fn continued_restart(routed: bool) {
     )
     .unwrap();
     let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    if routed {
+        // The step belongs to the workflow, which takes neither restart flag.
+        for flag in [&["--account", "default"][..], &["--no-continue"][..]] {
+            let output = room
+                .command(&[&["agents", "restart", &reference][..], flag].concat())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success()
+                    && stderr.contains(&format!(
+                        "restart refused: this agent runs step build of workflow run {id}, \
+                         which `--account` and `--no-continue` do not apply to; run `rimz \
+                         workflow restart {id} --continue` instead"
+                    )),
+                "{stderr}"
+            );
+        }
+    }
     let args = if routed {
         vec!["agents", "restart", &reference]
     } else {

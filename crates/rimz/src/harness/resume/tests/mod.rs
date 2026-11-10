@@ -111,6 +111,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             close_pane_on_exit: true,
             exit_on_run_completion: false,
             subagent: false,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: None,
             headless: None,

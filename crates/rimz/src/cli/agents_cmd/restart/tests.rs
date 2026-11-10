@@ -44,6 +44,7 @@ fn a_fresh_restart_of_a_molt_successor_keeps_its_predecessor_superseded() {
         dir.path(),
         restart_cell(&successor, &posture),
         None,
+        None,
     );
     assert!(restarted.is_ok(), "{restarted:?}");
     let restarted = restarted.unwrap();
@@ -306,6 +307,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
             close_pane_on_exit: true,
             exit_on_run_completion: false,
             subagent: false,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: expected,
             headless: None,
@@ -326,13 +328,24 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
     );
 }
 
+fn child_run(child: &AgentState) -> rimz::store::run::RunRecord {
+    let mut run = rimz::store::run::RunRecord::new(
+        rimz::ids::WorkspaceId::from_project_root(Path::new("/tmp")),
+        child.kind.clone(),
+        PermissionMode::Auto,
+        "task".to_owned(),
+        PathBuf::from("/tmp"),
+    );
+    run.agent_id = Some(child.agent_id.clone());
+    run
+}
+
 #[test]
-fn relaunch_request_keeps_child_treatment_without_a_supervised_run() {
+fn a_handed_over_child_carries_its_run_and_a_settled_one_carries_none() {
     let mut child = rimz::testkit::agent_state("claude", "child", jiff::Timestamp::UNIX_EPOCH);
     child.parent_agent_id = Some("parent".into());
     child.parent_agent_kind = Some(child.kind.clone());
     child.launch_depth = Some(1);
-
     let request = relaunch_request(
         &child,
         &ResumePosture::default(),
@@ -343,16 +356,116 @@ fn relaunch_request_keeps_child_treatment_without_a_supervised_run() {
         None,
         None,
     );
-
-    assert_eq!(
+    let summary = |request: &ExecRequest| {
         (
             request.subagent,
-            request.run_id,
+            request.run_id.clone(),
             request.close_pane_on_exit,
             request.exit_on_run_completion,
-            request.follow_up_message,
+            request.follow_up_message.clone(),
+        )
+    };
+    // Explain and molt build this request and never hand a run over.
+    assert_eq!(summary(&request), (true, None, true, false, None));
+
+    let mut run = child_run(&child);
+    let handed = with_run(request.clone(), &run);
+    assert_eq!(
+        summary(&handed),
+        (true, Some(run.run_id.clone()), true, true, None)
+    );
+    run.keep = true;
+    let kept = with_run(request, &run);
+    assert_eq!(
+        (
+            kept.run_id,
+            kept.close_pane_on_exit,
+            kept.exit_on_run_completion
         ),
-        (true, None, true, false, None)
+        (Some(run.run_id.clone()), false, false)
+    );
+
+    run.keep = false;
+    assert_eq!(open_run_fate(Some(&run), true, false), (Some(&run), None));
+    assert_eq!(open_run_fate(Some(&run), false, false), (None, Some(&run)));
+    assert_eq!(open_run_fate(Some(&run), true, true), (None, Some(&run)));
+    assert_eq!(open_run_fate(None, true, false), (None, None));
+    run.status = rimz::store::run::RunStatus::Completed;
+    assert_eq!(open_run_fate(Some(&run), true, false), (None, None));
+}
+
+#[test]
+fn newest_child_run_requires_kind_and_present_names() {
+    let child = AgentState::stub("codex", "child", rimz::agents::AgentStatus::Success);
+    let mut run = child_run(&child);
+    run.agent_id = None;
+    assert!(newest_run_for_child(&[run.clone()], &child).is_none());
+    run.agent_id = Some(child.agent_id.clone());
+    assert!(newest_run_for_child(&[run.clone()], &child).is_some());
+    run.kind = rimz::ids::AgentKind::new_unchecked("claude");
+    assert!(newest_run_for_child(&[run], &child).is_none());
+}
+
+#[test]
+fn interrupted_reads_a_working_paused_or_asking_row_and_not_one_at_rest() {
+    use rimz::agents::AgentStatus;
+    let now = jiff::Timestamp::now();
+    for (status, expected) in [
+        (AgentStatus::Running, true),
+        (AgentStatus::Waiting, true),
+        (AgentStatus::Paused, true),
+        (AgentStatus::Idle, false),
+        (AgentStatus::Success, false),
+        (AgentStatus::Failed, false),
+    ] {
+        let agent = AgentState::stub("claude", "a", status);
+        assert_eq!(interrupted(&agent, now), expected, "{status:?}");
+    }
+}
+
+#[test]
+fn account_flag_takes_an_account_in_the_session_pool_and_refuses_others() {
+    let agent = AgentState {
+        login: Some("personal".parse().expect("login name")),
+        name: Some("x".to_owned()),
+        ..rimz::testkit::agent_state("claude", "session-1", jiff::Timestamp::now())
+    };
+    let config: rimz::config::AccountsConfig = toml::from_str(
+        "[claude.work]\nhome = \"/srv/claude-work\"\nhistory = \"standalone\"\n\
+         [claude.personal]\nhome = \"/srv/claude-personal\"\n\
+         [claude.team]\nhome = \"/srv/claude-team\"\n",
+    )
+    .expect("accounts toml");
+    let catalog = rimz::agents::LoginCatalog::from_config(&config).expect("login catalog");
+    let name = |name: &str| -> rimz::ids::LoginName { name.parse().expect("login name") };
+
+    assert_eq!(
+        flag_login(&agent, &name("team"), true, &config, &catalog).unwrap(),
+        Some(name("team"))
+    );
+    assert_eq!(
+        flag_login(&agent, &name("default"), true, &config, &catalog).unwrap(),
+        None
+    );
+    let err = flag_login(&agent, &name("work"), true, &config, &catalog).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "restart refused: @x's session belongs to claude account `personal`, and `work` keeps \
+         its history apart, so the session cannot resume there; pass an account that shares \
+         `personal`'s history, or `personal` itself"
+    );
+    assert!(!err.to_string().contains("accounts use"));
+    // A fresh fallback resumes nothing, so the pool does not bind it.
+    assert_eq!(
+        flag_login(&agent, &name("work"), false, &config, &catalog).unwrap(),
+        Some(name("work"))
+    );
+    let unknown = flag_login(&agent, &name("nobody"), true, &config, &catalog).unwrap_err();
+    assert_eq!(
+        unknown.to_string(),
+        rimz::agents::session_login(&agent.kind, Some(&name("nobody")), &config)
+            .unwrap_err()
+            .to_string()
     );
 }
 

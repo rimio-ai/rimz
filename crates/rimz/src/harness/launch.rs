@@ -774,6 +774,11 @@ pub struct ExecRequest {
     pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_message: Option<MessageId>,
+    /// Whether the wrapper queues one continue to the resumed session after
+    /// spawn, unless a stage re-wake stands in for it. Set by
+    /// `rimz agents restart` for an interrupted agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub continue_session: bool,
     /// The reminder section composed or replayed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder_section: Option<ReminderSection>,
@@ -849,6 +854,7 @@ impl ExecRequest {
             exit_on_run_completion: false,
             subagent: false,
             follow_up_message: None,
+            continue_session: false,
             reminder_section: None,
             headless: None,
             identity: ExecIdentity::default(),

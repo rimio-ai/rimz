@@ -480,7 +480,16 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
-        rewake_resumed(invocation, target, globals.mux, resume_since);
+        let rewoken = rewake_resumed(invocation, target, globals.mux, resume_since);
+        let machine_config = crate::cli::machine_config();
+        if let Some(text) = resume_continue_text(
+            request.continue_session,
+            rewoken,
+            &machine_config.resume.auto_continue_text,
+        ) && let Err(error) = queue_resume_continue(invocation, target, text)
+        {
+            tracing::warn!(%error, "could not queue the restarted session's continue");
+        }
         match invocation
             .store()
             .and_then(|store| Ok(store.list_pending_messages()?))
@@ -1813,14 +1822,53 @@ fn session_bound_to_another_pane(
     })
 }
 
-/// Re-wake a stamped resumed card when it owns its team's open stage. `since` precedes the
-/// provider's start, so a Stage notice it already took counts.
+/// The continue a restarted session takes after spawn: none unless the restart asked for
+/// one, none when a stage re-wake already stands in for it, and none for blank text.
+fn resume_continue_text(continue_session: bool, rewoken: bool, text: &str) -> Option<&str> {
+    continue_text(text).filter(|_| continue_session && !rewoken)
+}
+
+/// The configured continue text, trimmed; blank text sends no continue, so a restart reads it
+/// as `--no-continue`.
+pub(super) fn continue_text(text: &str) -> Option<&str> {
+    Some(text.trim()).filter(|text| !text.is_empty())
+}
+
+/// Queue one system continue for the resumed card at its next turn boundary; the queued-head
+/// delivery spawned after this sends it.
+fn queue_resume_continue(
+    invocation: &ExecInvocationContext<'_>,
+    target: &(AgentKind, AgentSessionId),
+    text: &str,
+) -> Result<()> {
+    let workspace = invocation.workspace;
+    let store = invocation.store()?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let agent = find_agent(&projection.agents, target.0.as_str(), &target.1)
+        .context("resumed card is not in the store")?;
+    store.queue_message(
+        &rimz::message::synthetic::SyntheticMessage {
+            agent,
+            text: text.to_owned(),
+            sender: rimz::store::message::MessageSender::System,
+            gate: rimz::store::message::DeliveryGate::Done,
+            pane_id: None,
+        }
+        .record(workspace),
+        &workspace.session_name,
+    )?;
+    Ok(())
+}
+
+/// Re-wake a stamped resumed card when it owns its team's open stage, and say whether a
+/// Stage notice now stands for it. `since` precedes the provider's start, so a Stage notice
+/// it already took counts.
 fn rewake_resumed(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     mux: Option<rimz::ids::MuxName>,
     since: jiff::Timestamp,
-) {
+) -> bool {
     let rewoken = invocation.store().and_then(|store| {
         Ok(rimz::harness::team_stage::rewake_resumed(
             invocation.workspace,
@@ -1835,14 +1883,21 @@ fn rewake_resumed(
     match rewoken {
         Ok(Some(receipt)) => {
             tracing::debug!(delivery = ?receipt.delivery, "resume: re-woke team stage owner");
+            true
         }
-        Ok(None) => tracing::debug!("resume: no team stage to re-wake"),
-        Err(err) => tracing::warn!(
-            kind = %target.0,
-            agent_id = %target.1,
-            error = %err,
-            "could not re-wake the resumed team stage owner",
-        ),
+        Ok(None) => {
+            tracing::debug!("resume: no team stage to re-wake");
+            false
+        }
+        Err(err) => {
+            tracing::warn!(
+                kind = %target.0,
+                agent_id = %target.1,
+                error = %err,
+                "could not re-wake the resumed team stage owner",
+            );
+            false
+        }
     }
 }
 

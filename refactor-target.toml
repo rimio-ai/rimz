@@ -4648,13 +4648,16 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # The launch module and shared placement leave the published CLI surface (-2).
 # Sidebar close/reopen share resume_command and resume_worktree_name with stop receipts (+2).
 # Sidebar close shares offers_resume with the stop receipt's eligibility gate (+1).
-surface-budget = 26
+# Restart hands a child's run over through newest_run_for_child and with_run, which the
+# subagent resume doorway shares (+2).
+surface-budget = 28
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
 # The hidden duty request and entry re-export cross to agents dispatch (+2).
 # close_own_pane shares self-cleanup with the run-bound command wrapper (+1).
-surface-budget = 4
+# continue_text lets restart read a blank continue text as the wrapper does (+1).
+surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/session_step.rs"
