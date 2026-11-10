@@ -150,6 +150,8 @@ fn draw_into(
     view.held_expansions = composed.held_expansions;
     ui.scroll_zone_top = top_height;
     ui.banner_shown = composed.banner_shown;
+    ui.skipped_shown =
+        compose::shown_skipped(snapshot, alert, view).map(|skipped| skipped.digest.clone());
     ui.anchor_clamped = composed.anchor_clamped;
     view.viewport = ViewportRequest::default();
     // Never wrapped: composed line `i` is buffer row `i` for every map stored above, and a line

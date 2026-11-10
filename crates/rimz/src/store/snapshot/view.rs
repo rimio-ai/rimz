@@ -83,6 +83,44 @@ pub struct HookDrainerOutageAgent {
     pub agent_name: Option<String>,
 }
 
+/// The settings the room's last start or attach skipped, as the sidebar notice
+/// shows them: how many, and an identity of the whole list that a dismissal is
+/// remembered against.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedSettings {
+    pub count: usize,
+    pub digest: String,
+}
+
+impl SkippedSettings {
+    /// `None` for an empty list. The digest ignores the list's order and frames each field by
+    /// its length, so `("ab", "c")` and `("a", "bc")` differ.
+    pub fn of(skipped: &[crate::workspace::record::SkippedSetting]) -> Option<Self> {
+        use sha2::{Digest, Sha256};
+
+        if skipped.is_empty() {
+            return None;
+        }
+        let mut pairs = skipped
+            .iter()
+            .map(|entry| (entry.setting.as_str(), entry.message.as_str()))
+            .collect::<Vec<_>>();
+        pairs.sort_unstable();
+        let mut hasher = Sha256::new();
+        for field in pairs
+            .iter()
+            .flat_map(|&(setting, message)| [setting, message])
+        {
+            hasher.update((field.len() as u64).to_le_bytes());
+            hasher.update(field.as_bytes());
+        }
+        Some(Self {
+            count: skipped.len(),
+            digest: hex::encode(hasher.finalize()),
+        })
+    }
+}
+
 /// Serde default for [`SidebarSnapshot::root_class`]: `Repo` keeps a pre-class
 /// snapshot (and the pure reducer path) on repo-room grouping.
 fn default_root_class() -> RootClass {
@@ -99,7 +137,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 89;
+pub const SNAPSHOT_VERSION: u32 = 90;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -126,8 +164,8 @@ pub struct SidebarSnapshot {
     pub workspace_id: WorkspaceId,
     pub display_name: String,
     pub generated_at: Timestamp,
-    #[serde(default)]
-    pub skipped_settings: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_settings: Option<SkippedSettings>,
     /// Producer timestamp of the pane frame folded into this snapshot. Realtime
     /// events older than this baseline are superseded by pulled truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -419,7 +457,7 @@ impl SidebarSnapshot {
             workspace_id,
             display_name,
             generated_at: now,
-            skipped_settings: 0,
+            skipped_settings: None,
             panes_produced_at_ms: None,
             panes_observed_at_ms: None,
             viewed_panes: Vec::new(),

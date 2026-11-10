@@ -164,35 +164,102 @@ fn qwen_shaped_panel_shows_a_month_ceiling_on_the_week() {
     assert_snapshot("provider_qwen_ceiling", rendered);
 }
 
+fn skipped(count: usize, digest: &str) -> Option<crate::store::snapshot::SkippedSettings> {
+    Some(crate::store::snapshot::SkippedSettings {
+        count,
+        digest: digest.into(),
+    })
+}
+
+fn bottom_chrome_text(snapshot: &SidebarSnapshot, view: &ViewState, cells: usize) -> String {
+    let roster = VisibleRoster::new(snapshot, &BodyLens::default(), &Default::default(), None);
+    let block = compose::build_bottom_chrome(
+        snapshot,
+        None,
+        &Theme::fixed(false),
+        cells,
+        view,
+        &UiState::default(),
+        &roster,
+    );
+    block
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
-fn skipped_settings_notice_is_above_the_footer_and_absent_at_zero() {
-    let theme = Theme::fixed(false);
+fn skipped_settings_notice_shows_until_this_list_is_dismissed() {
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.providers = two_provider_panels();
-    for count in [2, 0] {
-        snapshot.skipped_settings = count;
-        let roster = VisibleRoster::new(&snapshot, &BodyLens::default(), &Default::default(), None);
-        let block = compose::build_bottom_chrome(
-            &snapshot,
-            None,
-            &theme,
-            90,
-            &ViewState::default(),
-            &UiState::default(),
-            &roster,
-        );
-        let text = block
-            .lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            text.contains("2 settings skipped at start · rimz doctor"),
-            count > 0,
-            "{text}"
-        );
+    let notice = "2 settings skipped at start · rimz doctor · Esc dismiss";
+    for (shown, dismissed, visible) in [
+        (skipped(2, "aa"), None, true),
+        (None, None, false),
+        (skipped(2, "aa"), Some("aa"), false),
+        (skipped(2, "bb"), Some("aa"), true),
+    ] {
+        snapshot.skipped_settings = shown;
+        let view = ViewState {
+            dismissed_skipped: dismissed.map(Into::into),
+            ..Default::default()
+        };
+        let text = bottom_chrome_text(&snapshot, &view, 90);
+        assert_eq!(text.contains(notice), visible, "{dismissed:?}\n{text}");
+        assert_eq!(text.contains("skipped at start"), visible, "{text}");
     }
+    snapshot.skipped_settings = skipped(1, "aa");
+    snapshot.keys = crate::config::keys::sidebar::SidebarKeymap::rebound(&[("Esc", "none")]);
+    let text = bottom_chrome_text(&snapshot, &ViewState::default(), 90);
+    assert!(
+        text.contains("1 setting skipped at start · rimz doctor"),
+        "{text}"
+    );
+    assert!(!text.contains("dismiss"), "no cancel key, no hint:\n{text}");
+}
+
+#[test]
+fn a_dismissed_skipped_list_folds_the_footer_as_if_nothing_were_skipped() {
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.providers = two_provider_panels();
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.pets.enabled = true;
+    let clean = bottom_chrome_text(&snapshot, &ViewState::default(), 60);
+    snapshot.skipped_settings = skipped(2, "aa");
+    let shown = bottom_chrome_text(&snapshot, &ViewState::default(), 60);
+    let without_notice = shown
+        .lines()
+        .filter(|line| !line.contains("skipped at start") && !line.contains("dismiss"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(
+        without_notice, clean,
+        "the fixture folds its footer only when nothing is skipped"
+    );
+    let dismissed = ViewState {
+        dismissed_skipped: Some("aa".into()),
+        ..Default::default()
+    };
+    assert_eq!(bottom_chrome_text(&snapshot, &dismissed, 60), clean);
+}
+
+#[test]
+fn skipped_settings_notice_wraps_whole_at_a_narrow_pane() {
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.skipped_settings = skipped(2, "aa");
+    let text = bottom_chrome_text(&snapshot, &ViewState::default(), 46);
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        words.contains("2 settings skipped at start · rimz doctor · Esc dismiss"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .all(|line| crate::sidebar_pane::render::layout::text_width(line) <= 46),
+        "{text}"
+    );
 }
 
 #[test]

@@ -3161,13 +3161,16 @@ impl PaneState {
                 v.state.scroll_ease.cancel();
             }
             if applied.effects.contains(&InputEffect::DismissAlert) {
-                v.context.health.alert = None;
-                if v.state
+                let refresh = v.context.health.alert.take();
+                let drainer = v
+                    .state
                     .hook_drainer_alert
-                    .as_ref()
-                    .is_some_and(|alert| !alert.is_active())
-                {
-                    v.state.hook_drainer_alert = None;
+                    .take_if(|alert| !alert.is_active());
+                if refresh.is_none() && drainer.is_none() {
+                    // The last rung: dismiss the notice this pane last drew, if any.
+                    if let Some(digest) = &self.ui.skipped_shown {
+                        v.state.dismissed_skipped = Some(digest.clone());
+                    }
                 }
             }
             outcome.redraw |= applied.redraw;

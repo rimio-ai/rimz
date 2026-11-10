@@ -56,6 +56,102 @@ fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
     assert!(rig.view().ui().hook_drainer_alert.is_none());
 }
 
+/// Paint the next frame now, whatever the frame clock says.
+fn paint_due(rig: &mut Rig) {
+    rig.state.pane.next_frame = rig.state.pane.clock.now();
+    rig.paint(true);
+}
+
+fn press_esc(rig: &mut Rig) {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let press = Wakeup::Press {
+        code: KeyCode::Esc,
+        mods: KeyModifiers::NONE,
+    };
+    rig.state.on_input(press, &mut rig.terminal).unwrap();
+    paint_due(rig);
+}
+
+fn with_skipped(mut snapshot: SidebarSnapshot, digest: &str) -> SidebarSnapshot {
+    snapshot.skipped_settings = Some(crate::store::snapshot::SkippedSettings {
+        count: 2,
+        digest: digest.into(),
+    });
+    snapshot.now += jiff::SignedDuration::from_secs(1);
+    snapshot
+}
+
+#[test]
+fn esc_dismisses_the_painted_skipped_notice_until_another_list_arrives() {
+    let mut rig = Rig::new();
+    let snapshot = with_skipped(agent_snapshot(&rig.ws), "aa");
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    paint_due(&mut rig);
+    assert_eq!(rig.state.pane.ui.skipped_shown.as_deref(), Some("aa"));
+    press_esc(&mut rig);
+    assert_eq!(rig.state.pane.ui.skipped_shown, None, "one press dismisses");
+    let snapshot = with_skipped(snapshot, "aa");
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    paint_due(&mut rig);
+    assert_eq!(
+        rig.state.pane.ui.skipped_shown, None,
+        "the same list stays dismissed"
+    );
+    rig.fold(with_skipped(snapshot, "bb"), SnapshotSource::Produced);
+    paint_due(&mut rig);
+    assert_eq!(rig.state.pane.ui.skipped_shown.as_deref(), Some("bb"));
+}
+
+#[test]
+fn esc_clears_an_alert_before_the_skipped_notice() {
+    let mut rig = Rig::new();
+    rig.fold(
+        with_skipped(agent_snapshot(&rig.ws), "aa"),
+        SnapshotSource::Produced,
+    );
+    let now = rig.view().ctx().current.now;
+    rig.view().ctx().health.alert = Some(render::Alert {
+        reason: "refresh failed".into(),
+        since: now,
+        recovered_at: Some(now),
+    });
+    paint_due(&mut rig);
+    assert_eq!(rig.state.pane.ui.skipped_shown.as_deref(), Some("aa"));
+    press_esc(&mut rig);
+    assert!(rig.view().ctx().health.alert.is_none());
+    assert_eq!(
+        rig.state.pane.ui.skipped_shown.as_deref(),
+        Some("aa"),
+        "the press aimed at the alert keeps the notice"
+    );
+    press_esc(&mut rig);
+    assert_eq!(rig.state.pane.ui.skipped_shown, None);
+}
+
+#[test]
+fn esc_on_an_active_alert_leaves_the_hidden_skipped_notice() {
+    let mut rig = Rig::new();
+    rig.fold(
+        with_skipped(agent_snapshot(&rig.ws), "aa"),
+        SnapshotSource::Produced,
+    );
+    let now = rig.view().ctx().current.now;
+    rig.view().ctx().health.alert = Some(render::Alert {
+        reason: "refresh failed".into(),
+        since: now,
+        recovered_at: None,
+    });
+    paint_due(&mut rig);
+    assert_eq!(
+        rig.state.pane.ui.skipped_shown, None,
+        "an active alert hides it"
+    );
+    press_esc(&mut rig);
+    assert!(rig.view().ctx().health.alert.is_none());
+    assert_eq!(rig.view().ui().dismissed_skipped, None);
+    assert_eq!(rig.state.pane.ui.skipped_shown.as_deref(), Some("aa"));
+}
+
 #[test]
 fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
     let mut rig = Rig::new();

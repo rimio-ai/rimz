@@ -442,6 +442,19 @@ fn hook_drainer_outages_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn a_rejudged_skipped_list_of_equal_size_is_content() {
+    let mut left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    left.skipped_settings = Some(crate::store::snapshot::SkippedSettings {
+        count: 2,
+        digest: "aa".into(),
+    });
+    let mut right = left.clone();
+    assert!(same_snapshot_content(&left, &right));
+    right.skipped_settings.as_mut().unwrap().digest = "bb".into();
+    assert!(!same_snapshot_content(&left, &right));
+}
+
+#[test]
 fn typing_deadlines_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut right = left.clone();

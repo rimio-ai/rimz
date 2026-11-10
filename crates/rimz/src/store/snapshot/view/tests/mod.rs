@@ -193,3 +193,36 @@ fn capacity_and_session_usage_do_not_fabricate_a_context_percentage() {
     assert_eq!(row.context_gauge_percent(), None);
     assert_eq!(row.context_used_tokens(), None);
 }
+
+#[test]
+fn skipped_settings_digest_names_the_set_of_warnings() {
+    use crate::store::snapshot::SkippedSettings;
+    use crate::workspace::record::SkippedSetting;
+
+    let skipped = |pairs: &[(&str, &str)]| {
+        let list = pairs
+            .iter()
+            .map(|&(setting, message)| SkippedSetting {
+                setting: setting.into(),
+                message: message.into(),
+            })
+            .collect::<Vec<_>>();
+        SkippedSettings::of(&list)
+    };
+    let shown = skipped(&[("theme.x", "unknown key"), ("agents.y", "not a number")]).unwrap();
+    assert_eq!(shown.count, 2);
+    assert_eq!(
+        skipped(&[("agents.y", "not a number"), ("theme.x", "unknown key")]),
+        Some(shown.clone()),
+        "order does not change the identity"
+    );
+    let reworded = skipped(&[("theme.x", "unknown key"), ("agents.y", "too large")]).unwrap();
+    assert_eq!(reworded.count, 2);
+    assert_ne!(reworded.digest, shown.digest);
+    assert_ne!(
+        skipped(&[("ab", "c")]).unwrap().digest,
+        skipped(&[("a", "bc")]).unwrap().digest,
+        "field boundaries are framed"
+    );
+    assert_eq!(skipped(&[]), None);
+}
