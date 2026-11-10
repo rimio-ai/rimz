@@ -454,6 +454,7 @@ fn rate_limits_response_maps_reset_credit_summary() {
                 .filter_map(|seconds| Timestamp::from_second(seconds).ok())
                 .collect(),
             effect: crate::agents::RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
         })
     );
 
@@ -476,6 +477,7 @@ fn rate_limits_response_maps_reset_credit_summary() {
             soonest_expiry: None,
             expiries: Vec::new(),
             effect: crate::agents::RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
         })
     );
 }

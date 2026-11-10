@@ -272,6 +272,7 @@ fn redeem_preview_shows_a_lifted_window_without_a_redeem_line() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: rimz::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
     let mut stream = anstream::StripStream::new(Vec::new());
     write_redeem_preview(
@@ -301,6 +302,7 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
         soonest_expiry: Some(now() + Duration::from_secs(3600)),
         expiries: vec![],
         effect: RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
     let (rows, text) = listed(
         ACCOUNTS,

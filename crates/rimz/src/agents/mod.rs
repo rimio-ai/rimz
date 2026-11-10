@@ -88,6 +88,7 @@ use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
 use credits::HttpErrKind;
 pub use credits::{
     AccountUsageProbe, AccountUsageSnapshot, Entitlement, ExtraCredits, RedeemEffect, ResetCredits,
+    ResetGrant,
 };
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,

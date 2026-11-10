@@ -20,6 +20,7 @@ fn facts(used: u8, extra_credits: Option<ExtraCredits>) -> SpendFacts {
             soonest_expiry: None,
             expiries: Vec::new(),
             effect: RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
         }),
         rate_pct_per_day: None,
         last_attempt: None,

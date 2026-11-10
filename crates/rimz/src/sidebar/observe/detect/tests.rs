@@ -1224,6 +1224,7 @@ fn aggregate_reset_credit_signature_ignores_subsecond_precision() {
                     soonest_expiry: Some(expiry),
                     expiries: vec![expiry],
                     effect: crate::agents::RedeemEffect::RestartsWindow,
+                    grants: Vec::new(),
                 }),
                 ..provider_panel("codex", Vec::new())
             }],

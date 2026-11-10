@@ -945,6 +945,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         soonest_expiry: Some(now + std::time::Duration::from_secs(3 * 3_600)),
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     codex_panel.redeem_forecast = Some(RedeemForecast::Armed);
     snapshot.providers = vec![
@@ -1379,6 +1380,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         soonest_expiry: Some(now + std::time::Duration::from_secs(3 * 3_600)),
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     codex_panel.redeem_forecast = Some(RedeemForecast::Armed);
     snapshot.providers = vec![

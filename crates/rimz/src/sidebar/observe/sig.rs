@@ -655,6 +655,7 @@ mod tests {
                 soonest_expiry: Some(reset_expiry),
                 expiries: vec![reset_expiry],
                 effect: crate::agents::RedeemEffect::RestartsWindow,
+                grants: Vec::new(),
             }),
             redeem_forecast: Some(crate::store::snapshot::RedeemForecast::Armed),
             ..provider_panel(
