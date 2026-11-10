@@ -90,7 +90,6 @@ pub(super) fn scope_key(name: &str, checkout: &Path) -> String {
 
 fn scoped_tasks(
     tasks: &BTreeMap<String, LoadedTask>,
-    ledger: &super::launch_ledger::Ledger,
     workflows: &super::launch_ledger::WorkflowLedger,
     owned: &[PathBuf],
 ) -> BTreeMap<String, ScopedTask> {
@@ -98,9 +97,7 @@ fn scoped_tasks(
     for (name, task) in tasks {
         let entry = task.entry();
         if !entry.each_worktree {
-            if super::launch_ledger::launched(entry, name, &entry.run_dir(), ledger, workflows)
-                .is_some()
-            {
+            if super::launch_ledger::launched(entry, name, &entry.run_dir(), workflows).is_some() {
                 continue;
             }
             scoped.insert(
@@ -115,7 +112,7 @@ fn scoped_tasks(
         }
         for checkout in owned {
             let checkout = crate::utils::path::normalize_path_lexical(checkout);
-            if super::launch_ledger::launched(entry, name, &checkout, ledger, workflows).is_some() {
+            if super::launch_ledger::launched(entry, name, &checkout, workflows).is_some() {
                 continue;
             }
             let key = scope_key(name, &checkout);
@@ -289,27 +286,12 @@ fn fire_tasks(
     let path = state_path(runtime);
     let state = read_state(&path);
     let mut arming = arming::load();
-    let ledger = if tasks.values().any(|task| task.entry().stay) {
-        match super::launch_ledger::load_room(runtime, project_root) {
-            Ok(ledger) => ledger,
-            Err(error) => {
-                tracing::warn!(%error, "resident loop ledger unavailable");
-                tasks.retain(|_, task| !task.entry().stay);
-                BTreeMap::new()
-            }
-        }
-    } else {
-        BTreeMap::new()
-    };
-    let workflows = if tasks
-        .values()
-        .any(|task| task.entry().is_condition_workflow())
-    {
+    let workflows = if tasks.values().any(|task| task.entry().dedupes_checkout()) {
         match super::launch_ledger::load_workflows_room(runtime, project_root) {
             Ok(ledger) => ledger,
             Err(error) => {
                 tracing::warn!(%error, "workflow loop ledger unavailable");
-                tasks.retain(|_, task| !task.entry().is_condition_workflow());
+                tasks.retain(|_, task| !task.entry().dedupes_checkout());
                 Default::default()
             }
         }
@@ -333,7 +315,7 @@ fn fire_tasks(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
-    let scoped = scoped_tasks(&tasks, &ledger, &workflows, &owned);
+    let scoped = scoped_tasks(&tasks, &workflows, &owned);
     for (key, scope) in &scoped {
         if let Some(record) = arming.get(&scope.task.key(&scope.name)).copied() {
             arming.insert(scope.task.key(key), record);
@@ -930,16 +912,9 @@ fn recorded_launch(
     let checkout = checkout
         .map(Path::to_path_buf)
         .unwrap_or_else(|| entry.run_dir());
-    if entry.stay {
-        return super::launch_ledger::load_room(runtime, project_root).is_ok_and(|ledger| {
-            super::launch_ledger::launched(entry, name, &checkout, &ledger, &Default::default())
-                .is_some()
-        });
-    }
-    entry.is_condition_workflow()
+    entry.dedupes_checkout()
         && super::launch_ledger::load_workflows_room(runtime, project_root).is_ok_and(|ledger| {
-            super::launch_ledger::launched(entry, name, &checkout, &BTreeMap::new(), &ledger)
-                .is_some()
+            super::launch_ledger::launched(entry, name, &checkout, &ledger).is_some()
         })
 }
 

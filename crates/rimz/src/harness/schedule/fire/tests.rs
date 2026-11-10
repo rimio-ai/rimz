@@ -136,7 +136,7 @@ fn worktree_tasks(
 fn worktree_scopes_normalize_marker_components() {
     let (root, tasks, _) = worktree_tasks(None);
     let owned = vec![root.path().join("b/../a")];
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
+    let scoped = scoped_tasks(&tasks, &Default::default(), &owned);
     let scope = scoped.values().next().unwrap();
     assert_eq!(
         scope.checkout.as_deref(),
@@ -144,27 +144,35 @@ fn worktree_scopes_normalize_marker_components() {
     );
 }
 
+/// A launch the resident path remembered before every fire became a workflow run.
+fn resident(at: Timestamp) -> super::super::launch_ledger::WorkflowLaunchRecord {
+    super::super::launch_ledger::WorkflowLaunchRecord {
+        at,
+        run: None,
+        scope: crate::store::workflow::ScopeKind::Worktree,
+        leader: Some("otter".into()),
+        destination: None,
+    }
+}
+
 #[test]
-fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
-    let (_root, mut tasks, owned) = worktree_tasks(None);
+fn resident_memory_holds_a_checkout_only_for_a_remembering_task() {
+    let (_root, tasks, owned) = worktree_tasks(None);
+    let now = Timestamp::from_second(1000).unwrap();
+    let mut workflows = super::super::launch_ledger::WorkflowLedger::default();
+    workflows.tasks.insert(
+        NAME.into(),
+        BTreeMap::from([(owned[0].clone(), resident(now))]),
+    );
     let mut entry = tasks[NAME].entry().clone();
+    let stay = scoped_tasks(&one(loaded(entry.clone())), &workflows, &owned).len();
     entry.agent = None;
     entry.stay = false;
     entry.workflow = Some("review".into());
-    tasks.insert(NAME.into(), loaded(entry));
-    let now = Timestamp::from_second(1000).unwrap();
-    let ledger = one(BTreeMap::from([(
-        owned[0].clone(),
-        super::super::launch_ledger::LaunchRecord {
-            destination: None,
-            at: now,
-            leader: "old".into(),
-        },
-    )]));
-    assert_eq!(
-        scoped_tasks(&tasks, &ledger, &Default::default(), &owned,).len(),
-        2
-    );
+    entry.when = None;
+    entry.every = Some("1h".into());
+    let scheduled = scoped_tasks(&one(loaded(entry)), &workflows, &owned).len();
+    assert_eq!((stay, scheduled), (1, 2));
 }
 
 #[test]
@@ -176,8 +184,10 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
     let mut workflows = WorkflowLedger::default();
     let record = WorkflowLaunchRecord {
         at: now,
-        run: crate::ids::WorkflowRunId::new(),
+        run: Some(crate::ids::WorkflowRunId::new()),
         scope: ScopeKind::Worktree,
+        leader: None,
+        destination: None,
     };
     let mut results = Vec::new();
     for (stay, condition, each_worktree, project) in [
@@ -215,14 +225,14 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
                 },
             )]),
         );
-        results.push(scoped_tasks(&one(loaded(entry)), &BTreeMap::new(), &workflows, &owned).len());
+        results.push(scoped_tasks(&one(loaded(entry)), &workflows, &owned).len());
     }
     // A stay task runs as a workflow, so its run's memory holds its checkout too.
     assert_eq!(results, vec![1, 0, 0, 2, 1]);
 }
 
 #[test]
-fn malformed_workflow_memory_suppresses_only_condition_workflow_planning() {
+fn malformed_launch_memory_suppresses_every_remembering_task() {
     let root = tempfile::tempdir().unwrap();
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let runtime = RuntimePaths::for_state(&paths).unwrap();
@@ -280,7 +290,8 @@ fn malformed_workflow_memory_suppresses_only_condition_workflow_planning() {
             LoopRunHost::Detached,
             None
         ),
-        vec!["ordinary", "resident"]
+        // A resident task records its runs there too, so it fails closed beside the workflow.
+        vec!["ordinary"]
     );
 }
 
@@ -320,7 +331,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
     }
     std::fs::write(owned[0].join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     std::fs::write(owned[1].join(".rimz/team/blackboard.md"), "Stage: Review\n").unwrap();
-    let mut ledger = super::super::launch_ledger::Ledger::new();
+    let mut ledger = super::super::launch_ledger::WorkflowLedger::default();
     for stage in [None, Some("Review"), Some("Done")] {
         if let Some(stage) = stage {
             std::fs::write(
@@ -329,8 +340,8 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             )
             .unwrap();
         }
-        let scoped = scoped_tasks(&tasks, &ledger, &Default::default(), &owned);
-        assert_eq!(scoped.len(), if ledger.is_empty() { 2 } else { 1 });
+        let scoped = scoped_tasks(&tasks, &ledger, &owned);
+        assert_eq!(scoped.len(), if ledger.tasks.is_empty() { 2 } else { 1 });
         let planned: BTreeMap<_, _> = scoped
             .iter()
             .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
@@ -371,20 +382,13 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
             &verdicts,
             &BTreeSet::new(),
         );
-        if ledger.is_empty() {
+        if ledger.tasks.is_empty() {
             assert_eq!(actions.len(), 1);
             assert_eq!(actions[0].1, Action::Fire);
             assert_eq!(scoped[&actions[0].0].checkout.as_ref(), Some(&owned[0]));
-            ledger.insert(
+            ledger.tasks.insert(
                 NAME.into(),
-                BTreeMap::from([(
-                    owned[0].clone(),
-                    super::super::launch_ledger::LaunchRecord {
-                        destination: None,
-                        at: now.timestamp(),
-                        leader: "otter".into(),
-                    },
-                )]),
+                BTreeMap::from([(owned[0].clone(), resident(now.timestamp()))]),
             );
         } else {
             assert!(actions.is_empty());
@@ -401,7 +405,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
 fn worktree_retries_use_each_checkouts_last_fire() {
     let (_root, tasks, owned) = worktree_tasks(None);
     let now = zdt(2026, 6, 24, 8, 5, 0);
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
+    let scoped = scoped_tasks(&tasks, &Default::default(), &owned);
     let planned = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -466,7 +470,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
 fn worktree_holds_have_independent_clocks() {
     let (_root, tasks, owned) = worktree_tasks(Some("30m"));
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &Default::default(), &owned);
+    let scoped = scoped_tasks(&tasks, &Default::default(), &owned);
     assert_eq!(scoped.len(), 2);
     let planned: BTreeMap<_, _> = scoped
         .iter()
@@ -885,14 +889,10 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let runtime = RuntimePaths::for_state(&paths).unwrap();
         crate::disk::atomic::write_temp_then_rename(
-            &super::super::launch_ledger::path(&paths),
+            &super::super::launch_ledger::resident_path(&paths),
             &one(BTreeMap::from([(
                 root.path().to_owned(),
-                super::super::launch_ledger::LaunchRecord {
-                    destination: None,
-                    at: now.timestamp(),
-                    leader: "otter".into(),
-                },
+                serde_json::json!({"at": now.timestamp(), "leader": "otter"}),
             )])),
         )
         .unwrap();
@@ -2080,16 +2080,12 @@ fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
         fire_at: Some(seconds_before(stamp, 60)),
         ..TaskEntry::default()
     }));
-    let ledger = super::super::launch_ledger::path(&paths);
+    let ledger = super::super::launch_ledger::resident_path(&paths);
     crate::disk::atomic::write_temp_then_rename(
         &ledger,
         &one(BTreeMap::from([(
             root.path().to_owned(),
-            super::super::launch_ledger::LaunchRecord {
-                destination: None,
-                at: stamp,
-                leader: "otter".into(),
-            },
+            serde_json::json!({"at": stamp, "leader": "otter"}),
         )])),
     )
     .unwrap();

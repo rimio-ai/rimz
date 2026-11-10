@@ -635,6 +635,32 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
         [(LoopRunResult::Completed, Some(id.as_str()), Some(false))],
         "a visited command step is not an act"
     );
+    // A launcher that remembers the run only after this report keeps no memory of it.
+    let launch = crate::harness::schedule::launch_ledger::WorkflowLaunchRecord {
+        at: record.created_at,
+        run: Some(record.id.clone()),
+        scope: record.scope.kind,
+        leader: None,
+        destination: None,
+    };
+    let ledger =
+        json!({"version": 2, "tasks": {"nightly": {home.path().to_str().unwrap(): launch}}});
+    // The report forgets in the project's own store, as it does in production.
+    let ledger_state = StatePaths::for_project_root(home.path()).unwrap();
+    let file = crate::StatePaths::class_path(
+        &ledger_state.root,
+        crate::disk::paths::Class::Records,
+        "loop-workflow-launches.json",
+    );
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, ledger.to_string()).unwrap();
+    crate::harness::workflow::forget_reported_launch(&state, &record.id).unwrap();
+    let remembered =
+        crate::harness::schedule::launch_ledger::load_workflows(&ledger_state).unwrap();
+    assert!(
+        !remembered.tasks.contains_key("nightly"),
+        "an unacted run's late memory is forgotten: {remembered:?}"
+    );
 }
 
 fn judge_at(node: &str) -> (crate::disk::paths::WorkflowPaths, RunRecord) {

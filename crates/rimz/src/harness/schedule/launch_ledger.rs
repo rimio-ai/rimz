@@ -1,20 +1,10 @@
-//! Read-only launch memory, judge declines, and condition capacity waits.
+//! Read-only launch memory and condition capacity waits.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LaunchRecord {
-    pub at: Timestamp,
-    pub leader: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub destination: Option<PathBuf>,
-}
-
-pub type Ledger = BTreeMap<String, BTreeMap<PathBuf, LaunchRecord>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapacityRecord {
@@ -53,12 +43,23 @@ pub fn load_capacity(paths: &crate::StatePaths) -> Result<CapacityWaits, LedgerE
     }
 }
 
+/// One remembered launch: the run a deduping task created there, or a resident launch
+/// remembered before every fire became a workflow run, which carries its leader instead.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowLaunchRecord {
     pub at: Timestamp,
-    pub run: crate::ids::WorkflowRunId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::ids::WorkflowRunId>,
     pub scope: crate::store::workflow::ScopeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<PathBuf>,
 }
+
+/// Version 2 holds the resident launches version 1 left in their own file; reading a version 1
+/// file, or none, folds that file in, so the next write keeps them and the older file is done.
+const VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowLedger {
@@ -69,7 +70,7 @@ pub struct WorkflowLedger {
 impl Default for WorkflowLedger {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: VERSION,
             tasks: BTreeMap::new(),
         }
     }
@@ -84,16 +85,35 @@ pub(super) fn workflow_path(paths: &crate::StatePaths) -> PathBuf {
 }
 
 pub fn load_workflows(paths: &crate::StatePaths) -> Result<WorkflowLedger, LedgerErr> {
-    let ledger: WorkflowLedger = match std::fs::read(workflow_path(paths)) {
+    let mut ledger: WorkflowLedger = match std::fs::read(workflow_path(paths)) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(WorkflowLedger::default());
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => WorkflowLedger {
+            version: 1,
+            tasks: BTreeMap::new(),
+        },
         Err(error) => return Err(error.into()),
     };
-    if ledger.version != 1 {
-        return Err(LedgerErr::Version(ledger.version));
+    match ledger.version {
+        VERSION => return Ok(ledger),
+        1 => {}
+        version => return Err(LedgerErr::Version(version)),
     }
+    for (task, launches) in load_residents(paths)? {
+        let remembered = ledger.tasks.entry(task).or_default();
+        for (checkout, resident) in launches {
+            remembered
+                .entry(checkout)
+                .or_insert_with(|| WorkflowLaunchRecord {
+                    at: resident.at,
+                    run: None,
+                    scope: crate::store::workflow::ScopeKind::Worktree,
+                    leader: Some(resident.leader),
+                    destination: resident.destination,
+                });
+        }
+    }
+    ledger.tasks.retain(|_, launches| !launches.is_empty());
+    ledger.version = VERSION;
     Ok(ledger)
 }
 
@@ -108,27 +128,12 @@ pub(super) fn load_workflows_room(
     load_workflows(&paths)
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Launch<'a> {
-    Resident(&'a LaunchRecord),
-    Workflow(&'a WorkflowLaunchRecord),
-}
-
 pub fn launched<'a>(
     entry: &crate::config::TaskEntry,
     task: &str,
     checkout: &std::path::Path,
-    residents: &'a Ledger,
     workflows: &'a WorkflowLedger,
-) -> Option<Launch<'a>> {
-    // A resident remembered before the cutover still counts; its runs since are workflows.
-    if entry.stay
-        && let Some(launch) = residents
-            .get(task)
-            .and_then(|launches| launches.get(checkout))
-    {
-        return Some(Launch::Resident(launch));
-    }
+) -> Option<&'a WorkflowLaunchRecord> {
     if !entry.dedupes_checkout() {
         return None;
     }
@@ -137,41 +142,6 @@ pub fn launched<'a>(
         .values()
         .find(|record| record.scope == crate::store::workflow::ScopeKind::Project)
         .or_else(|| launches.get(checkout))
-        .map(Launch::Workflow)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct DeclineRecord {
-    pub(super) at: Timestamp,
-    pub(super) since: Option<Timestamp>,
-    pub(super) reason: String,
-    pub(super) profile: String,
-    #[serde(default)]
-    pub(super) tier: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) kind: Option<crate::ids::AgentKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) fingerprint: Option<String>,
-}
-
-pub(super) type Declines = BTreeMap<String, BTreeMap<PathBuf, DeclineRecord>>;
-
-pub(super) fn decline_path(paths: &crate::StatePaths) -> PathBuf {
-    crate::StatePaths::class_path(
-        &paths.root,
-        crate::disk::paths::Class::Records,
-        "loop-declines.json",
-    )
-}
-
-pub(super) fn load_declines(paths: &crate::StatePaths) -> Result<Declines, LedgerErr> {
-    match std::fs::read(decline_path(paths)) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Declines::new()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -186,18 +156,22 @@ pub enum LedgerErr {
     Version(u32),
 }
 
-pub(super) fn load_room(
-    runtime: &crate::RuntimePaths,
-    root: Option<&std::path::Path>,
-) -> Result<Ledger, LedgerErr> {
-    let paths = match root {
-        Some(root) => crate::StatePaths::for_project_root(root)?,
-        None => crate::StatePaths::for_workspace(runtime.workspace_id.clone())?,
-    };
-    load(&paths)
+/// A launch the resident path remembered before its fires became workflow runs; it is read
+/// only to fold into a version 1 workflow ledger.
+#[derive(Deserialize)]
+struct ResidentRecord {
+    at: Timestamp,
+    leader: String,
+    #[serde(default)]
+    destination: Option<PathBuf>,
 }
 
-pub(super) fn path(paths: &crate::StatePaths) -> PathBuf {
+#[cfg(test)]
+pub(super) fn resident_path(paths: &crate::StatePaths) -> PathBuf {
+    residents_at(paths)
+}
+
+fn residents_at(paths: &crate::StatePaths) -> PathBuf {
     crate::StatePaths::class_path(
         &paths.root,
         crate::disk::paths::Class::Records,
@@ -205,10 +179,12 @@ pub(super) fn path(paths: &crate::StatePaths) -> PathBuf {
     )
 }
 
-pub fn load(paths: &crate::StatePaths) -> Result<Ledger, LedgerErr> {
-    match std::fs::read(path(paths)) {
+fn load_residents(
+    paths: &crate::StatePaths,
+) -> Result<BTreeMap<String, BTreeMap<PathBuf, ResidentRecord>>, LedgerErr> {
+    match std::fs::read(residents_at(paths)) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Ledger::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
         Err(error) => Err(error.into()),
     }
 }
@@ -243,18 +219,5 @@ mod tests {
             load_capacity(&paths).is_err(),
             "corruption is not an empty wait file"
         );
-    }
-
-    #[test]
-    fn legacy_decline_defaults_to_the_first_judge() {
-        let decoded = serde_json::from_value::<DeclineRecord>(serde_json::json!({
-            "at": "2026-06-01T00:00:00Z", "since": null,
-            "profile": "codex", "reason": "nothing to do"
-        }));
-        assert!(
-            decoded.is_ok(),
-            "declines stored without a tier remain readable: {decoded:?}"
-        );
-        assert_eq!(decoded.unwrap().tier, 0);
     }
 }

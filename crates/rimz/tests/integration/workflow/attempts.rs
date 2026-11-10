@@ -983,6 +983,11 @@ fn condition_workflow(room: &Room, scope: &str, each: bool) {
     )
     .unwrap();
     fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
+    review_task(room, each);
+}
+
+/// The `review` loop task, firing the `review` workflow while a pull request is open.
+fn review_task(room: &Room, each: bool) {
     fs::write(
         room.env.rimz_home().join("loop.toml"),
         format!(
@@ -1137,7 +1142,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
 }
 
 #[test]
-fn condition_workflow_readded_while_its_removed_run_lives_starts_fresh_afterward() {
+fn condition_workflow_removed_before_its_agent_cancels_the_run_and_readds_fresh() {
     let room = Room::new("");
     condition_workflow(&room, "worktree", false);
     let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
@@ -1149,7 +1154,47 @@ fn condition_workflow_readded_while_its_removed_run_lives_starts_fresh_afterward
             .output()
             .unwrap(),
     );
+    settled(&room.env, old.id.as_str(), "canceled");
+    assert!(
+        workflow_launches(&room)["tasks"].get("review").is_none(),
+        "a re-added task must not adopt the removed task's run"
+    );
     condition_workflow(&room, "worktree", false);
+    fire();
+    let runs = records::list(&paths).unwrap();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let new = runs.iter().find(|run| run.id != old.id).unwrap();
+    assert_eq!(new.task.as_deref(), Some("review"));
+    assert_eq!(
+        workflow_launches(&room)["tasks"]["review"][room.env.project_root.to_str().unwrap()]["run"],
+        new.id.as_str()
+    );
+    let history = workflow_task_history(&room, "review");
+    assert!(
+        !history["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| overlapped_by(row, old.id.as_str())),
+        "{history}"
+    );
+}
+
+#[test]
+fn condition_workflow_readded_while_its_removed_acted_run_lives_starts_fresh_afterward() {
+    let room = Room::new("");
+    review_task(&room, false);
+    let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
+    fire();
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let old = records::list(&paths).unwrap().remove(0);
+    room.attempt(old.id.as_str());
+    success(
+        room.command(&["loop", "remove", "review"])
+            .output()
+            .unwrap(),
+    );
+    review_task(&room, false);
     fire();
     let history = workflow_task_history(&room, "review");
     assert!(

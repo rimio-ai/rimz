@@ -2042,7 +2042,7 @@ done
         fired.clone()
     };
     let trace_text = std::fs::read_to_string(&trace).unwrap_or_default();
-    let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    let residents = store.paths().root.join("records/loop-launches.json");
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .unwrap()
@@ -2095,7 +2095,7 @@ done
         }
         assert_eq!(store.list_messages().unwrap(), before_queue);
         assert_eq!(store.list_message_history().unwrap(), before_history);
-        assert!(ledger.is_empty());
+        assert!(!residents.exists());
         assert!(!trace_text.contains("new-tab"), "{trace_text}");
         assert_eq!(
             trace_text.matches("close-pane").count(),
@@ -2135,8 +2135,8 @@ done
         }
         return;
     }
-    // The run remembers the firing checkout; the resident ledger is read, never written.
-    assert!(ledger.is_empty());
+    // The run remembers the firing checkout; no fire writes the resident launch file.
+    assert!(!residents.exists());
     let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
     assert!(
         workflows.tasks["resident"].contains_key(&env.project_root),
@@ -2416,17 +2416,10 @@ fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
     std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
     std::fs::write(
         ledger,
-        serde_json::to_vec(&BTreeMap::from([(
-            "resident",
-            BTreeMap::from([(
-                env.project_root.clone(),
-                rimz::harness::schedule::launch_ledger::LaunchRecord {
-                    destination: None,
-                    at: Timestamp::now(),
-                    leader: "ghost-leader".into(),
-                },
-            )]),
-        )]))
+        serde_json::to_vec(&serde_json::json!({"resident": {
+            env.project_root.display().to_string():
+                {"at": Timestamp::now(), "leader": "ghost-leader"}
+        }}))
         .unwrap(),
     )
     .unwrap();
@@ -3006,11 +2999,13 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     let runs = rimz::harness::run::list(store.paths()).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].loop_task.as_deref(), Some("resident"));
-    // The run remembers the checkout; the resident ledger is read, never written.
+    // The run remembers the checkout; no fire writes the resident launch file.
     assert!(
-        rimz::harness::schedule::launch_ledger::load(store.paths())
-            .unwrap()
-            .is_empty()
+        !store
+            .paths()
+            .root
+            .join("records/loop-launches.json")
+            .exists()
     );
     let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
     assert!(

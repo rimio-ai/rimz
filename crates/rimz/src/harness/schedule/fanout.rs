@@ -62,25 +62,22 @@ pub fn inspect(
     };
     let entry = task.entry();
     let root = entry.resolved_root();
-    let launches = if entry.stay {
-        launch_ledger::load_room(runtime, Some(&root))?
-    } else {
-        Default::default()
-    };
     let clocks = fire::last_when_states(runtime);
     let stamps = fire::last_stamps(runtime);
     let windows = WindowReadings::new(Some(runtime), now);
     let mut rows = Vec::new();
     for worktree in crate::worktree::discover_owned(&root)? {
         let checkout = crate::utils::path::normalize_path_lexical(&worktree.marker.worktree_path);
-        let state = match launch_ledger::launched(entry, name, &checkout, &launches, workflows) {
-            Some(launch_ledger::Launch::Resident(launch)) => CheckoutState::Launched {
-                leader: launch.leader.clone(),
-                at: launch.at,
-            },
-            Some(launch_ledger::Launch::Workflow(launch)) => CheckoutState::Workflow {
-                run: launch.run.clone(),
-                at: launch.at,
+        let state = match launch_ledger::launched(entry, name, &checkout, workflows) {
+            Some(launch) => match &launch.run {
+                Some(run) => CheckoutState::Workflow {
+                    run: run.clone(),
+                    at: launch.at,
+                },
+                None => CheckoutState::Launched {
+                    leader: launch.leader.clone().unwrap_or_default(),
+                    at: launch.at,
+                },
             },
             None => {
                 let key = fire::scope_key(name, &checkout);

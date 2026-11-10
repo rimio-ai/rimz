@@ -384,6 +384,7 @@ pub(in crate::harness) fn report_run(
             .and_then(|row| row.worktree);
     }
     super::runner::settle_fire_tree(run, acted);
+    forget_unkept_launch(run, task, acted);
     let catalog = super::catalog::TaskCatalog::load_lenient(Some(&run.project_root));
     let Some(loaded) = catalog.for_run(task) else {
         // A consumed one-shot's row is gone; the row its fire wrote still names the kind.
@@ -412,6 +413,34 @@ pub(in crate::harness) fn report_run(
     }
     drain_waiting(task, &loaded.entry().resolved_root());
     transition
+}
+
+/// A run that ended without acting, or failed, leaves its checkout free to launch again: the
+/// launch memory keeps a checkout for a run whose act came to an end of its own, and for a
+/// canceled run, which only a manual fire replaces.
+pub(in crate::harness) fn forget_unkept_launch(
+    run: &crate::store::workflow::RunRecord,
+    task: &str,
+    acted: bool,
+) {
+    use crate::store::workflow::RunState;
+    let kept = match run.state {
+        RunState::Canceled => true,
+        RunState::Failed => false,
+        _ => acted,
+    };
+    if kept {
+        return;
+    }
+    let forgotten = crate::StatePaths::for_project_root(&run.project_root)
+        .map_err(anyhow::Error::from)
+        .and_then(|paths| {
+            super::launch_ledger_store::forget_runs(&paths, task, std::slice::from_ref(&run.id))
+                .map_err(anyhow::Error::from)
+        });
+    if let Err(error) = forgotten {
+        tracing::warn!(task, run = %run.id, error = %format!("{error:#}"), "launch memory kept");
+    }
 }
 
 /// Whether the run's last attempt ended at its budget, and if so whether a turn ran: a launch

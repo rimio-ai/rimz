@@ -407,6 +407,22 @@ fn report_to_loop(paths: &WorkflowPaths, record: &mut RunRecord, guard: &Workspa
     }
 }
 
+/// Apply a sent report's launch-memory rule again, for a launcher that remembered the run only
+/// after its report forgot it: a fast run can end before its launcher writes the memory. The
+/// workspace lock orders this read after a report in flight, which forgets under that lock.
+pub(crate) fn forget_reported_launch(state: &StatePaths, run: &WorkflowRunId) -> Result<()> {
+    let paths = state.workflow(run);
+    let _guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let record = workflow::load(&paths)?;
+    if record.loop_report == workflow::LoopReport::Sent
+        && let Some(task) = record.task.as_deref()
+    {
+        let acted = acted(&paths, &record);
+        crate::harness::schedule::run_log::forget_unkept_launch(&record, task, acted);
+    }
+    Ok(())
+}
+
 /// Whether the run entered an agent or message step, read against its sealed graph; a graph
 /// that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
@@ -1860,6 +1876,19 @@ pub fn resume(
     };
     spawn(&record)?;
     Ok(record)
+}
+
+/// The task's live runs that have not entered an agent or message step: the runs a removal or
+/// redefinition of the task cancels, since nothing they started outlives them.
+pub(crate) fn unacted_task_runs(state: &StatePaths, task: &str) -> Result<Vec<WorkflowRunId>> {
+    if !state.root.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(workflow::list(state)?
+        .into_iter()
+        .filter(|record| record.started_by(task) && !acted(&state.workflow(&record.id), record))
+        .map(|record| record.id)
+        .collect())
 }
 
 pub(crate) fn reassign_task(

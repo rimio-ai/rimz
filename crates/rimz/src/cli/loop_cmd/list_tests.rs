@@ -136,35 +136,31 @@ fn capacity_json_retains_the_typed_hold_and_omits_unknown() {
 }
 
 #[test]
-fn launched_counts_select_the_tasks_own_ledger() {
-    use launch_ledger::{LaunchRecord, WorkflowLaunchRecord, WorkflowLedger};
+fn launched_counts_cover_runs_and_resident_launches_of_remembering_tasks() {
+    use launch_ledger::{WorkflowLaunchRecord, WorkflowLedger};
     let at = Timestamp::from_second(100).unwrap();
-    let residents = BTreeMap::from([(
-        "review".into(),
-        BTreeMap::from([(
-            PathBuf::from("/repo/stale"),
-            LaunchRecord {
-                at,
-                leader: "fox".into(),
-                destination: None,
-            },
-        )]),
-    )]);
     let mut workflows = WorkflowLedger::default();
+    let launch =
+        |run: Option<rimz::ids::WorkflowRunId>, leader: Option<&str>| WorkflowLaunchRecord {
+            at,
+            run,
+            scope: rimz::store::workflow::ScopeKind::Worktree,
+            leader: leader.map(str::to_owned),
+            destination: None,
+        };
     workflows.tasks.insert(
         "review".into(),
-        ["/repo/one", "/repo/two"]
-            .map(|path| {
-                (
-                    PathBuf::from(path),
-                    WorkflowLaunchRecord {
-                        at,
-                        run: rimz::ids::WorkflowRunId::new(),
-                        scope: rimz::store::workflow::ScopeKind::Worktree,
-                    },
-                )
-            })
-            .into(),
+        BTreeMap::from([
+            (PathBuf::from("/repo/stale"), launch(None, Some("fox"))),
+            (
+                PathBuf::from("/repo/one"),
+                launch(Some(rimz::ids::WorkflowRunId::new()), None),
+            ),
+            (
+                PathBuf::from("/repo/two"),
+                launch(Some(rimz::ids::WorkflowRunId::new()), None),
+            ),
+        ]),
     );
     let mut entry = TaskEntry {
         workflow: Some("review".into()),
@@ -172,16 +168,16 @@ fn launched_counts_select_the_tasks_own_ledger() {
         each_worktree: true,
         ..TaskEntry::default()
     };
-    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 2);
+    assert_eq!(launched_count(&entry, "review", &workflows), 3);
     entry.workflow = None;
     entry.stay = true;
-    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 1);
+    assert_eq!(launched_count(&entry, "review", &workflows), 3);
     entry.stay = false;
-    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 0);
+    assert_eq!(launched_count(&entry, "review", &workflows), 0);
     entry.workflow = Some("review".into());
     entry.when = None;
     entry.every = Some("1h".into());
-    assert_eq!(launched_count(&entry, "review", &residents, &workflows), 0);
+    assert_eq!(launched_count(&entry, "review", &workflows), 0);
 }
 
 #[test]

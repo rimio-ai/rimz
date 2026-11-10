@@ -1733,7 +1733,6 @@ fn malformed_launch_memory_warns_without_hiding_local_or_remote_tasks() {
             )
             .unwrap();
             for flags in [vec!["--all"], vec!["--all", "--json"]] {
-                let json = flags.contains(&"--json");
                 let output = env
                     .rimz()
                     .args(["loop", "list"])
@@ -1749,9 +1748,10 @@ fn malformed_launch_memory_warns_without_hiding_local_or_remote_tasks() {
                         && text.contains("healthy"),
                     "{text}"
                 );
-                if !json {
-                    assert!(text.contains("1 worktrees"), "{text}");
-                }
+                assert!(
+                    !text.contains("1 worktrees"),
+                    "one memory serves both: {text}"
+                );
                 assert!(
                     error.contains("warning:")
                         && error.contains("cannot load loop launch memory")

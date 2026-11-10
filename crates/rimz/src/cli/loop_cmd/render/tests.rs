@@ -164,7 +164,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         launches: BTreeMap::from([
             (
                 PathBuf::from("/repo/older"),
-                schedule::launch_ledger::LaunchRecord {
+                ResidentLaunch {
                     destination: None,
                     at: Timestamp::from_second(10).unwrap(),
                     leader: "old-leader".into(),
@@ -172,7 +172,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             ),
             (
                 PathBuf::from("/repo/newer"),
-                schedule::launch_ledger::LaunchRecord {
+                ResidentLaunch {
                     destination: None,
                     at: Timestamp::from_second(90).unwrap(),
                     leader: "new-leader".into(),
@@ -265,8 +265,10 @@ fn workflow_view() -> ShowView {
             checkout.clone(),
             schedule::launch_ledger::WorkflowLaunchRecord {
                 at,
-                run: id.clone(),
+                run: Some(id.clone()),
                 scope: rimz::store::workflow::ScopeKind::Worktree,
+                leader: None,
+                destination: None,
             },
         );
         view.worktrees.push(CheckoutCondition {
