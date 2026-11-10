@@ -511,8 +511,14 @@ fn write_record<T>(
 
 pub fn record_pane(paths: &StatePaths, run_id: &RunId, pane_id: PaneId) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
-        if record.pane_id.as_ref() == Some(&pane_id) {
+        // A new wrapper in the stamped pane's id is a later generation, not the
+        // replaced one, whose own bind came before the stamp.
+        let rebound = record.handed_over_from.as_ref() == Some(&pane_id);
+        if record.pane_id.as_ref() == Some(&pane_id) && !rebound {
             return Ok(RecordMutation::Keep(()));
+        }
+        if rebound {
+            record.handed_over_from = None;
         }
         record.pane_id = Some(pane_id);
         Ok(RecordMutation::Write(()))
@@ -760,6 +766,25 @@ pub fn fail_limit_park(
     Ok(wrote.then_some(record))
 }
 
+/// Stamp a nonterminal run as taken from the wrapper in pane `from`, or clear
+/// the stamp with `None`. A terminal run is never stamped, but is cleared, so a
+/// follow-up turn in the pane a failed restart left keeps owning it. Returns
+/// whether the run is nonterminal and now carries `from`.
+pub fn hand_over(paths: &StatePaths, run_id: &RunId, from: Option<PaneId>) -> Result<bool> {
+    update_record(paths, run_id, |record, _| {
+        if from.is_some() && record.status.is_terminal() {
+            return Ok(RecordMutation::Keep(false));
+        }
+        let stamped = from.is_some();
+        if record.handed_over_from == from {
+            return Ok(RecordMutation::Keep(stamped));
+        }
+        record.handed_over_from = from;
+        Ok(RecordMutation::Write(stamped))
+    })
+    .map(|(_, stamped)| stamped)
+}
+
 /// Give a claimed park back when its notice could not be queued.
 pub fn release_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp) -> Result<()> {
     update_record(paths, run_id, |record, _| {
@@ -852,8 +877,21 @@ pub fn fail_if_nonterminal(
     run_id: &RunId,
     reason: &str,
 ) -> Result<Option<RunRecord>> {
+    fail_if_owned(paths, run_id, None, reason)
+}
+
+/// [`fail_if_nonterminal`] for the wrapper in `pane`, which leaves a run that
+/// pane no longer owns ([`RunRecord::superseded_in`]) untouched.
+pub fn fail_if_owned(
+    paths: &StatePaths,
+    run_id: &RunId,
+    pane: Option<&PaneId>,
+    reason: &str,
+) -> Result<Option<RunRecord>> {
     let (record, wrote) = update_record(paths, run_id, |record, now| {
-        if !record.mark_terminal(RunStatus::Failed, now) {
+        if pane.is_some_and(|pane| record.superseded_in(pane))
+            || !record.mark_terminal(RunStatus::Failed, now)
+        {
             return Ok(RecordMutation::Keep(false));
         }
         if record.failure_tail.is_none() {
@@ -1276,7 +1314,13 @@ fn fold_lifecycle(
         && record.status.is_terminal()
         && record.subagent
         && matches!(observation.signal, LifecycleSignal::TurnStarted { .. });
-    if record.kind.as_str() != kind || (record.status.is_terminal() && !reopen) {
+    if record.kind.as_str() != kind
+        || (record.status.is_terminal() && !reopen)
+        || observation
+            .pane_id
+            .as_ref()
+            .is_some_and(|pane| record.superseded_in(pane))
+    {
         return LifecycleFold::Ignored;
     }
     if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
