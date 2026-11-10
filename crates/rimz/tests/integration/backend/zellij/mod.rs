@@ -27,6 +27,7 @@ mod large_paste;
 mod launch;
 mod options;
 mod pane_io;
+mod popup;
 mod presence;
 mod reap;
 mod reconcile;

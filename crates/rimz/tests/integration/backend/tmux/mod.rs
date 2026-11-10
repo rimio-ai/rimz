@@ -20,6 +20,7 @@ mod keymap;
 mod large_paste;
 mod layout;
 mod pane_io;
+mod popup;
 mod presence;
 mod reconcile;
 mod remote_reconnect;
