@@ -10,8 +10,8 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType};
 use tracing::{debug, warn};
 
+use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
-use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps};
 use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
@@ -144,17 +144,6 @@ impl Attachment {
         let initial_width = terminal.size().map(|s| s.width).ok();
         let host_wake_path =
             runtime.sidebar_host_wake_socket_path(config.room.mux, &config.room.session_name);
-        let pixel_lease = match PixelLease::acquire(&runtime) {
-            Ok(Some(lease)) => Some(lease),
-            Ok(None) => {
-                warn!("sidebar pixel slots exhausted; using cell rendering for this pane");
-                None
-            }
-            Err(err) => {
-                warn!(error = %err, "sidebar pixel lease failed; using cell rendering for this pane");
-                None
-            }
-        };
         let mut state = LoopState::new(
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config.clone(),
@@ -166,7 +155,7 @@ impl Attachment {
             initial_width,
             subscription.observe,
             pet_render_caps,
-            pixel_lease.as_ref().map(|lease| lease.slot),
+            runtime.clone(),
         );
         state.pane.titled = titled;
         state.pane.room_caps = plane.caps.clone();

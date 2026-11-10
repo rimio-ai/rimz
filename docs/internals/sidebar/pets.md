@@ -33,7 +33,7 @@ A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../
 `refresh_view` runs these steps:
 
 1. `render::selected_pet_action` reduces the selected row to one of seven `PetAction` values ([From card state to animation](#from-card-state-to-animation)).
-2. `effective_render_tier` folds the configured mode, the probed capabilities, and this frame's paintability into `Pixel` or `Cell` ([Render tiers](#render-tiers)).
+2. `effective_render_tier` folds the configured mode, the probed capabilities, and this frame's paintability into `Pixel` or `Cell` ([Render tiers](#render-tiers)). A routed frame in which a pixel surface resolves then takes a [pixel slot](#image-ids-and-slots) if the pane holds none; a mirror, or a frame whose take was denied, gets no image ids and draws a `Pixel` tier as `PetBody::Blank`.
 3. The tier becomes the body tier only when `render::pets_on_dashboard` holds (pets enabled, no alert covering the dashboard) and the theme allows a body. `NO_COLOR` suppresses the body (`Theme::pet_body_enabled`), and the caption then carries the state alone.
 4. `PetAssets::observe_unread_rows` diffs the unread row ids against the previous frame and reports whether any row became unread.
 5. `PetAssets::view` polls the loader, starts a load if the pet or its preparation changed, picks the track, samples a sprite index, and returns the `PetView`.
@@ -160,7 +160,7 @@ A failed load retries after `RETRY_COOLDOWN_MS` (20 seconds), counted in base fr
 | `pixel` | pixel transport | `Pixel`, else `Cell` |
 | `auto` (default) | pixel transport and kitty clients | `Pixel`, else `Cell` |
 
-`effective_render_tier` applies this frame's conditions on top. `[theme.display] pixel = "off"` forces `Cell`. A resolved `Pixel` drops to `Cell` when the pane holds no [pixel slot](#image-ids-and-slots), the dashboard has no provider block to sit beside, or `NO_COLOR` suppresses the body. `Cell` always passes through, so `sextant` stays sextant. Sextant cell art is the portable baseline every miss falls back to.
+`effective_render_tier` applies this frame's conditions on top. `[theme.display] pixel = "off"` forces `Cell`. A resolved `Pixel` drops to `Cell` when the dashboard has no provider block to sit beside, or `NO_COLOR` suppresses the body. `Cell` always passes through, so `sextant` stays sextant. Sextant cell art is the portable baseline every miss falls back to. The [pixel slot](#image-ids-and-slots) does not change the tier: a `Pixel` frame without one draws `PetBody::Blank`, an empty box of the pixel footprint, so the column keeps its shape and no sextant art stands in for the slot.
 
 The tier sets the footprint (`dashboard_pet_size`): a pixel pet reserves `15x9` cells and a cell-art pet `18x9`, with one empty row under either body.
 
@@ -203,11 +203,11 @@ Animation cycles image ids instead of using kitty's animation-frame actions (`a=
 
 ### Image ids and slots
 
-Each pane's attachment leases one slot when it starts (`PixelLease::acquire`): the lowest free of 256 flock guards, `pixel-slot-<n>.lock` in the user's shared runtime directory (`RuntimePaths::shared_pixel_slot_lock`), so every room of the user draws from one pool. Slot `n` owns ids `0x520000 + n * 0x200` up to the next slot's base. Sprite `s` uses `base + s`, and the context meter uses `base + 0x100` onward. This layout is a cross-version contract (`PixelSlot`): moving it would orphan the images an older renderer left behind.
+A pane holds a slot only while on screen. Its painter (`FramePainter`) takes one in the routed frame where a pixel surface first resolves (`PixelLease::acquire`): the lowest free of 256 flock guards, `pixel-slot-<n>.lock` in the user's shared runtime directory (`RuntimePaths::shared_pixel_slot_lock`), so every room of the user draws from one pool. A pane with no pixel surface (Zellij, no capabilities, `pixel = "off"`) never opens a slot lock. Slot `n` owns ids `0x520000 + n * 0x200` up to the next slot's base. Sprite `s` uses `base + s`, and the context meter uses `base + 0x100` onward. This layout is a cross-version contract (`PixelSlot`): moving it would orphan the images an older renderer left behind.
 
-The first frame that draws pixels sweeps every id in the slot with individual `d=I` deletes before its first transmit. A successor thus frees images a dead holder left, without touching another live sidebar's slot. Lease exhaustion or a lock I/O error warns once and selects cell rendering for the attachment's lifetime.
+Each take sweeps every id in the slot with individual `d=I` deletes before its first transmit, and every slot-derived value (the pet and meter residency, `MeterPixels`) starts over with it. A successor thus frees images an earlier holder left, without touching another live sidebar's slot. When every slot is held, or the lock fails with an I/O error, the pane warns once per episode and draws the blank box and the cell meter. It retries at most every two seconds while on screen, and at once on its next routed frame after any hidden pass, so more sidebars than slots take turns as the user moves between tabs.
 
-The testkit scenario player (the hidden `rimz sidebar play`, built only with the `testkit` feature) leases slots like live attachments, one per column. Each column keeps its `PixelLease` outside its rebuilt loop state, so a seek or wrap keeps its slot and never sweeps a live sidebar's slot. Headless exports use cell art, and live playback detects capabilities from the environment alone, without mux probes.
+The testkit scenario player (the hidden `rimz sidebar play`, built only with the `testkit` feature) takes slots like live attachments, one per column, from the user's shared pool. A seek or wrap clears the column's images and drops its slot before rebuilding the loop state, which then takes a slot afresh. Headless exports use cell art, and live playback detects capabilities from the environment alone, without mux probes.
 
 ### Sending images
 
@@ -216,7 +216,7 @@ The testkit scenario player (the hidden `rimz sidebar play`, built only with the
 - A sprite is transmitted the first time a frame shows it, or when its id or pet changes. The PNG bytes come from the shared prepared sheet.
 - A sprite whose last send is `RESIDENT_REFRESH_MS` (2 seconds) old is re-sent the next time a frame shows it, so a dropped tmux passthrough or a terminal image-store eviction recovers on its own. Re-sends that fall on different frames are spaced at least `MIN_RESEND_SPACING_MS` (250 ms) apart.
 - A pet change re-transmits the new sheet under the same ids, so the terminal replaces image data in place without a delete.
-- Deletes free both image data and placements (`d=I`), at teardown and on the next paint after pixels are disabled. Every attachment loop exit, errors included, attempts cleanup (`LoopState::clear_pixel`). A lost pty cannot deliver it, and the next holder's sweep bounds those leftovers. Range deletes are never used, because Ghostty 1.3.1 deletes unrelated images for that operation.
+- Deletes free both image data and placements (`d=I`), at teardown and on the next paint after pixels are disabled; the first routed paint after a frame carrying those deletes is written returns the slot. Every attachment loop exit, errors included, attempts cleanup (`LoopState::clear_pixel`). A lost pty cannot deliver it, and the next holder's sweep bounds those leftovers. Range deletes are never used, because Ghostty 1.3.1 deletes unrelated images for that operation.
 
 Every transmit carries a virtual placement (`U=1,p=1`) that the placeholder cells refer to. A re-send replaces that placement instead of adding one, and restores it on terminals that drop placements when replacing image data.
 
@@ -228,9 +228,9 @@ Mode 2026 does not nest: under the renderer's [synchronized-output policy](./sid
 
 ### The context meter
 
-The pixel context meter shares the transport and the slot. It paints only when the pane holds a slot, both capability bits are on, and `[theme.display] pixel` is `auto`. `MeterPixels` interns each distinct raster to an id from `base + 0x100`, up to 256 ids, with least-recently-used eviction that protects the ids visible on screen and those composed in the current frame. When every id is protected, the meter falls back to the cell bar. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns the rest.
+The pixel context meter shares the transport and the slot. It paints only in a routed frame of a pane that holds a slot, both capability bits are on, and `[theme.display] pixel` is `auto`. `MeterPixels` interns each distinct raster to an id from `base + 0x100`, up to 256 ids, with least-recently-used eviction that protects the ids visible on screen and those composed in the current frame. When every id is protected, the meter falls back to the cell bar. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns the rest.
 
-The terminal's image memory depends on peak concurrent attachments, not on uptime or restart count: each slot holds at most 72 pet sprites and 256 meter rasters.
+The terminal's image memory depends on peak concurrent on-screen sidebars, not on uptime or restart count: each slot holds at most 72 pet sprites and 256 meter rasters.
 
 ## rimz list-pets
 

@@ -1,5 +1,6 @@
 //! Tracks pane-local pixel-pet image residency so dropped or evicted sprites self-heal.
 //! PNG payloads come from the shared prepared sheet, not a pane-local cache.
+//! One painter lives per take of a pixel slot, so its ids and residency end with the slot.
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -26,10 +27,6 @@ impl PixelPainter {
             pet_id: None,
             residency: ImageResidency::new(wrap),
         }
-    }
-
-    pub(crate) fn id_base(&self) -> u32 {
-        self.id_base
     }
 
     pub(crate) fn ensure_transmitted<W: Write>(

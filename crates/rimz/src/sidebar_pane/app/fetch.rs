@@ -760,14 +760,14 @@ fn fixture_renderer(
         clock,
         config,
         None,
-        runtime,
+        runtime.clone(),
         std::path::PathBuf::new(),
         crate::diag::DiagSink::disabled(),
         FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
         None,
         std::sync::mpsc::sync_channel(1).0,
         Default::default(),
-        None,
+        runtime,
     );
     renderer.share_views(views, 0);
     renderer

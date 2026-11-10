@@ -398,14 +398,14 @@ impl ApplyHarness {
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
             None,
-            runtime,
+            runtime.clone(),
             socket_path,
             diag,
             FetchHandle::new(std::sync::mpsc::channel().0, completion.clone()),
             None,
             observe_tx,
             PixelRenderCaps::default(),
-            Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+            runtime.clone(),
         );
         state.views.scratch_for_test().1.current = snapshot(ws);
         let views = std::sync::Arc::default();

@@ -94,7 +94,14 @@ fn pixel_churn_and_restarts_stay_in_one_slot_with_one_placement() {
         let view_ui = render::ViewState::default();
         let mut ui = UiState::default();
         for frame in 0..800 {
-            painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+            painter.refresh_view(
+                &mut ui,
+                &view_ui,
+                &snapshot,
+                false,
+                paint::PaintKind::Routed,
+                Instant::now(),
+            );
             compose_test_meters(&mut ui, restart * 800 + frame);
             let mut bytes = Vec::new();
             painter
@@ -135,7 +142,14 @@ fn pixel_slot_sweep_precedes_first_transmit_once() {
         let snapshot = snapshot(&workspace());
         let view_ui = render::ViewState::default();
         let mut ui = UiState::default();
-        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+        painter.refresh_view(
+            &mut ui,
+            &view_ui,
+            &snapshot,
+            false,
+            paint::PaintKind::Routed,
+            Instant::now(),
+        );
         compose_test_meters(&mut ui, 1);
         let mut bytes = Vec::new();
         painter
@@ -177,7 +191,8 @@ fn pixel_slot_sweep_precedes_first_transmit_once() {
 #[test]
 fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
     for wrap in [false, true] {
-        let mut painter = paint::FramePainter::new(
+        let mut painter = paint::FramePainter::test_held(
+            PetAssets::default(),
             PixelRenderCaps {
                 pixel_transport: true,
                 kitty_clients: true,
@@ -197,7 +212,14 @@ fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
         card.usage.context_window = Some(200_000);
         let mut view_ui = render::ViewState::default();
         let mut ui = UiState::default();
-        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+        painter.refresh_view(
+            &mut ui,
+            &view_ui,
+            &snapshot,
+            false,
+            paint::PaintKind::Routed,
+            Instant::now(),
+        );
         assert!(ui.pet.is_none());
         assert!(
             ui.meter_pixels
@@ -250,39 +272,43 @@ fn an_unsized_pixel_frame_writes_no_sync_markers() {
     let snapshot = snapshot(&workspace());
     let mut view_ui = render::ViewState::default();
     let mut ui = UiState::default();
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     painter
         .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
         .unwrap();
     assert!(pty.drain().is_empty(), "an unsized frame ships no bytes");
 }
 
-#[test]
-fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
-    use crate::sidebar_pane::pixel::PixelLease;
+const FULL_CAPS: PixelRenderCaps = PixelRenderCaps {
+    pixel_transport: true,
+    kitty_clients: true,
+};
+
+fn slot_pool() -> (tempfile::TempDir, crate::disk::paths::RuntimePaths) {
     let root = tempfile::tempdir().unwrap();
     let runtime = crate::disk::paths::RuntimePaths::under(workspace(), root.path()).unwrap();
-    let mut leases = (0..256)
-        .map(|_| PixelLease::acquire(&runtime).unwrap().expect("free slot"))
-        .collect::<Vec<_>>();
-    let bases = leases
-        .iter()
+    (root, runtime)
+}
+
+fn first_free_base(pool: &crate::disk::paths::RuntimePaths) -> Option<u32> {
+    crate::sidebar_pane::pixel::PixelLease::acquire(pool)
+        .unwrap()
         .map(|lease| lease.slot.base())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(bases.len(), 256);
-    assert_eq!(leases[0].slot.base(), 0x520000);
-    let exhausted = PixelLease::acquire(&runtime).unwrap();
-    assert!(exhausted.is_none());
-    let mut painter = paint::FramePainter::with_slot(
-        exhausted.map(|lease| lease.slot),
-        PixelRenderCaps {
-            pixel_transport: true,
-            kitty_clients: true,
-        },
-    );
-    let mut view_ui = render::ViewState::default();
-    let mut ui = UiState::default();
-    let mut snapshot = snapshot(&workspace());
+}
+
+/// A dashboard with a pixel pet beside a 5h budget bar, and a card with a context meter.
+fn slot_snapshot() -> crate::store::snapshot::SidebarSnapshot {
+    let mut snapshot = agent_snapshot(&workspace());
+    snapshot.theme.mode = crate::config::ThemeMode::Truecolor;
+    snapshot.theme.pets.enabled = true;
+    snapshot.theme.pets.pet = "codex".to_owned();
     snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
         "codex",
         vec![crate::agents::RateLimitWindow {
@@ -292,66 +318,499 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
             ..Default::default()
         }],
     )];
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
-    assert!(ui.meter_pixels.is_none(), "exhaustion selects cell meters");
-    let mut bytes = Vec::new();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    card.usage.context_pct = Some(50);
+    card.usage.context_window = Some(200_000);
+    snapshot
+}
+
+fn slot_painter(
+    pool: &crate::disk::paths::RuntimePaths,
+    caps: PixelRenderCaps,
+) -> paint::FramePainter {
+    let mut painter = paint::FramePainter::new(caps, false, pool.clone());
+    painter.set_assets(PetAssets::test_loaded_pixel_frame("codex"));
     painter
-        .ensure_meters_transmitted(&mut bytes, &ui, 0)
-        .unwrap();
-    assert!(bytes.is_empty());
-    let draw = |painter: &mut paint::FramePainter,
-                snapshot: &crate::store::snapshot::SidebarSnapshot,
-                view: &mut render::ViewState,
-                ui: &mut UiState| {
-        let output = SharedBuffer::default();
-        let mut terminal = Terminal::with_options(
-            PaneBackend::headless(output.clone()),
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 44, 30)),
-            },
-        )
-        .unwrap();
-        painter
-            .draw_and_paint(&mut terminal, snapshot, None, view, ui)
-            .unwrap();
-        drop(terminal);
-        output.0.lock().unwrap().clone()
-    };
-    let exhausted_frame = draw(&mut painter, &snapshot, &mut view_ui, &mut ui);
-    assert!(
-        !String::from_utf8_lossy(&exhausted_frame).contains("\x1b_G"),
-        "a disabled pixel session emits no kitty graphics bytes"
-    );
-    snapshot.theme.display.pixel = crate::config::PixelMode::Off;
-    let mut cell_painter = paint::FramePainter::with_slot(
-        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
-        PixelRenderCaps {
-            pixel_transport: true,
-            kitty_clients: true,
+}
+
+struct SlotFrame {
+    bytes: String,
+    cells: Vec<((u16, u16), String, ratatui::style::Color)>,
+}
+
+impl SlotFrame {
+    fn graphics(&self) -> bool {
+        self.bytes.contains("\x1b_G")
+    }
+
+    fn image_ids(&self) -> Vec<u32> {
+        kitty_commands(self.bytes.as_bytes())
+            .into_iter()
+            .map(|command| command["i"].parse().unwrap())
+            .chain(self.placeholders().map(|(_, id)| id))
+            .collect()
+    }
+
+    fn placeholders(&self) -> impl Iterator<Item = ((u16, u16), u32)> + '_ {
+        self.cells.iter().filter_map(|(at, symbol, fg)| {
+            let ratatui::style::Color::Rgb(r, g, b) = fg else {
+                return None;
+            };
+            symbol
+                .starts_with('\u{10eeee}')
+                .then(|| (*at, u32::from_be_bytes([0, *r, *g, *b])))
+        })
+    }
+
+    /// Placeholder cells whose image id sits in the pet's or the meter's part of a slot.
+    fn placeholders_at(&self, meter: bool) -> Vec<(u16, u16)> {
+        self.placeholders()
+            .filter(|(_, id)| ((id - 0x520000) % 0x200 >= 0x100) == meter)
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    fn symbol(&self, at: (u16, u16)) -> &str {
+        &self.cells.iter().find(|(cell, ..)| *cell == at).unwrap().1
+    }
+
+    fn sextants(&self) -> bool {
+        self.cells.iter().any(|(_, symbol, _)| {
+            symbol
+                .chars()
+                .any(|ch| ('\u{1fb00}'..='\u{1fb3b}').contains(&ch))
+        })
+    }
+}
+
+fn paint_slot_frame(
+    painter: &mut paint::FramePainter,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    ui: &mut UiState,
+    kind: paint::PaintKind,
+    now: Instant,
+) -> SlotFrame {
+    let mut view = render::ViewState::default();
+    painter.refresh_view(ui, &view, snapshot, false, kind, now);
+    let output = SharedBuffer::default();
+    let area = ratatui::layout::Rect::new(0, 0, 44, 40);
+    let mut terminal = Terminal::with_options(
+        PaneBackend::headless(output.clone()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(area),
         },
+    )
+    .unwrap();
+    let (result, frame) = painter.compose_frame(&mut terminal, snapshot, None, &mut view, ui, kind);
+    result.and(frame.write(terminal.backend_mut())).unwrap();
+    if matches!(kind, paint::PaintKind::Routed) {
+        painter.routed_frame_written();
+    }
+    let mut cells =
+        Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height)).unwrap();
+    render::draw_to_terminal(&mut cells, snapshot, None, &mut view, ui).unwrap();
+    let buffer = cells.backend().buffer();
+    let bytes = String::from_utf8_lossy(&output.0.lock().unwrap()).into_owned();
+    SlotFrame {
+        bytes,
+        cells: area
+            .positions()
+            .map(|at| {
+                let cell = &buffer[at];
+                ((at.x, at.y), cell.symbol().to_owned(), cell.fg)
+            })
+            .collect(),
+    }
+}
+
+/// A hidden frame, the slot return the loop makes once that frame is written,
+/// and the retry clear its unwatched pass makes.
+fn paint_hidden_slot_frame(
+    painter: &mut paint::FramePainter,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    ui: &mut UiState,
+    now: Instant,
+) -> SlotFrame {
+    let frame = paint_slot_frame(painter, snapshot, ui, paint::PaintKind::Mirror, now);
+    painter.release_slot(ui);
+    painter.clear_slot_retry();
+    frame
+}
+
+#[test]
+fn a_routed_frame_takes_a_slot_and_a_hidden_frame_returns_it_blank() {
+    let (_root, pool) = slot_pool();
+    let snapshot = slot_snapshot();
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let pet_drawn = !crate::tui::no_color();
+
+    let routed = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        now,
     );
-    let mut view_cell_ui = render::ViewState::default();
-    let mut cell_ui = UiState::default();
-    cell_painter.refresh_view(&mut cell_ui, &view_cell_ui, &snapshot, false);
+    let commands = kitty_commands(routed.bytes.as_bytes());
+    assert!(commands.len() > 512);
+    for (index, command) in commands[..512].iter().enumerate() {
+        assert_eq!((command["a"].as_str(), command["d"].as_str()), ("d", "I"));
+        assert_eq!(
+            command["i"].parse::<u32>().unwrap(),
+            0x520000 + index as u32
+        );
+    }
+    assert!(commands[512..].iter().any(|command| command["a"] == "t"));
+    let pet_cells = routed.placeholders_at(false);
+    let meter_cells = routed.placeholders_at(true);
+    assert!(
+        !meter_cells.is_empty(),
+        "the routed frame draws a pixel meter"
+    );
     assert_eq!(
-        exhausted_frame,
-        draw(
-            &mut cell_painter,
-            &snapshot,
-            &mut view_cell_ui,
-            &mut cell_ui
-        )
+        !pet_cells.is_empty(),
+        pet_drawn,
+        "the routed frame draws the pixel pet"
+    );
+    assert_eq!(first_free_base(&pool), Some(0x520200), "slot 0 stays held");
+
+    let hidden = paint_hidden_slot_frame(&mut painter, &snapshot, &mut ui, now);
+    assert!(
+        !hidden.graphics(),
+        "a hidden frame writes no kitty graphics"
+    );
+    assert!(hidden.placeholders().next().is_none());
+    assert!(!hidden.bytes.contains('\u{10eeee}'));
+    assert!(!hidden.sextants(), "the pet box is blank, not cell art");
+    assert!(ui.meter_pixels.is_none());
+    if pet_drawn {
+        assert_eq!(
+            ui.pet.as_ref().and_then(|pet| pet.body.clone()),
+            Some(crate::sidebar_pane::pets::PetBody::Blank(
+                crate::sidebar_pane::pets::PetGridSize { cols: 15, rows: 9 }
+            ))
+        );
+    }
+    for at in &pet_cells {
+        assert_eq!(
+            hidden.symbol(*at),
+            " ",
+            "the pet's footprint stays, blank, at {at:?}"
+        );
+    }
+    for at in &meter_cells {
+        assert_ne!(
+            hidden.symbol(*at),
+            " ",
+            "the cell meter replaces the pixel meter at {at:?}"
+        );
+    }
+    let held = crate::sidebar_pane::pixel::PixelLease::acquire(&pool)
+        .unwrap()
+        .expect("the hidden frame returned slot 0");
+    assert_eq!(held.slot.base(), 0x520000);
+
+    let arrival = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        now,
+    );
+    let commands = kitty_commands(arrival.bytes.as_bytes());
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| command["a"] == "d")
+            .count(),
+        512,
+        "each take sweeps its slot once"
+    );
+    assert_eq!(commands[0]["i"].parse::<u32>().unwrap(), 0x520200);
+    assert!(commands.iter().any(|command| command["a"] == "t"));
+    let ids = arrival.image_ids();
+    assert!(!ids.is_empty());
+    for id in ids {
+        assert!((0x520200..0x520400).contains(&id), "{id:x} outside slot 1");
+    }
+    assert_eq!(arrival.placeholders_at(false).is_empty(), !pet_drawn);
+}
+
+#[test]
+fn a_denied_pane_shows_the_blank_box_and_cell_meter_and_retries() {
+    use crate::sidebar_pane::pixel::PixelLease;
+    let (_root, pool) = slot_pool();
+    let mut leases = (0..256)
+        .map(|_| PixelLease::acquire(&pool).unwrap().expect("free slot"))
+        .collect::<Vec<_>>();
+    let bases = leases
+        .iter()
+        .map(|lease| lease.slot.base())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(bases.len(), 256);
+    assert_eq!(leases[0].slot.base(), 0x520000);
+    assert!(PixelLease::acquire(&pool).unwrap().is_none());
+    let snapshot = slot_snapshot();
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let start = Instant::now();
+
+    let denied = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        start,
+    );
+    assert!(!denied.graphics(), "a denied pane writes no kitty graphics");
+    assert!(denied.placeholders().next().is_none());
+    assert!(!denied.sextants(), "a denied pane draws the blank pet box");
+    assert!(ui.meter_pixels.is_none(), "a denied pane draws cell meters");
+    assert!(
+        denied.bytes.contains("5h"),
+        "the budget bar is drawn as cells"
+    );
+
+    drop(leases.remove(0));
+    let soon = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        start + Duration::from_millis(500),
+    );
+    assert!(!soon.graphics(), "an on-screen retry waits out its spacing");
+    let retried = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        start + Duration::from_secs(2),
     );
     assert!(
-        String::from_utf8_lossy(&exhausted_frame).contains("5h"),
-        "the budget bar is rendered: {:?}",
-        String::from_utf8_lossy(&exhausted_frame)
+        retried.bytes.contains("a=t"),
+        "the retry after its spacing paints pixels"
     );
-    drop(leases.remove(0));
+
+    paint_hidden_slot_frame(&mut painter, &snapshot, &mut ui, start);
+    leases.push(
+        PixelLease::acquire(&pool)
+            .unwrap()
+            .expect("slot 0 returned"),
+    );
+    let later = start + Duration::from_secs(10);
+    let denied = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        later,
+    );
+    assert!(!denied.graphics());
+    drop(leases.pop());
+    paint_hidden_slot_frame(&mut painter, &snapshot, &mut ui, later);
+    let arrival = paint_slot_frame(
+        &mut painter,
+        &snapshot,
+        &mut ui,
+        paint::PaintKind::Routed,
+        later,
+    );
+    assert!(
+        arrival.bytes.contains("a=t"),
+        "an arrival after a hidden frame retries at once"
+    );
+    painter.clear(&mut Vec::new()).unwrap();
     assert_eq!(
-        PixelLease::acquire(&runtime).unwrap().unwrap().slot.base(),
-        0x520000
+        first_free_base(&pool),
+        Some(0x520000),
+        "slot 0 is reusable after its lease drops"
     );
+
+    let mut pets_off = slot_snapshot();
+    pets_off.theme.pets.enabled = false;
+    leases.push(PixelLease::acquire(&pool).unwrap().unwrap());
+    let mut denied_painter = slot_painter(&pool, FULL_CAPS);
+    let denied = paint_slot_frame(
+        &mut denied_painter,
+        &pets_off,
+        &mut UiState::default(),
+        paint::PaintKind::Routed,
+        later,
+    );
+    let mut off = pets_off.clone();
+    off.theme.display.pixel = crate::config::PixelMode::Off;
+    let mut off_painter = slot_painter(&pool, FULL_CAPS);
+    let cells = paint_slot_frame(
+        &mut off_painter,
+        &off,
+        &mut UiState::default(),
+        paint::PaintKind::Routed,
+        later,
+    );
+    assert_eq!(
+        denied.bytes, cells.bytes,
+        "a denied pane without a pet draws the pixel-off frame"
+    );
+}
+
+#[test]
+fn a_denied_pane_warns_once_across_hidden_frames() {
+    use crate::sidebar_pane::pixel::PixelLease;
+    let (_root, pool) = slot_pool();
+    let _held = (0..256)
+        .map(|_| PixelLease::acquire(&pool).unwrap().unwrap())
+        .collect::<Vec<_>>();
+    let snapshot = slot_snapshot();
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let logs = tempfile::NamedTempFile::new().unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(std::sync::Arc::new(logs.reopen().unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        for _ in 0..2 {
+            let kind = paint::PaintKind::Routed;
+            let denied = paint_slot_frame(&mut painter, &snapshot, &mut ui, kind, now);
+            assert!(!denied.graphics(), "every arrival is denied");
+            paint_hidden_slot_frame(&mut painter, &snapshot, &mut ui, now);
+        }
+    });
+    let logs = std::fs::read_to_string(logs.path()).unwrap();
+    assert_eq!(
+        logs.matches("sidebar pixel slots are all held").count(),
+        1,
+        "a denial episode warns once, across hidden frames: {logs}"
+    );
+}
+
+#[test]
+fn pixels_turned_off_return_the_slot_after_a_written_frame_of_deletes() {
+    let (_root, pool) = slot_pool();
+    let mut snapshot = slot_snapshot();
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let routed = paint::PaintKind::Routed;
+    let pixels = paint_slot_frame(&mut painter, &snapshot, &mut ui, routed, now);
+    assert!(pixels.bytes.contains("a=t"));
+    snapshot.theme.display.pixel = crate::config::PixelMode::Off;
+    let view = render::ViewState::default();
+    for _ in 0..2 {
+        painter.refresh_view(&mut ui, &view, &snapshot, false, routed, now);
+    }
+    assert!(
+        painter.holds_slot(),
+        "routed passes that write no frame keep the slot"
+    );
+    let deletes = paint_slot_frame(&mut painter, &snapshot, &mut ui, routed, now);
+    assert!(deletes.bytes.contains("a=d"), "the frame deletes the ids");
+    assert!(painter.holds_slot());
+    assert_eq!(first_free_base(&pool), Some(0x520200));
+    painter.refresh_view(&mut ui, &view, &snapshot, false, routed, now);
+    assert!(!painter.holds_slot(), "the next routed frame returns it");
+    assert_eq!(first_free_base(&pool), Some(0x520000));
+}
+
+#[test]
+fn more_sidebars_than_slots_take_turns_on_screen() {
+    use crate::sidebar_pane::pixel::PixelLease;
+    let (_root, pool) = slot_pool();
+    let _held = (0..255)
+        .map(|_| PixelLease::acquire(&pool).unwrap().unwrap())
+        .collect::<Vec<_>>();
+    let snapshot = slot_snapshot();
+    let mut painters = (0..3)
+        .map(|_| (slot_painter(&pool, FULL_CAPS), UiState::default()))
+        .collect::<Vec<_>>();
+    let now = Instant::now();
+    for turn in 0..6 {
+        let (painter, ui) = &mut painters[turn % 3];
+        let frame = paint_slot_frame(painter, &snapshot, ui, paint::PaintKind::Routed, now);
+        assert!(frame.bytes.contains("a=t"), "turn {turn} paints pixels");
+        assert!(
+            frame
+                .image_ids()
+                .iter()
+                .all(|id| (0x53fe00..0x540000).contains(id))
+        );
+        paint_hidden_slot_frame(painter, &snapshot, ui, now);
+    }
+}
+
+#[test]
+fn panes_without_a_pixel_surface_open_no_slot_lock() {
+    let snapshot = slot_snapshot();
+    let mut off = snapshot.clone();
+    off.theme.display.pixel = crate::config::PixelMode::Off;
+    let transportless = PixelRenderCaps {
+        pixel_transport: false,
+        kitty_clients: true,
+    };
+    for (snapshot, caps) in [
+        (&snapshot, PixelRenderCaps::default()),
+        (&off, FULL_CAPS),
+        (&snapshot, transportless),
+    ] {
+        let (_root, pool) = slot_pool();
+        let mut painter = slot_painter(&pool, caps);
+        let mut ui = UiState::default();
+        for kind in [
+            paint::PaintKind::Routed,
+            paint::PaintKind::Mirror,
+            paint::PaintKind::Routed,
+        ] {
+            let frame = paint_slot_frame(&mut painter, snapshot, &mut ui, kind, Instant::now());
+            assert!(!frame.graphics());
+        }
+        assert!(
+            !pool.shared_pixel_slot_lock(0).exists(),
+            "no slot lock file is opened for {caps:?}"
+        );
+    }
+
+    let mut sextant = slot_snapshot();
+    sextant.theme.pets.glyphs = crate::config::PetsGlyphMode::Sextant;
+    let (_root, pool) = slot_pool();
+    let mut painter = paint::FramePainter::new(FULL_CAPS, false, pool.clone());
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let ready = painter.prepare_play_pet(&render::ViewState::default(), &mut ui, &sextant, now);
+    let cell_art = ready && !crate::tui::no_color();
+    let routed = paint_slot_frame(
+        &mut painter,
+        &sextant,
+        &mut ui,
+        paint::PaintKind::Routed,
+        now,
+    );
+    assert_eq!(
+        routed.sextants(),
+        cell_art,
+        "sextant glyphs draw cell art when routed"
+    );
+    assert!(
+        !routed.placeholders_at(true).is_empty(),
+        "the meter still takes a slot"
+    );
+    assert!(routed.placeholders_at(false).is_empty());
+    assert_eq!(first_free_base(&pool), Some(0x520200));
+    let hidden = paint_hidden_slot_frame(&mut painter, &sextant, &mut ui, now);
+    assert_eq!(
+        hidden.sextants(),
+        cell_art,
+        "sextant glyphs draw cell art when hidden"
+    );
+    assert!(hidden.placeholders().next().is_none());
+    assert_eq!(first_free_base(&pool), Some(0x520000));
 }
 
 #[test]
@@ -369,7 +828,14 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
     let mut ui = UiState::default();
     for disable in [true, false] {
         snapshot.theme.display.pixel = crate::config::PixelMode::Auto;
-        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+        painter.refresh_view(
+            &mut ui,
+            &view_ui,
+            &snapshot,
+            false,
+            paint::PaintKind::Routed,
+            Instant::now(),
+        );
         compose_test_meters(&mut ui, 1);
         let mut bytes = Vec::new();
         painter
@@ -384,7 +850,14 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
         bytes.clear();
         if disable {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
-            painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+            painter.refresh_view(
+                &mut ui,
+                &view_ui,
+                &snapshot,
+                false,
+                paint::PaintKind::Routed,
+                Instant::now(),
+            );
             painter
                 .ensure_meters_transmitted(&mut bytes, &ui, 1)
                 .unwrap();
@@ -455,7 +928,14 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
         Vec::new(),
     )];
     let saved_pet = ui.pet.clone();
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, true);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        true,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     bytes.clear();
     painter
         .ensure_pixel_transmitted(&mut bytes, &ui, 1)
@@ -466,7 +946,14 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
     );
     ui.pet = saved_pet;
     snapshot.theme.pets.enabled = false;
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     bytes.clear();
     painter
         .ensure_pixel_transmitted(&mut bytes, &ui, 1)
@@ -630,13 +1117,21 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     snapshot.theme.pets.enabled = true;
     let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
-    let mut painter = paint::FramePainter::new(
+    let mut painter = paint::FramePainter::test_held(
+        PetAssets::default(),
         PixelRenderCaps::default(),
         true,
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.body, None);
@@ -658,7 +1153,8 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     let mut snapshot = snapshot(&ws);
     let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
-    let mut painter = paint::FramePainter::new(
+    let mut painter = paint::FramePainter::test_held(
+        PetAssets::default(),
         PixelRenderCaps {
             pixel_transport: true,
             kitty_clients: true,
@@ -667,7 +1163,14 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     let raster = crate::sidebar_pane::pixel::meter::MeterRaster::new(
         2,
         0.5,
@@ -683,7 +1186,14 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
         .intern(raster.clone())
         .expect("first raster");
 
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     assert_eq!(
         ui.meter_pixels
             .as_mut()
@@ -694,7 +1204,14 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     );
 
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     assert!(ui.meter_pixels.is_none());
 }
 
@@ -704,7 +1221,8 @@ fn meter_transmission_paints_visible_rasters_once() {
     let snapshot = snapshot(&ws);
     let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
-    let mut painter = paint::FramePainter::new(
+    let mut painter = paint::FramePainter::test_held(
+        PetAssets::default(),
         PixelRenderCaps {
             pixel_transport: true,
             kitty_clients: true,
@@ -713,7 +1231,14 @@ fn meter_transmission_paints_visible_rasters_once() {
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
+    painter.refresh_view(
+        &mut ui,
+        &view_ui,
+        &snapshot,
+        false,
+        paint::PaintKind::Routed,
+        Instant::now(),
+    );
     let image_id = ui
         .meter_pixels
         .as_mut()

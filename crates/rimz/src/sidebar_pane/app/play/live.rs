@@ -4,7 +4,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::text::Line;
 
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelLease, probe};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, probe};
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 use super::*;
@@ -31,7 +31,6 @@ struct LiveColumn {
     column: Column,
     source: Option<String>,
     error: Option<String>,
-    _pixel_lease: Option<PixelLease>,
     warned: bool,
     pass: u128,
 }
@@ -85,11 +84,12 @@ impl LiveColumn {
     fn seek(&mut self, at: Duration, height: u16) -> Result<()> {
         self.column.motion = Some(Duration::ZERO..self.scenario.length);
         if self.column.terminal.size()?.height != height {
+            self.column.state.clear_pixel(&mut self.column.terminal);
             self.column = Column::build(
                 &self.scenario,
                 Some(height),
                 self.column.motion.clone(),
-                self.column.surface,
+                self.column.surface.clone(),
             )?;
         }
         self.column
@@ -128,10 +128,9 @@ pub(super) fn serve(files: &[PathBuf], scenarios: Vec<(Scenario, String)>) -> Re
     let mut columns = scenarios
         .into_iter()
         .map(|(scenario, source)| {
-            let pixel_lease = PixelLease::acquire(&runtime).ok().flatten();
             let surface = Surface::Live {
                 caps,
-                slot: pixel_lease.as_ref().map(|lease| lease.slot),
+                slots: Box::new(runtime.clone()),
             };
             let column = Column::build(
                 &scenario,
@@ -144,7 +143,6 @@ pub(super) fn serve(files: &[PathBuf], scenarios: Vec<(Scenario, String)>) -> Re
                 column,
                 source: Some(source),
                 error: None,
-                _pixel_lease: pixel_lease,
                 warned: false,
                 pass: 0,
             })
@@ -387,7 +385,6 @@ mod tests {
             column,
             source: None,
             error: None,
-            _pixel_lease: None,
             warned: false,
             pass: 0,
         };
@@ -424,7 +421,6 @@ mod tests {
                     column,
                     source: None,
                     error: None,
-                    _pixel_lease: None,
                     warned: false,
                     pass: 0,
                 }
