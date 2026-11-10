@@ -803,6 +803,7 @@ fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEnt
             soonest_expiry: None,
             expiries: Vec::new(),
             effect: crate::agents::RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
         }),
         direct_query_claim: Some(DirectQueryClaim {
             nonce,
@@ -2370,6 +2371,7 @@ fn successful_partial_read_preserves_prior_optional_credits() {
                         soonest_expiry: None,
                         expiries: Vec::new(),
                         effect: crate::agents::RedeemEffect::RestartsWindow,
+                        grants: Vec::new(),
                     }),
                     ..Default::default()
                 },
@@ -2440,6 +2442,7 @@ fn realtime_write_preserves_attempt_and_claim() {
                         soonest_expiry: None,
                         expiries: Vec::new(),
                         effect: crate::agents::RedeemEffect::RestartsWindow,
+                        grants: Vec::new(),
                     }),
                     direct_query_claim: Some(claim.clone()),
                     ..Default::default()
@@ -2486,6 +2489,7 @@ fn realtime_write_preserves_attempt_and_claim() {
                 soonest_expiry: None,
                 expiries: Vec::new(),
                 effect: crate::agents::RedeemEffect::RestartsWindow,
+                grants: Vec::new(),
             }),
             ..Default::default()
         },
@@ -2717,6 +2721,7 @@ fn idle_reset_credits_hold_the_display_staleness_line_and_skip_in_use_logins() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
     let entry = |ok, observed_at_ms| ProviderCreditsEntry {
         observed_at_ms,
@@ -2839,4 +2844,55 @@ fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
         Some(nonce(5)),
         "an account never attempted is due at once"
     );
+}
+
+#[test]
+fn published_reset_grants_reach_the_cache_and_panel_and_outlive_a_reading_without_credits() {
+    let (_dir, runtime) = runtime();
+    let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"));
+    let expiry = jiff::Timestamp::now() + std::time::Duration::from_secs(86_400);
+    let granted = ResetCredits {
+        count: 2,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry],
+        effect: crate::agents::RedeemEffect::KeepsSchedule,
+        grants: vec![crate::agents::ResetGrant {
+            count: 2,
+            expiry: Some(expiry),
+            label: Some("Free limit reset".to_owned()),
+            clears: vec!["five_hour".to_owned()],
+            ..Default::default()
+        }],
+    };
+    for snapshot in [
+        AccountUsageSnapshot {
+            reset_credits: Some(granted.clone()),
+            ..Default::default()
+        },
+        AccountUsageSnapshot {
+            plan: Some("pro".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        merge_provider_realtime_usage(
+            &runtime,
+            &key,
+            identity(None, Some("owner"), ProviderAccountScope::KindWide),
+            snapshot,
+        );
+        let cache = read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(cache.logins[&key].reset_credits.as_ref(), Some(&granted));
+        let mut sidebar = crate::sidebar::test_support::snapshot_with_panels(
+            runtime.workspace_id.clone(),
+            vec![panel("claude", true)],
+        );
+        apply_credits_cache_with(
+            &mut sidebar,
+            &cache,
+            &AccountsConfig::default(),
+            &RoomLoginSet::native(),
+            unix_now_ms(),
+        );
+        assert_eq!(sidebar.providers[0].reset_credits.as_ref(), Some(&granted));
+    }
 }

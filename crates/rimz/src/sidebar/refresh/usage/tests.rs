@@ -203,6 +203,7 @@ fn published_usage_preserves_identity_and_only_writes_present_credits() {
                     soonest_expiry: None,
                     expiries: Vec::new(),
                     effect: crate::agents::RedeemEffect::RestartsWindow,
+                    grants: Vec::new(),
                 }),
                 ..Default::default()
             },
@@ -286,6 +287,7 @@ fn claimed_usage_reads_an_idle_account_by_the_direct_probe_alone() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
     assert!(refresh_claimed_account_usage_with(
         &runtime,

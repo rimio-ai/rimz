@@ -853,6 +853,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     reset_attention.providers = vec![codex];
     assert_eq!(

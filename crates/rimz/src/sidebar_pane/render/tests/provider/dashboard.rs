@@ -796,6 +796,7 @@ fn reset_credit_header_shows_for_any_kind_with_credits() {
             soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
             expiries: Vec::new(),
             effect: crate::agents::RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
         })
     };
     let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
@@ -836,6 +837,7 @@ fn codex_credit_panel(
         soonest_expiry: Some(fixed_now() + Duration::from_secs(expiry_hours * 3_600)),
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     panel.redeem_forecast = forecast;
     panel

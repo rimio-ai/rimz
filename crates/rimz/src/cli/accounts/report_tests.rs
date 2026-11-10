@@ -1097,6 +1097,7 @@ fn overview_keeps_account_choices_and_collects_single_logins() {
         soonest_expiry: Some(now + SignedDuration::from_secs(3 * 86_400)),
         expiries: Vec::new(),
         effect: rimz::agents::RedeemEffect::KeepsSchedule,
+        grants: Vec::new(),
     });
     let mut work_panel = panel("claude");
     work_panel.version = None;
@@ -1322,6 +1323,7 @@ fn a_single_login_earns_a_table_for_credits_but_not_for_logged_out_cache() {
                 soonest_expiry: None,
                 expiries: Vec::new(),
                 effect: rimz::agents::RedeemEffect::KeepsSchedule,
+                grants: Vec::new(),
             });
         } else {
             reports[0].extra_credits = Some(ExtraCredits::Disabled);
@@ -1716,6 +1718,7 @@ fn reset_cell_marks_its_countdown_as_an_expiry() {
             soonest_expiry,
             expiries: Vec::new(),
             effect: rimz::agents::RedeemEffect::KeepsSchedule,
+            grants: Vec::new(),
         }),
         ..panel("codex")
     };
@@ -2178,6 +2181,7 @@ fn protocol_fixture(
             now + SignedDuration::from_secs(5 * 86_400),
         ],
         effect: rimz::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     provider.spending = Some(
         SpendTally {
@@ -2329,6 +2333,7 @@ fn pretty_report_hides_zero_reset_credits() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: rimz::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     });
     let reports = assemble_reports(
         &default_logins(),
@@ -2363,6 +2368,7 @@ fn reset_rendering_sorts_preserves_duplicates_and_caps_detail() {
         soonest_expiry: Some(day(1)),
         expiries: vec![day(4), day(1), day(3), day(1), day(2)],
         effect: rimz::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
 
     assert_eq!(
@@ -2382,6 +2388,7 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
                 soonest_expiry: Some(hour(1)),
                 expiries: vec![hour(2), hour(1)],
                 effect: rimz::agents::RedeemEffect::RestartsWindow,
+                grants: Vec::new(),
             },
             now,
         ),
@@ -2394,6 +2401,7 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
                 soonest_expiry: Some(hour(6)),
                 expiries: Vec::new(),
                 effect: rimz::agents::RedeemEffect::RestartsWindow,
+                grants: Vec::new(),
             },
             now,
         ),
@@ -2406,6 +2414,7 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
                 soonest_expiry: Some(now),
                 expiries: vec![now - SignedDuration::from_secs(1), now],
                 effect: rimz::agents::RedeemEffect::RestartsWindow,
+                grants: Vec::new(),
             },
             now,
         ),

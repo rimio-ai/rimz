@@ -777,6 +777,7 @@ fn launch_availability_follows_the_spend_ladder() {
         soonest_expiry: None,
         expiries: Vec::new(),
         effect: crate::agents::RedeemEffect::RestartsWindow,
+        grants: Vec::new(),
     };
     let usable = ExtraCredits::known(None, Some(2_413.92), None);
     let seed = |kind: &str,
