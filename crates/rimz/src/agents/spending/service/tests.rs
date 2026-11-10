@@ -368,9 +368,9 @@ fn walk_panic_replies_internal_and_resets_walker() {
         "panic reply must release the walker"
     );
     std::fs::remove_file(runtime.shared_provider_spending_path()).unwrap();
-    let next = fulfil(&mut walker);
-    assert!(next.is_ok(), "reset walker must serve the next request");
-    assert!((next.unwrap().workspace.tally.year.usd - 2.5).abs() < 1e-9);
+    let next = fulfil(&mut walker)
+        .unwrap_or_else(|error| panic!("reset walker must serve the next request: {error:?}"));
+    assert!((next.workspace.tally.year.usd - 2.5).abs() < 1e-9);
     assert!(!busy.load(Ordering::Acquire));
 }
 
