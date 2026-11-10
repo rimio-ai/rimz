@@ -206,6 +206,12 @@ impl Store {
         self.ingress.as_ref().map(|(id, _)| id)
     }
 
+    /// When the hook frame this handle applies was received, for a fold that must tell a
+    /// delayed hook from a later one.
+    pub fn hook_ingress_at(&self) -> Option<jiff::Timestamp> {
+        self.ingress.as_ref().map(|(_, at)| *at)
+    }
+
     pub fn runtime_paths(&self) -> &RuntimePaths {
         &self.inner.runtime
     }

@@ -76,7 +76,7 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
             let mut observation =
                 AgentLifecycleObservation::new(Some("leader".into()), signal.clone());
             assert_eq!(
-                fold_lifecycle(&mut record, "claude", &observation, None, now, None),
+                fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
                 LifecycleFold::Updated,
             );
             assert_eq!(record.status, RunStatus::Running);
@@ -85,10 +85,10 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
             let stopped = record.stopped_turn.as_ref().unwrap();
             assert_eq!((stopped.at, stopped.disposition), (now, disposition));
             observation.signal = resume;
-            fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
             assert!(record.stopped_turn.is_none());
             observation.signal = turn_end("leader").signal;
-            fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
             assert_eq!(record.status, RunStatus::Completed);
         }
     }
@@ -113,12 +113,12 @@ fn workflow_session_stops_are_evidence_until_work_resumes() {
         });
         let now = record.started_at;
         let mut observation = AgentLifecycleObservation::new(Some("leader".into()), signal);
-        fold_lifecycle(&mut record, "claude", &observation, None, now, None);
+        fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
         assert_eq!(record.status, RunStatus::Running);
         assert!(record.stopped_turn.is_some());
         observation.signal = turn_started();
         assert_eq!(
-            fold_lifecycle(&mut record, "claude", &observation, None, now, None),
+            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
             LifecycleFold::Updated,
         );
         assert!(record.stopped_turn.is_none());
@@ -983,7 +983,7 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
     );
     assert_eq!(
         claim_rung(&paths, &record.run_id, now, |_, _| true).unwrap(),
-        Some(super::super::deadline::Rung::Stop {
+        Some(crate::harness::deadline::Rung::Stop {
             at: record.deadline_at.unwrap()
         })
     );
@@ -1005,7 +1005,15 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
     for elapsed in [0, 3600] {
         record.status = RunStatus::Completed;
         let reopen_at = now + std::time::Duration::from_secs(elapsed);
-        fold_lifecycle(&mut record, "claude", &observation, None, reopen_at, None);
+        fold_lifecycle(
+            &mut record,
+            "claude",
+            &observation,
+            None,
+            reopen_at,
+            reopen_at,
+            None,
+        );
         assert_eq!(
             record.deadline_at,
             Some(reopen_at + std::time::Duration::from_secs(1800))
@@ -2982,35 +2990,343 @@ fn a_detached_team_run_reopens_detached() {
     assert_eq!(reopened.report_to, ReportTo::Nobody);
 }
 
+fn hold_at(activity: Timestamp, held: Duration) -> crate::store::run::LimitHold {
+    crate::store::run::LimitHold {
+        activity,
+        since: activity + Duration::from_secs(1),
+        until: activity + Duration::from_secs(1) + held,
+    }
+}
+
 #[test]
 fn a_park_is_claimed_once_until_the_child_acts_again() {
     let (_dir, paths, record) = setup();
     let parked: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
     let resumed = parked + std::time::Duration::from_secs(600);
     let stamp = || load(&paths, &record.run_id).unwrap().park_noticed_activity;
+    let hour = Duration::from_secs(3600);
 
-    assert!(claim_park_notice(&paths, &record.run_id, parked).unwrap());
-    assert!(!claim_park_notice(&paths, &record.run_id, parked).unwrap());
+    assert!(claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
+    assert!(!claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
     assert_eq!(stamp(), Some(parked));
-    assert!(claim_park_notice(&paths, &record.run_id, resumed).unwrap());
-    assert!(!claim_park_notice(&paths, &record.run_id, parked).unwrap());
+    assert!(claim_park_notice(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
+    assert!(!claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
     assert_eq!(stamp(), Some(resumed));
 
     release_park_notice(&paths, &record.run_id, parked).unwrap();
     assert_eq!(stamp(), Some(resumed));
     release_park_notice(&paths, &record.run_id, resumed).unwrap();
     assert_eq!(stamp(), None);
-    assert!(claim_park_notice(&paths, &record.run_id, resumed).unwrap());
+    assert!(claim_park_notice(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
 
     cancel(&paths, &record.run_id).unwrap();
     assert!(
         !claim_park_notice(
             &paths,
             &record.run_id,
-            resumed + std::time::Duration::from_secs(1)
+            hold_at(resumed + std::time::Duration::from_secs(1), hour)
         )
         .unwrap()
     );
+}
+
+/// An open child run on a 30m deadline with a 3m grace, its first warn rung claimed.
+fn held_candidate() -> (tempfile::TempDir, StatePaths, RunRecord) {
+    let (dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.agent_id = Some("child".into());
+    record.timeout = Some(Duration::from_secs(1800));
+    record.grace = Some(Duration::from_secs(180));
+    record.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
+    record.deadline_at = Some(record.started_at + Duration::from_secs(1800));
+    record.deadline_notice_at = Some(record.started_at + Duration::from_secs(1440));
+    create(&paths, &record).unwrap();
+    (dir, paths, record)
+}
+
+#[test]
+fn a_hold_moves_both_deadline_stamps_once_per_park() {
+    let (_dir, paths, record) = held_candidate();
+    let held = Duration::from_secs(2 * 3600);
+    let hold = hold_at(record.started_at + Duration::from_secs(600), held);
+    let deadline = record.deadline_at.unwrap();
+    let notice = record.deadline_notice_at.unwrap();
+    let kill = deadline + Duration::from_secs(180);
+
+    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    let loaded = load(&paths, &record.run_id).unwrap();
+    assert_eq!(loaded.limit_hold, Some(hold));
+    assert_eq!(loaded.park_noticed_activity, Some(hold.activity));
+    assert_eq!(loaded.deadline_at, Some(deadline + held));
+    assert_eq!(loaded.deadline_notice_at, Some(notice + held));
+
+    // A notice that could not be queued is claimed again without a second shift.
+    release_park_notice(&paths, &record.run_id, hold.activity).unwrap();
+    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    let loaded = load(&paths, &record.run_id).unwrap();
+    assert_eq!(loaded.deadline_at, Some(deadline + held));
+    assert_eq!(loaded.deadline_notice_at, Some(notice + held));
+
+    // The ladder reads the moved stamps: nothing is due before the remaining time.
+    assert_eq!(crate::harness::deadline::due_rung(&loaded, deadline), None);
+    assert!(!crate::harness::deadline::kill_due(&loaded, kill));
+    assert!(crate::harness::deadline::kill_due(&loaded, kill + held));
+    let (_, wrote) = timeout_if_due(&paths, &record.run_id, kill, None).unwrap();
+    assert!(
+        !wrote,
+        "a held run is not timed out at its old kill instant"
+    );
+    let (timed, wrote) = timeout_if_due(&paths, &record.run_id, kill + held, None).unwrap();
+    assert!(wrote);
+    assert_eq!(timed.status, RunStatus::TimedOut);
+    assert_eq!(
+        timed.limit_hold,
+        Some(hold),
+        "a terminal write keeps the hold"
+    );
+}
+
+#[test]
+fn a_hold_without_a_warn_claim_moves_only_the_deadline() {
+    let (_dir, paths, mut record) = held_candidate();
+    record.deadline_notice_at = None;
+    create(&paths, &record).unwrap();
+    let held = Duration::from_secs(600);
+    let hold = hold_at(record.started_at, held);
+    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    let loaded = load(&paths, &record.run_id).unwrap();
+    assert_eq!(loaded.deadline_at, Some(record.deadline_at.unwrap() + held));
+    assert_eq!(loaded.deadline_notice_at, None);
+}
+
+#[test]
+fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
+    let in_turn = [
+        turn_started(),
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: None,
+            native_key: None,
+            turn_id: None,
+        },
+        LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind: crate::agents::AskKind::Permission,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        },
+    ];
+    for signal in in_turn {
+        let (_dir, _paths, mut record) = held_candidate();
+        let hold = hold_at(
+            record.started_at + Duration::from_secs(600),
+            Duration::from_secs(7200),
+        );
+        record.limit_hold = Some(hold);
+        let deadline = record.deadline_at.unwrap();
+        let notice = record.deadline_notice_at.unwrap();
+        let observation = AgentLifecycleObservation::new(Some("child".into()), signal.clone());
+
+        let early = hold.until - Duration::from_secs(1800);
+        let mut resumed = record.clone();
+        assert_eq!(
+            fold_lifecycle(
+                &mut resumed,
+                "claude",
+                &observation,
+                None,
+                early,
+                early,
+                None
+            ),
+            LifecycleFold::Updated,
+            "{signal:?}"
+        );
+        assert_eq!(resumed.limit_hold, None, "{signal:?}");
+        assert_eq!(
+            resumed.deadline_at,
+            Some(deadline - Duration::from_secs(1800))
+        );
+        assert_eq!(
+            resumed.deadline_notice_at,
+            Some(notice - Duration::from_secs(1800))
+        );
+
+        let late = hold.until + Duration::from_secs(60);
+        let mut resumed = record.clone();
+        assert_eq!(
+            fold_lifecycle(&mut resumed, "claude", &observation, None, late, late, None),
+            LifecycleFold::Updated,
+            "{signal:?}"
+        );
+        assert_eq!(resumed.limit_hold, None);
+        assert_eq!(
+            resumed.deadline_at,
+            Some(deadline),
+            "the whole hold was used"
+        );
+        assert_eq!(resumed.deadline_notice_at, Some(notice));
+    }
+}
+
+/// A hook received before the park, applied only after the hold was claimed, is the stopped
+/// turn's own late signal: it keeps the hold and both moved stamps. Ties keep it too.
+#[test]
+fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
+    let (_dir, paths, record) = held_candidate();
+    let hold = hold_at(
+        record.started_at + Duration::from_secs(600),
+        Duration::from_secs(7200),
+    );
+    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    let held = load(&paths, &record.run_id).unwrap();
+    let observation = AgentLifecycleObservation::new(
+        Some("child".into()),
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: None,
+            native_key: None,
+            turn_id: None,
+        },
+    );
+    let now = hold.until - Duration::from_secs(1800);
+    let between = hold.activity + Duration::from_millis(500);
+    for observed_at in [
+        hold.activity - Duration::from_secs(1),
+        hold.activity,
+        between,
+        hold.since,
+    ] {
+        let mut folded = held.clone();
+        fold_lifecycle(
+            &mut folded,
+            "claude",
+            &observation,
+            None,
+            now,
+            observed_at,
+            None,
+        );
+        assert_eq!(folded.limit_hold, Some(hold), "{observed_at}");
+        assert_eq!(folded.deadline_at, held.deadline_at, "{observed_at}");
+        assert_eq!(
+            folded.deadline_notice_at, held.deadline_notice_at,
+            "{observed_at}"
+        );
+    }
+
+    // Through the locked write, with the frame's ingress time.
+    record_lifecycle_at(
+        &paths,
+        &record.run_id,
+        "claude",
+        &observation,
+        None,
+        Some(between),
+        || None,
+    )
+    .unwrap();
+    assert_eq!(load(&paths, &record.run_id).unwrap().limit_hold, Some(hold));
+
+    let mut resumed = held.clone();
+    fold_lifecycle(
+        &mut resumed,
+        "claude",
+        &observation,
+        None,
+        now,
+        hold.since + Duration::from_millis(1),
+        None,
+    );
+    assert_eq!(resumed.limit_hold, None);
+    assert_eq!(
+        resumed.deadline_at,
+        held.deadline_at.map(|at| at - Duration::from_secs(1800))
+    );
+}
+
+#[test]
+fn a_reopen_clears_a_hold_and_rearms_from_the_timeout() {
+    let (_dir, _paths, mut record) = held_candidate();
+    record.limit_hold = Some(hold_at(record.started_at, Duration::from_secs(7200)));
+    record.status = RunStatus::Failed;
+    record.completed_at = Some(record.started_at + Duration::from_secs(60));
+    let now = record.started_at + Duration::from_secs(600);
+    let observation = AgentLifecycleObservation::new(Some("child".into()), turn_started());
+    assert_eq!(
+        fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
+        LifecycleFold::Updated
+    );
+    assert_eq!(record.status, RunStatus::Running);
+    assert_eq!(record.limit_hold, None);
+    assert_eq!(record.deadline_at, Some(now + Duration::from_secs(1800)));
+    assert_eq!(record.deadline_notice_at, None);
+}
+
+#[test]
+fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
+    let activity: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+
+    let (_dir, paths, record) = held_candidate();
+    let failed = fail_limit_park(&paths, &record.run_id, activity, "provider limit")
+        .unwrap()
+        .expect("an open, unclaimed park fails");
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.failure_tail.as_deref(), Some("provider limit"));
+    assert!(
+        fail_limit_park(&paths, &record.run_id, activity, "again")
+            .unwrap()
+            .is_none(),
+        "a terminal run is untouched"
+    );
+    assert_eq!(
+        load(&paths, &record.run_id)
+            .unwrap()
+            .failure_tail
+            .as_deref(),
+        Some("provider limit")
+    );
+
+    // A park another helper claimed for a notice stays on its deadline.
+    let (_dir, paths, mut record) = held_candidate();
+    record.park_noticed_activity = Some(activity);
+    create(&paths, &record).unwrap();
+    assert!(
+        fail_limit_park(&paths, &record.run_id, activity, "x")
+            .unwrap()
+            .is_none()
+    );
+
+    // A held park fails only once its reset has passed.
+    let (_dir, paths, mut record) = held_candidate();
+    let now = Timestamp::now();
+    record.park_noticed_activity = Some(activity);
+    record.limit_hold = Some(crate::store::run::LimitHold {
+        activity,
+        since: activity,
+        until: now + Duration::from_secs(3600),
+    });
+    create(&paths, &record).unwrap();
+    assert!(
+        fail_limit_park(&paths, &record.run_id, activity, "x")
+            .unwrap()
+            .is_none(),
+        "the reset is still ahead"
+    );
+    record.limit_hold = Some(crate::store::run::LimitHold {
+        activity,
+        since: activity,
+        until: now - Duration::from_secs(1),
+    });
+    create(&paths, &record).unwrap();
+    let failed = fail_limit_park(&paths, &record.run_id, activity, "reset reached")
+        .unwrap()
+        .expect("a held park past its reset fails");
+    assert_eq!(failed.failure_tail.as_deref(), Some("reset reached"));
 }
 
 #[test]

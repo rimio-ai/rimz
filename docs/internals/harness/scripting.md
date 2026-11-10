@@ -25,7 +25,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The receiving half of the blocking wait: the per-run datagram socket, frame validation, the poll loop, and the timeout and cancellation transitions it drives. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and spawning the detached timeout helper. |
 | [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure deadline policy: the warning and stop rungs, the stop channel, and the grace-bound kill time. |
-| [`harness/park_notice.rs`](../../../crates/rimz/src/harness/park_notice.rs), [`harness/stall_notice.rs`](../../../crates/rimz/src/harness/stall_notice.rs) | Producer-side detection of a launched child parked on a provider limit or gone silent, the notice text, and spawning the detached notice helper ([backstops](./subagents.md#backstops)). |
+| [`harness/park_notice.rs`](../../../crates/rimz/src/harness/park_notice.rs), [`harness/stall_notice.rs`](../../../crates/rimz/src/harness/stall_notice.rs) | Producer-side detection of a launched child parked on a provider limit or gone silent, the limit park's hold-or-fail classification, the notice and failure text, and spawning the detached notice helper ([backstops](./subagents.md#backstops)). |
 | [`harness/stall_nudge.rs`](../../../crates/rimz/src/harness/stall_nudge.rs), [`stall_nudge/helper.rs`](../../../crates/rimz/src/harness/stall_nudge/helper.rs) | Read-only stalled-team selection and pacing; the separate helper owns the locked once-per-visit recheck and enqueue. |
 | [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, single-cell refusals and the child permission cap before finalize, then the isolation cap. Warnings and child-mode notes return as values. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
@@ -40,7 +40,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | [`cli/agents_cmd/exec/supervisor.rs`](../../../crates/rimz/src/cli/agents_cmd/exec/supervisor.rs), [`exec/duty.rs`](../../../crates/rimz/src/cli/agents_cmd/exec/duty.rs) | The parked wrapper image: `supervise_child` and its `RunMonitor`, and the hidden `agents supervise-duty` helpers it delegates store work to, including the stranded-park check. |
 | [`cli/agents_cmd/run_command.rs`](../../../crates/rimz/src/cli/agents_cmd/run_command.rs) | Thin run-bound command-cell supervision and own-pane cleanup. |
 | [`cli/agents_cmd/run_timeout.rs`](../../../crates/rimz/src/cli/agents_cmd/run_timeout.rs) | The hidden `agents run-timeout` helper that settles an overdue run. |
-| [`cli/agents_cmd/park_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/park_notice.rs), [`stall_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_notice.rs) | The hidden `agents park-notice` and `agents stall-notice` helpers that claim a child's notice on its run record and tell its parent. |
+| [`cli/agents_cmd/park_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/park_notice.rs), [`stall_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_notice.rs) | The hidden `agents park-notice` and `agents stall-notice` helpers that claim a child's notice on its run record and tell its parent; `park-notice` also holds the run to the limit's reset or fails it. |
 | [`cli/agents_cmd/stall_nudge.rs`](../../../crates/rimz/src/cli/agents_cmd/stall_nudge.rs) | The hidden `agents stall-nudge` helper: call the locked harness enqueue, attempt boundary delivery, and append the assist. |
 | [`cli/agents_cmd/wait.rs`](../../../crates/rimz/src/cli/agents_cmd/wait.rs), [`stop.rs`](../../../crates/rimz/src/cli/agents_cmd/stop.rs) | Joining on runs started elsewhere, and cancelling them. |
 
@@ -60,7 +60,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | Follow-ups | `follow_ups`, `follow_up`, `opened_by`, `earlier_answers` ([subagents.md](./subagents.md#follow-ups-and-resume)) |
 | Other run shapes | `peer` ([subagents.md](./subagents.md#peer-turns)), `team` ([teams.md](./teams.md#team-reports)) |
 | Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at` |
-| Subagent ladder and notices | `timeout`, `warn`, `grace`, `deadline_notice_at`, `park_noticed_activity`, `stall_noticed_at` ([subagents.md](./subagents.md#backstops)) |
+| Subagent ladder and notices | `timeout`, `warn`, `grace`, `deadline_notice_at`, `park_noticed_activity`, `limit_hold`, `stall_noticed_at` ([subagents.md](./subagents.md#backstops)) |
 
 `agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly. The RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID.
 
@@ -192,7 +192,7 @@ A loop-owned run also takes SIGTERM into that flag, from the moment its waiter b
 
 A second path enforces deadlines without any waiter. On its heavy-lane refresh, the room host calls `run_timeout::enforce`, which lists run records and spawns the hidden `agents run-timeout` helper when `deadline::kill_due` or `deadline::stop_due_by_pane` is true. This covers background runs, which have no waiter, and blocking runs whose caller died. Subagents have a [warning and stop ladder](./subagents.md#the-deadline-ladder) before the kill. Other supervised runs have no grace. At the kill bound the helper rechecks under the workspace lock (`timeout_if_due`) and writes `TimedOut`, storing the last non-empty assistant message from the provider's transcript when the record has none. It then wakes any waiter, sends `SIGTERM` to a subagent's recorded provider process when the PID and start token still match, and reclaims the pane unless the run is a kept subagent. Detection stays read-only in the sidebar process, and the short-lived helper owns every mutation.
 
-`deadline_at` is fixed when the attempt starts, and a verify re-prompt does not move it, so the helper can time out a run in the middle of its verify rounds even though each blocking wait gets the full `--timeout`.
+`deadline_at` is fixed when the attempt starts; only a subagent's [limit hold](./subagents.md#a-child-parked-on-a-provider-limit) and a reopen move it, and a verify re-prompt does not, so the helper can time out a run in the middle of its verify rounds even though each blocking wait gets the full `--timeout`.
 
 ## Verification re-arms the same run
 

@@ -226,6 +226,17 @@ pub struct StoppedTurn {
     pub disposition: StoppedTurnDisposition,
 }
 
+/// A provider-limit park held open past the run's deadline until the reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitHold {
+    /// The child's `last_activity`, naming the park as `park_noticed_activity` does.
+    pub activity: Timestamp,
+    /// The limit marker's time, clamped into the current answer's span.
+    pub since: Timestamp,
+    /// The reset read when the park was classified; never re-read.
+    pub until: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
@@ -355,6 +366,12 @@ pub struct RunRecord {
     /// on any resume, so a later park carries a later value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park_noticed_activity: Option<Timestamp>,
+    /// The provider-limit park this run is held through. Set with the deadline
+    /// shift when the park is classified, cleared by the first in-turn signal
+    /// (which pulls an early resume's unused hold back) and by a reopen; a
+    /// terminal write keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_hold: Option<LimitHold>,
     /// When this run's parent was told the launched child went silent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_noticed_at: Option<Timestamp>,
@@ -516,6 +533,7 @@ impl RunRecord {
             stopped_turn: None,
             parked_answer: None,
             park_noticed_activity: None,
+            limit_hold: None,
             stall_noticed_at: None,
         }
     }
@@ -1123,6 +1141,39 @@ mod tests {
         value.as_object_mut().unwrap().remove("retry_of");
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.retry_of, None);
+    }
+
+    #[test]
+    fn limit_hold_round_trips_and_defaults_when_absent() {
+        let mut record = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        assert!(
+            serde_json::to_value(&record)
+                .unwrap()
+                .get("limit_hold")
+                .is_none(),
+            "an unset hold is omitted"
+        );
+        let at: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+        let hold = LimitHold {
+            activity: at,
+            since: at + Duration::from_secs(1),
+            until: at + Duration::from_secs(3600),
+        };
+        record.limit_hold = Some(hold);
+
+        let mut value = serde_json::to_value(&record).unwrap();
+        let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(decoded.limit_hold, Some(hold));
+
+        value.as_object_mut().unwrap().remove("limit_hold");
+        let decoded: RunRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.limit_hold, None);
     }
 
     #[test]

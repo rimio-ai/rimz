@@ -283,7 +283,7 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
-- `SUBAGENT_PAUSED`, queued for a parent once per park when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) parks on a provider usage limit. If the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`.
+- `SUBAGENT_PAUSED`, queued for a parent once per park when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) parks on a provider usage limit and its run is held open until the limit resets; a park whose run fails instead sends none. If the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`.
 - `SUBAGENT_STALLED`, queued for a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn or has not started its first turn past the same stall window. It too is withdrawn and reads `canceled` if the run ends before delivery.
 - `TEAM_STALLED`, an opt-in [stalled-team nudge](./configuration.md#stalled-team-nudge) to the last-active teammate after 55 minutes of quiet, once per unfinished stage visit.
 - `MESSAGE_UNDELIVERED`, sent once to an agent sender when its message ends without delivery.
