@@ -311,7 +311,7 @@ On Zellij, a silent or stale presence-plugin warning does not stop repair: it us
 
 A banner such as `⚠ Sidebar degraded for 8s: snapshot failed` means a render could not read a fresh snapshot, usually because the binary moved on disk or the durable state directory vanished mid-write. Nothing is lost: the durable store stays the source of truth, so fixing the underlying cause (reinstall or repoint the binary, confirm the state directory exists) clears the banner on the next good frame.
 
-Once it recovers, the banner steps down to a dim, dismissable notice (`⚠ last alert 8s ago: …  ·  Esc dismiss`), so a failure that flickered past is still visible after the fact. Press `Esc` to clear it (after any search or notice it clears first); two consecutive failed renders re-arm it, which is why a single bad frame does not.
+Once it recovers, the banner steps down to a dim, dismissable notice (`⚠ last alert 8s ago: …  ·  Esc dismiss`), so a failure that flickered past is still visible after the fact. Press `Esc` to clear it (after any search or notice it clears first; the next press dismisses a `settings skipped at start` notice); two consecutive failed renders re-arm it, which is why a single bad frame does not.
 
 ### The "hook drainer unreachable" alert
 

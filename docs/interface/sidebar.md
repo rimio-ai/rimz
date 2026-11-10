@@ -976,7 +976,7 @@ At 46 columns the same notices keep their suffixes:
 
 A [workflow run](../guide/workflows.md) raises no attention notice. Failures lead to an on-break agent or end the run; an agent asks in its own pane. Legacy parked runs retain the worktree strip's yellow `parked` word and appear in `rimz workflow list`.
 
-When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor` (singular `setting` for one). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice.
+When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor · Esc dismiss` (singular `setting` for one; no `Esc dismiss` tail when no key is bound to `view.cancel`). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice. `Esc` dismisses the notice once no search, pane notice, or alert is left to clear, and the footer then sits as it does when nothing was skipped. The notice returns when a later start or attach records a different set of warnings, even one of the same size, and when the sidebar host is replaced (an upgrade reload, a crash, a new session); another client viewing the room keeps it until dismissed there. Dismissing it changes nothing on disk: `rimz doctor` still lists every skipped setting.
 
 When RimZ repairs a partial read of the multiplexer's panes by carrying panes over from the last frame, a dim notice appears above the footer and the room stays usable:
 
@@ -996,7 +996,7 @@ Both clear on the next good read. When the sidebar cannot read the room at all, 
  ⚠ Sidebar degraded for 8s: snapshot failed: store not found
 ```
 
-While the alert is active, `/` does nothing; `R` reloads the tab, `Esc` dismisses the alert once no search or notice is left to clear, and `?` and movement keys keep their usual meanings. If the alert appears while you are typing a search, the draft is discarded and the committed query stays.
+While the alert is active, `/` does nothing; `R` reloads the tab, `Esc` dismisses the alert once no search or notice is left to clear (the skipped-settings notice, hidden behind the alert, waits for the next press), and `?` and movement keys keep their usual meanings. If the alert appears while you are typing a search, the draft is discarded and the committed query stays.
 
 After recovery the alert stays as a dim notice until you press `Esc`, so a failure that came and went is still visible. A new failure raises it again.
 
@@ -1089,7 +1089,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `R` | reload this tab's sidebar |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
-| `Esc` | peel one layer per press: a pending key sequence, then the search draft, then the committed text search, then a pane notice, then recovered alerts or an active `Sidebar degraded` alert; while help is open, close help only |
+| `Esc` | peel one layer per press: a pending key sequence, then the search draft, then the committed text search, then a pane notice, then recovered alerts or an active `Sidebar degraded` alert, then the skipped-settings notice; while help is open, close help only |
 
 `g`, `f` and `z` start a key sequence: the bottom row shows the key you pressed and each key that can follow it with its label (`f  ? asks  ! failures  u unread …`), and the next key finishes it. The same row carries the room's mode on its left while a client viewing this sidebar is in one: `PREFIX`, `PANE`, `TAB`, `RESIZE`, `SCROLL` or `MOVE`, each mode once, in that order. The marks follow the mode within about a second. When the row is too narrow the key hint is cut and the marks stay. With no sequence pending and every viewer in normal mode the row is absent, and nothing else in the bottom chrome moves. A key that continues nothing, `Esc` included, cancels the sequence and does nothing else. Opening help or starting a search also cancels it. A refusal from `1` to `9`, `Tab`, `f n`, `n` / `N`, `d d` or `q` shows as a `⚠` notice above the bottom row until the next key, and so does the first error line of a `d d`, `:`, `o`, `O` or `.` command that fails.
 

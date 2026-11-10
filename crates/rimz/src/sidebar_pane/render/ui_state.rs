@@ -41,6 +41,8 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) anchor_clamped: bool,
     /// Whether the last frame painted on this pane showed a banner.
     pub(in crate::sidebar_pane) banner_shown: bool,
+    /// Digest of the skipped-settings notice the last frame drew, `None` when it drew none.
+    pub(in crate::sidebar_pane) skipped_shown: Option<String>,
     /// The current pet dashboard view, folded by the serve loop from the latest
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.
@@ -217,6 +219,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) pending_keys: Vec<crate::config::keys::sidebar::SidebarChord>,
     /// A refusal from the last in-pane key, cleared by the next key.
     pub(in crate::sidebar_pane) notice: Option<String>,
+    /// Digest of the last skipped-settings list this view dismissed. Only a later
+    /// dismissal replaces it, so a list shown again after another stays hidden.
+    pub(in crate::sidebar_pane) dismissed_skipped: Option<String>,
     pub(in crate::sidebar_pane) toggles: PresentationToggles,
 }
 

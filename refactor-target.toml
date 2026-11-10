@@ -4209,7 +4209,8 @@ path = "crates/rimz/src/store"
 # raised::prepare_raise owns the CLI's basis, rest and captured-reply decisions (+1).
 # MessageRecord::with_reply_wait_lease stamps a reply wait leg's lease token for cycle detection (+1).
 # Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
-surface-budget = 589
+# SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
+surface-budget = 590
 
 [[verdict]]
 kind = "item"
@@ -4360,6 +4361,11 @@ reason = "Both sidebar fold paths carry the earliest runtime outage and its orde
 kind = "item"
 key = "store::snapshot::view::HookDrainerOutageAgent"
 reason = "The snapshot owns the renderer's outage identity without importing harness records into store."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::SkippedSettings"
+reason = "The sidebar fold fills the skipped-settings count and list digest the renderer's dismissal compares."
 
 [[verdict]]
 kind = "item"

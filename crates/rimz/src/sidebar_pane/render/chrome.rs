@@ -131,6 +131,24 @@ fn dismiss_hint(theme: &Theme, keys: &SidebarKeymap) -> String {
         .unwrap_or_default()
 }
 
+/// The room's skipped settings, above the footer until this view dismisses the list.
+pub(super) fn skipped_settings_line(
+    theme: &Theme,
+    count: usize,
+    keys: &SidebarKeymap,
+) -> Line<'static> {
+    let suffix = if count == 1 { "" } else { "s" };
+    Line::styled(
+        format!(
+            "{} {count} setting{suffix} skipped at start {} rimz doctor{}",
+            theme.glyph(GlyphRole::ChromeAlert),
+            theme.glyph(GlyphRole::Seam),
+            dismiss_hint(theme, keys)
+        ),
+        theme.muted().add_modifier(Modifier::DIM),
+    )
+}
+
 /// A refusal from the last in-pane key, in the bottom chrome until the next key.
 pub(super) fn pane_notice_line(theme: &Theme, notice: &str, keys: &SidebarKeymap) -> Line<'static> {
     Line::styled(

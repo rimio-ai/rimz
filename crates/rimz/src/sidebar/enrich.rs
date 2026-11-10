@@ -784,7 +784,7 @@ fn enrich_core(
     snapshot.skipped_settings = crate::workspace::record::read_optional(&state.workspace_record)
         .ok()
         .flatten()
-        .map_or(0, |record| record.skipped.len());
+        .and_then(|record| crate::store::snapshot::SkippedSettings::of(&record.skipped));
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load(runtime);

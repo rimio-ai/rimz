@@ -6,8 +6,8 @@ use crate::config::{GlyphRole, ScrollbarMode};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
-    SidebarInactive, SidebarSnapshot, SidebarWorktreeGroup, actionable_unread_count,
-    lead_unread_row,
+    SidebarInactive, SidebarSnapshot, SidebarWorktreeGroup, SkippedSettings,
+    actionable_unread_count, lead_unread_row,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
     hook_drainer_alert_lines, key_row_line, pane_notice_line, repo_header_lines, search_line,
-    truth_notice_lines,
+    skipped_settings_line, truth_notice_lines,
 };
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
@@ -492,28 +492,47 @@ enum BottomCorner {
 
 /// Selects alert-only, dashboard-folded, dashboard-with-totals, or bare-store
 /// chrome before rendering any lines.
-struct BottomPlan {
+struct BottomPlan<'a> {
     dashboard: Option<DashboardMode>,
     folded_footer: bool,
     corner: BottomCorner,
     truth_notice: bool,
     gate_notice: bool,
+    skipped_notice: Option<&'a SkippedSettings>,
     footer: bool,
     alert: bool,
 }
 
-fn plan_bottom_chrome(
-    snapshot: &SidebarSnapshot,
+/// The skipped-settings list this frame draws a notice for: none while an alert is active,
+/// when nothing was skipped, or once this view dismissed the same list.
+pub(super) fn shown_skipped<'a>(
+    snapshot: &'a SidebarSnapshot,
     alert: Option<&Alert>,
+    view: &ViewState,
+) -> Option<&'a SkippedSettings> {
+    if alert.is_some_and(Alert::is_active) {
+        return None;
+    }
+    snapshot
+        .skipped_settings
+        .as_ref()
+        .filter(|skipped| view.dismissed_skipped.as_deref() != Some(skipped.digest.as_str()))
+}
+
+fn plan_bottom_chrome<'a>(
+    snapshot: &'a SidebarSnapshot,
+    alert: Option<&Alert>,
+    view: &ViewState,
     ui: &UiState,
-) -> BottomPlan {
+) -> BottomPlan<'a> {
+    let skipped_notice = shown_skipped(snapshot, alert, view);
     let alert_active = alert.is_some_and(Alert::is_active);
     let dashboard = dashboard_present(snapshot, alert_active).then(|| dashboard_mode(snapshot));
     let owns_store = dashboard.is_some_and(|mode| mode.owns_store(!snapshot.providers.is_empty()));
     let folded_footer = owns_store
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
-        && snapshot.skipped_settings == 0
+        && skipped_notice.is_none()
         && snapshot.throttle_notices.is_empty()
         && alert.is_none();
     let corner = if alert_active || owns_store {
@@ -529,6 +548,7 @@ fn plan_bottom_chrome(
         corner,
         truth_notice: !alert_active && snapshot.truth_degraded.is_some(),
         gate_notice: !alert_active && ui.gate_notice.is_some(),
+        skipped_notice,
         footer: !alert_active && !folded_footer,
         alert: alert.is_some(),
     }
@@ -543,7 +563,7 @@ pub(super) fn build_bottom_chrome(
     ui: &UiState,
     roster: &VisibleRoster<'_>,
 ) -> RenderedBlock {
-    let plan = plan_bottom_chrome(snapshot, alert, ui);
+    let plan = plan_bottom_chrome(snapshot, alert, view, ui);
     let inner = content_width(cells);
     let mut header = RenderedBlock::default();
     if let Some(line) = search_line(theme, view, roster, snapshot, cells) {
@@ -582,17 +602,8 @@ pub(super) fn build_bottom_chrome(
     {
         bottom.extend_inert(notice_rows(gate_notice_lines(theme, notice), inner));
     }
-    if !alert.is_some_and(Alert::is_active) && snapshot.skipped_settings > 0 {
-        let count = snapshot.skipped_settings;
-        let suffix = if count == 1 { "" } else { "s" };
-        let notice = Line::styled(
-            format!(
-                "{} {count} setting{suffix} skipped at start {} rimz doctor",
-                theme.glyph(GlyphRole::ChromeAlert),
-                theme.glyph(GlyphRole::Seam)
-            ),
-            theme.muted().add_modifier(Modifier::DIM),
-        );
+    if let Some(skipped) = plan.skipped_notice {
+        let notice = skipped_settings_line(theme, skipped.count, &snapshot.keys);
         bottom.extend_inert(notice_rows(vec![notice], inner));
     }
     if !alert.is_some_and(Alert::is_active) {
