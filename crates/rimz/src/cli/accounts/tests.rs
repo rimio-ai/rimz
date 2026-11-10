@@ -297,12 +297,19 @@ fn redeem_preview_shows_a_lifted_window_without_a_redeem_line() {
 
 #[test]
 fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() {
+    let expiry = now() + Duration::from_secs(3600);
     let credits = ResetCredits {
         count: 2,
-        soonest_expiry: Some(now() + Duration::from_secs(3600)),
-        expiries: vec![],
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry],
         effect: RedeemEffect::RestartsWindow,
-        grants: Vec::new(),
+        grants: vec![rimz::agents::ResetGrant {
+            count: 2,
+            expiry: Some(expiry),
+            label: Some("Free limit reset".to_owned()),
+            clears: vec!["five_hour".to_owned(), "seven_day".to_owned()],
+            ..Default::default()
+        }],
     };
     let (rows, text) = listed(
         ACCOUNTS,
@@ -329,10 +336,18 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
     );
     assert!(text.contains("RESET CREDITS"), "{text}");
     assert!(text.contains("2 · exp 1h00m"), "{text}");
+    let json = serde_json::to_value(&rows[3]).unwrap()["reset_credits"].clone();
+    assert_eq!(json, serde_json::to_value(credits).unwrap());
     assert_eq!(
-        serde_json::to_value(&rows[3]).unwrap()["reset_credits"],
-        serde_json::to_value(credits).unwrap()
+        json["grants"],
+        serde_json::json!([{
+            "count": 2,
+            "expiry": expiry.to_string(),
+            "label": "Free limit reset",
+            "clears": ["five_hour", "seven_day"]
+        }])
     );
+    assert!(!text.contains("Free limit reset"), "{text}");
     assert!(
         serde_json::to_value(&rows[0])
             .unwrap()

@@ -1278,20 +1278,32 @@ fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
     if reset.count == 0 {
         return cell("-").dash();
     }
-    let soonest = reset
-        .expiries
+    let accounted = reset.accounted();
+    let Some(nearest) = accounted.iter().filter_map(|grant| grant.expiry).min() else {
+        return cell(reset.count.to_string());
+    };
+    let due = nearest <= now;
+    let going = accounted
         .iter()
-        .min()
-        .copied()
-        .or(reset.soonest_expiry);
-    match soonest {
-        Some(deadline) if deadline <= now => cell(format!("{} · due", reset.count)),
-        Some(deadline) => cell(format!(
-            "{} · exp {}",
-            reset.count,
-            rimz::theme::fmt::reset_countdown(deadline, now)
-        )),
-        None => cell(reset.count.to_string()),
+        .filter(|grant| {
+            grant.expiry.is_some_and(|expiry| {
+                if due {
+                    expiry <= now
+                } else {
+                    expiry == nearest
+                }
+            })
+        })
+        .fold(0_u32, |sum, grant| sum.saturating_add(grant.count));
+    let when = if due {
+        "due".to_owned()
+    } else {
+        format!("exp {}", rimz::theme::fmt::reset_countdown(nearest, now))
+    };
+    if going >= reset.count {
+        cell(format!("{} · {when}", reset.count))
+    } else {
+        cell(format!("{} · {going} {when}", reset.count))
     }
 }
 
@@ -1662,34 +1674,78 @@ fn reset_credit_lines(
     now: Timestamp,
     time_zone: &TimeZone,
 ) -> Vec<Vec<render::Cell>> {
-    let noun = if reset.count == 1 {
-        "credit"
-    } else {
-        "credits"
-    };
-    let mut lines = vec![vec![cell(format!("{} {noun}", reset.count))]];
-    let mut expiries = if reset.expiries.is_empty() {
-        reset.soonest_expiry.into_iter().collect::<Vec<_>>()
-    } else {
-        reset.expiries.clone()
-    };
-    expiries.sort_unstable();
-    for deadline in expiries
-        .into_iter()
-        .take(usize::try_from(reset.count).unwrap_or(usize::MAX).min(3))
-    {
-        let local = deadline.to_zoned(time_zone.clone());
-        let relative = if deadline <= now {
-            "due".to_owned()
-        } else {
-            format!("in {}", rimz::theme::fmt::reset_countdown(deadline, now))
+    let mut lines = vec![vec![cell(credits_noun(reset.count))]];
+    let mut groups: Vec<(ResetCreditLine, u32)> = Vec::new();
+    for grant in reset.accounted() {
+        let line = ResetCreditLine {
+            expiry: grant.expiry,
+            label: grant
+                .label
+                .as_deref()
+                .and_then(rimz::agents::single_line_description),
+            paused: grant.paused,
+            starts_at: grant.starts_at.filter(|start| *start > now),
         };
-        lines.push(vec![cell(format!(
-            "- {} · {relative}",
-            local.strftime("%Y-%m-%d %H:%M:%S %:z")
-        ))]);
+        match groups.iter_mut().find(|(group, _)| *group == line) {
+            Some((_, count)) => *count = count.saturating_add(grant.count),
+            None => groups.push((line, grant.count)),
+        }
+    }
+    let width = groups
+        .iter()
+        .filter_map(|(line, _)| line.expiry)
+        .map(|expiry| deadline_word(expiry, now).len())
+        .max()
+        .unwrap_or(0);
+    for (line, count) in groups {
+        let mut text = match line.expiry {
+            Some(expiry) => format!(
+                "{:<width$} · {}",
+                deadline_word(expiry, now),
+                expiry
+                    .to_zoned(time_zone.clone())
+                    .strftime("%Y-%m-%d %H:%M %:z")
+            ),
+            None => "expiry unknown".to_owned(),
+        };
+        match &line.label {
+            Some(label) => text.push_str(&format!(" · {count} × {label}")),
+            None => text.push_str(&format!(" · {}", credits_noun(count))),
+        }
+        if line.paused {
+            text.push_str(" · paused");
+        }
+        if let Some(start) = line.starts_at {
+            text.push_str(&format!(
+                " · starts in {}",
+                rimz::theme::fmt::reset_countdown(start, now)
+            ));
+        }
+        lines.push(vec![cell(text)]);
     }
     lines
+}
+
+/// What one detail line prints besides its count; grants that agree on it fold.
+#[derive(PartialEq)]
+struct ResetCreditLine {
+    expiry: Option<Timestamp>,
+    label: Option<String>,
+    paused: bool,
+    starts_at: Option<Timestamp>,
+}
+
+fn credits_noun(count: u32) -> String {
+    let noun = if count == 1 { "credit" } else { "credits" };
+    format!("{count} {noun}")
+}
+
+fn deadline_word(deadline: Timestamp, now: Timestamp) -> String {
+    if deadline <= now {
+        "due".to_owned()
+    } else {
+        format!("in {}", rimz::theme::fmt::reset_countdown(deadline, now))
+    }
 }
 
 #[cfg(test)]

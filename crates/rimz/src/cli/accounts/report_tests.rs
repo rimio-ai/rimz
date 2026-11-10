@@ -1,7 +1,7 @@
 use super::super::*;
 use jiff::SignedDuration;
 use jiff::tz::TimeZone;
-use rimz::agents::{AgentAccount, SpendTally, SpendWindow};
+use rimz::agents::{AgentAccount, ResetGrant, SpendTally, SpendWindow};
 use rimz::config::MachineConfig;
 use rimz::ids::LoginName;
 use rimz::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
@@ -1722,29 +1722,80 @@ fn reset_cell_marks_its_countdown_as_an_expiry() {
         }),
         ..panel("codex")
     };
+    let days = |days: i64| now + SignedDuration::from_secs(days * 86_400);
+    let flat = |count, expiries: Vec<Timestamp>| SidebarProviderPanel {
+        reset_credits: Some(ResetCredits {
+            count,
+            soonest_expiry: expiries.iter().min().copied(),
+            expiries,
+            effect: rimz::agents::RedeemEffect::KeepsSchedule,
+            grants: Vec::new(),
+        }),
+        ..panel("codex")
+    };
+    let labelled = SidebarProviderPanel {
+        reset_credits: Some(ResetCredits {
+            count: 4,
+            soonest_expiry: Some(days(3)),
+            expiries: vec![days(3), days(9), days(9), days(9)],
+            effect: rimz::agents::RedeemEffect::KeepsSchedule,
+            grants: vec![
+                ResetGrant {
+                    count: 1,
+                    expiry: Some(days(3)),
+                    label: Some("launch".to_owned()),
+                    ..Default::default()
+                },
+                ResetGrant {
+                    count: 3,
+                    expiry: Some(days(9)),
+                    label: Some("free".to_owned()),
+                    ..Default::default()
+                },
+            ],
+        }),
+        ..panel("codex")
+    };
     let reports = group(
         "codex",
         vec![
-            (
-                "default",
-                banked(2, Some(now + SignedDuration::from_secs(3 * 86_400))),
-            ),
+            ("default", banked(2, Some(days(3)))),
             ("due", banked(4, Some(now))),
             ("bare", banked(1, None)),
             ("none", banked(0, None)),
             ("unknown", panel("codex")),
+            ("shared", flat(2, vec![days(3), days(3)])),
+            ("one", flat(1, vec![days(3)])),
+            (
+                "alldue",
+                flat(2, vec![now, now - SignedDuration::from_secs(60)]),
+            ),
+            ("somedue", flat(3, vec![now, now, days(1)])),
+            ("labelled", labelled),
         ],
     );
     let text = overview(&reports, now, &BTreeMap::new(), false);
-    assert_eq!(
-        text.lines()
-            .skip(1)
-            .take(reports.len() + 1)
-            .map(|line| cells(line)[2])
-            .collect::<Vec<_>>(),
-        ["RESET CREDITS", "2 · exp 3d00h", "4 · due", "1", "-", "–"],
-        "{text}"
-    );
+    let rows = text
+        .lines()
+        .skip(1)
+        .take(reports.len() + 1)
+        .map(|line| (cells(line)[0], cells(line)[2]))
+        .collect::<BTreeMap<_, _>>();
+    for (name, cell) in [
+        ("NAME", "RESET CREDITS"),
+        ("default", "2 · 1 exp 3d00h"),
+        ("due", "4 · 1 due"),
+        ("bare", "1"),
+        ("none", "-"),
+        ("unknown", "–"),
+        ("shared", "2 · exp 3d00h"),
+        ("one", "1 · exp 3d00h"),
+        ("alldue", "2 · due"),
+        ("somedue", "3 · 2 due"),
+        ("labelled", "4 · 1 exp 3d00h"),
+    ] {
+        assert_eq!(rows.get(name), Some(&cell), "{name}: {text}");
+    }
 }
 
 #[test]
@@ -2344,81 +2395,148 @@ fn pretty_report_hides_zero_reset_credits() {
     );
     let mut out = anstream::StripStream::new(Vec::new());
     write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
-    assert!(
-        !String::from_utf8(out.into_inner())
-            .unwrap()
-            .contains("resets:")
-    );
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(!text.contains("reset credits"), "{text}");
 }
 
-fn rendered_resets(reset: &ResetCredits, now: Timestamp) -> String {
+fn rendered_resets(reset: &ResetCredits, now: Timestamp, time_zone: &TimeZone) -> String {
     let mut rows = KeyVals::new().indent(2);
-    rows.push_lines("resets", reset_credit_lines(reset, now, &TimeZone::UTC));
+    rows.push_lines("reset credits", reset_credit_lines(reset, now, time_zone));
     let mut out = anstream::StripStream::new(Vec::new());
     rows.render(&mut out).unwrap();
     String::from_utf8(out.into_inner()).unwrap()
 }
 
-#[test]
-fn reset_rendering_sorts_preserves_duplicates_and_caps_detail() {
-    let now = Timestamp::from_second(1_700_000_000).unwrap();
-    let day = |days: i64| now + SignedDuration::from_secs(days * 86_400);
-    let reset = ResetCredits {
-        count: 5,
-        soonest_expiry: Some(day(1)),
-        expiries: vec![day(4), day(1), day(3), day(1), day(2)],
+fn flat_resets(count: u32, soonest: Option<Timestamp>, expiries: Vec<Timestamp>) -> ResetCredits {
+    ResetCredits {
+        count,
+        soonest_expiry: soonest,
+        expiries,
         effect: rimz::agents::RedeemEffect::RestartsWindow,
         grants: Vec::new(),
-    };
+    }
+}
 
+fn granted_resets(grants: Vec<ResetGrant>) -> ResetCredits {
+    let mut expiries: Vec<_> = grants
+        .iter()
+        .flat_map(|grant| std::iter::repeat_n(grant.expiry, grant.count as usize))
+        .flatten()
+        .collect();
+    expiries.sort_unstable();
+    ResetCredits {
+        count: grants.iter().map(|grant| grant.count).sum(),
+        soonest_expiry: expiries.first().copied(),
+        expiries,
+        effect: rimz::agents::RedeemEffect::KeepsSchedule,
+        grants,
+    }
+}
+
+fn labelled(count: u32, expiry: Option<Timestamp>, label: &str) -> ResetGrant {
+    ResetGrant {
+        count,
+        expiry,
+        label: Some(label.to_owned()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn reset_detail_lists_each_grant_by_deadline_with_its_label() {
+    let now: Timestamp = "2026-11-10T04:24:04Z".parse().unwrap();
+    let launch: Timestamp = "2026-11-17T07:59:00Z".parse().unwrap();
+    let free: Timestamp = "2026-12-16T04:59:00Z".parse().unwrap();
+    let reset = granted_resets(vec![
+        labelled(
+            1,
+            Some(launch),
+            "New model launch: one Fable reset for Pro and Team Standard, launch week only",
+        ),
+        labelled(2, Some(free), "Free limit reset"),
+        labelled(1, Some(free), "Free limit reset"),
+    ]);
+    let zone = TimeZone::fixed(jiff::tz::offset(8));
     assert_eq!(
-        rendered_resets(&reset, now),
-        "  resets: 5 credits\n          - 2023-11-15 22:13:20 +00:00 · in 1d00h\n          - 2023-11-15 22:13:20 +00:00 · in 1d00h\n          - 2023-11-16 22:13:20 +00:00 · in 2d00h\n"
+        rendered_resets(&reset, now, &zone),
+        "  reset credits: 4 credits\n                 in 7d03h  · 2026-11-17 15:59 +08:00 · 1 × New model launch: one Fable reset for Pro and Team Standard, launch week only\n                 in 36d00h · 2026-12-16 12:59 +08:00 · 3 × Free limit reset\n"
     );
 }
 
 #[test]
-fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
+fn reset_detail_shows_every_flat_expiry_folded_by_deadline() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let day = |days: i64| now + SignedDuration::from_secs(days * 86_400);
+    let reset = flat_resets(
+        5,
+        Some(day(1)),
+        vec![day(4), day(1), day(3), day(1), day(2)],
+    );
+    assert_eq!(
+        rendered_resets(&reset, now, &TimeZone::UTC),
+        "  reset credits: 5 credits\n                 in 1d00h · 2023-11-15 22:13 +00:00 · 2 credits\n                 in 2d00h · 2023-11-16 22:13 +00:00 · 1 credit\n                 in 3d00h · 2023-11-17 22:13 +00:00 · 1 credit\n                 in 4d00h · 2023-11-18 22:13 +00:00 · 1 credit\n"
+    );
+}
+
+#[test]
+fn reset_detail_respects_count_marks_due_and_lists_undated_credits_last() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let hour = |hours: i64| now + SignedDuration::from_hours(hours);
+    let utc = TimeZone::UTC;
     assert_eq!(
         rendered_resets(
-            &ResetCredits {
-                count: 1,
-                soonest_expiry: Some(hour(1)),
-                expiries: vec![hour(2), hour(1)],
-                effect: rimz::agents::RedeemEffect::RestartsWindow,
-                grants: Vec::new(),
-            },
+            &flat_resets(1, Some(hour(1)), vec![hour(2), hour(1)]),
             now,
+            &utc
         ),
-        "  resets: 1 credit\n          - 2023-11-14 23:13:20 +00:00 · in 1h00m\n"
+        "  reset credits: 1 credit\n                 in 1h00m · 2023-11-14 23:13 +00:00 · 1 credit\n"
+    );
+    assert_eq!(
+        rendered_resets(&flat_resets(4, Some(hour(6)), Vec::new()), now, &utc),
+        "  reset credits: 4 credits\n                 in 6h00m · 2023-11-15 04:13 +00:00 · 1 credit\n                 expiry unknown · 3 credits\n"
     );
     assert_eq!(
         rendered_resets(
-            &ResetCredits {
-                count: 4,
-                soonest_expiry: Some(hour(6)),
-                expiries: Vec::new(),
-                effect: rimz::agents::RedeemEffect::RestartsWindow,
-                grants: Vec::new(),
-            },
+            &flat_resets(
+                3,
+                Some(now),
+                vec![now - SignedDuration::from_secs(60), hour(30)]
+            ),
             now,
+            &utc
         ),
-        "  resets: 4 credits\n          - 2023-11-15 04:13:20 +00:00 · in 6h00m\n"
+        "  reset credits: 3 credits\n                 due      · 2023-11-14 22:12 +00:00 · 1 credit\n                 in 1d06h · 2023-11-16 04:13 +00:00 · 1 credit\n                 expiry unknown · 1 credit\n"
     );
     assert_eq!(
-        rendered_resets(
-            &ResetCredits {
-                count: 2,
-                soonest_expiry: Some(now),
-                expiries: vec![now - SignedDuration::from_secs(1), now],
-                effect: rimz::agents::RedeemEffect::RestartsWindow,
-                grants: Vec::new(),
-            },
-            now,
-        ),
-        "  resets: 2 credits\n          - 2023-11-14 22:13:19 +00:00 · due\n          - 2023-11-14 22:13:20 +00:00 · due\n"
+        rendered_resets(&flat_resets(2, None, Vec::new()), now, &utc),
+        "  reset credits: 2 credits\n                 expiry unknown · 2 credits\n"
+    );
+}
+
+#[test]
+fn reset_detail_marks_unusable_grants_and_prints_labels_on_one_line() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let day = |days: i64| now + SignedDuration::from_secs(days * 86_400);
+    let reset = granted_resets(vec![
+        labelled(1, Some(day(2)), "Launch\nreset \u{1b}[31mnow"),
+        ResetGrant {
+            paused: true,
+            ..labelled(1, Some(day(2)), "Free limit reset")
+        },
+        ResetGrant {
+            starts_at: Some(day(1)),
+            ..labelled(2, Some(day(2)), "Free limit reset")
+        },
+        ResetGrant {
+            starts_at: Some(now - SignedDuration::from_secs(60)),
+            ..labelled(1, Some(day(3)), "Free limit reset")
+        },
+        labelled(1, Some(day(3)), "Free limit reset"),
+        labelled(1, None, " \t "),
+    ]);
+    assert_eq!(
+        rendered_resets(&reset, now, &TimeZone::UTC),
+        "  reset credits: 7 credits\n                 in 2d00h · 2023-11-16 22:13 +00:00 · 1 × Launch reset [31mnow\n                 in 2d00h · 2023-11-16 22:13 +00:00 · 1 × Free limit reset · paused\n                 in 2d00h · 2023-11-16 22:13 +00:00 · 2 × Free limit reset · starts in 1d00h\n                 in 3d00h · 2023-11-17 22:13 +00:00 · 2 × Free limit reset\n                 expiry unknown · 1 credit\n"
     );
 }
 
