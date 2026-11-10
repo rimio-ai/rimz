@@ -1003,6 +1003,41 @@ fn a_departed_pixel_pane_mirrors_once_blank_and_returns_its_slot() {
 }
 
 #[test]
+fn an_on_screen_pane_returns_its_slot_after_the_frame_of_deletes_once_pixels_turn_off() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520200));
+    pair.snapshot.theme.display.pixel = crate::config::PixelMode::Off;
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let first =
+        String::from_utf8_lossy(&std::mem::take(&mut *output.0.lock().unwrap())).into_owned();
+    assert!(
+        first.contains("a=d"),
+        "the first frame deletes the ids: {}",
+        first.escape_debug()
+    );
+    assert!(
+        pair.panes[1].state.pane.paint.holds_slot(),
+        "the slot outlives the frame that carries its deletes"
+    );
+    assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520200));
+
+    let paints = pair.panes[1].state.pane.paints;
+    let rig = &mut pair.panes[1];
+    rig.state.pane.dirty = true;
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    rig.state.pane.next_frame = pair.clock.now();
+    advance_wakeup(rig, Wakeup::Snapshot);
+    assert!(rig.state.pane.paints > paints, "a second frame paints");
+    assert!(
+        !rig.state.pane.paint.holds_slot(),
+        "the pass after the written deletes returns the slot"
+    );
+    assert_eq!(first_free_slot(rig), Some(0x520000));
+}
+
+#[test]
 fn a_pane_returning_before_its_mirror_grant_keeps_its_slot() {
     let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
     pair.sample(&[(1, 0)]);
