@@ -30,7 +30,8 @@ pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
 pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
 /// Cross-version image-id layout. Moving it orphans images from older renderers.
-/// A routed frame with a pixel surface takes one.
+/// A pane holds one only while on screen: a routed frame takes it, a hidden
+/// mirror returns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PixelSlot(u8);
 

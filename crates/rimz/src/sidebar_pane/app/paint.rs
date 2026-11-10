@@ -163,6 +163,10 @@ impl FramePainter {
         }
     }
 
+    pub(super) fn holds_slot(&self) -> bool {
+        matches!(self.slot, SlotState::Held(_))
+    }
+
     /// Return the slot without writing: the pane's frame already carries no ids,
     /// and the next holder's sweep retires the images left behind. A free
     /// painter keeps its denial episode.
