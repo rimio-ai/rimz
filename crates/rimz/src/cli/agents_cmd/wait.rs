@@ -364,22 +364,30 @@ fn mark_joined<'a>(
     session_name: &str,
     outcomes: impl IntoIterator<Item = &'a TargetOutcome>,
 ) {
-    let attended = std::cell::LazyCell::new(|| match store.snapshot_cached() {
-        Ok(snapshot) => rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents)
-            .map_or(true, AgentState::holds_open_turn),
-        Err(err) => {
-            tracing::warn!(error = %err, "could not read the caller's turn for the joined run");
-            true
-        }
+    let snapshot = std::cell::LazyCell::new(|| {
+        store
+            .snapshot_cached()
+            .inspect_err(|err| {
+                tracing::warn!(error = %err, "could not read the caller for the joined run");
+            })
+            .ok()
+    });
+    let caller = std::cell::LazyCell::new(|| {
+        snapshot
+            .as_ref()
+            .and_then(|snapshot| rimz::harness::ancestry::resolve_caller(&snapshot.agents))
     });
     for outcome in outcomes {
         let TerminalPayload::Run(record) = &outcome.payload else {
             continue;
         };
-        if !*attended {
+        let claims = snapshot.as_ref().is_some_and(|snapshot| {
+            rimz::harness::run::report::may_claim(snapshot, caller.as_ref(), record)
+        });
+        if !claims {
             tracing::debug!(
                 run_id = %record.run_id,
-                "result printed outside the caller's turn; left unjoined for the digest",
+                "result printed outside its launcher's turn; left unjoined for the digest",
             );
             continue;
         }

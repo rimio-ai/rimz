@@ -1,5 +1,6 @@
 //! A wait that starts after a launched peer's run ended reads that run while
-//! it still describes the peer's latest turn, and marks it read for its launcher.
+//! it still describes the peer's latest turn. A wait marks the answer it
+//! prints read only for the run's launcher or a person at a shell.
 
 use super::*;
 use crate::common::wait::{register_agent, register_calling_agent};
@@ -350,6 +351,7 @@ fn late_wait_reads_the_run_a_restart_failed() {
 fn late_stream_on_an_ended_peer_ends_with_the_run_record() {
     let env = launcher_room();
     let mut peer = ended_peer(&env, "alpha", false);
+    peer.run = rimz::harness::run::load(env.store().paths(), &peer.run.run_id).expect("reload");
     peer.run.status = RunStatus::Failed;
     rimz::harness::run::create(env.store().paths(), &peer.run).expect("fail peer run");
     let out = wait_as_launcher(&env, &["@alpha", "--stream", "--timeout", "10s"]);
@@ -359,4 +361,64 @@ fn late_stream_on_an_ended_peer_ends_with_the_run_record() {
         "{out:?}"
     );
     assert_unread(&env, &peer);
+}
+
+/// Who runs a wait on a peer run that settles while it waits, and whether the
+/// printed answer is theirs to mark read.
+#[test]
+fn a_settled_wait_marks_the_answer_only_for_its_launcher_or_a_person() {
+    for (caller, marks) in [
+        (Some(LAUNCHER_LAUNCH), true),
+        (None, true),
+        (Some("stranger-launch"), false),
+        (Some("missing-launch"), false),
+    ] {
+        let env = launcher_room();
+        register_agent(
+            &env,
+            "stranger-session",
+            "stranger-launch",
+            "stranger",
+            LaunchParams::default(),
+        );
+        lifecycle(&env.store(), "stranger-session", TURN_STARTED);
+        let mut peer = ended_peer(&env, "alpha", false);
+        let paths = env.store().paths().clone();
+        peer.run = rimz::harness::run::load(&paths, &peer.run.run_id).expect("reload peer run");
+        peer.run.status = RunStatus::Running;
+        peer.run.completed_at = None;
+        rimz::harness::run::create(&paths, &peer.run).expect("reopen peer run");
+        let mut wait = env.rimz();
+        wait.args([
+            "agents",
+            "wait",
+            peer.run.run_id.as_str(),
+            "--timeout",
+            "10s",
+        ]);
+        if let Some(launch) = caller {
+            wait.env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                .env(rimz::harness::launch::ENV_AGENT_ID, launch);
+        }
+        let child = wait
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn wait");
+        peer.run.status = RunStatus::Completed;
+        peer.run.completed_at = Some(Timestamp::now());
+        rimz::harness::run::create(&paths, &peer.run).expect("settle peer run");
+        let out = child.wait_with_output().expect("collect wait");
+        assert!(out.status.success(), "{caller:?}: {out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "alpha run answer\n",
+            "{caller:?}"
+        );
+        if marks {
+            assert_read(&env, &peer);
+        } else {
+            assert_unread(&env, &peer);
+        }
+    }
 }
