@@ -697,10 +697,18 @@ pub fn claim_rung(
     .map(|(_, rung)| rung)
 }
 
-/// Claim one provider-limit park of a child run for its parent's notice. The
-/// park is named by the child's `last_activity`; a settled run and a park
-/// already claimed write nothing. Returns whether this caller owns the notice.
-pub fn claim_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp) -> Result<bool> {
+/// Claim one provider-limit park of a child run for its parent's notice and hold
+/// the run through it. The park is named by the child's `last_activity`; a
+/// settled run and a park already claimed write nothing. The first claim of a
+/// park stores `hold` and moves `deadline_at`, and `deadline_notice_at` when
+/// set, later by the held span; a claim again after a release moves nothing.
+/// Returns whether this caller owns the notice.
+pub fn claim_park_notice(
+    paths: &StatePaths,
+    run_id: &RunId,
+    hold: crate::store::run::LimitHold,
+) -> Result<bool> {
+    let activity = hold.activity;
     update_record(paths, run_id, |record, _| {
         if record.status.is_terminal()
             || record
@@ -710,9 +718,46 @@ pub fn claim_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp
             return Ok(RecordMutation::Keep(false));
         }
         record.park_noticed_activity = Some(activity);
+        if record
+            .limit_hold
+            .is_none_or(|stored| stored.activity != activity)
+        {
+            let held = hold.until.duration_since(hold.since);
+            record.deadline_at = record.deadline_at.map(|at| at + held);
+            record.deadline_notice_at = record.deadline_notice_at.map(|at| at + held);
+            record.limit_hold = Some(hold);
+        }
         Ok(RecordMutation::Write(true))
     })
     .map(|(_, claimed)| claimed)
+}
+
+/// Fail a child run for the provider-limit park named by `activity`, writing
+/// `reason` with the terminal status. A held park fails only once its reset
+/// has passed; an unheld one only while no notice claims it. A terminal run is
+/// left untouched. Returns the record only when this call wrote it.
+pub fn fail_limit_park(
+    paths: &StatePaths,
+    run_id: &RunId,
+    activity: Timestamp,
+    reason: &str,
+) -> Result<Option<RunRecord>> {
+    let (record, wrote) = update_record(paths, run_id, |record, now| {
+        let owed = match record.limit_hold {
+            Some(hold) if hold.activity == activity => hold.until <= now,
+            _ => record
+                .park_noticed_activity
+                .is_none_or(|noticed| noticed < activity),
+        };
+        if !owed || !record.mark_terminal(RunStatus::Failed, now) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        if record.failure_tail.is_none() {
+            record.failure_tail = capped_failure_tail(reason);
+        }
+        Ok(RecordMutation::Write(true))
+    })?;
+    Ok(wrote.then_some(record))
 }
 
 /// Give a claimed park back when its notice could not be queued.
@@ -927,6 +972,20 @@ pub fn record_lifecycle(
     last_message: Option<String>,
     owed: impl FnOnce() -> Option<OwedWake>,
 ) -> Result<Option<RunRecord>> {
+    record_lifecycle_at(paths, run_id, kind, observation, last_message, None, owed)
+}
+
+/// [`record_lifecycle`] for an observation the hook ingress stamped at `observed_at`; `None`
+/// reads it as observed when the fold runs.
+fn record_lifecycle_at(
+    paths: &StatePaths,
+    run_id: &RunId,
+    kind: &str,
+    observation: &AgentLifecycleObservation,
+    last_message: Option<String>,
+    observed_at: Option<Timestamp>,
+    owed: impl FnOnce() -> Option<OwedWake>,
+) -> Result<Option<RunRecord>> {
     if observation.parent_agent_id.is_some()
         || matches!(
             observation.signal,
@@ -942,8 +1001,17 @@ pub fn record_lifecycle(
         None
     };
     let (record, transition, _) = write_record(paths, run_id, |record, now| {
+        let observed_at = observed_at.unwrap_or(now);
         Ok(
-            match fold_lifecycle(record, kind, observation, last_message, now, owed) {
+            match fold_lifecycle(
+                record,
+                kind,
+                observation,
+                last_message,
+                now,
+                observed_at,
+                owed,
+            ) {
                 LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
                 LifecycleFold::Updated => RecordMutation::Write(LifecycleFold::Updated),
                 LifecycleFold::NewlyTerminal => RecordMutation::Write(LifecycleFold::NewlyTerminal),
@@ -1025,12 +1093,13 @@ pub fn settle_lifecycle(
     last_message: Option<String>,
 ) -> Result<Option<RunRecord>> {
     let kind = agent.spec().kind;
-    let record = record_lifecycle(
+    let record = record_lifecycle_at(
         store.paths(),
         run_id,
         kind,
         observation,
         last_message,
+        store.hook_ingress_at(),
         || {
             let agent_id = observation.agent_id.as_ref()?;
             match super::owed::owed_wake(store, &agent.spec().kind_id(), agent_id) {
@@ -1200,6 +1269,7 @@ fn fold_lifecycle(
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
     now: Timestamp,
+    observed_at: Timestamp,
     owed: Option<OwedWake>,
 ) -> LifecycleFold {
     let reopen = record.lifecycle == RunLifecycle::Turn
@@ -1256,6 +1326,7 @@ fn fold_lifecycle(
         });
         record.opened_by.clear();
         record.deadline_notice_at = None;
+        record.limit_hold = None;
         record.status = RunStatus::Running;
         record.completed_at = None;
         record.parked_at = None;
@@ -1300,13 +1371,13 @@ fn fold_lifecycle(
     }
     // The first in-turn signal resumes work: a keepalive's turn start is a
     // ping edge the hook never folds. Still fold any first transcript path.
-    let unparked = record.parked_at.is_some()
-        && matches!(
-            observation.signal,
-            LifecycleSignal::TurnStarted { .. }
-                | LifecycleSignal::ToolUsed { .. }
-                | LifecycleSignal::AwaitingInput { .. }
-        );
+    let in_turn = matches!(
+        observation.signal,
+        LifecycleSignal::TurnStarted { .. }
+            | LifecycleSignal::ToolUsed { .. }
+            | LifecycleSignal::AwaitingInput { .. }
+    );
+    let unparked = record.parked_at.is_some() && in_turn;
     if unparked {
         record.parked_at = None;
         // Sealed here, not at park, so a replayed Stop of the parked turn
@@ -1315,10 +1386,12 @@ fn fold_lifecycle(
             record.parked_answer = Some(answer.clone());
         }
     }
+    let unheld = in_turn && end_limit_hold(record, observed_at, now);
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
     if !reopen
         && !unparked
+        && !unheld
         && !stop_changed
         && record.status != RunStatus::Pending
         && !first_transcript_path
@@ -1332,6 +1405,27 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
+}
+
+/// End a provider-limit hold on the child's first in-turn signal observed after
+/// the park: a hook received at or before the stop or the activity naming the
+/// park is the stopped turn's own, applied late, and keeps the hold. A resume
+/// before the reset gives the unused rest of the held span back to both
+/// deadline stamps. Returns whether a hold was ended.
+fn end_limit_hold(record: &mut RunRecord, observed_at: Timestamp, now: Timestamp) -> bool {
+    let Some(hold) = record
+        .limit_hold
+        .filter(|hold| observed_at > hold.since.max(hold.activity))
+    else {
+        return false;
+    };
+    record.limit_hold = None;
+    if now < hold.until {
+        let unused = hold.until.duration_since(now);
+        record.deadline_at = record.deadline_at.map(|at| at - unused);
+        record.deadline_notice_at = record.deadline_notice_at.map(|at| at - unused);
+    }
+    true
 }
 
 /// A team or session run spans every turn of its leader:

@@ -2325,7 +2325,8 @@ path = "crates/rimz/src/harness"
 # `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
 # run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
-surface-budget = 1125
+# park_notice::{Continuation, FailCause, ParkAction, park_action, reset_reading, failure_reason} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run (+7).
+surface-budget = 1132
 
 [[verdict]]
 kind = "item"
@@ -4198,7 +4199,9 @@ path = "crates/rimz/src/store"
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
 # workflow::LoopReport and RunRecord::owes_loop_report mark a task-started run's outcome report for the engine, the tick backstop, and GC (+2).
 # RunRecord::firing_checkout keys a fire-tree run's overlap, backlog and history at the project root (+1).
-surface-budget = 595
+# store::run::LimitHold records a limit-parked child's hold on its run, for the harness and the park-notice helper (+1).
+# Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
+surface-budget = 597
 
 [[verdict]]
 kind = "item"
@@ -4977,7 +4980,8 @@ allowed-dependencies = [
 # Store::audit_rows exposes the frame's shared durable fold (+1).
 # The store-owned notes manifest, allocator and archive reader module (+1).
 # The durable raised-attention record module (+1).
-surface-budget = 43
+# Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -5253,7 +5257,8 @@ allowed-dependencies = [
 # settle_session_exit settles provider-exit spend before waking a session run (+1).
 # cancel_unserved_workflow_run rechecks rebirth liveness at the locked mutation (+1).
 # describes_latest_turn decides when `agents wait` reads a live peer's ended run (+1).
-surface-budget = 60
+# fail_limit_park fails a limit-parked child's run under the lock, for the park-notice helper (+1).
+surface-budget = 61
 
 [[verdict]]
 kind = "item"

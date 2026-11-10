@@ -409,7 +409,15 @@ pub(super) fn refresh_heavy_lanes(
     let runs = steps.step("run_timeout", || {
         let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
         if let Some(runs) = &runs {
-            crate::harness::park_notice::notify_parents(runs, &base.agents, runtime, base.now);
+            crate::harness::park_notice::notify_parents(
+                runs,
+                &base.agents,
+                runtime,
+                base.now,
+                config,
+                store.as_ref(),
+                base.resume_outcomes.as_deref().unwrap_or_default(),
+            );
             crate::harness::stall_notice::notify_parents(
                 runs,
                 &base.agents,

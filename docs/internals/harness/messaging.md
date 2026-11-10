@@ -553,7 +553,7 @@ Content:
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
-| `SUBAGENT_PAUSED` | A launched child parked on a provider limit, queued for its parent once per park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `SUBAGENT_PAUSED` | A launched child parked on a provider limit whose run is held until the reset, queued for its parent once per held park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
@@ -748,7 +748,7 @@ A ping turn in which the agent does work folds into its parked supervised run as
 
 ### The cap
 
-`harness.cache_keepalive_max` (default 6h, `off` for none) bounds any unbroken run of pings, Sleeping or keep-warm alike, and a horizon never outlives it.
+`harness.cache_keepalive_max` (default 6h, `off` for none) bounds any unbroken run of pings, Sleeping or keep-warm alike, and a horizon never outlives it. It is also how far past the instant RimZ classifies a launched child's provider-limit park the reset may fall for the child's run to be held to it (6h when the cap is `off`, whatever `harness.cache_keepalive` says; [a child parked on a provider limit](./subagents.md#a-child-parked-on-a-provider-limit)).
 
 Its clock is `AgentState::keepalive_since`. The fold stamps it at a ping-only turn's open, from the prior `keepalive_since`, else the prior `last_request_at`: the agent's last request before the run of pings. A ping to a row parked on background work counts too, since its open is the same inert edge. Any other turn start clears it, as does any context reset. That covers a human prompt, an agent message, a `STAGE` or `WAIT` wake, a batch that mixes a keepalive with anything else, and a turn that resumes a parked row. The run's last ping is `pinged_at`, the one stamp a ping moves, which `last_request_at` then returns.
 

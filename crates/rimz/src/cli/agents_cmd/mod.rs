@@ -1070,7 +1070,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::CacheKeepalive(args)) => return cache_keepalive::run(args.request),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
-        Some(AgentsSubcmd::ParkNotice(args)) => return park_notice::run(args.request),
+        Some(AgentsSubcmd::ParkNotice(args)) => return park_notice::run(args.request, globals),
         Some(AgentsSubcmd::StallNotice(args)) => return stall_notice::run(args.request),
         Some(AgentsSubcmd::StallNudge(args)) => return stall_nudge::run(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),

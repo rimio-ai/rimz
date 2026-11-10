@@ -15,10 +15,6 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     let initial = rimz::harness::run::load(&paths, &request.run_id).context("loading timed run")?;
     let mux_hint = initial.pane_id.as_ref().map(|pane| pane.mux());
     let ctx = Ctx::for_workspace(request.workspace_id, mux_hint)?;
-    let provider_process = initial
-        .subagent
-        .then(|| provider_process_for_run(&initial))
-        .flatten();
     let now = Timestamp::now();
     if stop_due_by_pane(&initial, now) {
         if let Some(rung) =
@@ -76,19 +72,39 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     if !wrote && !(record.status == rimz::store::run::RunStatus::TimedOut && deadline_due) {
         return Ok(());
     }
-    if wrote {
-        rimz::store::run::wake_run(ctx.store.runtime_paths(), &record);
+    if !wrote {
+        return reclaim_pane(&ctx, globals, &record).context("reclaiming timed-out run pane");
     }
-    if wrote && let Some((pid, process_start)) = provider_process {
+    reclaim_settled_run(&ctx, globals, &initial, &record).context("reclaiming timed-out run pane")
+}
+
+/// The tail of a helper's own terminal write: wake the run's waiter, stop the
+/// provider `initial` recorded, and reclaim the pane unless the run keeps it.
+pub(super) fn reclaim_settled_run(
+    ctx: &Ctx,
+    globals: &super::GlobalFlags,
+    initial: &RunRecord,
+    record: &RunRecord,
+) -> Result<()> {
+    rimz::store::run::wake_run(ctx.store.runtime_paths(), record);
+    if let Some((pid, process_start)) = initial
+        .subagent
+        .then(|| provider_process_for_run(initial))
+        .flatten()
+    {
         let _ = rimz::child_process::signal_process_term(pid, Some(&process_start));
     }
-    if retains_pane_after_timeout(&record) {
+    reclaim_pane(ctx, globals, record)
+}
+
+fn reclaim_pane(ctx: &Ctx, globals: &super::GlobalFlags, record: &RunRecord) -> Result<()> {
+    if retains_pane_after_timeout(record) {
         // The wrapper observes the terminal record and stops the provider, but
         // `--keep` retains the subagent pane until explicit stop or gc.
         return Ok(());
     }
-    super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, &record)
-        .context("reclaiming timed-out run pane")
+    super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, record)?;
+    Ok(())
 }
 
 fn deadline_stop_target(record: &RunRecord) -> Option<String> {
