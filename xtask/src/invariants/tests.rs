@@ -1095,3 +1095,15 @@ fn deep_journeys_without_a_backend_prefix_are_flagged() {
     let text = "#[test]\nfn tmux_room() {}\n\n#[test]\n#[ignore]\nfn account_room() {\n}\n\nfn helper() {}\n\n#[test]\nfn zellij_room() {}\n";
     assert_eq!(unprefixed_deep_journeys(text), vec![(6, "account_room")]);
 }
+
+#[test]
+fn template_sections_match_header_lines_not_mentions() {
+    let text = "# Settings live in [theme.display.popup] below.\n[theme.display]\n# [agents]\n## [colors.primary]\n";
+    assert!(template_has_section_header(text, "[theme.display]"));
+    assert!(template_has_section_header(text, "[agents]"));
+    assert!(template_has_section_header(text, "[colors.primary]"));
+    assert!(
+        !template_has_section_header(text, "[theme.display.popup]"),
+        "a comment that mentions a section is not its header"
+    );
+}
