@@ -1000,6 +1000,97 @@ fn limit_resets_without_valid_expiry_still_count() {
     assert_eq!(reset.count, 3);
     assert_eq!(reset.soonest_expiry, None);
     assert!(reset.expiries.is_empty());
+    assert_eq!(
+        reset.grants,
+        vec![
+            crate::agents::ResetGrant {
+                count: 1,
+                ..Default::default()
+            };
+            3
+        ]
+    );
+}
+
+#[test]
+fn limit_reset_grants_keep_the_provider_label_clears_and_deadline() {
+    let usage = parse_usage_response(include_str!("fixtures/limit-resets-grants.json")).unwrap();
+    let reset = usage.reset_credits.expect("settled reset credits");
+    let launch = "2026-11-17T07:59:00Z".parse::<Timestamp>().unwrap();
+    let free = "2026-12-16T04:59:00Z".parse::<Timestamp>().unwrap();
+    assert_eq!(reset.count, 4);
+    assert_eq!(reset.soonest_expiry, Some(launch));
+    assert_eq!(reset.expiries, vec![launch, free, free, free]);
+    assert_eq!(reset.effect, crate::agents::RedeemEffect::KeepsSchedule);
+    let free_grant = |count, starts_at: &str| crate::agents::ResetGrant {
+        count,
+        expiry: Some(free),
+        label: Some("Free limit reset".to_owned()),
+        clears: vec![
+            "five_hour".to_owned(),
+            "seven_day".to_owned(),
+            "seven_day_overage_included".to_owned(),
+        ],
+        paused: false,
+        starts_at: Some(starts_at.parse().unwrap()),
+    };
+    assert_eq!(
+        reset.grants,
+        vec![
+            crate::agents::ResetGrant {
+                count: 1,
+                expiry: Some(launch),
+                label: Some(
+                    "New model launch: one Fable reset for Pro and Team Standard, launch week only"
+                        .to_owned()
+                ),
+                clears: vec![
+                    "five_hour".to_owned(),
+                    "seven_day_overage_included".to_owned()
+                ],
+                paused: false,
+                starts_at: Some("2026-11-09T18:00:00Z".parse().unwrap()),
+            },
+            free_grant(2, "2026-11-03T02:37:00Z"),
+            free_grant(1, "2026-10-21T00:45:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn limit_reset_grants_drop_spent_flag_paused_and_survive_mistyped_detail() {
+    let usage = parse_usage_response(
+        r#"{"seven_day":{"utilization":40.0},"cedar_ember":{"eligible":true,"grants":[
+            {"resets_left":0,"label":"spent","ends_at":"2026-10-20T16:00:00Z"},
+            {"resets_left":1,"label":7,"clears":"five_hour","paused":null,"starts_at":12,
+             "ends_at":"2026-10-22T16:00:00Z"},
+            {"resets_left":2,"label":null,"clears":null,"paused":true,
+             "starts_at":"2026-10-01T00:00:00Z"}
+        ]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        usage.rate_limits.unwrap().windows[1].used_percentage,
+        Some(40)
+    );
+    let reset = usage.reset_credits.expect("settled reset credits");
+    assert_eq!(reset.count, 3);
+    assert_eq!(
+        reset.grants,
+        vec![
+            crate::agents::ResetGrant {
+                count: 1,
+                expiry: Some("2026-10-22T16:00:00Z".parse().unwrap()),
+                ..Default::default()
+            },
+            crate::agents::ResetGrant {
+                count: 2,
+                paused: true,
+                starts_at: Some("2026-10-01T00:00:00Z".parse().unwrap()),
+                ..Default::default()
+            },
+        ]
+    );
 }
 
 #[test]

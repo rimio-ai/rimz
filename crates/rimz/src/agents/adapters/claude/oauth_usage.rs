@@ -280,11 +280,41 @@ struct LimitResetsWire {
 struct ResetGrantWire {
     id: Option<String>,
     resets_left: u32,
+    #[serde(deserialize_with = "lenient")]
     starts_at: Option<String>,
     ends_at: Option<String>,
+    #[serde(deserialize_with = "lenient")]
     paused: bool,
     usable_now: bool,
     use_requires_limit: bool,
+    #[serde(deserialize_with = "lenient")]
+    label: Option<String>,
+    #[serde(deserialize_with = "lenient")]
+    clears: Vec<String>,
+}
+
+impl ResetGrantWire {
+    fn into_grant(self) -> crate::agents::ResetGrant {
+        crate::agents::ResetGrant {
+            count: self.resets_left,
+            expiry: parse_reset(self.ends_at.as_deref()),
+            label: self.label,
+            clears: self.clears,
+            paused: self.paused,
+            starts_at: parse_reset(self.starts_at.as_deref()),
+        }
+    }
+}
+
+/// Reads a grant's display detail as absent when it is `null` or mistyped, so
+/// enrichment never fails the usage read that carries the windows.
+fn lenient<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// The API error envelope, read only at `error.details.error_code`.
@@ -775,22 +805,19 @@ fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
-        let mut count: u32 = 0;
-        let mut expiries = Vec::new();
-        if let Some(resets) = self.cedar_ember.filter(|resets| resets.eligible) {
-            for grant in resets.grants {
-                count = count.saturating_add(grant.resets_left);
-                if let Some(expiry) = parse_reset(grant.ends_at.as_deref()) {
-                    expiries.extend(std::iter::repeat_n(expiry, grant.resets_left as usize));
-                }
-            }
-        }
+        let grants = self
+            .cedar_ember
+            .filter(|resets| resets.eligible)
+            .map(|resets| resets.grants)
+            .unwrap_or_default()
+            .into_iter()
+            .map(ResetGrantWire::into_grant)
+            .collect();
         AccountUsageSnapshot {
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day, self.limits),
             extra_credits: collect_extra_usage(self.extra_usage),
-            reset_credits: Some(crate::agents::ResetCredits::normalized(
-                count,
-                expiries,
+            reset_credits: Some(crate::agents::ResetCredits::from_grants(
+                grants,
                 crate::agents::RedeemEffect::KeepsSchedule,
             )),
             ..Default::default()

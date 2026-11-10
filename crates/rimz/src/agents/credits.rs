@@ -575,10 +575,6 @@ impl ResetCredits {
 
     /// Builds the flat summary from per-grant detail. A grant with nothing
     /// left is dropped, as it adds nothing to the count.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the Claude usage parse adopts it next")
-    )]
     pub(super) fn from_grants(mut grants: Vec<ResetGrant>, effect: RedeemEffect) -> Self {
         grants.retain(|grant| grant.count > 0);
         sort_by_deadline(&mut grants);
