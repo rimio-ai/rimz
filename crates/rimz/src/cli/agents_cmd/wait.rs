@@ -564,7 +564,8 @@ fn resolve_wait_target(
         && (!run.status.is_terminal()
             || live_agent.is_none()
             || run.run_id.as_str() == reference
-            || (run.subagent && live_agent.is_some_and(AgentState::is_launched_child)))
+            || (run.subagent && live_agent.is_some_and(AgentState::is_launched_child))
+            || run_describes_latest_turn(store, &run, reference, current_channel)?)
     {
         let name = run
             .agent_name
@@ -591,6 +592,30 @@ fn resolve_wait_target(
             .clone(),
         completed_seen_at: None,
     })
+}
+
+/// Whether a live peer's terminal run is its latest turn, read from the same
+/// wake-aware view the agent target would settle on.
+fn run_describes_latest_turn(
+    store: &rimz::Store,
+    run: &RunRecord,
+    reference: &str,
+    current_channel: &rimz::address::AddressContext,
+) -> Result<bool> {
+    if run.peer.is_none() {
+        return Ok(false);
+    }
+    let view = TurnWaitView::load(store).context("reading agent snapshot")?;
+    let Ok(peer) =
+        crate::cli::resolve_agent_one(store, &view.snapshot, reference, None, current_channel)
+    else {
+        return Ok(false);
+    };
+    Ok(rimz::harness::run::describes_latest_turn(
+        run,
+        peer,
+        view.completion(peer),
+    ))
 }
 
 /// How long a completed turn may wait for its final message to reach the

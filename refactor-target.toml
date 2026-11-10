@@ -2323,7 +2323,8 @@ path = "crates/rimz/src/harness"
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
 # `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
-surface-budget = 1123
+# run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
+surface-budget = 1124
 
 [[verdict]]
 kind = "item"
@@ -5250,12 +5251,18 @@ allowed-dependencies = [
 # rekey_team_run moves a molting leader's open team run after placement (+1).
 # settle_session_exit settles provider-exit spend before waking a session run (+1).
 # cancel_unserved_workflow_run rechecks rebirth liveness at the locked mutation (+1).
-surface-budget = 59
+# describes_latest_turn decides when `agents wait` reads a live peer's ended run (+1).
+surface-budget = 60
 
 [[verdict]]
 kind = "item"
 key = "harness::run::cancel_unserved_workflow_run"
 reason = "Rebirth cancels rosterless workflow runs only after checking provider and wrapper liveness under the mutation lock."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::describes_latest_turn"
+reason = "`agents wait` reads a live peer's terminal run instead of its transcript while the peer rests and has closed no request since the run completed."
 
 [[verdict]]
 kind = "item"
