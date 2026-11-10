@@ -19,9 +19,9 @@ pub enum ThemeStyle {
 }
 
 /// `[theme]`: per-machine appearance. It owns palette depth, scheme selection,
-/// semantic slot overrides, sidebar render preferences, glyphs, provider
-/// styling, status-head animations, and pets. Display-only — it tunes what the
-/// renderer paints, never store correctness.
+/// semantic slot overrides, sidebar render preferences and the palette popup's
+/// size, glyphs, provider styling, status-head animations, and pets.
+/// Display-only — it tunes what the renderer paints, never store correctness.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ThemeConfig {
@@ -67,7 +67,7 @@ pub struct ThemeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_bg: Option<ThemeColor>,
     /// Sidebar render preferences: cadence, sizing, dashboard layout, meter
-    /// bands, and highlight steps.
+    /// bands, and highlight steps; and the palette popup's size.
     #[serde(default, skip_serializing_if = "DisplayConfig::is_unset")]
     pub display: DisplayConfig,
     #[serde(skip_serializing_if = "ThemeGlyphsConfig::is_unset")]

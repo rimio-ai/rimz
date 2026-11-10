@@ -6,8 +6,11 @@ use std::collections::HashSet;
 fn popup_argv_and_cached_floating_title_guard() {
     let room = TestRoom::new();
     room.publish_workspace();
-    let (temp, shim) =
-        support::zellij_shim("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/argv\"\n");
+    let (temp, shim) = support::zellij_shim(
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nprintf '%s\\n' \"$*\" >> \"$d/calls\"\n\
+         case \"$*\" in *list-tabs*) cat \"$d/tabs\" 2>/dev/null; exit 0;; esac\n\
+         printf '%s\\n' \"$@\" > \"$d/argv\"\n",
+    );
     let backend = room.backend(&shim);
     let request = crate::mux::PopupRequest {
         session_name: "rimz-test".to_owned(),
@@ -16,45 +19,80 @@ fn popup_argv_and_cached_floating_title_guard() {
         cwd: "/project with space".into(),
         ..Default::default()
     };
-    for (title, floating, opens) in [
-        ("work", false, true),
-        ("rimz palette", false, true),
-        ("rimz palette", true, false),
+    let tab = |id: u64, active: bool, cols: u16, rows: u16| {
+        format!(
+            r#"{{"name":"t{id}","tab_id":{id},"active":{active},"viewport_columns":{cols},"viewport_rows":{rows}}}"#
+        )
+    };
+    let viewed = format!("[{},{}]", tab(0, true, 255, 76), tab(1, false, 80, 24));
+    let disagreeing = format!("[{},{}]", tab(0, true, 255, 76), tab(1, true, 185, 52));
+    let unviewed = format!("[{}]", tab(0, false, 255, 76));
+    let zero = format!("[{}]", tab(0, true, 0, 76));
+    for (title, floating, tabs, size) in [
+        ("work", false, Some(viewed.as_str()), Some(["153", "38"])),
+        (
+            "rimz palette",
+            false,
+            Some(disagreeing.as_str()),
+            Some(["60%", "50%"]),
+        ),
+        ("work", false, Some(unviewed.as_str()), Some(["60%", "50%"])),
+        ("work", false, Some(zero.as_str()), Some(["60%", "50%"])),
+        ("work", false, Some("not json"), Some(["60%", "50%"])),
+        ("work", false, None, Some(["60%", "50%"])),
+        ("rimz palette", true, Some(viewed.as_str()), None),
     ] {
         let mut pane = terminal_pane(3, 0, 80, 0, title);
         pane.is_floating = floating;
         room.write_cache(unix_now_ms(), None, None, vec![pane]);
         let argv_path = temp.path().join("argv");
+        let calls_path = temp.path().join("calls");
         let _ = std::fs::remove_file(&argv_path);
+        let _ = std::fs::remove_file(&calls_path);
+        match tabs {
+            Some(tabs) => std::fs::write(temp.path().join("tabs"), tabs).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(temp.path().join("tabs"));
+            }
+        }
         let result = backend.open_popup(&request);
         assert!(result.is_ok(), "popup opens or is already open: {result:?}");
-        assert_eq!(argv_path.exists(), opens);
-        if opens {
-            let argv = std::fs::read_to_string(&argv_path).unwrap();
-            assert_eq!(
-                argv.lines().collect::<Vec<_>>(),
-                [
-                    "--session",
-                    "rimz-test",
-                    "action",
-                    "new-pane",
-                    "--floating",
-                    "--close-on-exit",
-                    "--name",
-                    "rimz palette",
-                    "--width",
-                    "80%",
-                    "--height",
-                    "80%",
-                    "--cwd",
-                    "/project with space",
-                    "--",
-                    "/bin/rimz with space",
-                    "palette",
-                    "literal $word;",
-                ]
-            );
-        }
+        let Some(size) = size else {
+            assert!(!calls_path.exists(), "an open palette issues no command");
+            continue;
+        };
+        let calls = std::fs::read_to_string(&calls_path).unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>()[0],
+            "--session rimz-test action list-tabs --json",
+            "one area read before the open: {calls}"
+        );
+        let argv = std::fs::read_to_string(&argv_path).unwrap();
+        assert_eq!(
+            argv.lines().collect::<Vec<_>>(),
+            [
+                "--session",
+                "rimz-test",
+                "action",
+                "new-pane",
+                "--floating",
+                "--close-on-exit",
+                "--name",
+                "rimz palette",
+                "--width",
+                size[0],
+                "--height",
+                size[1],
+                "--cwd",
+                "/project with space",
+                "--",
+                "/bin/rimz with space",
+                "palette",
+                "literal $word;",
+            ],
+            "{tabs:?}"
+        );
+        assert_eq!(calls.lines().count(), 2, "no retry: {calls}");
     }
 }
 

@@ -31,7 +31,8 @@
 ## selection_bg = "#2a2723"           # defaults to colors.selection.background
 
 [theme.display]
-# Sidebar render preferences - cadence, sizing, and dashboard layout. All optional.
+# Sidebar render preferences - cadence, sizing, and dashboard layout, plus the
+# palette popup's size in [theme.display.popup]. All optional.
 ## refresh_ms = 100                   # render/animation grid; clamped internally
 ## pixel = "auto"                    # "auto" or "off"; master kitty-graphics switch
 ## width_percent = 30                 # fixed share; unset uses 30% above 240 cols, 25% at/below
@@ -78,6 +79,15 @@
 ## band = 5      # truecolor: selected-card recess below selection_bg
 ## wash = 1      # truecolor: unread-row wash lift above selection_bg
 ## indexed = 4   # 256-color: one-cell step either side (band darker, wash lighter)
+
+[theme.display.popup]
+# `rimz palette --popup` size, border included: the percentage of the room's
+# pane area, at least 100x24 cells (or the whole area when smaller), at most
+# the ceiling. Applies at the next open.
+## width_percent = 60                 # clamped to 10-100
+## height_percent = 50                # clamped to 10-100
+## max_cols = 160                     # ceiling in cells, at least 34; wins over the floor
+## max_rows = 40                      # ceiling in cells, at least 10; wins over the floor
 
 [theme.pets]
 # Opt-in animated companion in the provider dashboard. All optional.

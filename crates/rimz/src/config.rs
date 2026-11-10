@@ -90,7 +90,7 @@ pub use display::{
 };
 pub(crate) use display::{
     BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig, HighlightStepsConfig,
-    ScrollbarMode,
+    PopupConfig, ScrollbarMode,
 };
 pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
 pub(crate) use edit::{remove_keeping_comments, set_item_keeping_comments};

@@ -5,11 +5,31 @@ use crate::config::TmuxConfig;
 #[test]
 fn popup_argv_preserves_words_and_job_exit_is_not_an_open_failure() {
     let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/argv\"\nexit 3\n",
+        "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nprintf '%s\\n' \"$*\" >> \"$d/calls\"\n\
+         case \"$*\" in *list-clients*) cat \"$d/clients\" || exit 1; exit 0;; esac\n\
+         printf '%s\\n' \"$@\" > \"$d/argv\"\nexit 3\n",
     );
     let mut backend = TmuxBackend::with_socket("/test/socket");
     backend.program = Some(shim);
-    for anchored in [true, false] {
+    let clients = temp.path().join("clients");
+    for (anchored, listing, size) in [
+        (
+            true,
+            Some("/dev/pts/0 300 90 300 90\n/dev/pts/1 255 77 240 76\n"),
+            ["144", "38"],
+        ),
+        (true, Some("/dev/pts/1 255  255 73\n"), ["60%", "50%"]),
+        (true, Some("view /dev/pts/1 %4 @1\n"), ["60%", "50%"]),
+        (true, None, ["60%", "50%"]),
+        (false, Some("/dev/pts/1 255 77 255 77\n"), ["60%", "50%"]),
+    ] {
+        let _ = std::fs::remove_file(temp.path().join("calls"));
+        match listing {
+            Some(listing) => std::fs::write(&clients, listing).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&clients);
+            }
+        }
         let request = crate::mux::PopupRequest {
             session_name: "room".to_owned(),
             program: "/bin/rimz with space".to_owned(),
@@ -17,6 +37,7 @@ fn popup_argv_preserves_words_and_job_exit_is_not_an_open_failure() {
             cwd: "/project with space".into(),
             client: anchored.then(|| "/dev/pts/1".to_owned()),
             anchor_pane: anchored.then(|| crate::PaneId::from_parts(crate::MuxName::Tmux, "%4")),
+            ..Default::default()
         };
         let result = backend.open_popup(&request);
         assert!(
@@ -31,9 +52,9 @@ fn popup_argv_preserves_words_and_job_exit_is_not_an_open_failure() {
         expected.extend([
             "-E",
             "-w",
-            "80%",
+            size[0],
             "-h",
-            "80%",
+            size[1],
             "-T",
             "rimz palette",
             "-d",
@@ -42,7 +63,14 @@ fn popup_argv_preserves_words_and_job_exit_is_not_an_open_failure() {
             "palette",
             "literal $word;",
         ]);
-        assert_eq!(argv.lines().collect::<Vec<_>>(), expected);
+        assert_eq!(argv.lines().collect::<Vec<_>>(), expected, "{listing:?}");
+        let calls = std::fs::read_to_string(temp.path().join("calls")).unwrap();
+        let reads = calls.lines().filter(|call| call.contains("list-clients"));
+        assert_eq!(
+            reads.count(),
+            usize::from(anchored),
+            "one area read: {calls}"
+        );
     }
     let (_temp, refusing) = crate::mux::zellij::tests::support::zellij_shim(
         "#!/bin/sh\necho \"can't find client: gone\" >&2\nexit 1\n",

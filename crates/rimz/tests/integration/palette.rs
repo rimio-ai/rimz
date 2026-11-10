@@ -140,8 +140,12 @@ case "$1" in
   -V) printf 'tmux 3.8\n' ;;
   list-clients)
     if [ "$RIMZ_TEST_POPUP_VIEW_FAIL" = 1 ]; then exit 1; fi
-    printf 'human|%%7|1|root||attached,focused\n' ;;
+    case "$*" in
+      *client_width*) printf '%s\n' "${RIMZ_TEST_POPUP_AREA:-}" ;;
+      *) printf 'human|%%7|1|root||attached,focused\n' ;;
+    esac ;;
   display-popup)
+    printf '%s\n' "$@" > "$RIMZ_TEST_POPUP_TRACE.argv"
     if [ -f "$RIMZ_TEST_POPUP_TYPING" ]; then
       cp "$RIMZ_TEST_POPUP_TYPING" "$RIMZ_TEST_POPUP_DURING"
     fi
@@ -242,6 +246,40 @@ fn popup_still_opens_when_its_typing_stamp_or_client_view_fails() {
         [
             ("stamp", true, true, true, false),
             ("view", true, true, true, false)
+        ]
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn popup_sizes_from_the_theme_file_read_at_each_open() {
+    let fixture = PopupFixture::new();
+    let theme = fixture.env.rimz_home().join("theme.toml");
+    let mut sizes = Vec::new();
+    for body in [
+        "[theme.display.popup]\nwidth_percent = 50\nmax_rows = 30\n",
+        "[theme.display.popup]\nmax_cols = 120\nheight_percent = 100\n",
+    ] {
+        std::fs::write(&theme, body).unwrap();
+        let output = fixture
+            .command()
+            .env("RIMZ_TEST_POPUP_AREA", "human 255 77 255 77")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let argv = std::fs::read_to_string(fixture.trace.with_extension("trace.argv")).unwrap();
+        let words = argv.lines().collect::<Vec<_>>();
+        let word_after = |flag: &str| {
+            let at = words.iter().position(|word| *word == flag).unwrap();
+            words[at + 1].to_owned()
+        };
+        sizes.push((word_after("-w"), word_after("-h")));
+    }
+    assert_eq!(
+        sizes,
+        [
+            ("127".to_owned(), "30".to_owned()),
+            ("120".to_owned(), "40".to_owned())
         ]
     );
 }

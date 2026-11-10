@@ -220,6 +220,7 @@ pub(super) fn run(args: PaletteArgs, globals: &GlobalFlags) -> Result<()> {
         cwd: ctx.workspace.project_root.clone(),
         client,
         anchor_pane: opener,
+        size: MachineConfig::load_lenient().theme.display.popup,
     };
     if let Some(pane) = &typing_pane {
         rimz::mux::exclude_pane_input(ctx.store.runtime_paths(), pane);

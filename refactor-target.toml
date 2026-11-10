@@ -3238,7 +3238,7 @@ reason = "One platform selector feeds terminal observations or viewing-client cl
 [[verdict]]
 kind = "item"
 key = "mux::PopupRequest"
-reason = "The CLI hands either backend one explicit interactive palette job and opening context."
+reason = "The CLI hands either backend one explicit interactive palette job, its opening context, and the unclamped popup size settings each backend resolves through mux::popup."
 
 [[verdict]]
 kind = "item"

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
+use crate::mux::popup::PopupArea;
 use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 use crate::mux::{PaneRect, ViewGeometry};
 
@@ -1108,6 +1109,33 @@ impl TmuxBackend {
                 (!flags.split(',').any(|flag| flag == "ignore-size")).then_some((width, height))
             })
             .max_by_key(|(width, _)| *width)
+    }
+
+    /// The pane area a popup on `client` opens over: per axis the smaller of
+    /// the client and its current window, since tmux releases differ on which
+    /// of the two bounds a popup. One bounded attempt; `None` when the read
+    /// fails or the client's row does not hold four positive sizes.
+    pub(super) fn popup_area(&self, client: &str) -> Option<PopupArea> {
+        let output = self
+            .cmd()
+            .args([
+                "list-clients",
+                "-F",
+                "#{client_name} #{client_width} #{client_height} #{window_width} #{window_height}",
+            ])
+            .run_with_timeout(crate::mux::popup::AREA_READ_TIMEOUT)
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| {
+                let mut fields = line.rsplitn(5, ' ');
+                let mut size = || fields.next()?.parse::<u16>().ok().filter(|size| *size > 0);
+                let (rows, cols, client_rows, client_cols) = (size()?, size()?, size()?, size()?);
+                (fields.next()? == client).then(|| PopupArea {
+                    cols: cols.min(client_cols),
+                    rows: rows.min(client_rows),
+                })
+            })
     }
 
     /// The id of the pane at the window's left edge.
