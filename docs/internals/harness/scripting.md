@@ -50,7 +50,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 
 | Group | Fields |
 | --- | --- |
-| Identity | `run_id`, `workspace_id`, `kind`, `agent_id`, `agent_name`, `pane_id` |
+| Identity | `run_id`, `workspace_id`, `kind`, `agent_id`, `agent_name`, `pane_id`, `handed_over_from` |
 | Provider process | `provider_pid`, `provider_process_start` |
 | Provenance | `prompt`, `worktree_path`, `permission_mode`, `budget`, `retry_of`, `loop_task`, `workflow` |
 | Retention | `keep`, `subagent` |
@@ -62,7 +62,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at` |
 | Subagent ladder and notices | `timeout`, `warn`, `grace`, `deadline_notice_at`, `park_noticed_activity`, `limit_hold`, `stall_noticed_at` ([subagents.md](./subagents.md#backstops)) |
 
-`agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly. The RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID.
+`agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly. The RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID. `handed_over_from` names the pane of a wrapper `rimz agents restart` replaced (`harness::run::hand_over`): while it is set, neither that pane nor any pane other than the one bound to the run since settles or moves the run, by hook or by wrapper exit (`RunRecord::superseded_in`), so its replacement owns it from then on ([subagents.md](./subagents.md#what-is-left-out) has the restart side).
 
 `report_to` says who is owed the answer. It is `launcher` when absent, and `nobody` for an `agents` or `teams` launch with `--detach` and for a workflow agent step. A `nobody` run is never listed in a digest and never holds its launcher's turn open. `reader` is the launcher's handle, which names the `out/<reader>/` directory a response file lands in.
 

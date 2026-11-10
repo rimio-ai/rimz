@@ -697,12 +697,13 @@ fn settle_after_exit(
                 .is_some_and(|watchdog| watchdog.parent_ended())
     };
     if let Some(context) = run {
-        fail_run_if_child_exited_first(context, globals, terminal_grace);
-    }
-    if let Some(context) = run
-        && !parent_ended()
-    {
-        report_settled_child_or_log(context);
+        settle_exited_run(
+            context,
+            globals,
+            terminal_grace,
+            rimz::mux::ambient_pane_id().as_ref(),
+            || !parent_ended(),
+        );
     }
     // After the failed run's pane tail is captured: the parent's reason stays
     // the provider's own last line.
@@ -814,6 +815,39 @@ fn settle_after_exit(
         close_own_pane(globals, session_name);
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Settle the run this wrapper's provider exited from and report it to the
+/// parent when `report` says so. A run `rimz agents restart` took from
+/// `own_pane` belongs to its replacement, so this exit leaves it alone, also
+/// when the restart stamps it while this wrapper drains hooks.
+fn settle_exited_run(
+    context: &RunExecContext,
+    globals: &GlobalFlags,
+    terminal_grace: Duration,
+    own_pane: Option<&rimz::ids::PaneId>,
+    report: impl FnOnce() -> bool,
+) {
+    if superseded(context, own_pane) {
+        return;
+    }
+    fail_run_if_child_exited_first(context, globals, terminal_grace, own_pane);
+    if superseded(context, own_pane) {
+        return;
+    }
+    if report() {
+        report_settled_child_or_log(context);
+    }
+}
+
+/// Whether the run no longer belongs to the wrapper in `own_pane`
+/// ([`rimz::store::run::RunRecord::superseded_in`]).
+fn superseded(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>) -> bool {
+    own_pane.is_some_and(|pane| {
+        context
+            .load_record()
+            .is_some_and(|record| record.superseded_in(pane))
+    })
 }
 
 fn report_settled_child_or_log(context: &RunExecContext) {
@@ -1895,11 +1929,15 @@ fn fail_run_if_child_exited_first(
     context: &RunExecContext,
     globals: &GlobalFlags,
     terminal_grace: Duration,
+    own_pane: Option<&rimz::ids::PaneId>,
 ) {
     if let Err(error) =
         rimz::harness::hook_drain::drain_through(&context.store, 0, None, HOOK_DRAIN_WAIT)
     {
         tracing::debug!(%error, "could not drain terminal hooks before child-exit settlement");
+    }
+    if superseded(context, own_pane) {
+        return;
     }
     if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
         && record.lifecycle == rimz::store::run::RunLifecycle::Session
@@ -1925,14 +1963,28 @@ fn fail_run_if_child_exited_first(
         }
         return;
     }
+    // A restart may have stamped the run during the grace wait; the locked
+    // write below rechecks the same rule.
+    if superseded(context, own_pane) {
+        return;
+    }
     record_own_run_failure_tail(context, globals);
     // No reason: the evidence is the pane tail, which the waiter still
     // captures when the read above found none.
-    fail_run_if_nonterminal(context, "");
+    fail_run_if_owned(context, own_pane, "");
 }
 
 fn fail_run_if_nonterminal(context: &RunExecContext, reason: &str) {
-    match rimz::harness::run::fail_if_nonterminal(context.store.paths(), &context.run_id, reason) {
+    fail_run_if_owned(context, None, reason);
+}
+
+fn fail_run_if_owned(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>, reason: &str) {
+    match rimz::harness::run::fail_if_owned(
+        context.store.paths(),
+        &context.run_id,
+        own_pane,
+        reason,
+    ) {
         Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
         Ok(None) => {}
         Err(err) => tracing::debug!(

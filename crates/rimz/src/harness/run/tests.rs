@@ -3352,3 +3352,143 @@ fn a_stall_is_claimed_once_per_run_and_released_only_by_its_owner() {
     cancel(&paths, &record.run_id).unwrap();
     assert!(!claim_stall_notice(&paths, &record.run_id, later).unwrap());
 }
+
+#[test]
+fn a_handover_stamps_an_open_run_clears_on_request_and_skips_a_settled_one() {
+    let (_dir, paths, record) = setup();
+    let old = PaneId::parse("tmux:%7").unwrap();
+    let stamped = || load(&paths, &record.run_id).unwrap().handed_over_from;
+
+    assert!(hand_over(&paths, &record.run_id, Some(old.clone())).unwrap());
+    assert_eq!(stamped(), Some(old.clone()));
+    assert!(!hand_over(&paths, &record.run_id, None).unwrap());
+    assert_eq!(stamped(), None, "a failed split clears the stamp");
+
+    cancel(&paths, &record.run_id).unwrap();
+    assert!(!hand_over(&paths, &record.run_id, Some(old)).unwrap());
+    assert_eq!(stamped(), None, "a settled run is never handed over");
+}
+
+/// An open child run in `tmux:%1` that a restart handed over; the replacement will run in
+/// `tmux:%2`.
+fn handed_over_run() -> (tempfile::TempDir, StatePaths, RunRecord, PaneId, PaneId) {
+    let (dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.agent_id = Some("child".into());
+    create(&paths, &record).unwrap();
+    let old = PaneId::parse("tmux:%1").unwrap();
+    record_pane(&paths, &record.run_id, old.clone()).unwrap();
+    assert!(hand_over(&paths, &record.run_id, Some(old.clone())).unwrap());
+    (dir, paths, record, old, PaneId::parse("tmux:%2").unwrap())
+}
+
+fn from_pane(signal: LifecycleSignal, pane: &PaneId) -> AgentLifecycleObservation {
+    let mut observation = AgentLifecycleObservation::new(Some("child".into()), signal);
+    observation.pane_id = Some(pane.clone());
+    observation
+}
+
+#[test]
+fn the_replaced_pane_neither_settles_nor_moves_a_handed_over_run() {
+    let (_dir, paths, record, old, new) = handed_over_run();
+    let fold = |signal: LifecycleSignal, pane: &PaneId| {
+        record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &from_pane(signal, pane),
+            None,
+            || None,
+        )
+        .unwrap()
+    };
+    let hold = hold_at(record.started_at, Duration::from_secs(3600));
+    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    for bound in [false, true] {
+        if bound {
+            record_pane(&paths, &record.run_id, new.clone()).unwrap();
+        }
+        for signal in [LifecycleSignal::Ended, turn_ended(), turn_started()] {
+            assert_eq!(fold(signal.clone(), &old), None, "{signal:?} bound={bound}");
+            let kept = load(&paths, &record.run_id).unwrap();
+            assert_eq!(kept.status, RunStatus::Running, "{signal:?} bound={bound}");
+            assert_eq!(kept.limit_hold, Some(hold), "{signal:?} bound={bound}");
+        }
+    }
+    let settled = fold(turn_ended(), &new).expect("the replacement's turn end settles it");
+    assert_eq!(settled.status, RunStatus::Completed);
+}
+
+#[test]
+fn a_wrapper_fails_only_a_run_its_pane_still_owns() {
+    let (_dir, paths, record, first, second) = handed_over_run();
+    let third = PaneId::parse("tmux:%3").unwrap();
+    let id = &record.run_id;
+    let fail = |pane: &PaneId| fail_if_owned(&paths, id, Some(pane), "").unwrap();
+
+    assert_eq!(
+        fail(&first),
+        None,
+        "a stamp written after the wrapper's first read"
+    );
+    record_pane(&paths, id, second.clone()).unwrap();
+    assert_eq!(fail(&first), None, "after the replacement binds");
+
+    // A second restart, from the replacement to a third pane.
+    assert!(hand_over(&paths, id, Some(second.clone())).unwrap());
+    for pane in [&first, &second] {
+        assert_eq!(fail(pane), None, "{pane} before the third pane binds");
+    }
+    record_pane(&paths, id, third.clone()).unwrap();
+    for pane in [&first, &second] {
+        assert_eq!(fail(pane), None, "{pane} after the third pane binds");
+        assert_eq!(
+            record_lifecycle(
+                &paths,
+                id,
+                "claude",
+                &from_pane(LifecycleSignal::Ended, pane),
+                None,
+                || None
+            )
+            .unwrap(),
+            None
+        );
+    }
+    assert_eq!(load(&paths, id).unwrap().status, RunStatus::Running);
+    let settled = fail(&third).expect("the owning pane's exit settles the run");
+    assert_eq!(settled.status, RunStatus::Failed);
+}
+
+#[test]
+fn a_rollback_or_a_rebind_of_the_stamped_pane_gives_the_run_back_to_it() {
+    // The restart's split failed after the run settled some other way.
+    let (_dir, paths, record, old, _) = handed_over_run();
+    let id = &record.run_id;
+    timeout_if_due(&paths, id, record.started_at + Duration::from_secs(1), None).unwrap();
+    fail_if_nonterminal(&paths, id, "settled meanwhile").unwrap();
+    assert!(!hand_over(&paths, id, None).unwrap());
+    assert_eq!(load(&paths, id).unwrap().handed_over_from, None);
+    let reopened = record_lifecycle(
+        &paths,
+        id,
+        "claude",
+        &from_pane(turn_started(), &old),
+        None,
+        || None,
+    )
+    .unwrap();
+    assert_eq!(reopened, None);
+    assert_eq!(load(&paths, id).unwrap().status, RunStatus::Running);
+    let settled = fail_if_owned(&paths, id, Some(&old), "").unwrap();
+    assert_eq!(settled.map(|record| record.status), Some(RunStatus::Failed));
+
+    // A new wrapper bound in the stamped pane's id (a reused id) owns the run again.
+    let (_dir, paths, record, old, new) = handed_over_run();
+    let id = &record.run_id;
+    record_pane(&paths, id, new).unwrap();
+    record_pane(&paths, id, old.clone()).unwrap();
+    assert_eq!(load(&paths, id).unwrap().handed_over_from, None);
+    assert!(fail_if_owned(&paths, id, Some(&old), "").unwrap().is_some());
+}

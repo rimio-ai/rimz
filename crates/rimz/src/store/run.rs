@@ -375,6 +375,13 @@ pub struct RunRecord {
     /// When this run's parent was told the launched child went silent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_noticed_at: Option<Timestamp>,
+    /// The pane of the wrapper `rimz agents restart` took this run from. While
+    /// set, that wrapper and every pane but the one bound since neither settle
+    /// nor move the run ([`RunRecord::superseded_in`]). A later restart
+    /// overwrites it; a failed split, or a new wrapper binding the stamped pane
+    /// id again, clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_over_from: Option<PaneId>,
 }
 
 /// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
@@ -394,6 +401,16 @@ pub struct AnswerClaim<'a> {
 }
 
 impl RunRecord {
+    /// Whether a wrapper or hook in `pane` no longer speaks for this run: a restart
+    /// handed the run over from `pane`, or, once any restart has, another pane
+    /// bound it since. Gating the second test on the stamp keeps a run never
+    /// handed over, whose later panes need not bind it, as it was.
+    pub fn superseded_in(&self, pane: &PaneId) -> bool {
+        self.handed_over_from.as_ref().is_some_and(|from| {
+            from == pane || self.pane_id.as_ref().is_some_and(|bound| bound != pane)
+        })
+    }
+
     /// Earlier answers first, then the settled current answer.
     pub fn answer_claims(&self) -> impl Iterator<Item = AnswerClaim<'_>> {
         self.earlier_answers
@@ -535,6 +552,7 @@ impl RunRecord {
             park_noticed_activity: None,
             limit_hold: None,
             stall_noticed_at: None,
+            handed_over_from: None,
         }
     }
 
@@ -1144,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn limit_hold_round_trips_and_defaults_when_absent() {
+    fn limit_hold_and_handover_round_trip_and_default_when_absent() {
         let mut record = RunRecord::new(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
             AgentKind::new_unchecked("claude"),
@@ -1152,13 +1170,12 @@ mod tests {
             "go".to_owned(),
             Path::new("/tmp/rimz-run").to_path_buf(),
         );
-        assert!(
-            serde_json::to_value(&record)
-                .unwrap()
-                .get("limit_hold")
-                .is_none(),
-            "an unset hold is omitted"
-        );
+        let unset = serde_json::to_value(&record).unwrap();
+        for key in ["limit_hold", "handed_over_from"] {
+            assert!(unset.get(key).is_none(), "an unset {key} is omitted");
+        }
+        let pane = PaneId::parse("tmux:%7").unwrap();
+        record.handed_over_from = Some(pane.clone());
         let at: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
         let hold = LimitHold {
             activity: at,
@@ -1170,10 +1187,13 @@ mod tests {
         let mut value = serde_json::to_value(&record).unwrap();
         let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(decoded.limit_hold, Some(hold));
+        assert_eq!(decoded.handed_over_from, Some(pane));
 
         value.as_object_mut().unwrap().remove("limit_hold");
+        value.as_object_mut().unwrap().remove("handed_over_from");
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.limit_hold, None);
+        assert_eq!(decoded.handed_over_from, None);
     }
 
     #[test]

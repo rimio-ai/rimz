@@ -2326,7 +2326,8 @@ path = "crates/rimz/src/harness"
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
 # run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
 # park_notice::{Continuation, FailCause, ParkAction, park_action, reset_reading, failure_reason} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run (+7).
-surface-budget = 1132
+# run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
+surface-budget = 1133
 
 [[verdict]]
 kind = "item"
@@ -4201,7 +4202,8 @@ path = "crates/rimz/src/store"
 # RunRecord::firing_checkout keys a fire-tree run's overlap, backlog and history at the project root (+1).
 # store::run::LimitHold records a limit-parked child's hold on its run, for the harness and the park-notice helper (+1).
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
-surface-budget = 597
+# RunRecord::superseded_in names the panes a handed-over run no longer answers to (+1).
+surface-budget = 598
 
 [[verdict]]
 kind = "item"
@@ -5258,7 +5260,9 @@ allowed-dependencies = [
 # cancel_unserved_workflow_run rechecks rebirth liveness at the locked mutation (+1).
 # describes_latest_turn decides when `agents wait` reads a live peer's ended run (+1).
 # fail_limit_park fails a limit-parked child's run under the lock, for the park-notice helper (+1).
-surface-budget = 61
+# hand_over stamps the run `rimz agents restart` hands to its replacement wrapper (+1).
+# fail_if_owned lets the exec wrapper fail its run only while its pane still owns it (+1).
+surface-budget = 63
 
 [[verdict]]
 kind = "item"

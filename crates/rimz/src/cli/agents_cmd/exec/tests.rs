@@ -1251,7 +1251,7 @@ mod runs {
             record.status = status;
             rimz::harness::run::create(context.store.paths(), &record).unwrap();
             let start = Instant::now();
-            fail_run_if_child_exited_first(&context, &globals, grace);
+            fail_run_if_child_exited_first(&context, &globals, grace, None);
             let stored = rimz::harness::run::load(context.store.paths(), &record.run_id).unwrap();
             outcomes.push((stored.status, start.elapsed() < grace));
         }
@@ -1368,7 +1368,7 @@ mod runs {
                     let _ = stream.write_all(b"{\"applied\":0,\"reply\":null}\n");
                 });
             }
-            fail_run_if_child_exited_first(&context, &globals, RUN_EXIT_TERMINAL_GRACE);
+            fail_run_if_child_exited_first(&context, &globals, RUN_EXIT_TERMINAL_GRACE, None);
             let completed =
                 rimz::harness::run::load(context.store.paths(), &context.run_id).unwrap();
             assert_eq!(
@@ -1479,7 +1479,7 @@ mod runs {
             color: crate::cli::ColorWhen::Auto,
         };
 
-        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
 
         let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
         assert_eq!(failed.status, RunStatus::Failed);
@@ -1511,7 +1511,7 @@ mod runs {
                         .expect("probe waiter")
                 );
 
-                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
 
                 let captured = rimz::harness::run::load(&paths, &run_id).expect("captured run");
                 assert_eq!(captured.status, status);
@@ -1519,8 +1519,92 @@ mod runs {
                     captured.failure_tail.as_deref(),
                     (status != RunStatus::Completed).then_some("provider failure evidence")
                 );
-                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
             }
         }
+    }
+
+    #[test]
+    fn an_exit_from_the_handed_over_pane_leaves_the_run_to_its_replacement() {
+        let state = tempfile::tempdir().expect("state dir");
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .expect("runtime dir");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+        let runtime =
+            rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+        paths.ensure_dirs().expect("state dirs");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let old = rimz::ids::PaneId::parse("tmux:%7").expect("pane");
+        let mut record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "summarize".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.handed_over_from = Some(old.clone());
+        rimz::harness::run::create(&paths, &record).expect("create run");
+        let context = RunExecContext {
+            run_id: record.run_id.clone(),
+            store: rimz::Store::open(paths.clone(), runtime).expect("store"),
+            session_name: "rimz-test".to_owned(),
+            workspace: rimz::ResolvedWorkspace {
+                workspace_id,
+                project_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                cwd_project_root: None,
+                root_class: rimz::workspace::RootClass::Directory,
+                worktree_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                worktree_branch: None,
+                session_name: "rimz-test".to_owned(),
+                mux_hint: None,
+            },
+        };
+        let globals = GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let reported = std::cell::Cell::new(false);
+
+        settle_exited_run(&context, &globals, Duration::ZERO, Some(&old), || {
+            reported.set(true);
+            true
+        });
+
+        let kept = rimz::harness::run::load(&paths, &record.run_id).expect("load run");
+        assert_eq!(kept.status, record.status, "the replacement owns the run");
+        assert!(!reported.get(), "the superseded wrapper reports nothing");
+
+        // A restart that stamps the run after the wrapper's first read: the locked
+        // failure write, after the drain and the grace wait, still leaves it.
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, Some(&old));
+        let kept = rimz::harness::run::load(&paths, &record.run_id).expect("load run");
+        assert_eq!(kept.status, record.status, "the late fail write is refused");
+        assert_eq!(kept.failure_tail, None, "no tail is captured onto it");
+
+        let replacement = rimz::ids::PaneId::parse("tmux:%9").expect("pane");
+        settle_exited_run(
+            &context,
+            &globals,
+            Duration::ZERO,
+            Some(&replacement),
+            || {
+                reported.set(true);
+                true
+            },
+        );
+
+        let settled = rimz::harness::run::load(&paths, &record.run_id).expect("load run");
+        assert_eq!(
+            settled.status,
+            RunStatus::Failed,
+            "any other pane's exit settles it"
+        );
+        assert!(reported.get());
     }
 }
