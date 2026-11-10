@@ -32,6 +32,9 @@ mod launch_characterization;
 #[path = "run/command_cells.rs"]
 mod command_cells;
 
+#[path = "run/late_wait.rs"]
+mod late_wait;
+
 #[test]
 fn run_record_json_shape_is_pinned() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace id");

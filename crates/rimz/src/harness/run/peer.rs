@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::agents::{AgentDefinition, AgentState, PermissionMode};
+use crate::agents::{AgentDefinition, AgentState, PermissionMode, TurnCompletion};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentSessionId;
@@ -211,6 +211,25 @@ pub fn fail_peer_run(store: &Store, peer: &AgentState, reason: &str) -> Result<O
     Ok(Some(record))
 }
 
+/// Whether a terminal peer run's answer is `peer`'s latest turn: the peer is at
+/// rest by `completion` (as `TurnWaitView::completion` reads it), and no request
+/// has closed on its row since the run completed. The row stamps a close at the
+/// hook's frame time, before the drainer settles the run under the lock, so a
+/// tie counts as covered.
+pub fn describes_latest_turn(
+    record: &RunRecord,
+    peer: &AgentState,
+    completion: TurnCompletion,
+) -> bool {
+    record.peer.is_some()
+        && record.status.is_terminal()
+        && completion != TurnCompletion::Open
+        && peer
+            .turn_ended_at
+            .zip(record.completed_at)
+            .is_some_and(|(ended, completed)| ended <= completed)
+}
+
 fn peer_launch_id(peer: &AgentState) -> Option<&AgentSessionId> {
     if peer.launched_by.is_none() || peer.parent_agent_id.is_some() || peer.is_team_seat() {
         return None;
@@ -242,4 +261,58 @@ fn new_peer_record(
         opened_by: Vec::new(),
     });
     record
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::agents::AgentStatus;
+
+    #[test]
+    fn a_terminal_peer_run_describes_the_turn_its_row_last_closed() {
+        let completed = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let mut record = RunRecord::new(
+            crate::ids::WorkspaceId::from_project_root(Path::new("/tmp/peer-latest")),
+            crate::ids::AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            "/tmp/peer-latest".into(),
+        );
+        record.peer = Some(PeerRun {
+            launch_id: "peer-launch".into(),
+            opened_by: Vec::new(),
+        });
+        record.status = RunStatus::Completed;
+        record.completed_at = Some(completed);
+        let mut peer = AgentState::stub("claude", "peer-session", AgentStatus::Idle);
+        let rest = TurnCompletion::Completed;
+        let second = Duration::from_secs(1);
+        let covered = |record: &RunRecord, peer: &AgentState, completion| {
+            describes_latest_turn(record, peer, completion)
+        };
+
+        for (ended, expected) in [
+            (Some(completed), true),
+            (Some(completed - second), true),
+            (Some(completed + second), false),
+            (None, false),
+        ] {
+            peer.turn_ended_at = ended;
+            assert_eq!(covered(&record, &peer, rest), expected, "{ended:?}");
+        }
+        peer.turn_ended_at = Some(completed);
+        assert!(covered(&record, &peer, TurnCompletion::Failed));
+        assert!(!covered(&record, &peer, TurnCompletion::Open));
+        let mut open = record.clone();
+        open.status = RunStatus::Running;
+        assert!(!covered(&open, &peer, rest));
+        let mut plain = record.clone();
+        plain.peer = None;
+        assert!(!covered(&plain, &peer, rest));
+        let mut unstamped = record;
+        unstamped.completed_at = None;
+        assert!(!covered(&unstamped, &peer, rest));
+    }
 }
