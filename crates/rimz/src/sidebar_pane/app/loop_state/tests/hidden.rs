@@ -910,11 +910,192 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
         pair.clock.advance(animation_frame(&pair.snapshot));
         assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
         let bytes = output.0.lock().unwrap();
+        let text = String::from_utf8_lossy(&bytes);
         assert!(
-            String::from_utf8_lossy(&bytes).contains("a=t"),
+            text.contains("a=d,d=I,i=5373952,") && text.matches("a=d,d=I").count() >= 512,
+            "arrival sweeps the slot it takes"
+        );
+        assert!(
+            text.contains("a=t"),
             "arrival transmits the meter that the mirror did not mark resident"
         );
     }
+}
+
+const SLOT_CAPS: crate::sidebar_pane::pixel::PixelRenderCaps =
+    crate::sidebar_pane::pixel::PixelRenderCaps {
+        pixel_transport: true,
+        kitty_clients: true,
+    };
+
+/// The first slot base free in `rig`'s pool, or `None` with every slot held.
+fn first_free_slot(rig: &Rig) -> Option<u32> {
+    crate::sidebar_pane::pixel::PixelLease::acquire(&rig.runtime)
+        .unwrap()
+        .map(|lease| lease.slot.base())
+}
+
+fn amend_for_pixel_meters(snapshot: &mut SidebarSnapshot) {
+    snapshot.theme.mode = crate::config::ThemeMode::Truecolor;
+    snapshot.theme.display.pixel = crate::config::PixelMode::Auto;
+    snapshot.theme.pets.enabled = false;
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .usage
+        .context_pct = Some(50);
+}
+
+/// A tmux pair whose hidden pane 1 can draw pixel meters, then arrives and takes slot 0.
+fn arrived_pixel_pair(
+    caps: crate::sidebar_pane::pixel::PixelRenderCaps,
+) -> (super::scroll::SharedPanes, FrameOutput) {
+    let mut pair = mirror_pair(MuxName::Tmux);
+    amend_for_pixel_meters(&mut pair.snapshot);
+    let rig = &mut pair.panes[1];
+    rig.state.pane.paint = FramePainter::new(caps, true, rig.runtime.clone());
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let arrival = std::mem::take(&mut *output.0.lock().unwrap());
+    assert_eq!(
+        String::from_utf8_lossy(&arrival).contains("a=t"),
+        caps == SLOT_CAPS
+    );
+    (pair, output)
+}
+
+#[test]
+fn a_departed_pixel_pane_mirrors_once_blank_and_returns_its_slot() {
+    for caps in [
+        SLOT_CAPS,
+        crate::sidebar_pane::pixel::PixelRenderCaps::default(),
+    ] {
+        let holds = caps == SLOT_CAPS;
+        let (mut pair, output) = arrived_pixel_pair(caps);
+        assert_eq!(
+            first_free_slot(&pair.panes[1]),
+            Some(if holds { 0x520200 } else { 0x520000 })
+        );
+        pair.sample(&[(1, 0)]);
+        repaint_source(&mut pair);
+        let paints = pair.panes[1].state.pane.paints;
+        for _ in 0..4 {
+            pair.clock.advance(
+                super::super::super::timing::MIRROR_QUIET + animation_frame(&pair.snapshot),
+            );
+            advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+        }
+        assert_eq!(
+            pair.panes[1].state.pane.paints - paints,
+            u64::from(holds),
+            "only a held slot makes an unchanged layout due a mirror"
+        );
+        let bytes = output.0.lock().unwrap();
+        assert!(!bytes.windows(3).any(|bytes| bytes == b"\x1b_G"));
+        assert!(!String::from_utf8_lossy(&bytes).contains('\u{10eeee}'));
+        drop(bytes);
+        assert!(!pair.panes[1].state.pane.paint.holds_slot());
+        assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520000));
+    }
+}
+
+#[test]
+fn a_pane_returning_before_its_mirror_grant_keeps_its_slot() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    pair.sample(&[(1, 0)]);
+    repaint_source(&mut pair);
+    let paints = pair.panes[1].state.pane.paints;
+    let rig = &mut pair.panes[1];
+    rig.state
+        .advance(
+            &mut super::scroll::queued([Wakeup::Tick]),
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert_eq!(rig.state.pane.paints, paints, "no grant yet");
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let text = String::from_utf8_lossy(&output.0.lock().unwrap()).into_owned();
+    assert!(!text.contains("a=d"), "no sweep: {}", text.escape_debug());
+    assert!(
+        !text.contains("a=t"),
+        "no transmit: {}",
+        text.escape_debug()
+    );
+    assert!(pair.panes[1].state.pane.paint.holds_slot());
+    assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520200));
+}
+
+#[test]
+fn a_hidden_pane_without_a_painted_view_returns_its_slot_unpainted() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    pair.sample(&[]);
+    for rig in &mut pair.panes {
+        rig.state.pane.optimistic_watch_until = None;
+    }
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    advance_wakeup(&mut pair.panes[0], Wakeup::Snapshot);
+    let paints = pair.panes[1].state.pane.paints;
+    assert!(!advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    assert!(pair.plane.views.read().mirror_target.is_none());
+    assert_eq!(pair.panes[1].state.pane.paints, paints);
+    assert!(
+        output.0.lock().unwrap().is_empty(),
+        "the release paints nothing"
+    );
+    assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520000));
+}
+
+#[test]
+fn a_denied_pane_retries_on_its_next_arrival_without_a_mirror() {
+    let mut pair = mirror_pair(MuxName::Tmux);
+    amend_for_pixel_meters(&mut pair.snapshot);
+    let rig = &mut pair.panes[1];
+    rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
+    let mut held = (0..256)
+        .map(|_| {
+            crate::sidebar_pane::pixel::PixelLease::acquire(&rig.runtime)
+                .unwrap()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    let start = pair.clock.now();
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    let denied = std::mem::take(&mut *output.0.lock().unwrap());
+    assert!(!String::from_utf8_lossy(&denied).contains("a=t"));
+
+    pair.sample(&[(1, 0)]);
+    repaint_source(&mut pair);
+    let paints = pair.panes[1].state.pane.paints;
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    advance_wakeup(&mut pair.panes[1], Wakeup::Tick);
+    assert_eq!(
+        pair.panes[1].state.pane.paints, paints,
+        "a pane holding no slot is due no mirror"
+    );
+
+    drop(held.pop());
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    assert!(advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot));
+    assert!(
+        pair.clock.now() < start + Duration::from_secs(2),
+        "the arrival lands inside the on-screen retry spacing"
+    );
+    let arrival = String::from_utf8_lossy(&output.0.lock().unwrap()).into_owned();
+    assert!(
+        arrival.contains("a=t"),
+        "the arrival retries the take: {}",
+        arrival.escape_debug()
+    );
 }
 
 #[test]
@@ -1051,6 +1232,10 @@ fn hidden_mirror_retries_after_the_jump_fence_releases() {
 }
 
 fn settled_shared_hidden(mux: MuxName) -> Rig {
+    settled_shared_hidden_with(mux, |_| {})
+}
+
+fn settled_shared_hidden_with(mux: MuxName, amend: impl FnOnce(&mut SidebarSnapshot)) -> Rig {
     let own = PaneId::from_parts(
         mux,
         if mux == MuxName::Tmux {
@@ -1081,6 +1266,7 @@ fn settled_shared_hidden(mux: MuxName) -> Rig {
         .pane_id = working;
     snapshot.viewed_panes.clear();
     snapshot.focused_pane = None;
+    amend(&mut snapshot);
     rig.fold(snapshot, SnapshotSource::Produced);
     settle_width(&mut rig);
     rig.state.frame_timing();
@@ -1608,6 +1794,60 @@ fn settled_hidden_focus_push_lands_and_paints_on_both_backends() {
             Some(nonce)
         );
     }
+}
+
+#[test]
+fn a_jump_takes_a_slot_inline_and_an_abandoned_jump_returns_it() {
+    let mut rig = settled_shared_hidden_with(MuxName::Tmux, amend_for_pixel_meters);
+    rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    let target = rig
+        .state
+        .views
+        .mirror()
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    let anchor = crate::mux::focus_anchor::FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".into(),
+        pane_id: target,
+        origin: crate::mux::focus_anchor::FocusOrigin::User,
+        repair_generation: None,
+        input_at_ms: None,
+        issued_at_ms: rig.state.pane.clock.now_ms(),
+        applied_at_ms: None,
+        state: crate::mux::focus_anchor::FocusIntentState::Requested,
+        pre_action: Vec::new(),
+        placement: None,
+        order: None,
+    };
+    let (push, _ack) = focus_push(&mut rig, anchor);
+    let paints = rig.state.pane.paints;
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
+    assert!(rig.state.pane.paints > paints, "the jump paints inline");
+    let text =
+        String::from_utf8_lossy(&std::mem::take(&mut *output.0.lock().unwrap())).into_owned();
+    assert!(
+        text.contains("a=d,d=I,i=5373952,") && text.matches("a=d,d=I").count() >= 512,
+        "the jump's inline paint sweeps its new slot"
+    );
+    assert!(text.contains("a=t"), "the jump's inline paint transmits");
+    assert_eq!(first_free_slot(&rig), Some(0x520200));
+
+    // The switch never happens: once optimism lapses, a later tick returns the slot.
+    rig.state.pane.optimistic_watch_until = None;
+    for _ in 0..3 {
+        advance_wakeup(&mut rig, Wakeup::Tick);
+    }
+    assert!(!rig.state.watched());
+    assert!(!rig.state.pane.paint.holds_slot());
+    assert_eq!(first_free_slot(&rig), Some(0x520000));
+    let bytes = output.0.lock().unwrap();
+    assert!(!bytes.windows(3).any(|bytes| bytes == b"\x1b_G"));
 }
 
 impl Rig {

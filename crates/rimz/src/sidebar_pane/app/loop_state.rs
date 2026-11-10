@@ -816,11 +816,27 @@ impl LoopState {
         let Some(target) = record.mirror_target else {
             return false;
         };
-        !self
-            .pane
-            .mirrored
-            .as_ref()
-            .is_some_and(|last| last.target == target && last.size == size)
+        self.pane.paint.holds_slot()
+            || !self
+                .pane
+                .mirrored
+                .as_ref()
+                .is_some_and(|last| last.target == target && last.size == size)
+    }
+
+    /// A hidden pane in a room with no painted view has no mirror to blank its
+    /// frame with, so it returns its pixel slot at once and repaints nothing.
+    fn release_slot_without_mirror(&mut self) {
+        if !self.pane.paint.holds_slot() || self.watched() {
+            return;
+        }
+        let record = self.views.record();
+        let own = &self.pane.config.own_pane;
+        if record.mapped(own) || record.resolved(own) || record.mirror_target.is_some() {
+            return;
+        }
+        drop(record);
+        self.pane.paint.release_slot(&mut self.pane.ui);
     }
 
     fn mirror_size(terminal: &mut Terminal<PaneBackend>) -> ratatui::layout::Size {
@@ -2301,6 +2317,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         allowed: bool,
     ) -> Result<()> {
+        self.release_slot_without_mirror();
         let offered = self.views.mirror_offer.load(Ordering::Acquire);
         if !allowed || terminal.backend().is_unsized() {
             if offered {
@@ -2329,11 +2346,12 @@ impl LoopState {
         let Some(mut source) = self.views.mirror_source(&self.pane) else {
             return Ok(());
         };
-        if self
-            .pane
-            .mirrored
-            .as_ref()
-            .is_some_and(|last| last.target == source.target && last.size == size)
+        if !self.pane.paint.holds_slot()
+            && self
+                .pane
+                .mirrored
+                .as_ref()
+                .is_some_and(|last| last.target == source.target && last.size == size)
         {
             return Ok(());
         }
@@ -2379,6 +2397,8 @@ impl LoopState {
         );
         let output = frame.write(terminal.backend_mut());
         result.and(output)?;
+        // The written frame holds no image ids, so the slot can go to another sidebar.
+        self.pane.paint.release_slot(&mut self.pane.ui);
         let size = terminal.get_frame().area().as_size();
         self.pane.paints += 1;
         self.pane.painted_at = self.pane.clock.now();
