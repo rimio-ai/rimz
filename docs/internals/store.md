@@ -113,8 +113,8 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/log-generation.json                  durable active-log generation
 records/messages/messages.jsonl               live message queue
 records/loop-instances.json                   loop and wait rows
-records/loop-launches.json                    older loop layout launches by task and checkout, read only
-records/loop-workflow-launches.json           remembering loop tasks' runs by task and checkout, version 1
+records/loop-launches.json                    older resident launches, read until the workflow file is version 2
+records/loop-workflow-launches.json           remembering loop tasks' launches by task and checkout, version 2
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision

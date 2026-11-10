@@ -2376,8 +2376,9 @@ fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strik
             assert_eq!(records[0].result, LoopRunResult::Errored);
             assert_eq!(records[0].error.as_deref(), Some(message.as_str()));
             assert!(
-                super::super::launch_ledger::load(&paths)
+                super::super::launch_ledger::load_workflows(&paths)
                     .unwrap()
+                    .tasks
                     .is_empty()
             );
         }

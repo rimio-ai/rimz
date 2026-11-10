@@ -296,7 +296,7 @@ struct ShowView {
     now_zoned: jiff::Zoned,
     records: Vec<LoopRunRecord>,
     heard: Option<run_log::HeardSummary>,
-    launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
+    launches: BTreeMap<PathBuf, ResidentLaunch>,
     capacity: BTreeMap<PathBuf, list::CapacityWaitView>,
     in_flight: Option<InFlightRun>,
     backlog: Option<schedule::backlog::TaskBacklog>,
@@ -322,6 +322,37 @@ struct ShowView {
 impl ShowView {
     fn takeover_refusals(&self) -> BTreeMap<&Path, CheckoutRefusals<'_>> {
         takeover_refusals(&self.records)
+    }
+}
+
+/// A launch the resident path remembered before every fire became a workflow run; the task's
+/// later launches are its workflow runs.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct ResidentLaunch {
+    at: Timestamp,
+    leader: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    destination: Option<PathBuf>,
+}
+
+impl ResidentLaunch {
+    fn of(
+        launches: &BTreeMap<PathBuf, schedule::launch_ledger::WorkflowLaunchRecord>,
+    ) -> BTreeMap<PathBuf, Self> {
+        launches
+            .iter()
+            .filter(|(_, launch)| launch.run.is_none())
+            .filter_map(|(checkout, launch)| {
+                Some((
+                    checkout.clone(),
+                    Self {
+                        at: launch.at,
+                        leader: launch.leader.clone()?,
+                        destination: launch.destination.clone(),
+                    },
+                ))
+            })
+            .collect()
     }
 }
 
@@ -368,7 +399,7 @@ enum ShowThrottle {
 }
 
 fn leader_statuses(
-    launches: &BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
+    launches: &BTreeMap<PathBuf, ResidentLaunch>,
     agents: &[rimz::agents::AgentState],
     now: jiff::Timestamp,
 ) -> BTreeMap<String, rimz::agents::AgentStatus> {
@@ -1509,18 +1540,17 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         Some(&root),
         entry.wait_meta.as_ref().map(|meta| meta.armed_at),
     );
-    let launches = if entry.stay {
-        rimz::harness::schedule::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
-            .remove(&args.name)
-            .unwrap_or_default()
-    } else {
-        BTreeMap::new()
-    };
-    let workflow_ledger = if entry.is_condition_workflow() {
+    let workflow_ledger = if entry.dedupes_checkout() {
         schedule::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?
     } else {
         Default::default()
     };
+    let launches = workflow_ledger
+        .tasks
+        .get(&args.name)
+        .filter(|_| entry.stay)
+        .map(ResidentLaunch::of)
+        .unwrap_or_default();
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
     let backlog = if entry.overlap.unwrap_or_default() != rimz::config::OverlapPolicy::Skip {
         Some(

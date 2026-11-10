@@ -1083,7 +1083,7 @@ The rest tune what one fire is allowed to do:
 
 A task's agent step asks the [machine start throttle](#agent-start-limits), configured in `config.toml`, not this file, before it launches. The task key `throttle = "off"` skips machine stagger, resource limits, and the capacity check, not the caps. The task key `capacity-wait` accepts a positive `s`/`m`/`h`/`d` duration or `forever`: conditions, signals, watches, and absolute one-shots default to forever; repeating clocks give up just before the next occurrence. The task's deadline still applies. A step that gives up records `throttle skipped`, never a strike. Manual `loop fire` never waits for capacity.
 
-A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts a run per worktree. With a `when` trigger, that launch happens once per checkout, even after its run finishes. `rimz loop add <task> --workflow <name>` writes it after checking the definition the way `rimz workflow run` does:
+A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts a run per worktree. With a `when` trigger, that launch happens once per checkout, even after its run finishes; `stay` tasks remember their checkouts the same way. `rimz loop add <task> --workflow <name>` writes it after checking the definition the way `rimz workflow run` does:
 
 ```toml
 [tasks.babysit-pr]

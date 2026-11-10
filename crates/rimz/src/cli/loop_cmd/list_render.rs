@@ -494,13 +494,17 @@ fn done_rows(
                     row.state_text(now)
                 } else if let Some(launch) = &row.launch {
                     format!(
-                        "{} · launched {} @{}",
+                        "{} · launched {} {}",
                         ui::rel_age(launch.at, now),
                         row.action
                             .as_ref()
                             .map(|action| action.subject.as_str())
                             .unwrap_or_default(),
-                        launch.leader.trim_start_matches('@')
+                        match (&launch.leader, &launch.run) {
+                            (Some(leader), _) => format!("@{}", leader.trim_start_matches('@')),
+                            (None, Some(run)) => format!("run {run}"),
+                            (None, None) => String::new(),
+                        }
                     )
                 } else {
                     row.last_text(now)

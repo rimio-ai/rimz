@@ -385,16 +385,20 @@ fn order_is_attention_running_clocks_rest_then_held() {
 fn done_fold_shares_retired_and_launched_history_not_running_rows() {
     let mut launched = row("launched");
     launched.section = Section::Done;
-    launched.launch = Some(launch_ledger::LaunchRecord {
+    launched.launch = Some(launch_ledger::WorkflowLaunchRecord {
         at: now() - SignedDuration::from_hours(1),
-        leader: "dont-show-me".into(),
+        run: None,
+        scope: rimz::store::workflow::ScopeKind::Worktree,
+        leader: Some("dont-show-me".into()),
         destination: None,
     });
     history(&mut launched, 7200, true);
     let mut active = running("active-resident");
-    active.launch = Some(launch_ledger::LaunchRecord {
+    active.launch = Some(launch_ledger::WorkflowLaunchRecord {
         at: now(),
-        leader: "dont-show-me".into(),
+        run: None,
+        scope: rimz::store::workflow::ScopeKind::Worktree,
+        leader: Some("dont-show-me".into()),
         destination: None,
     });
     let mut room = room(vec![launched, active, running("rowless")]);

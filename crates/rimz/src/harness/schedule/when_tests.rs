@@ -288,17 +288,20 @@ fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
         std::path::PathBuf::from("/alias/spare/../one"),
         std::path::PathBuf::from("/alias/spare/../two"),
     ];
-    let ledger = BTreeMap::from([(
+    let mut ledger = super::super::launch_ledger::WorkflowLedger::default();
+    ledger.tasks.insert(
         "fixer".to_owned(),
         BTreeMap::from([(
             std::path::PathBuf::from("/alias/one"),
-            super::super::launch_ledger::LaunchRecord {
-                destination: None,
+            super::super::launch_ledger::WorkflowLaunchRecord {
                 at: Timestamp::now(),
-                leader: "otter".into(),
+                run: None,
+                scope: crate::store::workflow::ScopeKind::Worktree,
+                leader: Some("otter".into()),
+                destination: None,
             },
         )]),
-    )]);
+    );
     let entry = crate::config::TaskEntry {
         stay: true,
         each_worktree: true,
@@ -306,32 +309,23 @@ fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
         ..Default::default()
     };
     assert_eq!(
-        probe_paths(&entry, "fixer", &owned, &ledger, &Default::default()),
+        probe_paths(&entry, "fixer", &owned, &ledger),
         vec![std::path::PathBuf::from("/alias/two")]
     );
 }
 
 #[test]
-fn workflow_probe_paths_ignore_resident_memory_and_exclude_workflow_launches() {
-    use super::super::launch_ledger::{LaunchRecord, WorkflowLaunchRecord, WorkflowLedger};
+fn workflow_probe_paths_exclude_workflow_launches() {
+    use super::super::launch_ledger::{WorkflowLaunchRecord, WorkflowLedger};
     use crate::store::workflow::ScopeKind;
     let owned = vec!["/alias/spare/../one".into(), "/alias/spare/../two".into()];
-    let resident = BTreeMap::from([(
-        "land".into(),
-        BTreeMap::from([(
-            "/alias/two".into(),
-            LaunchRecord {
-                at: Timestamp::now(),
-                leader: "otter".into(),
-                destination: None,
-            },
-        )]),
-    )]);
     let mut workflows = WorkflowLedger::default();
     let record = WorkflowLaunchRecord {
         at: Timestamp::now(),
-        run: crate::ids::WorkflowRunId::new(),
+        run: Some(crate::ids::WorkflowRunId::new()),
         scope: ScopeKind::Worktree,
+        leader: None,
+        destination: None,
     };
     workflows.tasks.insert(
         "land".into(),
@@ -343,7 +337,7 @@ fn workflow_probe_paths_ignore_resident_memory_and_exclude_workflow_launches() {
         when: Some(vec!["pr=open".into()]),
         ..Default::default()
     };
-    let worktree = probe_paths(&entry, "land", &owned, &resident, &workflows);
+    let worktree = probe_paths(&entry, "land", &owned, &workflows);
     workflows.tasks.get_mut("land").unwrap().insert(
         "/project".into(),
         WorkflowLaunchRecord {
@@ -351,7 +345,7 @@ fn workflow_probe_paths_ignore_resident_memory_and_exclude_workflow_launches() {
             ..record
         },
     );
-    let project = probe_paths(&entry, "land", &owned, &resident, &workflows);
+    let project = probe_paths(&entry, "land", &owned, &workflows);
     assert_eq!(
         (worktree, project),
         (vec![std::path::PathBuf::from("/alias/two")], vec![])

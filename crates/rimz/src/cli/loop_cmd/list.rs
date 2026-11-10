@@ -409,7 +409,7 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     launched_count: usize,
     #[serde(skip)]
-    launch: Option<launch_ledger::LaunchRecord>,
+    launch: Option<launch_ledger::WorkflowLaunchRecord>,
     #[serde(skip)]
     exit: Option<String>,
 }
@@ -420,7 +420,7 @@ struct RowContext<'a> {
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
     watcher_pid: Option<u32>,
-    launch: Option<&'a launch_ledger::LaunchRecord>,
+    launch: Option<&'a launch_ledger::WorkflowLaunchRecord>,
     now: Timestamp,
 }
 
@@ -597,12 +597,7 @@ fn load(
             .map(LoadedTask::entry)
             .filter(|entry| entry.resolved_root() == root)
             .collect::<Vec<_>>();
-        let ledger = if entries.iter().any(|entry| entry.stay) {
-            load_launch_memory(&root, launch_ledger::load, &mut warnings)
-        } else {
-            Default::default()
-        };
-        let workflow_ledger = if entries.iter().any(|entry| entry.is_condition_workflow()) {
+        let workflow_ledger = if entries.iter().any(|entry| entry.dedupes_checkout()) {
             load_launch_memory(&root, launch_ledger::load_workflows, &mut warnings)
         } else {
             Default::default()
@@ -667,16 +662,7 @@ fn load(
                         .as_ref()
                         .and_then(|runtime| watcher_info(runtime, name).ok().flatten())
                         .map(|info| info.pid),
-                    launch: match launch_ledger::launched(
-                        task.entry(),
-                        name,
-                        &run_dir,
-                        &ledger,
-                        &workflow_ledger,
-                    ) {
-                        Some(launch_ledger::Launch::Resident(launch)) => Some(launch),
-                        _ => None,
-                    },
+                    launch: launch_ledger::launched(task.entry(), name, &run_dir, &workflow_ledger),
                     now,
                 },
             );
@@ -696,7 +682,7 @@ fn load(
                     }
                     _ => run_dir == workspace.worktree_root,
                 });
-            row.launched_count = launched_count(task.entry(), name, &ledger, &workflow_ledger);
+            row.launched_count = launched_count(task.entry(), name, &workflow_ledger);
             row.attach_workflow_runs(
                 WorkflowRunRow::of_task(&workflows, name, &root, &workflow_specs, now),
                 now,
@@ -1207,16 +1193,12 @@ fn acting_run_text(last: &LastRun, exit: Option<&str>, now: Timestamp) -> String
 fn launched_count(
     entry: &TaskEntry,
     task: &str,
-    residents: &launch_ledger::Ledger,
     workflows: &launch_ledger::WorkflowLedger,
 ) -> usize {
-    if entry.stay {
-        residents.get(task).map_or(0, BTreeMap::len)
-    } else if entry.is_condition_workflow() {
-        workflows.tasks.get(task).map_or(0, BTreeMap::len)
-    } else {
-        0
+    if !entry.dedupes_checkout() {
+        return 0;
     }
+    workflows.tasks.get(task).map_or(0, BTreeMap::len)
 }
 
 /// One ledgered or live workflow run, shared by list, show, and checkout joins.
@@ -1266,17 +1248,21 @@ impl WorkflowRunRow {
         now: Timestamp,
     ) -> Vec<Self> {
         let mut runs = Vec::new();
-        for (checkout, launch) in launches {
-            if runs.iter().any(|run: &Self| run.id == launch.run) {
+        // A resident launch remembered before the cutover names a leader, not a run.
+        for (checkout, launch, run) in launches
+            .iter()
+            .filter_map(|(checkout, launch)| Some((checkout, launch, launch.run.as_ref()?)))
+        {
+            if runs.iter().any(|listed: &Self| listed.id == *run) {
                 continue;
             }
             runs.push(
                 records
                     .iter()
-                    .find(|record| record.id == launch.run)
+                    .find(|record| record.id == *run)
                     .map(|record| Self::of_record(record, specs.get(&record.id), now))
                     .unwrap_or_else(|| Self {
-                        id: launch.run.clone(),
+                        id: run.clone(),
                         address: None,
                         checkout: checkout.clone(),
                         state: "gone",

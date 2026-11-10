@@ -1222,3 +1222,54 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         "a capacity give-up never strikes"
     );
 }
+
+#[test]
+fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_end_keeps_it() {
+    let root = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let checkout = root.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    for (run_state, acted, kept) in [
+        ("done", false, false),
+        ("failed", true, false),
+        ("failed", false, false),
+        ("canceled", false, true),
+        ("done", true, true),
+        ("canceled", true, true),
+    ] {
+        let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
+            "origin":"inline", "task":"resident", "spec_dir":"/spec", "spec_digest":"abc",
+            "scope":{"kind":"worktree","path":checkout}, "project_root":root.path(),
+            "created_at":"2026-01-01T00:00:00Z", "state":run_state, "node":"agent",
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":2, "terminal_at":"2026-01-01T00:01:00Z",
+            "loop_report":"owed"
+        }))
+        .unwrap();
+        super::super::launch_ledger_store::record_workflow(
+            &state,
+            "resident",
+            &checkout,
+            super::super::launch_ledger::WorkflowLaunchRecord {
+                at: jiff::Timestamp::now(),
+                run: Some(run.id.clone()),
+                scope: crate::store::workflow::ScopeKind::Worktree,
+                leader: None,
+                destination: None,
+            },
+            false,
+        )
+        .unwrap();
+        report_run(&run, &[], acted);
+        let memory = super::super::launch_ledger::load_workflows(&state).unwrap();
+        assert_eq!(
+            memory
+                .tasks
+                .get("resident")
+                .is_some_and(|launches| launches.contains_key(&checkout)),
+            kept,
+            "{run_state} acted={acted}"
+        );
+    }
+}

@@ -1292,13 +1292,11 @@ impl<'a> TaskFire<'a> {
             return Ok(false);
         }
         let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
-        let residents = super::launch_ledger::load(&paths)?;
         let workflows = super::launch_ledger::load_workflows(&paths)?;
         Ok(super::launch_ledger::launched(
             &self.entry,
             &self.name,
             &self.launch_checkout(),
-            &residents,
             &workflows,
         )
         .is_some())
@@ -1321,8 +1319,10 @@ impl<'a> TaskFire<'a> {
         };
         let record = super::launch_ledger::WorkflowLaunchRecord {
             at,
-            run: run.clone(),
+            run: Some(run.clone()),
             scope,
+            leader: None,
+            destination: None,
         };
         let Err(error) = super::launch_ledger_store::record_workflow(
             paths,
@@ -1331,6 +1331,10 @@ impl<'a> TaskFire<'a> {
             record,
             replace_project,
         ) else {
+            // The run advances before this write, so its report may already have forgotten it.
+            if let Err(error) = crate::harness::workflow::forget_reported_launch(paths, run) {
+                tracing::warn!(task = %self.name, %run, %error, "launch memory kept");
+            }
             return None;
         };
         tracing::warn!(

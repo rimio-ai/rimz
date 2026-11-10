@@ -2151,7 +2151,7 @@ path = "crates/rimz/src/harness"
 # The exec wrapper decides its launch through one harness entry and its outcome type, `launch_plan::prepare_exec` (+1).
 # Supervised launch planning and verify settlement leave the CLI: plan +2, run +2 with three transitions made private (+1).
 # auto_redeem::idle_logins names the idle accounts for the sidebar's usage lane and credits input (+1).
-# Resident launch ledger records and strict reads cross the planner/CLI seam (+5).
+# Workflow launch memory, which folds the older resident launches in at load, crosses the planner/CLI seam.
 # Fan-out helpers hand the marker checkout to the runner without re-resolving it (+1).
 # Root registration shares resident-loop subscription arming with the team binding builder (+1).
 # Add-time subscription validation shares the registration scope-key predicate (+1).
@@ -2271,7 +2271,7 @@ path = "crates/rimz/src/harness"
 # AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
 # StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
-# WorkflowLaunchRecord, WorkflowLedger, load_workflows, Launch, and launched share typed launch memory with loop inspection (+5).
+# WorkflowLaunchRecord, WorkflowLedger, load_workflows, and launched share typed launch memory with loop inspection.
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
 # LeaderTurn and leader_turn share locked workflow eligibility with the CLI attempt host (+2).
@@ -2438,7 +2438,7 @@ reason = "Workflow eligibility reuses harness debt and rest predicates without e
 [[verdict]]
 kind = "item"
 key = "harness::schedule::launch_ledger::WorkflowLaunchRecord"
-reason = "Workflow launch ids, scope kinds and times feed the planner and CLI without agent-shaped records."
+reason = "Workflow launch ids, scope kinds and times, or a folded resident launch's leader and destination, feed the planner and CLI."
 
 [[verdict]]
 kind = "item"
@@ -2452,13 +2452,8 @@ reason = "Planner, runner and CLI share strict versioned workflow launch reads."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::launch_ledger::Launch"
-reason = "The launched query carries the selected workflow memory entry, or an older resident launch record, to its consumer."
-
-[[verdict]]
-kind = "item"
 key = "harness::schedule::launch_ledger::launched"
-reason = "One kind-aware checkout query shares workflow memory, project-covering entries and older resident launch records across dedupe."
+reason = "One kind-aware checkout query shares the remembering task's workflow memory, project-covering entries included, across dedupe."
 
 [[verdict]]
 kind = "item"
@@ -5393,7 +5388,7 @@ allowed-dependencies = [
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
 # A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
 # Fan-out supplies its already-resolved marker checkout separately from task config.
-# Resident completion appends its assist after durable ledger publication.
+# A deduping task's run creation records its checkout in the workflow launch memory.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
 # The CLI hears hold reasons and reports a resident launch through the fire (+2).
 # signal_subject shares delivered headline composition with events list (+1).

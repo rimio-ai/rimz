@@ -420,7 +420,7 @@ impl TaskCatalog {
             instances::remove(&instance_root, name, None)?;
         }
         let source = TaskSource::from_entry(entry);
-        self.clear_declines(name, &entry.resolved_root())?;
+        self.clear_task_state(name, &entry.resolved_root())?;
         let key = TaskKey::for_task(name, source, &entry.resolved_root());
         Ok(TaskMutation {
             changed: true,
@@ -435,7 +435,7 @@ impl TaskCatalog {
         entry: &TaskEntry,
     ) -> Result<TaskMutation> {
         config_edit::set_entry(config_edit::TaskStore::Project(project_root), name, entry)?;
-        self.clear_declines(name, project_root)?;
+        self.clear_task_state(name, project_root)?;
         let source = TaskSource::Project {
             state: crate::trust::status(project_root)?.state,
         };
@@ -467,11 +467,9 @@ impl TaskCatalog {
             _ => None,
         };
         let changed = remove_definition(name, task)?;
-        if changed && task.entry().stay {
-            super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
-        }
         if changed {
             let paths = StatePaths::for_project_root(&root)?;
+            cancel_unacted_runs(&paths, &root, name, "loop task removed")?;
             match super::launch_ledger_store::remove_workflows(&paths, name) {
                 Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
                     if !records_workflows =>
@@ -486,7 +484,6 @@ impl TaskCatalog {
                 result => result?,
             }
             super::backlog_store::remove(&paths, name)?;
-            super::launch_ledger_store::remove_declines(&paths, name)?;
             super::launch_ledger_store::remove_capacity(&paths, name)?;
             crate::harness::workflow::reassign_task(&paths, name, None)?;
         }
@@ -519,13 +516,13 @@ impl TaskCatalog {
             });
         };
         let root = task.entry().resolved_root();
-        if task.entry().workflow.is_some() {
-            super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
-        }
-        if task.entry().stay
-            && super::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
+        let records_workflows = task.entry().workflow.is_some() || task.entry().stay;
+        // A leader the resident path launched records the task name; a run's leader does not.
+        if records_workflows
+            && super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?
+                .tasks
                 .get(name)
-                .is_some_and(|launches| !launches.is_empty())
+                .is_some_and(|launches| launches.values().any(|launch| launch.run.is_none()))
         {
             bail!(
                 "cannot rename loop task `{name}`: its resident leaders record the task name; edit it with `rimz loop add {name}`, or remove and re-add under the new name (which relaunches its checkouts)"
@@ -548,19 +545,24 @@ impl TaskCatalog {
         };
         let old_key = task.key(name);
         if changed {
-            if task.entry().workflow.is_some() {
-                super::launch_ledger_store::rename_workflows(
-                    &StatePaths::for_project_root(&root)?,
-                    name,
-                    new_name,
-                )?;
-            }
-            super::backlog_store::rename(&StatePaths::for_project_root(&root)?, name, new_name)?;
-            super::launch_ledger_store::rename_declines(
+            match super::launch_ledger_store::rename_workflows(
                 &StatePaths::for_project_root(&root)?,
                 name,
                 new_name,
-            )?;
+            ) {
+                Err(super::launch_ledger_store::LedgerWriteErr::Read(error))
+                    if !records_workflows =>
+                {
+                    tracing::warn!(
+                        task = name,
+                        root = %root.display(),
+                        %error,
+                        "cannot move workflow launch memory for a task that records none"
+                    );
+                }
+                result => result?,
+            }
+            super::backlog_store::rename(&StatePaths::for_project_root(&root)?, name, new_name)?;
             super::launch_ledger_store::rename_capacity(
                 &StatePaths::for_project_root(&root)?,
                 name,
@@ -594,18 +596,15 @@ impl TaskCatalog {
         })
     }
 
-    fn clear_declines(&self, name: &str, root: &Path) -> Result<()> {
+    fn clear_task_state(&self, name: &str, root: &Path) -> Result<()> {
+        forget_unacted_runs(root, name)?;
         super::backlog_store::remove(&StatePaths::for_project_root(root)?, name)?;
-        super::launch_ledger_store::remove_declines(&StatePaths::for_project_root(root)?, name)?;
         super::launch_ledger_store::remove_capacity(&StatePaths::for_project_root(root)?, name)?;
         if let Some(task) = self.visible.get(name)
             && task.entry().resolved_root() != root
         {
+            forget_unacted_runs(&task.entry().resolved_root(), name)?;
             super::backlog_store::remove(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
-                name,
-            )?;
-            super::launch_ledger_store::remove_declines(
                 &StatePaths::for_project_root(&task.entry().resolved_root())?,
                 name,
             )?;
@@ -699,6 +698,47 @@ impl TaskCatalog {
         self.consume_scheduled(name)?;
         Ok(())
     }
+}
+
+/// Cancel the task's live runs that have not reached an agent, each in a detached
+/// `rimz workflow cancel`, which reports the run `canceled`; runs that launched one keep going.
+fn cancel_unacted_runs(
+    paths: &StatePaths,
+    root: &Path,
+    name: &str,
+    reason: &str,
+) -> Result<Vec<crate::ids::WorkflowRunId>> {
+    let runs = crate::harness::workflow::unacted_task_runs(paths, name)?;
+    for run in &runs {
+        let mut args: Vec<std::ffi::OsString> = vec!["--root".into(), root.into()];
+        args.extend(crate::harness::workflow::cancel_args(run, reason));
+        let spawned = RuntimePaths::for_state(paths)
+            .map_err(anyhow::Error::from)
+            .and_then(|runtime| {
+                crate::child_process::spawn_detached_rimz(&runtime, &args, "loop-redefine")
+                    .map_err(anyhow::Error::from)
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(
+                task = name,
+                %run,
+                error = %format!("{error:#}"),
+                "cannot cancel a run of a changed loop task"
+            );
+        }
+    }
+    Ok(runs)
+}
+
+/// A redefinition cancels the runs that have not acted and forgets the checkouts they held, so
+/// the new definition starts there; a checkout whose run launched an agent stays remembered.
+fn forget_unacted_runs(root: &Path, name: &str) -> Result<()> {
+    let paths = StatePaths::for_project_root(root)?;
+    let runs = cancel_unacted_runs(&paths, root, name, "loop task redefined")?;
+    if !runs.is_empty() {
+        super::launch_ledger_store::forget_runs(&paths, name, &runs)?;
+    }
+    Ok(())
 }
 
 impl TaskSource {

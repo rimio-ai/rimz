@@ -308,6 +308,37 @@ fn detaching_a_task_preserves_foreign_and_finished_runs() {
 }
 
 #[test]
+fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
+    let mut selected = Vec::new();
+    for (task, run_state, visited) in [
+        ("review", RunState::Active, &[][..]),
+        ("review", RunState::Active, &["pick"][..]),
+        ("review", RunState::Parked, &["pick"][..]),
+        ("review", RunState::Active, &["pick", "fix"][..]),
+        ("review", RunState::Done, &["pick"][..]),
+        ("other", RunState::Active, &["pick"][..]),
+    ] {
+        let (_home, state, mut record, _) = fixture(
+            "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.go='fix'\n[steps.fix]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+        );
+        record.task = Some(task.into());
+        record.state = run_state;
+        for step in visited {
+            record.visits.insert(
+                (*step).into(),
+                serde_json::from_value(json!({"total": 1, "outcomes": []})).unwrap(),
+            );
+        }
+        {
+            let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
+        }
+        selected.push(unacted_task_runs(&state, "review").unwrap() == vec![record.id]);
+    }
+    assert_eq!(selected, [true, true, true, false, false, false]);
+}
+
+#[test]
 fn bound_routes_stop_when_waiting_or_inactive() {
     for target in ["@wait", "@user", "@done", "@failed"] {
         let text = format!(
