@@ -49,6 +49,8 @@ pub(super) struct PetView {
 pub(super) enum PetBody {
     Cell(PetCellGrid),
     Pixel(PetPixelView),
+    /// The pixel pet's footprint with no image ids: the pane holds no pixel slot.
+    Blank(PetGridSize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,7 +74,8 @@ pub(super) struct PetViewFrame {
     pub(super) frame_ms: FrameTime,
     pub(super) refresh_ms: u16,
     pub(super) body: Option<PetRenderTier>,
-    pub(super) pixel_id_base: u32,
+    /// The held slot's image-id base; `None` draws a pixel tier as [`PetBody::Blank`].
+    pub(super) pixel_id_base: Option<u32>,
     pub(super) cell_aspect: CellAspect,
     pub(super) motion_enabled: bool,
     pub(super) unread_triggered: bool,
@@ -417,14 +420,16 @@ impl PetAssets {
             match key.tier {
                 PetRenderTier::Pixel => {
                     active_track = track;
-                    Some(PetBody::Pixel(PetPixelView {
-                        pet_id: id.to_owned(),
-                        sprite_index,
-                        image_id: crate::sidebar_pane::pixel::sprite_image_id(
-                            pixel_id_base,
+                    Some(pixel_id_base.map_or(PetBody::Blank(key.size), |base| {
+                        PetBody::Pixel(PetPixelView {
+                            pet_id: id.to_owned(),
                             sprite_index,
-                        ),
-                        size: key.size,
+                            image_id: crate::sidebar_pane::pixel::sprite_image_id(
+                                base,
+                                sprite_index,
+                            ),
+                            size: key.size,
+                        })
                     }))
                 }
                 PetRenderTier::Cell => self.loaded_grid(id, key, sprite_index).map(|grid| {

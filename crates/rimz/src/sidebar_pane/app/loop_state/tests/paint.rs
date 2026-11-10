@@ -364,10 +364,25 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
         let pane = &mut rig.state.pane;
         let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, _) = guard.pair();
-        pane.paint.refresh_view(&mut pane.ui, ui, &snapshot, false);
+        pane.paint.refresh_view(
+            &mut pane.ui,
+            ui,
+            &snapshot,
+            false,
+            paint::PaintKind::Routed,
+            Instant::now(),
+        );
     }
 
     assert!(rig.state.pane.ui.meter_pixels.is_none());
+    rig.state.pane.paint = FramePainter::new(caps, false, rig.runtime.clone());
+    rig.state
+        .draw_frame(&mut rig.terminal, rig.state.pane.clock.now(), false)
+        .unwrap();
+    assert!(
+        !rig.runtime.shared_pixel_slot_lock(0).exists(),
+        "a Zellij pane never opens a pixel slot lock"
+    );
 }
 
 /// The screen `bytes` alone draw on a blank 80x24 terminal.

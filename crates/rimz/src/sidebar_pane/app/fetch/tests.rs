@@ -1151,14 +1151,14 @@ fn consumer(config: ServeConfig, runtime: RuntimePaths, reader: Replay) -> LoopS
         crate::sidebar_pane::app::clock::LoopClock::wall(),
         config,
         None,
-        runtime,
+        runtime.clone(),
         PathBuf::new(),
         crate::diag::DiagSink::disabled(),
         FetchHandle::new(std::sync::mpsc::channel().0, reader.completion),
         None,
         std::sync::mpsc::sync_channel(1).0,
         Default::default(),
-        None,
+        runtime,
     );
     state.share_views(reader.views, reader.cursor.lock().unwrap().revision);
     state
@@ -3273,7 +3273,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             None,
             tx.clone(),
             crate::sidebar_pane::pixel::PixelRenderCaps::default(),
-            None,
+            fixture.runtime.clone(),
         );
         state.apply_latest_snapshot(update);
         assert!(
@@ -3345,14 +3345,14 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
                 crate::sidebar_pane::app::clock::LoopClock::wall(),
                 config,
                 None,
-                runtime,
+                runtime.clone(),
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),
                 FetchHandle::new(std::sync::mpsc::channel().0, Arc::default()),
                 None,
                 std::sync::mpsc::sync_channel(64).0,
                 crate::sidebar_pane::pixel::PixelRenderCaps::default(),
-                None,
+                runtime,
             );
             focus_anchor::take_reads();
             body_filter::take_reads();

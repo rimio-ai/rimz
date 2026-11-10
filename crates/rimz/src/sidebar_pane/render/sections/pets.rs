@@ -69,6 +69,13 @@ pub(super) fn dashboard_pet_column(
             let width = grid.iter().map(Vec::len).max().unwrap_or(0);
             (width, grid_lines(grid, width))
         }
+        PetBody::Blank(size) => {
+            let width = usize::from(size.cols);
+            let lines = (0..size.rows)
+                .map(|_| Line::from(" ".repeat(width)))
+                .collect();
+            (width, lines)
+        }
     };
     if width == 0 {
         return None;
@@ -88,7 +95,7 @@ fn pet_caption(pet: Option<&PetView>) -> Option<&str> {
 fn pet_cell_grid(view: &PetView) -> Option<&PetCellGrid> {
     match view.body.as_ref()? {
         PetBody::Cell(grid) => Some(grid),
-        PetBody::Pixel(_) => None,
+        PetBody::Pixel(_) | PetBody::Blank(_) => None,
     }
 }
 

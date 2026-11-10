@@ -399,7 +399,7 @@ fn frame(
         frame_ms: ms(phase * u64::from(refresh_ms)),
         refresh_ms,
         body,
-        pixel_id_base: 0x120000,
+        pixel_id_base: Some(0x120000),
         cell_aspect: CellAspect::NEUTRAL,
         motion_enabled,
         unread_triggered,

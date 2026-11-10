@@ -244,7 +244,7 @@ impl Rig {
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
-                Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+                runtime.clone(),
             ),
             completion,
             requests,

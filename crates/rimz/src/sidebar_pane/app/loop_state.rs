@@ -31,7 +31,7 @@ use crate::sidebar::timing::SELF_CLOSE_WATCHDOG;
 use crate::sidebar::timing::TAB_READ_DWELL;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
+use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
@@ -527,9 +527,12 @@ impl LoopState {
     #[cfg(feature = "testkit")]
     pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
         let presentation = self.inspect_view(|ui, _| ui.clone());
-        self.pane
-            .paint
-            .prepare_play_pet(&presentation, &mut self.pane.ui, snapshot)
+        self.pane.paint.prepare_play_pet(
+            &presentation,
+            &mut self.pane.ui,
+            snapshot,
+            self.pane.clock.now(),
+        )
     }
 
     #[cfg(feature = "testkit")]
@@ -568,7 +571,7 @@ impl LoopState {
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
-        pixel_slot: Option<PixelSlot>,
+        pixel_slots: RuntimePaths,
     ) -> Self {
         let snapshot_now = clock.timestamp();
         let current = SidebarSnapshot::build_with_agents(
@@ -639,7 +642,7 @@ impl LoopState {
                 observe_tx,
                 self_close: SelfCloseState::default(),
                 ui: UiState::default(),
-                paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
+                paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slots),
                 room_caps: Arc::default(),
                 focus_peers: None,
                 input_jump: None,
@@ -2233,6 +2236,9 @@ impl LoopState {
         )?;
         let now = self.pane.clock.now();
         let watched = self.watched();
+        if !watched {
+            self.pane.paint.clear_slot_retry();
+        }
         let foreground = self.foreground_paint_due(now, active, watched);
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
@@ -2344,6 +2350,8 @@ impl LoopState {
             &source.view,
             &source.snapshot,
             source.alert.as_ref().is_some_and(render::Alert::is_active),
+            PaintKind::Mirror,
+            self.pane.clock.now(),
         );
         let permit = self
             .pane
@@ -2456,9 +2464,14 @@ impl LoopState {
                     alert_active(v.context),
                 )
             });
-            self.pane
-                .paint
-                .refresh_view(&mut self.pane.ui, &view, &snapshot, alert_active);
+            self.pane.paint.refresh_view(
+                &mut self.pane.ui,
+                &view,
+                &snapshot,
+                alert_active,
+                PaintKind::Routed,
+                now,
+            );
             let nonce = self.inspect_view(|_, view| view.last_folded_focus_intent);
             let permit = self
                 .pane
@@ -2486,6 +2499,7 @@ impl LoopState {
             };
             let output = frame.write(terminal.backend_mut());
             result.and(output)?;
+            self.pane.paint.routed_frame_written();
             self.pane.painted_at = self.pane.clock.now();
             #[cfg(feature = "testkit")]
             {

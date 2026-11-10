@@ -903,15 +903,8 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
         );
         let rig = &mut pair.panes[1];
         assert!(
-            rig.state
-                .pane
-                .ui
-                .meter_pixels
-                .as_ref()
-                .unwrap()
-                .visible_rasters()
-                .next()
-                .is_some()
+            rig.state.pane.ui.meter_pixels.is_none(),
+            "a mirror draws the cell meter"
         );
         pair.sample(&[(1, 1)]);
         pair.clock.advance(animation_frame(&pair.snapshot));

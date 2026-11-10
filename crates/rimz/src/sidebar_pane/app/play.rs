@@ -15,7 +15,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::sidebar::scenario::{Action, Scenario, ScenarioError, UiAction};
 use crate::sidebar::unread::reconcile_snapshot;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
-use crate::sidebar_pane::pixel::PixelSlot;
 use crate::sidebar_pane::render::SectionLabel;
 use crate::{PaneId, RuntimePaths, SidebarInstanceId};
 
@@ -167,22 +166,25 @@ struct Column {
     pet_ready: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Surface {
     Text,
+    /// `slots` holds the user-wide pixel slot locks, shared with every sidebar.
     Live {
         caps: PixelRenderCaps,
-        slot: Option<PixelSlot>,
+        slots: Box<RuntimePaths>,
     },
 }
 
 impl Column {
     fn seek(&mut self, scenario: &Scenario, at: Duration) -> Result<()> {
+        // The replacement takes its own slot; retire this one's images first.
+        self.state.clear_pixel(&mut self.terminal);
         *self = Self::build(
             scenario,
             Some(self.terminal.size()?.height),
             self.motion.clone(),
-            self.surface,
+            self.surface.clone(),
         )?;
         self.run_until(scenario, at, |_| Ok(()))
     }
@@ -236,9 +238,9 @@ impl Column {
             refresh_ms_override: None,
             own_pane: PaneId::from_parts(crate::MuxName::Zellij, "sidebar_play"),
         };
-        let (caps, slot) = match surface {
-            Surface::Text => (PixelRenderCaps::default(), None),
-            Surface::Live { caps, slot } => (caps, slot),
+        let (caps, slots) = match &surface {
+            Surface::Text => (PixelRenderCaps::default(), runtime.clone()),
+            Surface::Live { caps, slots } => (*caps, RuntimePaths::clone(slots)),
         };
         let completion: Arc<AtomicBool> = Arc::default();
         let mut state = LoopState::new(
@@ -252,7 +254,7 @@ impl Column {
             Some(scenario.width),
             mpsc::sync_channel(64).0,
             caps,
-            slot,
+            slots,
         );
         let pet_ready = state.prepare_play_pet(&snapshot);
         let mut backend = PaneBackend::captured(scenario.width, height);
