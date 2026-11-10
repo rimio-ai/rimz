@@ -289,10 +289,11 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<TeamRun>,
     /// Time at which the caller claimed the current answer, either by printing
-    /// it during an open agent turn (or to a human shell) or discarding it
-    /// through `rimz subagents stop`; joined answers are
-    /// excluded from the next completion digest and let the joiner cancel a
-    /// digest once every row it lists has been joined.
+    /// it to a human shell or to its launcher during the launcher's open turn
+    /// (`harness::run::report::may_claim`), or by discarding it through
+    /// `rimz subagents stop`; joined answers are excluded from the next
+    /// completion digest and let the joiner cancel a digest once every row it
+    /// lists has been joined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_at: Option<Timestamp>,
     /// Completion digest that listed the current answer.

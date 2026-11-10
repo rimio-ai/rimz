@@ -351,7 +351,7 @@ Inline joins, parent stops, and the digest share a two-field handshake per answe
 
 | Actor | Stamps | Then |
 | --- | --- | --- |
-| a join that prints a terminal run to an attended caller | `joined_at` on the printed answer's ordinal only | cancels the queued digest if every answer carrying its id is joined |
+| a join that prints a terminal run to its launcher during an open turn, or to a person | `joined_at` on the printed answer's ordinal only | cancels the queued digest if every answer carrying its id is joined |
 | a blocking `rimz agents -p` driver, before it closes the pane of a terminal run | `joined_at` on the printed answer only | same check |
 | the parent's `rimz subagents stop` | `joined_at` on every answer of each selected child's newest run, before cancelling any run | checks each linked digest, then cancels the runs |
 | the fleet reporter | `report_message_id` on every listed answer, before queueing | rechecks the digest after queueing |

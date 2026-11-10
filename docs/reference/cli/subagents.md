@@ -174,7 +174,7 @@ A supervised parent can end its turn while children run without ending its own r
 An answer drops out of a report that has not been composed yet when:
 
 - a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its result while the parent's turn was open;
-- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell or while the caller's turn was open, which is how a `-p --bg` run is joined;
+- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell or to its launcher while the launcher's turn was open, which is how a `-p --bg` run is joined;
 - it is a `-p` run the parent launched without `--bg`, which prints its own result;
 - the parent stopped it with `rimz subagents stop`.
 

@@ -1,15 +1,18 @@
 //! Durable membership markers for parent-owned results and subagent report digests.
 //!
-//! An answer printed during the caller's open turn (or to a human shell), or
-//! dismissed by the parent's `rimz subagents stop`, is
-//! excluded from a digest that has not been composed. Once a digest exists, it
+//! An answer printed to a human shell, or to its launcher during the
+//! launcher's open turn, or dismissed by the parent's `rimz subagents stop`,
+//! is excluded from a digest that has not been composed. Any other agent that
+//! prints an answer leaves it to the digest. Once a digest exists, it
 //! may be canceled only after every listed answer has been claimed this way,
 //! preserving the notice while any row remains unread.
 
+use crate::agents::AgentState;
 use crate::disk::paths::StatePaths;
 use crate::harness::ancestry::{CallerIdentity, resolve_launch_caller};
 use crate::ids::{MessageId, RunId};
 use crate::store::Store;
+use crate::store::snapshot::SidebarSnapshot;
 use std::time::{Duration, Instant};
 
 use super::{RecordMutation, Result, RunRecord, list, update_record};
@@ -35,24 +38,15 @@ pub fn claim_reply(
     let deadline = deadline.map_or(ceiling, |deadline| deadline.min(ceiling));
     loop {
         let snapshot = store.snapshot_cached()?;
-        let parent = match caller {
-            None => None,
-            Some(caller) => match resolve_launch_caller(&snapshot.agents, caller) {
-                Ok(parent) if parent.holds_open_turn() => Some(parent),
-                _ => return Ok(()),
-            },
+        let Some(claimant) = Claimant::resolve(&snapshot.agents, caller) else {
+            return Ok(());
         };
         let mut unsettled = false;
         for record in list(store.paths())? {
             if record.team.is_some() || (!record.subagent && record.peer.is_none()) {
                 continue;
             }
-            if parent.is_some_and(|parent| {
-                !snapshot
-                    .agents
-                    .iter()
-                    .any(|child| record.matches_agent(child) && child.launcher_is(parent))
-            }) {
+            if !claimant.owns(&snapshot.agents, &record) {
                 continue;
             }
             match answer_opened_by(&record, message_id) {
@@ -74,6 +68,46 @@ pub fn claim_reply(
             return Ok(());
         }
         std::thread::sleep(left.min(Duration::from_millis(25)));
+    }
+}
+
+/// Whether a join that printed `record` to `caller` claims it: a person at a
+/// shell (`caller` None) does, and an agent does only once it resolves to a row
+/// that holds an open turn and launched an agent row the record matches.
+pub fn may_claim(
+    snapshot: &SidebarSnapshot,
+    caller: Option<&CallerIdentity>,
+    record: &RunRecord,
+) -> bool {
+    Claimant::resolve(&snapshot.agents, caller)
+        .is_some_and(|claimant| claimant.owns(&snapshot.agents, record))
+}
+
+/// Who a printed answer is claimed for; an unresolved or unattended agent
+/// caller claims nothing and leaves its answers to the digest.
+enum Claimant<'a> {
+    Person,
+    Launcher(&'a AgentState),
+}
+
+impl<'a> Claimant<'a> {
+    fn resolve(agents: &'a [AgentState], caller: Option<&CallerIdentity>) -> Option<Self> {
+        let Some(caller) = caller else {
+            return Some(Self::Person);
+        };
+        resolve_launch_caller(agents, caller)
+            .ok()
+            .filter(|parent| parent.holds_open_turn())
+            .map(Self::Launcher)
+    }
+
+    fn owns(&self, agents: &[AgentState], record: &RunRecord) -> bool {
+        match self {
+            Self::Person => true,
+            Self::Launcher(parent) => agents
+                .iter()
+                .any(|child| record.matches_agent(child) && child.launcher_is(parent)),
+        }
     }
 }
 

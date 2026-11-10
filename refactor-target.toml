@@ -2324,7 +2324,8 @@ path = "crates/rimz/src/harness"
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
 # `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
-surface-budget = 1124
+# run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
+surface-budget = 1125
 
 [[verdict]]
 kind = "item"
@@ -5317,7 +5318,9 @@ reason = "The agents dispatcher owns the agent-only molt verb."
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
 # `message --wait` claims the answer its printed reply came from, for the launcher resolved through ancestry.
+# may_claim reads the snapshot's agent rows (`agents::AgentState`) to find the caller and the run's launched row.
 allowed-dependencies = [
+    "agents",
     "disk::lock",
     "disk::paths",
     "harness::ancestry",
@@ -5325,7 +5328,8 @@ allowed-dependencies = [
     "ids",
     "store",
 ]
-surface-budget = 4
+# may_claim shares the person-or-launcher read-mark rule between `claim_reply` and `agents wait` (+1).
+surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"
@@ -8630,6 +8634,11 @@ reason = "Read by binary-crate supervised tests; gating it behind testkit leaves
 kind = "item"
 key = "harness::run_wake::wait_terminal"
 reason = "One-caller observer flag: presentation passes None, streaming passes Some; a split duplicates the wait loop (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::report::may_claim"
+reason = "`agents wait` and `claim_reply` mark a printed answer read only for a person at a shell or the run's launcher during its open turn."
 
 [[verdict]]
 kind = "item"
