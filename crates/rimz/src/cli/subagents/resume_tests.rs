@@ -109,6 +109,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 close_pane_on_exit: !keep,
                 exit_on_run_completion: !keep,
                 subagent: true,
+                continue_session: false,
                 follow_up_message: None,
                 reminder_section: Some(rimz::harness::launch::ReminderSection::Loop(
                     "The original loop fire".into()

@@ -108,7 +108,9 @@ use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
-pub(in crate::cli) use restart::{relaunch_action, relaunch_request, restart_resolved};
+pub(in crate::cli) use restart::{
+    newest_run_for_child, relaunch_action, relaunch_request, restart_resolved, with_run,
+};
 use resume::resume_lane;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
@@ -822,10 +824,17 @@ enum AgentsSubcmd {
         )]
         when_idle: Option<WhenIdle>,
     },
-    /// Stop an agent and relaunch it in place, resuming its session.
+    /// Stop an agent and relaunch it in place, resuming its session; an agent stopped mid-turn
+    /// gets one continue.
     Restart {
         /// Agent to restart: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         reference: String,
+        /// Run this agent on another account of its provider; the room's selection is unchanged.
+        #[arg(long, value_name = "NAME")]
+        account: Option<rimz::ids::LoginName>,
+        /// Reopen an agent stopped mid-turn at rest instead of sending it a continue.
+        #[arg(long)]
+        no_continue: bool,
     },
     /// Compact an agent's context at its next turn boundary.
     Compact {
@@ -1141,7 +1150,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             all,
             when_idle,
         }) => return stop_agent(reference, all, when_idle, globals),
-        Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
+        Some(AgentsSubcmd::Restart {
+            reference,
+            account,
+            no_continue,
+        }) => return restart_agent(reference, account, no_continue, globals),
         Some(AgentsSubcmd::Compact {
             reference,
             instruction,

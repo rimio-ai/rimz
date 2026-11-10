@@ -210,6 +210,7 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
             focus,
             Some(rimz::launcher::trust::Unattended::Team),
             || Some(rimz::launcher::trust::Unattended::Team),
+            None,
         ) {
             Ok(message) => writeln!(out, "{message}")?,
             Err(err) => {

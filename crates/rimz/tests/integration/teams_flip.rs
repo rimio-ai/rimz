@@ -1442,6 +1442,7 @@ impl Fixture {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: None,
             headless: None,

@@ -97,6 +97,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Human or agent message | `crates/rimz/src/cli/message/dispatch.rs::send_message`, caller text. `crates/rimz/src/launcher/context.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`. `--no-from` uses `System` / `Prompt` |
 | Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
 | Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
+| Child restarted with its run open | `crates/rimz/src/cli/agents_cmd/restart.rs::notify_parent_restarted`, through `SyntheticMessage` | `Harness { notice: SubagentRestarted }` / `Prompt` |
 | Child parked on a provider limit | `crates/rimz/src/cli/agents_cmd/park_notice.rs::run`, text from `crates/rimz/src/harness/park_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
 | Launched child silent mid-turn or never started | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
 | Unfinished team at rest | `crates/rimz/src/harness/stall_nudge/helper.rs::queue`, through `SyntheticMessage`, called by the hidden stall-nudge helper | `Harness { notice: TeamStalled }` / `Prompt` |
@@ -106,6 +107,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Auto-continue | `crates/rimz/src/cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text through `SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
 | Soft-compaction wrap-up and continue | `crates/rimz/src/cli/agents_cmd/soft_compact.rs::run`, `agents::soft_compact_prompt` or configured resume text, through `crates/rimz/src/message/soft_compact.rs::send_wrap_up` or `send_continue` | `System` / `Prompt`, tagged `wrap_up` (steer-only) or `continue` (boundary FIFO) |
 | Supervised verification reprompt | `crates/rimz/src/harness/prompt_compose.rs::verify_reprompt`, delivered by `crates/rimz/src/cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
+| Restart continue | `crates/rimz/src/cli/agents_cmd/exec.rs::queue_resume_continue`, run by the replacement wrapper when its exec request sets `continue_session` and no stage re-wake stood in (`resume_continue_text`), configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Fleet or account budget continuation | `crates/rimz/src/cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Agent budget continuation | `crates/rimz/src/cli/agents_cmd/tune/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Idle compaction | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
@@ -553,6 +555,7 @@ Content:
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
+| `SUBAGENT_RESTARTED` | A launched child `rimz agents restart` handed to a replacement pane with its run open, queued for its parent once per handover (none when the parent ran the restart) and withdrawn if its run ends before delivery | `@rimz` |
 | `SUBAGENT_PAUSED` | A launched child parked on a provider limit whose run is held until the reset, queued for its parent once per held park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::usage::UsageError;
 use super::{Ctx, GlobalFlags, agents_cmd, render};
+use agents_cmd::newest_run_for_child;
 use rimz::agents::AgentState;
 
 mod resume;
@@ -937,23 +938,6 @@ fn peer_handle(agents: &[AgentState], agent: &AgentState) -> String {
         .filter(|agent| !agent.is_provider_subagent())
         .collect::<Vec<_>>();
     rimz::address::agent_handle(agent, &peers, false)
-}
-
-fn newest_run_for_child<'a>(
-    runs: &'a [rimz::store::run::RunRecord],
-    child: &AgentState,
-) -> Option<&'a rimz::store::run::RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.kind == child.kind
-                && (run.agent_id.as_ref() == Some(&child.agent_id)
-                    || run
-                        .agent_name
-                        .as_ref()
-                        .zip(child.name.as_ref())
-                        .is_some_and(|(run, child)| run == child))
-        })
-        .max_by_key(|run| run.started_at)
 }
 
 fn wait_children(

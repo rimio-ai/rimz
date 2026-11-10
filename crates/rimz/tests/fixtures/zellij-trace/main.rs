@@ -4,7 +4,8 @@
 //! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
 //! `$RIMZ_TEST_ZELLIJ_HOLD_ESCAPE` holds lone Escape writes until the log path with extension
 //! `.escape-released` exists (10 s timeout).
-//! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE` makes `action close-pane` exit non-zero after logging it.
+//! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE` makes `action close-pane` exit non-zero after logging it,
+//! and `$RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE` does the same for `action new-pane`.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 //! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
 
@@ -124,6 +125,12 @@ fn main() {
         && env::var_os("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE").is_some()
     {
         write_stderr("simulated zellij close-pane failure");
+        std::process::exit(1);
+    }
+    if has_pair(cli, "action", "new-pane")
+        && env::var_os("RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE").is_some()
+    {
+        write_stderr("simulated zellij new-pane failure");
         std::process::exit(1);
     }
     if has_pair(cli, "action", "close-pane")

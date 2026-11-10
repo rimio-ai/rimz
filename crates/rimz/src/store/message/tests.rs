@@ -385,6 +385,7 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::Stage,
         HarnessNotice::CacheKeepalive,
         HarnessNotice::SubagentPaused,
+        HarnessNotice::SubagentRestarted,
         HarnessNotice::SubagentStalled,
         HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
@@ -2413,6 +2414,7 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
         HarnessNotice::Stage,
         HarnessNotice::TeamReport,
         HarnessNotice::SubagentPaused,
+        HarnessNotice::SubagentRestarted,
         HarnessNotice::SubagentStalled,
         HarnessNotice::TeamStalled,
         HarnessNotice::MessageUndelivered,
@@ -2429,6 +2431,7 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
             | HarnessNotice::Stage
             | HarnessNotice::TeamReport
             | HarnessNotice::SubagentPaused
+            | HarnessNotice::SubagentRestarted
             | HarnessNotice::SubagentStalled
             | HarnessNotice::TeamStalled
             | HarnessNotice::MessageUndelivered

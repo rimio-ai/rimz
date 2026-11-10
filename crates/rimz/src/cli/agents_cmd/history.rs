@@ -123,6 +123,7 @@ fn render_history(
                         HarnessNotice::Signal => "signal".to_owned(),
                         HarnessNotice::Stage => "stage".to_owned(),
                         HarnessNotice::SubagentPaused => "paused".to_owned(),
+                        HarnessNotice::SubagentRestarted => "restarted".to_owned(),
                         HarnessNotice::SubagentStalled => "stalled".to_owned(),
                         HarnessNotice::TeamStalled => "nudge".to_owned(),
                         HarnessNotice::MessageUndelivered => "undelivered".to_owned(),

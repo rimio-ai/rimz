@@ -136,6 +136,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             close_pane_on_exit: true,
             exit_on_run_completion: true,
             subagent: true,
+            continue_session: false,
             follow_up_message: None,
             reminder_section: None,
             headless: None,

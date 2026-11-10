@@ -5673,6 +5673,7 @@ fn assert_parent_follow_up_case(
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        continue_session: false,
         follow_up_message: Some(message.message_id.clone()),
         reminder_section: None,
         headless: None,
@@ -8188,6 +8189,7 @@ fn assert_run_notice_canceled(env: &Env, message: &MessageRecord, attempts: u32,
 fn delivery_preserves_notices_for_open_runs() {
     for (notice, header) in [
         (HarnessNotice::SubagentPaused, "SUBAGENT_PAUSED"),
+        (HarnessNotice::SubagentRestarted, "SUBAGENT_RESTARTED"),
         (HarnessNotice::SubagentStalled, "SUBAGENT_STALLED"),
     ] {
         let (env, message, pane_fixture) = run_notice_fixture(notice);
