@@ -2172,7 +2172,7 @@ path = "crates/rimz/src/harness"
 # A limit-parked child run: the park predicate, notice text and helper request cross the producer/CLI seam, with the locked claim and its release in `run`.
 # The producer tick calls the park detector (+1).
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
-# The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `schedule::throttle` module itself (+10).
+# The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `throttle` module itself (+10).
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
@@ -2302,7 +2302,7 @@ path = "crates/rimz/src/harness"
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
 # StallNudgeRequest, nudge_stalled_teams, helper, NudgeErr, and queue share the producer/CLI seam (+5).
 # workflow::cancel_args shares reason-bearing cancellation argv with removal callers (+1).
-# workflow::Limit shares the strict limit table with engine and CLI (+1).
+# throttle::Limit shares the strict limit table with engine and CLI (+1).
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
@@ -5251,7 +5251,7 @@ allowed-dependencies = [
     # A limit failure stores the sentence park_notice composes beside its typed cause.
     "harness::park_notice",
     # A loop spawn request carries its start-throttle turn to the launch commit.
-    "harness::schedule::throttle",
+    "harness::throttle",
     # Terminal supervised attempts wake their workflow after releasing the lock.
     "harness::workflow",
     "ids",
@@ -5409,6 +5409,7 @@ allowed-dependencies = [
     "harness::schedule",
     "harness::signal",
     "harness::surplus",
+    "harness::throttle",
     "harness::when",
     "harness::workflow",
     "ids",
@@ -5445,22 +5446,22 @@ surface-budget = 70
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::throttle::check_errors"
+key = "harness::throttle::check_errors"
 reason = "Doctor reads the latest per-kind/account capacity-check errors without executing checks."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::throttle::room_held"
+key = "harness::throttle::room_held"
 reason = "Sidebar and loop inspection read live waiting tickets for one project without locks or mutations."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::throttle::DiagnosticHold"
+key = "harness::throttle::DiagnosticHold"
 reason = "Doctor serializes typed fresh throttle findings and renders their problem and repair separately."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::throttle::diagnostic_holds"
+key = "harness::throttle::diagnostic_holds"
 reason = "Doctor reads disk floors, including owned fan-out checkout paths, and capped agent counts without tickets, locks, checks or writes."
 
 [[verdict]]
@@ -11440,7 +11441,7 @@ reason = "Workflow validation and execution share one agent/run/shell/message st
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::Limit"
+key = "harness::throttle::Limit"
 reason = "Workflow validation, admission, schema, and CLI share the workflow and step limit table."
 
 [[verdict]]

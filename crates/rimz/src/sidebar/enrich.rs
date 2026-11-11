@@ -586,7 +586,7 @@ fn throttle_notices(
             )
         });
     let tickets = root
-        .map(crate::harness::schedule::throttle::room_held)
+        .map(crate::harness::throttle::room_held)
         .unwrap_or_default();
     let ticket_waits = tickets.iter().map(|(_, wait)| {
         let since = i64::try_from(wait.since_ms)

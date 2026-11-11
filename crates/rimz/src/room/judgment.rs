@@ -136,7 +136,7 @@ pub(super) fn judge(
             crate::blocker::Blocker::from(error).to_string(),
         );
     }
-    if let Err(error) = crate::harness::schedule::throttle::preflight(&machine.throttle) {
+    if let Err(error) = crate::harness::throttle::preflight(&machine.throttle) {
         warn("throttle".into(), error.to_string());
     }
     let state = crate::StatePaths::for_project_root(&workspace.project_root)?;

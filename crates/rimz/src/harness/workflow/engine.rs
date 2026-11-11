@@ -8,10 +8,10 @@ use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::harness::schedule::throttle;
 use crate::harness::signal::{
     Signal, SignalResolution, default_signal_match_key, resolve_subscription,
 };
+use crate::harness::throttle;
 use crate::harness::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{

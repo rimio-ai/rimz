@@ -99,7 +99,7 @@ fn run_origin(record: &RunRecord) -> String {
     )
 }
 
-fn limit_text(limit: &workflow::Limit) -> String {
+fn limit_text(limit: &rimz::harness::throttle::Limit) -> String {
     limit
         .max_parallel
         .map(|cap| format!("max-parallel={cap}"))

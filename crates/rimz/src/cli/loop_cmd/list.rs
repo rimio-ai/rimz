@@ -587,7 +587,7 @@ fn load(
         let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
         let clocks_kept = open || *timer_active.get_or_init(timer::active);
         let mut tickets: BTreeMap<String, Vec<Held>> = BTreeMap::new();
-        for (name, held) in schedule::throttle::room_held(&root) {
+        for (name, held) in rimz::harness::throttle::room_held(&root) {
             tickets.entry(name).or_default().push(held);
         }
         let conditions = std::cell::OnceCell::new();

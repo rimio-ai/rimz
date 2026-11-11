@@ -205,7 +205,7 @@ pub struct SupervisedRunRequest {
     /// inherits its same-kind parent's.
     pub login: crate::store::writer::LaunchLogin,
     /// The loop throttle turn this launch holds; the launch commit reports it.
-    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub throttle_turn: Option<crate::harness::throttle::Turn>,
 }
 
 impl SupervisedRunRequest {

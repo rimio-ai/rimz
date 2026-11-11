@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, AgentStatus};
@@ -29,6 +30,26 @@ use crate::utils::time::format_duration_compact;
 
 mod limits;
 pub(in crate::harness) use limits::WorkflowStart;
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[schemars(deny_unknown_fields)]
+pub struct Limit {
+    #[schemars(range(min = 1))]
+    pub max_parallel: Option<u32>,
+    pub stagger: Option<String>,
+}
+
+impl Limit {
+    pub(in crate::harness) fn stagger(
+        &self,
+    ) -> Result<Option<std::time::Duration>, crate::utils::time::TimeInputErr> {
+        self.stagger
+            .as_deref()
+            .map(crate::harness::duration::duration)
+            .transpose()
+    }
+}
 
 const SAMPLE_EVERY_MS: u64 = 5_000;
 const CHECK_REUSE_MS: u64 = 60_000;
