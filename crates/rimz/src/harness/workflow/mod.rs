@@ -259,6 +259,10 @@ pub struct LaunchFailure {
 pub enum NotLaunched {
     /// The launch failed, ending its attempt with this outcome.
     Failed(LaunchFailure),
+    /// The launch failed stopping the checkout's occupants, before it started anything, so
+    /// running it again repeats no effect: the step's entry retries it once at the next advance
+    /// before the failure ends the attempt as `Failed` does.
+    Unstarted(LaunchFailure),
     /// The checkout's read once the launch was prepared found it taken; the step waits as it
     /// would on the first read, with no attempt counted.
     Taken(Occupancy),

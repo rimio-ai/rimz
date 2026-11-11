@@ -45,6 +45,7 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
     t.record.entered_at = t.now;
     t.record.check_retry = 0;
     t.record.check_retry_context = None;
+    t.record.launch_retry = false;
     Ok(true)
 }
 
@@ -243,6 +244,7 @@ pub(super) fn prepare(
         t.record.entered_at = t.now;
         t.record.check_retry = 0;
         t.record.check_retry_context = None;
+        t.record.launch_retry = false;
         persist(t, guard)?;
         return Ok(Some(Decision::Again));
     }

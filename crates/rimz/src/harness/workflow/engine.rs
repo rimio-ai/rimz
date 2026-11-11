@@ -311,6 +311,7 @@ fn publish(
         outcome: None,
         check_retry: 0,
         check_retry_context: None,
+        launch_retry: false,
     };
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     refuse_existing(
@@ -1919,6 +1920,7 @@ pub fn resume(
                 t.record.entered_at = t.now;
                 t.record.check_retry = 0;
                 t.record.check_retry_context = None;
+                t.record.launch_retry = false;
                 t.push(
                     None,
                     JournalEvent::Resume {
@@ -1949,6 +1951,7 @@ pub fn resume(
             t.record.entered_at = t.now;
             t.record.check_retry = 0;
             t.record.check_retry_context = None;
+            t.record.launch_retry = false;
             t.record.park = None;
             t.record.state = RunState::Active;
         }

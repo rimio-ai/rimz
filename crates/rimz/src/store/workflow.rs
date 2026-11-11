@@ -678,6 +678,10 @@ pub struct RunRecord {
     pub check_retry: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_retry_context: Option<Value>,
+    /// The current step entry spent its one retry of a launch whose eviction failed before it
+    /// started anything; cleared wherever the run enters a step afresh.
+    #[serde(default)]
+    pub launch_retry: bool,
 }
 
 impl RunRecord {

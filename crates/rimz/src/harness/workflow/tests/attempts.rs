@@ -2019,16 +2019,187 @@ fn successful_eviction_admits_only_the_immediate_launch() {
     assert_eq!(host.launched.borrow().len(), 1);
 }
 
+/// The first failed eviction waits with outcome `retry` and counts nothing; the next advance
+/// stops the occupant again, and a second failure is the counted `died` attempt.
 #[test]
-fn eviction_failure_is_a_counted_died_attempt() {
+fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
     let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
     host.evict_error.set(true);
+    let waiting = advance_ok(&state, &record.id, &host);
+    assert_eq!(waiting.state, RunState::Active, "{waiting:#?}");
+    let wait = waiting.wait.as_ref().expect("retry wait");
+    assert_eq!(
+        (wait.outcome.as_str(), wait.detail.as_deref()),
+        ("retry", Some("occupant did not stop"))
+    );
+    assert!(waiting.attempt.is_none() && waiting.prev_attempt.is_none());
+    assert!(!waiting.visits.contains_key("build"), "{waiting:#?}");
+    assert!(waiting.launch_retry);
+    assert_eq!(host.evictions.get(), 1);
+
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(ended.prev_attempt.unwrap().outcome, AttemptOutcome::Died);
     assert_eq!(ended.visits["build"].total, 1);
+    assert_eq!(ended.state, RunState::Done, "the failure follows `then`");
+    assert_eq!(host.evictions.get(), 2);
     assert!(host.launched.borrow().is_empty());
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    let died = journal
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.event,
+                JournalEvent::Attempt {
+                    outcome: AttemptOutcome::Died,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(died, 1, "{journal:#?}");
+    assert!(
+        journal.iter().any(|entry| matches!(
+            &entry.event,
+            JournalEvent::Wait { outcome, .. } if outcome == "retry"
+        )),
+        "{journal:#?}"
+    );
+}
+
+/// A retry whose stop succeeds launches with no failure on record, and a step entered again
+/// has its retry back.
+#[test]
+fn a_retried_eviction_launches_and_a_reentered_step_retries_again() {
+    let (_dir, state, record) = setup(&format!(
+        "{}takeover=true\n",
+        STEP.replace("then='@done'", "then='build'")
+    ));
+    let host = FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    host.evict_error.set(true);
+    assert!(advance_ok(&state, &record.id, &host).launch_retry);
+    host.evict_error.set(false);
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(host.launched.borrow().len(), 1);
+    assert!(live.attempt.as_ref().unwrap().run.is_some(), "{live:#?}");
+    assert!(
+        live.prev_attempt.is_none() && live.wait.is_none(),
+        "{live:#?}"
+    );
+    assert_eq!(live.visits["build"].total, 1);
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    assert!(
+        !journal
+            .iter()
+            .any(|entry| matches!(entry.event, JournalEvent::Attempt { .. })),
+        "{journal:#?}"
+    );
+
+    // The attempt ends and `then` enters the step again, whose eviction fails once more.
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    host.evict_error.set(true);
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let again = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        again.prev_attempt.as_ref().unwrap().outcome,
+        AttemptOutcome::Ended
+    );
+    assert_eq!(
+        again.wait.as_ref().map(|wait| wait.outcome.as_str()),
+        Some("retry"),
+        "{again:#?}"
+    );
+    assert_eq!(again.visits["build"].total, 1);
+    assert_eq!(host.launched.borrow().len(), 1);
+}
+
+/// A second advance between the host's failure and the engine's settlement neither launches
+/// nor takes the retry; the settled wait still retries once.
+#[test]
+fn an_advance_during_a_failed_eviction_neither_launches_nor_spends_the_retry() {
+    let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
+    let host = FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    host.evict_error.set(true);
+    let rival = Rc::new(FakeHost::new());
+    let (callback_state, id, callback_rival) = (state.clone(), record.id.clone(), rival.clone());
+    *host.on_launch.borrow_mut() = Some(Box::new(move || {
+        advance(&callback_state, &id, &*callback_rival).unwrap();
+    }));
+    let waiting = advance_ok(&state, &record.id, &host);
+    assert!(rival.launched.borrow().is_empty() && rival.evictions.get() == 0);
+    assert_eq!(
+        waiting.wait.as_ref().map(|wait| wait.outcome.as_str()),
+        Some("retry"),
+        "{waiting:#?}"
+    );
+    assert!(waiting.prev_attempt.is_none(), "{waiting:#?}");
+    host.on_launch.borrow_mut().take();
+    host.evict_error.set(false);
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(host.launched.borrow().len(), 1);
+    assert_eq!(live.visits["build"].total, 1);
+}
+
+/// Only an unstarted `died` launch of a fresh step retries: a provider limit and a continued
+/// restart settle on their first failure as before.
+#[test]
+fn limited_and_continued_restart_launch_failures_are_not_retried() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    host.unstarted.set(true);
+    *host.failure.borrow_mut() = Some(LaunchFailure {
+        outcome: AttemptOutcome::Limited,
+        reason: "budget".into(),
+    });
+    let limited = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        limited.prev_attempt.unwrap().outcome,
+        AttemptOutcome::Limited
+    );
+    assert!(!limited.launch_retry);
+
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let seq = live.attempt.as_ref().unwrap().seq;
+    restart(
+        &state,
+        &record.id,
+        Some((seq, "conversation".into())),
+        &host,
+    )
+    .unwrap();
+    host.unstarted.set(true);
+    *host.failure.borrow_mut() = Some(LaunchFailure {
+        outcome: AttemptOutcome::Died,
+        reason: "history pool changed".into(),
+    });
+    let failed = advance_ok(&state, &record.id, &host);
+    assert_eq!(failed.state, RunState::Parked, "{failed:#?}");
+    assert!(!failed.launch_retry);
+}
+
+/// A host error carries no word that the launch started nothing, so it settles as a counted
+/// `died` attempt on the first failure.
+#[test]
+fn a_host_error_is_a_counted_died_attempt_without_a_retry() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    host.host_error.set(true);
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(ended.prev_attempt.unwrap().outcome, AttemptOutcome::Died);
+    assert_eq!(ended.visits["build"].total, 1);
+    assert!(!ended.launch_retry && ended.wait.is_none());
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    assert!(
+        !journal
+            .iter()
+            .any(|entry| matches!(entry.event, JournalEvent::Wait { .. })),
+        "{journal:#?}"
+    );
 }
 
 #[test]

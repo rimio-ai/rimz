@@ -258,6 +258,54 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
+/// A launch its preparation refuses is not retried: the step settles `died` on the first
+/// advance, as on trunk, without a `retry` wait and without stopping the occupant.
+#[test]
+fn a_refused_preparation_is_not_retried_and_stops_no_occupant() {
+    let room = Room::with_kind("takeover=true", "claude");
+    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
+    fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+    let mut owner = dummy_agent_process();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let mut observation =
+        AgentLifecycleObservation::new(Some("resident".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("resident".into());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_71"));
+    observation.worktree_path = Some(room.env.project_root.display().to_string());
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "resident",
+        owner.id(),
+    ));
+    room.env
+        .store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            "claude",
+            "test",
+            &observation,
+        ))
+        .unwrap();
+    let id = room.start();
+    let value = settled(&room.env, &id, "failed");
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let attempts = events(&value, "attempt");
+    assert_eq!(attempts.len(), 1, "{value:#}");
+    assert_eq!(attempts[0]["outcome"], "died");
+    assert!(
+        attempts[0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("requires claude hooks")),
+        "{value:#}"
+    );
+    assert!(events(&value, "wait").is_empty(), "{value:#}");
+    assert_eq!(value["record"]["launch_retry"], false, "{value:#}");
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
+    assert!(!trace.contains("close-pane"), "{trace}");
+}
+
 #[test]
 fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
     let room = Room::new("timeout='1h'");

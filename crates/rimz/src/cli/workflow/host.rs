@@ -270,6 +270,9 @@ impl workflow::AttemptHost for Host<'_> {
             },
             ..Default::default()
         };
+        // Only a failed eviction started nothing: the retry prepares again over the checkout
+        // preparation created, and stops the occupants again.
+        let mut evict_failed = false;
         let result = (|| -> Result<_> {
             let ctx = self.ctx()?;
             let mux = crate::cli::render::room::present_mux_pick(
@@ -339,7 +342,9 @@ impl workflow::AttemptHost for Host<'_> {
             match launcher::prepare_layout(request, &mut interaction)? {
                 Preparation::Prepared(prepared) => {
                     if let Some(eviction) = &evict
-                        && let Some(taken) = self.evict(eviction, step.takeover)?
+                        && let Some(taken) = self
+                            .evict(eviction, step.takeover)
+                            .inspect_err(|_| evict_failed = true)?
                     {
                         return Ok(Err(taken));
                     }
@@ -387,9 +392,12 @@ impl workflow::AttemptHost for Host<'_> {
                 },
             ),
         };
-        Ok(Err(workflow::NotLaunched::Failed(
-            workflow::LaunchFailure { outcome, reason },
-        )))
+        let failure = workflow::LaunchFailure { outcome, reason };
+        Ok(Err(if evict_failed {
+            workflow::NotLaunched::Unstarted(failure)
+        } else {
+            workflow::NotLaunched::Failed(failure)
+        }))
     }
 
     fn observe(
