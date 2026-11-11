@@ -228,12 +228,21 @@ impl FocusPeers {
         self.jumps.accepts(nonce, now)
     }
 
-    pub(super) fn paint_permit(
+    pub(super) fn paint_fence(
         &self,
         nonce: Option<crate::ids::FocusNonce>,
         now: Instant,
     ) -> Option<impl Fn() -> bool + use<>> {
-        self.jumps.paint_permit(&self.source, nonce, now)
+        self.jumps.paint_fence(&self.source, nonce, now)
+    }
+
+    /// Claim `push`'s landing for `pane`, its established destination.
+    pub(super) fn claim_landing(&self, push: &FocusPush, pane: &PaneId, now: Instant) -> bool {
+        self.jumps.claim_landing(&push.lease, pane, now)
+    }
+
+    pub(super) fn lands_on(&self, pane: &PaneId, now: Instant) -> bool {
+        self.jumps.lands_on(pane, now)
     }
 
     pub(in crate::sidebar_pane) fn with_fit(mut self, fit: Option<FitView>) -> Self {

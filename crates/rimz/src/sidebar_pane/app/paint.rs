@@ -14,11 +14,14 @@ use crate::sidebar_pane::pets::{
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::probe::CAPS_REFRESH_INTERVAL;
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelLease, PixelRenderCaps, PixelSlot};
+use crate::sidebar_pane::pixel::{
+    BEGIN_SYNC, END_SYNC, ImagePermit, PixelLease, PixelRenderCaps, PixelSlot,
+};
 use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::store::snapshot::SidebarSnapshot;
 
 use super::backend::{BufferedFrame, PaneBackend};
+use super::mirror_queue::Grant;
 
 /// Spacing between slot requests while a denied pane stays on screen.
 const SLOT_RETRY: Duration = Duration::from_secs(2);
@@ -44,6 +47,9 @@ enum Retire {
     /// A routed frame carrying the deletes was written; the next routed pass
     /// without a surface returns the slot.
     DeletesWritten,
+    /// A routed pass had no image permit and drew no ids; the slot returns
+    /// once that frame is written.
+    Unpermitted,
 }
 
 impl HeldSlot {
@@ -59,9 +65,14 @@ impl HeldSlot {
     }
 
     /// Unbracketed: the caller's frame carries the synchronized-output bracket.
-    fn sweep_once<W: Write>(&mut self, writer: &mut W, wrap: bool) -> io::Result<()> {
+    fn sweep_once<W: Write>(
+        &mut self,
+        writer: &mut W,
+        wrap: bool,
+        permit: &ImagePermit,
+    ) -> io::Result<()> {
         if !self.swept {
-            self.slot.sweep(writer, wrap)?;
+            self.slot.sweep(writer, wrap, permit)?;
             self.swept = true;
         }
         Ok(())
@@ -78,9 +89,11 @@ enum SlotState {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum PaintKind {
-    Routed,
-    Mirror,
+pub(super) enum PaintKind<'a> {
+    /// A routed frame; it draws images only under this pass's host permit.
+    Routed(Option<&'a ImagePermit>),
+    /// A hidden mirror, painted only under its queue grant; it draws no images.
+    Mirror(#[expect(dead_code, reason = "held to prove the queue granted the paint")] &'a Grant),
 }
 
 pub(super) struct FramePainter {
@@ -105,9 +118,11 @@ impl FramePainter {
         snapshot: &SidebarSnapshot,
         now: Instant,
     ) -> bool {
-        self.refresh_view(ui, view, snapshot, false, PaintKind::Routed, now);
+        let permit = ImagePermit::for_test();
+        let kind = PaintKind::Routed(Some(&permit));
+        self.refresh_view(ui, view, snapshot, false, kind, now);
         let ready = self.assets.settle_load(std::time::Duration::from_secs(5));
-        self.refresh_view(ui, view, snapshot, false, PaintKind::Routed, now);
+        self.refresh_view(ui, view, snapshot, false, kind, now);
         ready
     }
 
@@ -181,12 +196,16 @@ impl FramePainter {
         ui.meter_pixels = None;
     }
 
-    /// A routed frame was written; deletes it carried now let the slot retire.
-    pub(super) fn routed_frame_written(&mut self) {
-        if let SlotState::Held(held) = &mut self.slot
-            && held.retire == Retire::Surfaceless
-        {
-            held.retire = Retire::DeletesWritten;
+    /// A routed frame was written: deletes it carried now let the slot retire,
+    /// and a frame drawn without a permit returns the slot its ids left.
+    pub(super) fn routed_frame_written(&mut self, ui: &mut UiState) {
+        let SlotState::Held(held) = &mut self.slot else {
+            return;
+        };
+        match held.retire {
+            Retire::Surfaceless => held.retire = Retire::DeletesWritten,
+            Retire::Unpermitted => self.release_slot(ui),
+            Retire::Kept | Retire::DeletesWritten => {}
         }
     }
 
@@ -198,14 +217,14 @@ impl FramePainter {
         }
     }
 
-    fn take_slot_if_due(&mut self, ui: &mut UiState, now: Instant) {
+    fn take_slot_if_due(&mut self, ui: &mut UiState, now: Instant, permit: &ImagePermit) {
         let SlotState::Free { retry_at, warned } = &mut self.slot else {
             return;
         };
         if retry_at.is_some_and(|at| now < at) {
             return;
         }
-        let denial = match PixelLease::acquire(&self.slot_pool) {
+        let denial = match PixelLease::acquire(&self.slot_pool, permit) {
             Ok(Some(lease)) => {
                 self.slot = SlotState::Held(Box::new(HeldSlot::new(
                     lease.slot,
@@ -282,15 +301,16 @@ impl FramePainter {
         self.caps != previous
     }
 
-    /// A routed frame takes a slot when a pixel surface resolves; a mirror draws
-    /// no image ids, and the caller returns the slot once that frame is written.
+    /// A permitted routed frame takes a slot when a pixel surface resolves. A
+    /// routed frame without a permit and a mirror draw no image ids; the slot
+    /// returns once that frame is written.
     pub(super) fn refresh_view(
         &mut self,
         ui: &mut UiState,
         view: &ViewState,
         snapshot: &SidebarSnapshot,
         alert_active: bool,
-        kind: PaintKind,
+        kind: PaintKind<'_>,
         now: Instant,
     ) {
         let action = render::selected_pet_action(snapshot, view);
@@ -307,15 +327,24 @@ impl FramePainter {
             && snapshot.theme.display.pixel == PixelMode::Auto;
         let pixel_surface =
             meter_surface || (snapshot.theme.pets.enabled && tier == PetRenderTier::Pixel);
+        let permit = match kind {
+            PaintKind::Routed(permit) => permit,
+            PaintKind::Mirror(_) => None,
+        };
         match kind {
-            PaintKind::Mirror => {}
-            PaintKind::Routed if pixel_surface => {
-                self.take_slot_if_due(ui, now);
+            PaintKind::Mirror(_) => {}
+            PaintKind::Routed(None) => {
+                if let SlotState::Held(held) = &mut self.slot {
+                    held.retire = Retire::Unpermitted;
+                }
+            }
+            PaintKind::Routed(Some(permit)) if pixel_surface => {
+                self.take_slot_if_due(ui, now, permit);
                 if let SlotState::Held(held) = &mut self.slot {
                     held.retire = Retire::Kept;
                 }
             }
-            PaintKind::Routed => {
+            PaintKind::Routed(Some(_)) => {
                 if let SlotState::Held(held) = &mut self.slot {
                     if held.retire == Retire::DeletesWritten {
                         self.release_slot(ui);
@@ -325,8 +354,8 @@ impl FramePainter {
                 }
             }
         }
-        let id_base = match (&self.slot, kind) {
-            (SlotState::Held(held), PaintKind::Routed) => Some(held.slot.base()),
+        let id_base = match (&self.slot, permit) {
+            (SlotState::Held(held), Some(_)) => Some(held.slot.base()),
             _ => None,
         };
         let body =
@@ -385,10 +414,11 @@ impl FramePainter {
         view: &mut ViewState,
         ui: &mut UiState,
     ) -> io::Result<()> {
-        let (body_result, frame) =
-            self.compose_frame(terminal, snapshot, alert, view, ui, PaintKind::Routed);
+        let permit = ImagePermit::for_test();
+        let kind = PaintKind::Routed(Some(&permit));
+        let (body_result, frame) = self.compose_frame(terminal, snapshot, alert, view, ui, kind);
         body_result.and(frame.write(terminal.backend_mut()))?;
-        self.routed_frame_written();
+        self.routed_frame_written(ui);
         Ok(())
     }
 
@@ -399,7 +429,7 @@ impl FramePainter {
         alert: Option<&render::Alert>,
         view: &mut ViewState,
         ui: &mut UiState,
-        kind: PaintKind,
+        kind: PaintKind<'_>,
     ) -> (io::Result<()>, BufferedFrame) {
         terminal.backend_mut().begin_frame();
         let mut graphics = Vec::new();
@@ -410,16 +440,19 @@ impl FramePainter {
             }
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
                 .saturating_mul(view.animation_phase);
-            let transmit_pixels = matches!(kind, PaintKind::Routed);
-            if transmit_pixels {
-                self.ensure_pixel_transmitted(&mut graphics, ui, now_ms)?;
+            let permit = match kind {
+                PaintKind::Routed(permit) => permit,
+                PaintKind::Mirror(_) => None,
+            };
+            if let Some(permit) = permit {
+                self.ensure_pixel_transmitted(&mut graphics, ui, now_ms, permit)?;
                 bracket = !graphics.is_empty();
                 terminal.backend_mut().write_all(&graphics)?;
                 graphics.clear();
             }
             render::draw_to_terminal(terminal, snapshot, alert, view, ui)?;
-            if transmit_pixels {
-                self.ensure_meters_transmitted(&mut graphics, ui, now_ms)?;
+            if let Some(permit) = permit {
+                self.ensure_meters_transmitted(&mut graphics, ui, now_ms, permit)?;
             }
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)
@@ -429,7 +462,7 @@ impl FramePainter {
             body_result,
             terminal
                 .backend_mut()
-                .take_frame(bracket, width, matches!(kind, PaintKind::Mirror)),
+                .take_frame(bracket, width, matches!(kind, PaintKind::Mirror(_))),
         )
     }
 
@@ -438,20 +471,22 @@ impl FramePainter {
         writer: &mut W,
         ui: &UiState,
         now_ms: u64,
+        permit: &ImagePermit,
     ) -> io::Result<()> {
         let SlotState::Held(held) = &mut self.slot else {
             return Ok(());
         };
         if held.pet.pet_id.is_none() {
-            held.pet.clear(writer)?;
+            held.pet.clear(writer, permit)?;
         }
         let Some(PetBody::Pixel(pixel)) = ui.pet.as_ref().and_then(|view| view.body.as_ref())
         else {
             return Ok(());
         };
-        held.sweep_once(writer, self.pixel_wrap)?;
+        held.sweep_once(writer, self.pixel_wrap, permit)?;
         if let Some(png) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index) {
-            held.pet.ensure_transmitted(writer, pixel, png, now_ms)?;
+            held.pet
+                .ensure_transmitted(writer, pixel, png, now_ms, permit)?;
         }
         Ok(())
     }
@@ -461,29 +496,38 @@ impl FramePainter {
         writer: &mut W,
         ui: &UiState,
         now_ms: u64,
+        permit: &ImagePermit,
     ) -> io::Result<()> {
         let SlotState::Held(held) = &mut self.slot else {
             return Ok(());
         };
         let Some(pixels) = &ui.meter_pixels else {
-            return held.meter.clear(writer);
+            return held.meter.clear(writer, permit);
         };
-        held.sweep_once(writer, self.pixel_wrap)?;
+        held.sweep_once(writer, self.pixel_wrap, permit)?;
         for (image_id, raster) in pixels.visible_rasters() {
             held.meter
-                .ensure_transmitted(writer, image_id, raster, now_ms)?;
+                .ensure_transmitted(writer, image_id, raster, now_ms, permit)?;
         }
         Ok(())
     }
 
-    /// Delete every resident image, then return the slot.
-    pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
+    /// Delete every resident image under a permit, then return the slot. Without
+    /// one, return the slot and write nothing; its next holder's sweep retires
+    /// the images left behind.
+    pub(super) fn clear<W: Write>(
+        &mut self,
+        backend: &mut W,
+        permit: Option<&ImagePermit>,
+    ) -> io::Result<()> {
         let SlotState::Held(held) = &mut self.slot else {
             return Ok(());
         };
         let mut graphics = Vec::new();
-        held.pet.clear(&mut graphics)?;
-        held.meter.clear(&mut graphics)?;
+        if let Some(permit) = permit {
+            held.pet.clear(&mut graphics, permit)?;
+            held.meter.clear(&mut graphics, permit)?;
+        }
         self.slot = SlotState::Free {
             retry_at: None,
             warned: false,

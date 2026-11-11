@@ -861,8 +861,7 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
             .unwrap()
             .usage
             .context_pct = Some(50);
-        let rig = &mut pair.panes[1];
-        rig.state.pane.paint = FramePainter::with_assets(
+        pair.panes[1].state.pane.paint = FramePainter::with_assets(
             PetAssets::test_loaded_pixel_frame("codex"),
             PixelRenderCaps {
                 pixel_transport: true,
@@ -871,6 +870,13 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
             true,
         );
         if resident_pet {
+            // The pet went resident while a client sample still placed the pane on screen.
+            pair.sample(&[(1, 1)]);
+            let rig = &mut pair.panes[1];
+            let permit = rig
+                .state
+                .image_permit(pair.clock.now())
+                .expect("a sampled pane holds a permit");
             rig.state.pane.ui.pet = Some(PetView {
                 body: Some(PetBody::Pixel(PetPixelView {
                     pet_id: "codex".into(),
@@ -884,9 +890,10 @@ fn tmux_hidden_mirrors_defer_pixel_transmissions_until_arrival() {
             rig.state
                 .pane
                 .paint
-                .ensure_pixel_transmitted(&mut Vec::new(), &rig.state.pane.ui, 0)
+                .ensure_pixel_transmitted(&mut Vec::new(), &rig.state.pane.ui, 0, &permit)
                 .unwrap();
         }
+        let rig = &mut pair.panes[1];
         let output = FrameOutput::default();
         rig.terminal.backend_mut().play_output(output.clone());
         pair.sample(&[(1, 0)]);
@@ -929,10 +936,17 @@ const SLOT_CAPS: crate::sidebar_pane::pixel::PixelRenderCaps =
     };
 
 /// The first slot base free in `rig`'s pool, or `None` with every slot held.
+/// It probes the lock files directly, so it takes no slot a painter counts.
 fn first_free_slot(rig: &Rig) -> Option<u32> {
-    crate::sidebar_pane::pixel::PixelLease::acquire(&rig.runtime)
+    (0..=u8::MAX)
+        .find(|&index| hold_slot_lock(rig, index).is_some())
+        .map(|index| crate::sidebar_pane::pixel::PixelSlot::new(index).base())
+}
+
+/// Hold slot `index` of `rig`'s pool as another sidebar would, if it is free.
+fn hold_slot_lock(rig: &Rig, index: u8) -> Option<crate::disk::lock::WorkspaceLock> {
+    crate::disk::lock::WorkspaceLock::try_acquire(&rig.runtime.shared_pixel_slot_lock(index))
         .unwrap()
-        .map(|lease| lease.slot.base())
 }
 
 fn amend_for_pixel_meters(snapshot: &mut SidebarSnapshot) {
@@ -1091,12 +1105,8 @@ fn a_denied_pane_retries_on_its_next_arrival_without_a_mirror() {
     amend_for_pixel_meters(&mut pair.snapshot);
     let rig = &mut pair.panes[1];
     rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
-    let mut held = (0..256)
-        .map(|_| {
-            crate::sidebar_pane::pixel::PixelLease::acquire(&rig.runtime)
-                .unwrap()
-                .unwrap()
-        })
+    let mut held = (0..=u8::MAX)
+        .map(|index| hold_slot_lock(rig, index).unwrap())
         .collect::<Vec<_>>();
     let output = FrameOutput::default();
     rig.terminal.backend_mut().play_output(output.clone());
@@ -1834,6 +1844,7 @@ fn settled_hidden_focus_push_lands_and_paints_on_both_backends() {
 #[test]
 fn a_jump_takes_a_slot_inline_and_an_abandoned_jump_returns_it() {
     let mut rig = settled_shared_hidden_with(MuxName::Tmux, amend_for_pixel_meters);
+    rig.state.pane.clock = LoopClock::play(rig.state.pane.clock.timestamp());
     rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
     let output = FrameOutput::default();
     rig.terminal.backend_mut().play_output(output.clone());
@@ -1873,8 +1884,12 @@ fn a_jump_takes_a_slot_inline_and_an_abandoned_jump_returns_it() {
     assert!(text.contains("a=t"), "the jump's inline paint transmits");
     assert_eq!(first_free_slot(&rig), Some(0x520200));
 
-    // The switch never happens: once optimism lapses, a later tick returns the slot.
-    rig.state.pane.optimistic_watch_until = None;
+    // The switch never happens: once optimism and the landing lapse, a later tick
+    // returns the slot.
+    rig.state
+        .pane
+        .clock
+        .advance(crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW);
     for _ in 0..3 {
         advance_wakeup(&mut rig, Wakeup::Tick);
     }
@@ -1963,6 +1978,8 @@ fn a_pushed_jump_gives_no_hidden_peer_a_slot_or_graphics() {
         output.0.lock().unwrap().clear();
     }
     let target = PaneId::from_parts(MuxName::Tmux, "%999");
+    let counts = host_pass::thread_counters();
+    counts.reset();
     let (_source, ack) = push_jump_to_all(&mut room, &target);
     let reports: Vec<_> = ack.try_iter().collect();
     for rig in &room.panes[1..] {
@@ -2002,7 +2019,153 @@ fn a_pushed_jump_gives_no_hidden_peer_a_slot_or_graphics() {
         Vec::new(),
         "(watched, holds slot, graphics escapes) of each non-destination that leaked"
     );
+    assert_eq!(
+        (
+            counts.get(Counter::PixelSlotTake),
+            counts.get(Counter::GraphicsBytes)
+        ),
+        (0, 0),
+        "(slot takes, graphics bytes) across the room after the push"
+    );
     assert_eq!(first_free_slot(&room.panes[0]), Some(0x520000));
+}
+
+fn graphics_escapes(output: &FrameOutput) -> usize {
+    output
+        .0
+        .lock()
+        .unwrap()
+        .windows(3)
+        .filter(|bytes| *bytes == b"\x1b_G")
+        .count()
+}
+
+#[test]
+fn optimism_never_earns_a_slot_or_graphics() {
+    for path in ["focus overlay", "input", "intent or resize mark"] {
+        let (mut room, outputs) = hidden_pixel_room(3);
+        for output in &outputs {
+            output.0.lock().unwrap().clear();
+        }
+        for rig in &mut room.panes[1..] {
+            let own = rig.state.pane.config.own_pane.clone();
+            match path {
+                "focus overlay" => rig.event(SidebarEvent::FocusChanged {
+                    focused: vec![own],
+                    unfocused: Vec::new(),
+                }),
+                "input" => rig
+                    .state
+                    .on_input(Wakeup::Scroll { down: true }, &mut rig.terminal)
+                    .unwrap(),
+                _ => {
+                    rig.state.pane.optimistic_watch_until =
+                        Some(rig.state.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+                    rig.state.pane.dirty = true;
+                }
+            }
+        }
+        let paints: Vec<_> = room.panes[1..]
+            .iter()
+            .map(|rig| rig.state.pane.paints)
+            .collect();
+        for _ in 0..3 {
+            room.clock.advance(animation_frame(&room.snapshot));
+            for rig in &mut room.panes[1..] {
+                rig.state.pane.dirty = true;
+                advance_wakeup(rig, Wakeup::Tick);
+            }
+        }
+        for ((rig, output), paints) in room.panes[1..].iter().zip(&outputs).zip(paints) {
+            let own = &rig.state.pane.config.own_pane;
+            assert!(
+                rig.state.watched(),
+                "{path} {own}: optimism keeps it watched"
+            );
+            assert!(rig.state.pane.paints > paints, "{path} {own}: it paints");
+            assert!(!rig.state.pane.paint.holds_slot(), "{path} {own}: no slot");
+            assert_eq!(graphics_escapes(output), 0, "{path} {own}: no graphics");
+        }
+        assert_eq!(first_free_slot(&room.panes[0]), Some(0x520000), "{path}");
+    }
+}
+
+#[test]
+fn a_pane_sampled_off_screen_paints_its_next_frame_without_images_and_frees_its_slot() {
+    let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+    assert!(pair.panes[1].state.pane.paint.holds_slot());
+    pair.sample(&[(1, 0)]);
+    let rig = &mut pair.panes[1];
+    let paints = rig.state.pane.paints;
+    rig.state
+        .on_input(Wakeup::Scroll { down: true }, &mut rig.terminal)
+        .unwrap();
+    assert!(
+        rig.state.watched(),
+        "input keeps the departed pane painting"
+    );
+    assert!(
+        rig.state.pane.paints > paints,
+        "the input paints a routed frame"
+    );
+    let bytes = std::mem::take(&mut *output.0.lock().unwrap());
+    assert!(!bytes.windows(3).any(|bytes| bytes == b"\x1b_G"));
+    assert!(!String::from_utf8_lossy(&bytes).contains('\u{10eeee}'));
+    assert!(!rig.state.pane.paint.holds_slot());
+    assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520000));
+}
+
+#[test]
+fn a_pane_no_sample_places_on_screen_paints_cells_until_one_does() {
+    let mut pair = mirror_pair(MuxName::Tmux);
+    amend_for_pixel_meters(&mut pair.snapshot);
+    let rig = &mut pair.panes[1];
+    rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, rig.runtime.clone());
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    // The frame lists the client on pane 1, but the client read failed: no fresh sample.
+    pair.sample_with(&[(1, 1)], |frame| frame.client_view_fresh = false);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    let paints = pair.panes[1].state.pane.paints;
+    advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot);
+    assert!(pair.panes[1].state.watched());
+    assert!(pair.panes[1].state.pane.paints > paints, "it paints cells");
+    assert!(!pair.panes[1].state.pane.paint.holds_slot());
+    assert_eq!(graphics_escapes(&output), 0);
+    let counts = host_pass::thread_counters();
+    counts.reset();
+    pair.sample(&[(1, 1)]);
+    pair.clock.advance(animation_frame(&pair.snapshot));
+    advance_wakeup(&mut pair.panes[1], Wakeup::Snapshot);
+    assert!(pair.panes[1].state.pane.paint.holds_slot());
+    let written = output.0.lock().unwrap().len();
+    assert!(String::from_utf8_lossy(&output.0.lock().unwrap()).contains("a=t"));
+    assert_eq!(counts.get(Counter::PixelSlotTake), 1);
+    let graphics = counts.get(Counter::GraphicsBytes);
+    assert!(
+        graphics > 0 && graphics < written as u64,
+        "the permitted take counts its graphics, not its cells: {graphics} of {written}"
+    );
+}
+
+#[test]
+fn teardown_deletes_images_only_for_a_permitted_pane_and_frees_the_slot_either_way() {
+    for on_screen in [true, false] {
+        let (mut pair, output) = arrived_pixel_pair(SLOT_CAPS);
+        if !on_screen {
+            pair.sample(&[(1, 0)]);
+        }
+        let rig = &mut pair.panes[1];
+        assert!(rig.state.pane.paint.holds_slot());
+        rig.state.clear_pixel(&mut rig.terminal);
+        assert_eq!(
+            graphics_escapes(&output) > 0,
+            on_screen,
+            "on screen: {on_screen}"
+        );
+        assert!(!rig.state.pane.paint.holds_slot());
+        assert_eq!(first_free_slot(&pair.panes[1]), Some(0x520000));
+    }
 }
 
 impl Rig {

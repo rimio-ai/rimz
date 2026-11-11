@@ -26,6 +26,7 @@ mod focus_push;
 mod gate;
 mod health;
 mod hidden_views;
+mod image_permit;
 mod inbox;
 mod input;
 mod key_spawn;

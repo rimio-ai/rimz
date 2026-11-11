@@ -9,6 +9,7 @@ use super::{DiagSink, FocusPush, FocusTraceEvent, PAINT_WAIT, PushPeer, PushVerd
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar_pane::app::fetch::Subscribers;
 use crate::sidebar_pane::app::input::Wakeup;
+use crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW;
 
 #[derive(Default)]
 pub(in crate::sidebar_pane::app) struct JumpHost {
@@ -22,6 +23,14 @@ struct JumpState {
     next: u64,
     active: Option<ActiveJump>,
     pushes: HashMap<String, FocusPush>,
+    landing: Option<Landing>,
+}
+
+/// The one sidebar pane a pushed jump earns images for, until its deadline.
+struct Landing {
+    pane: PaneId,
+    sequence: u64,
+    until: Instant,
 }
 
 struct ActiveJump {
@@ -73,6 +82,19 @@ impl Drop for JumpLease {
     }
 }
 
+impl JumpState {
+    /// A jump superseded before dispatch ends the landing it earned.
+    fn revoke_landing(&mut self, sequence: u64) {
+        if self
+            .landing
+            .as_ref()
+            .is_some_and(|landing| landing.sequence == sequence)
+        {
+            self.landing = None;
+        }
+    }
+}
+
 impl JumpHost {
     fn lock(&self) -> MutexGuard<'_, JumpState> {
         // State changes replace whole leases and slots, including during unwinding.
@@ -100,6 +122,7 @@ impl JumpHost {
         };
         self.current.store(stamp.sequence, Ordering::SeqCst);
         if let Some(previous) = state.active.take() {
+            state.revoke_landing(previous.stamp.sequence);
             Self::cancel(previous);
         }
         for (_, push) in state.pushes.drain() {
@@ -148,6 +171,7 @@ impl JumpHost {
             stage: "input_superseded".to_owned(),
             elapsed_ms: super::duration_millis((active.until - PAINT_WAIT).elapsed()),
         };
+        state.revoke_landing(active.stamp.sequence);
         Self::cancel(active);
         for (_, push) in state.pushes.drain() {
             push.finish(PushVerdict::Superseded, Instant::now());
@@ -238,7 +262,37 @@ impl JumpHost {
             .is_none_or(|active| active.nonce.is_some() && active.nonce == nonce)
     }
 
-    pub(super) fn paint_permit(
+    /// Claim the jump's landing for its destination while the jump is current.
+    /// The first claimant of a jump wins and keeps its deadline; a claim for a
+    /// later jump replaces the landing.
+    pub(super) fn claim_landing(&self, stamp: &LeaseStamp, pane: &PaneId, now: Instant) -> bool {
+        let mut state = self.lock();
+        if !stamp.is_current() {
+            return false;
+        }
+        if let Some(landing) = state
+            .landing
+            .as_ref()
+            .filter(|landing| landing.sequence == stamp.sequence)
+        {
+            return landing.pane == *pane;
+        }
+        state.landing = Some(Landing {
+            pane: pane.clone(),
+            sequence: stamp.sequence,
+            until: now + FOCUS_RESUME_WATCH_WINDOW,
+        });
+        true
+    }
+
+    pub(super) fn lands_on(&self, pane: &PaneId, now: Instant) -> bool {
+        self.lock()
+            .landing
+            .as_ref()
+            .is_some_and(|landing| landing.pane == *pane && now < landing.until)
+    }
+
+    pub(super) fn paint_fence(
         &self,
         source: &SidebarInstanceId,
         nonce: Option<crate::ids::FocusNonce>,

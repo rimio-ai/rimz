@@ -1109,3 +1109,92 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
         );
     }
 }
+
+fn stamp(peers: &FocusPeers) -> LeaseStamp {
+    peers.lease.as_ref().expect("an armed jump").stamp.clone()
+}
+
+fn sidebar(raw: &str) -> PaneId {
+    PaneId::from_parts(crate::MuxName::Tmux, raw)
+}
+
+#[test]
+fn a_jump_lands_on_its_first_claimant_only() {
+    let rig = TraceRig::new();
+    let now = Instant::now();
+    let jump = rig.peers.arm(rig.anchor().pane_id, now);
+    let (first, second) = (sidebar("%11"), sidebar("%12"));
+    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &first, now));
+    assert!(
+        !rig.peers.jumps.claim_landing(&stamp(&jump), &second, now),
+        "a second pane is refused the same jump's landing"
+    );
+    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &first, now));
+    assert!(rig.peers.lands_on(&first, now));
+    assert!(!rig.peers.lands_on(&second, now));
+}
+
+#[test]
+fn a_later_jumps_landing_ends_the_earlier_one_and_dispatch_keeps_it() {
+    let rig = TraceRig::new();
+    let now = Instant::now();
+    let (first, second) = (sidebar("%11"), sidebar("%12"));
+    let earlier = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(rig.peers.jumps.claim_landing(&stamp(&earlier), &first, now));
+    earlier.release();
+    assert!(
+        rig.peers.lands_on(&first, now),
+        "a dispatched jump keeps its landing"
+    );
+    let later = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(
+        rig.peers.lands_on(&first, now),
+        "arming over a dispatched jump leaves its landing"
+    );
+    assert!(
+        !rig.peers.jumps.claim_landing(&stamp(&earlier), &first, now),
+        "a jump that is no longer current claims nothing"
+    );
+    assert!(rig.peers.jumps.claim_landing(&stamp(&later), &second, now));
+    assert!(rig.peers.lands_on(&second, now));
+    assert!(!rig.peers.lands_on(&first, now), "one landing host-wide");
+}
+
+#[test]
+fn a_jump_superseded_before_dispatch_ends_its_landing() {
+    let rig = TraceRig::new();
+    let now = Instant::now();
+    let pane = sidebar("%11");
+    let jump = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
+    let _newer = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(
+        !rig.peers.lands_on(&pane, now),
+        "arming over an active jump"
+    );
+
+    let jump = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
+    rig.peers.supersede();
+    assert!(!rig.peers.lands_on(&pane, now), "input supersedes the jump");
+}
+
+#[test]
+fn a_landing_ends_at_its_deadline_and_a_reclaim_does_not_extend_it() {
+    let rig = TraceRig::new();
+    let now = Instant::now();
+    let pane = sidebar("%11");
+    let jump = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
+    let deadline = now + crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW;
+    assert!(
+        rig.peers
+            .jumps
+            .claim_landing(&stamp(&jump), &pane, now + Duration::from_secs(1))
+    );
+    assert!(
+        rig.peers
+            .lands_on(&pane, deadline - Duration::from_millis(1))
+    );
+    assert!(!rig.peers.lands_on(&pane, deadline));
+}

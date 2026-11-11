@@ -356,8 +356,13 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
         );
     }
 
-    let own_pane = pane("terminal_1", "tab_0").pane_id;
-    let mut rig = Rig::with_own_pane(own_pane);
+    let mut pair = super::scroll::SharedPanes::new(crate::MuxName::Zellij);
+    pair.sample(&[(1, 0)]);
+    let rig = &mut pair.panes[0];
+    let permit = rig
+        .state
+        .image_permit(rig.state.pane.clock.now())
+        .expect("a sampled pane holds a permit");
     rig.state.pane.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
     let snapshot = rig.state.views.mirror().clone();
     {
@@ -369,7 +374,7 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
             ui,
             &snapshot,
             false,
-            paint::PaintKind::Routed,
+            paint::PaintKind::Routed(Some(&permit)),
             Instant::now(),
         );
     }
