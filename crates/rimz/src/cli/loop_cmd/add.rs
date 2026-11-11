@@ -252,12 +252,12 @@ fn add_delivery(
     let surplus = args
         .surplus
         .as_deref()
-        .map(schedule::parse_surplus)
+        .map(rimz::harness::surplus::parse_surplus)
         .transpose()
         .map_err(anyhow::Error::msg)?
         .map(|ratio| format!("{ratio}x"));
     if let Some(after) = args.surplus_after.as_deref() {
-        schedule::parse_surplus_after(after).map_err(anyhow::Error::msg)?;
+        rimz::harness::surplus::parse_surplus_after(after).map_err(anyhow::Error::msg)?;
     }
     let outcome = arm::arm_delivery(
         workspace,
@@ -308,7 +308,7 @@ fn add_delivery(
 }
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
-    schedule::validate_name(&args.name)?;
+    rimz::harness::name::validate_name(&args.name)?;
     if args.until.is_some() {
         bail!(
             "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check"
@@ -797,7 +797,7 @@ fn resolve_add_action(
                 Path::new(name),
                 Some(&workspace.project_root),
             )?;
-            if schedule::validate_name(name).is_err() {
+            if rimz::harness::name::validate_name(name).is_err() {
                 bail!(
                     "--workflow {name}: a loop task starts a workflow by its name under {}; letters, digits, `-`, `_`",
                     rimz::disk::paths::workflows_dir().display()
@@ -935,14 +935,14 @@ fn build_task_entry(
     let surplus = args
         .surplus
         .as_deref()
-        .map(schedule::parse_surplus)
+        .map(rimz::harness::surplus::parse_surplus)
         .transpose()
         .map_err(anyhow::Error::msg)?
         .map(|ratio| format!("{ratio}x"));
     let surplus_after = args
         .surplus_after
         .as_deref()
-        .map(schedule::parse_surplus_after)
+        .map(rimz::harness::surplus::parse_surplus_after)
         .transpose()
         .map_err(anyhow::Error::msg)?
         .map(|_| {
@@ -1088,7 +1088,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Result<()> {
-    schedule::validate_name(new_name)?;
+    rimz::harness::name::validate_name(new_name)?;
     if name == new_name {
         bail!("new loop task name must differ from `{name}`");
     }
@@ -1527,7 +1527,7 @@ fn write_add_feedback(
         let threshold = entry
             .surplus
             .as_deref()
-            .and_then(|raw| schedule::parse_surplus(raw).ok())
+            .and_then(|raw| rimz::harness::surplus::parse_surplus(raw).ok())
             .unwrap_or(1.0);
         let mut segments = Vec::new();
         if let Some(after) = entry.surplus_after.as_deref() {

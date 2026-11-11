@@ -410,7 +410,7 @@ fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
         return Vec::new();
     };
     vec![
-        (crate::harness::schedule::LOOP_TASK_ENV.to_owned(), task),
+        (crate::harness::loop_task::LOOP_TASK_ENV.to_owned(), task),
         (
             crate::workspace::ENV_WORKTREE_PATH.to_owned(),
             record.scope.path.display().to_string(),

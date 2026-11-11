@@ -162,7 +162,10 @@ impl Host for SystemHost {
     ) -> std::result::Result<super::runner::CheckOutcome, String> {
         let mut env = crate::workspace::pin_env(&run.workspace, &run.root);
         env.extend([
-            (super::LOOP_TASK_ENV.to_owned(), run.task.clone()),
+            (
+                crate::harness::loop_task::LOOP_TASK_ENV.to_owned(),
+                run.task.clone(),
+            ),
             (
                 crate::workspace::ENV_WORKTREE_PATH.to_owned(),
                 run.checkout.display().to_string(),

@@ -76,7 +76,7 @@ pub(super) fn validate_spec(
         warnings: spec.ignored.clone(),
         ..Default::default()
     };
-    if let Err(err) = crate::harness::schedule::validate_name(name) {
+    if let Err(err) = crate::harness::name::validate_name(name) {
         report.error("workflow", err);
     }
     if !spec.checks.contains_key(&spec.workflow.start)
@@ -646,7 +646,7 @@ impl Validation {
     }
 
     fn node_name(&mut self, path: &str, node: &str) {
-        if let Err(err) = crate::harness::schedule::validate_name(node) {
+        if let Err(err) = crate::harness::name::validate_name(node) {
             self.error(path, err);
         }
     }

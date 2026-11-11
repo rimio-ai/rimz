@@ -28,7 +28,6 @@ use serde::{Deserialize, Serialize};
 
 use super::super::assist_log::{self, Assist, AssistRecord};
 use super::{
-    LOOP_TASK_ENV,
     backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
@@ -40,12 +39,13 @@ use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache}
 use crate::agents::login::LoginErr;
 use crate::agents::{
     BirthLoginErr, HookPreflightErr, ManagedLaunchState, ProviderCapacity, ProviderLogin,
-    RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
-    find_definition, preflight_hooks,
+    RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, ambient_env, find_definition,
+    preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
+use crate::harness::loop_task::{LOOP_TASK_ENV, task_login};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{RunCancellation, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
@@ -56,6 +56,7 @@ use crate::harness::schedule::run_log::{
 };
 use crate::harness::schedule::signal::{Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome};
 use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
+use crate::harness::surplus::surplus_refusal;
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -827,7 +828,7 @@ impl<'a> TaskFire<'a> {
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
         if let TaskWorkflow::Named(name) = &workflow {
-            super::validate_name(name)?;
+            crate::harness::name::validate_name(name)?;
         }
         if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
@@ -2000,27 +2001,6 @@ fn overlap_detail(info: Option<RunLockInfo>, suffix: &str) -> String {
         },
     );
     format!("{holder} — {suffix}")
-}
-
-/// The account a task's gates, hooks preflight, window reads, and launch use
-/// for `kind`: the row's pin, else the room's current account, which is `None`
-/// when the room's record resolves none.
-pub fn task_login(
-    launch: &LaunchLogin,
-    kind: &str,
-    runtime: &RuntimePaths,
-) -> Result<Option<ProviderLogin>, RoomLoginErr> {
-    match launch {
-        LaunchLogin::RoomDefault => {
-            Ok(crate::agents::RoomLoginSet::for_runtime(runtime).default_login(kind))
-        }
-        LaunchLogin::Pinned(name) => crate::agents::session_login(
-            &AgentKind::new_unchecked(kind),
-            Some(name),
-            &MachineConfig::load_lenient().accounts,
-        )
-        .map(Some),
-    }
 }
 
 /// The account gate for a task pinned to `name`: the login its fire runs on,
@@ -3623,89 +3603,6 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
         reserved += spec.reserved_usd();
     }
     Ok(reserved)
-}
-
-/// Why a task's `surplus` and `surplus-after` values, as written on its row, hold an agent on
-/// `kind`'s account back, from that account's window `reading`, read only when either is set:
-/// a fire's admission passes the live row's values, and a workflow judge's spawn the values
-/// its run's record kept from the row when the run started.
-pub(in crate::harness) fn surplus_refusal(
-    surplus: Option<&str>,
-    surplus_after: Option<&str>,
-    kind: &str,
-    reading: impl FnOnce() -> Option<WindowSurplus>,
-) -> Option<String> {
-    if surplus.is_none() && surplus_after.is_none() {
-        return None;
-    }
-    surplus_gate_in(surplus, surplus_after, kind, reading())
-}
-
-fn surplus_gate_in(
-    surplus: Option<&str>,
-    surplus_after: Option<&str>,
-    kind: &str,
-    reading: Option<WindowSurplus>,
-) -> Option<String> {
-    if surplus.is_none() && surplus_after.is_none() {
-        return None;
-    }
-    let Some(reading) = reading else {
-        return Some(format!(
-            "no {kind} budget-window reading; surplus gate stays closed"
-        ));
-    };
-    let after = match surplus_after.map(super::parse_surplus_after) {
-        Some(Ok(after)) => Some(after),
-        Some(Err(_)) => {
-            return Some("invalid surplus-after gate; surplus gate stays closed".to_owned());
-        }
-        None => None,
-    };
-    if let Some(after) = after
-        && (reading.elapsed.as_secs().max(0) as u64) < after.as_secs()
-    {
-        return Some(format!(
-            "{kind} {} window {} elapsed; fires after {}",
-            crate::theme::fmt::window_duration_label(reading.duration_mins),
-            elapsed_label(reading.elapsed),
-            surplus_after.unwrap_or_default().trim(),
-        ));
-    }
-    let threshold = match surplus.map(super::parse_surplus) {
-        Some(Ok(threshold)) => threshold,
-        Some(Err(_)) => return Some("invalid surplus gate; surplus gate stays closed".to_owned()),
-        None => 1.0,
-    };
-    (reading.headroom < threshold).then(|| {
-        format!(
-            "{kind} {} window surplus {:.1}x below {threshold:.1}x",
-            crate::theme::fmt::window_duration_label(reading.duration_mins),
-            reading.headroom,
-        )
-    })
-}
-
-fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
-    let total_mins = elapsed.as_secs().max(0) / 60;
-    let days = total_mins / (24 * 60);
-    let hours = total_mins % (24 * 60) / 60;
-    let mins = total_mins % 60;
-    if days > 0 {
-        if hours > 0 {
-            format!("{days}d{hours}h")
-        } else {
-            format!("{days}d")
-        }
-    } else if hours > 0 {
-        if mins > 0 {
-            format!("{hours}h{mins}m")
-        } else {
-            format!("{hours}h")
-        }
-    } else {
-        format!("{mins}m")
-    }
 }
 
 #[cfg(test)]

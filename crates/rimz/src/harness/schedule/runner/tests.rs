@@ -798,50 +798,6 @@ fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntr
     }
 }
 
-fn reading(elapsed_days: i64, headroom: f64) -> WindowSurplus {
-    WindowSurplus {
-        duration_mins: 7 * 24 * 60,
-        elapsed: jiff::SignedDuration::from_secs(elapsed_days * 86_400),
-        headroom,
-    }
-}
-
-#[test]
-fn surplus_gate_covers_every_branch() {
-    // Reason `surplus`/`surplus-after` gave for holding a fire back, if any.
-    let gate = |surplus, after, reading| surplus_gate_in(surplus, after, "claude", reading);
-
-    assert_eq!(
-        surplus_gate_in(None, None, "claude", None),
-        None,
-        "an ungated task never consults the window"
-    );
-    assert_eq!(
-        gate(Some("1.5x"), None, None).as_deref(),
-        Some("no claude budget-window reading; surplus gate stays closed"),
-        "a gate with no reading fails closed"
-    );
-    assert_eq!(
-        gate(Some("1.5x"), Some("3d"), Some(reading(2, 2.0))).as_deref(),
-        Some("claude 7d window 2d elapsed; fires after 3d"),
-        "ample headroom still waits for the elapsed floor"
-    );
-    assert_eq!(
-        gate(Some("1.5x"), Some("3d"), Some(reading(4, 1.4))).as_deref(),
-        Some("claude 7d window surplus 1.4x below 1.5x")
-    );
-    assert_eq!(
-        gate(Some("1.5x"), Some("3d"), Some(reading(4, 1.5))),
-        None,
-        "headroom exactly at the threshold fires"
-    );
-    assert_eq!(
-        surplus_gate_in(None, Some("3d"), "codex", Some(reading(4, 0.9))).as_deref(),
-        Some("codex 7d window surplus 0.9x below 1.0x"),
-        "a bare elapsed floor still demands sustainable headroom"
-    );
-}
-
 #[test]
 fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
     let root = tempfile::tempdir().unwrap();
@@ -930,31 +886,6 @@ fn an_over_cap_workflow_fire_records_its_skip_before_birthing_a_room() {
         Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::BudgetSkipped
     );
     assert_eq!((skipped, births), (true, 0), "{:?}", plan.err());
-}
-
-#[test]
-fn month_surplus_reasons_use_the_window_label() {
-    let reasons: Vec<_> = [(None, Some("3d")), (Some("1.5x"), None)]
-        .into_iter()
-        .map(|(surplus, after)| {
-            surplus_gate_in(
-                surplus,
-                after,
-                "qwen",
-                Some(WindowSurplus {
-                    duration_mins: 43_200,
-                    ..reading(2, 0.9)
-                }),
-            )
-        })
-        .collect();
-    assert_eq!(
-        reasons,
-        [
-            Some("qwen mo window 2d elapsed; fires after 3d".to_owned()),
-            Some("qwen mo window surplus 0.9x below 1.5x".to_owned())
-        ]
-    );
 }
 
 #[test]

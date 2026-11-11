@@ -25,7 +25,7 @@ impl FromStr for TaskName {
     type Err = ScheduleErr;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        super::validate_name(value)?;
+        crate::harness::name::validate_name(value)?;
         Ok(Self(value.to_owned()))
     }
 }

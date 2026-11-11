@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::config::{TaskEntry, TaskTarget};
+use crate::harness::prose::{span, verbatim};
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
 use jiff::civil::Weekday;
 use jiff::{SignedDuration, Timestamp, Zoned};
@@ -48,8 +49,6 @@ pub mod when;
 
 pub use condition::{condition_stages, unread_reason};
 pub use fire::last_stamps;
-
-pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 
 /// The recorded provenance of a session delivery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -483,8 +482,8 @@ pub enum ScheduleErr {
         "schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m` or a day mask like `weekday` or `mon,wed,fri`"
     )]
     BadEvery { name: String, value: String },
-    #[error("schedule name `{name}` must be non-empty and use only letters, digits, `-`, or `_`")]
-    BadName { name: String },
+    #[error(transparent)]
+    BadName(#[from] crate::harness::name::NameErr),
 }
 
 /// Runtime shape compiled once from one persisted task row.
@@ -797,24 +796,6 @@ pub(super) fn trigger_clause(parsed: &ParsedTrigger, condition_predicate: &str) 
         }
         Trigger::Watch(_) => return None,
     })
-}
-
-pub(super) fn span(text: &str) -> String {
-    format!("`{}`", verbatim(text))
-}
-
-/// User text shown as typed: only `<`, which could open or close the
-/// reminder tag, and control characters are escaped.
-pub(super) fn verbatim(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '<' => escaped.push_str("&lt;"),
-            ch if ch.is_control() => escaped.extend(ch.escape_default()),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped
 }
 
 impl ParsedSchedule {
@@ -1139,46 +1120,6 @@ pub fn resolve_once_at(name: &str, raw: &str, now: &Zoned) -> Result<Timestamp, 
         });
     }
     Ok(candidate)
-}
-
-/// Validate a schedule name: non-empty and limited to a filesystem- and
-/// shell-safe charset.
-pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
-    let ok = !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
-    if ok {
-        Ok(())
-    } else {
-        Err(ScheduleErr::BadName {
-            name: name.to_owned(),
-        })
-    }
-}
-
-/// Parse a positive forward-headroom ratio such as `1.5x`.
-pub fn parse_surplus(raw: &str) -> Result<f64, String> {
-    let trimmed = raw.trim();
-    let number = trimmed.strip_suffix(['x', 'X']).unwrap_or(trimmed).trim();
-    let ratio = number
-        .parse::<f64>()
-        .map_err(|err| format!("surplus ratio `{raw}` is not a number: {err}"))?;
-    if !ratio.is_finite() || ratio <= 0.0 {
-        return Err(format!(
-            "surplus ratio `{raw}` must be finite and greater than zero"
-        ));
-    }
-    Ok(ratio)
-}
-
-/// Parse the elapsed floor for a provider budget-window surplus gate.
-pub fn parse_surplus_after(raw: &str) -> Result<Duration, String> {
-    parse_duration_units(
-        raw,
-        &[DurationUnit::Minute, DurationUnit::Hour, DurationUnit::Day],
-    )
-    .map_err(|err| err.to_string())
 }
 
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full

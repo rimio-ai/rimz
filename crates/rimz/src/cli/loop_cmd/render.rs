@@ -224,7 +224,7 @@ fn surplus_label(entry: &TaskEntry) -> Option<String> {
         let threshold = entry
             .surplus
             .as_deref()
-            .and_then(|raw| schedule::parse_surplus(raw).ok())
+            .and_then(|raw| rimz::harness::surplus::parse_surplus(raw).ok())
             .unwrap_or(1.0);
         segments.push(format!("surplus ≥ {threshold:.1}x"));
     }
