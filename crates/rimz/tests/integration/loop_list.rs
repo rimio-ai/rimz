@@ -2169,7 +2169,10 @@ fn active_timer_shows_closed_room_clocks_as_live() {
 fn clocks_wait_for_the_room_without_an_active_timer() {
     for (code, units) in [(3, true), (0, false)] {
         let (env, shims, log) = timer_fixture(code, units);
-        let (text, _) = list_with_timer(&env, &shims, &log, &[]);
+        let (text, text_reads) = list_with_timer(&env, &shims, &log, &[]);
+        if !units {
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), "", "{text}");
+        }
         assert!(
             text.contains("clocks and CI/PR signals wait until"),
             "{text}"
@@ -2181,7 +2184,11 @@ fn clocks_wait_for_the_room_without_an_active_timer() {
                 .unwrap();
             assert_eq!(row.matches("waits for room").count(), 1, "{text}");
         }
-        let (json, _) = list_with_timer(&env, &shims, &log, &["--json"]);
+        let (json, json_reads) = list_with_timer(&env, &shims, &log, &["--json"]);
+        assert_eq!(
+            (text_reads, json_reads),
+            (usize::from(units), usize::from(units))
+        );
         let (_, tasks) = json_tasks(&json);
         assert_eq!(tasks["nightly"]["state"], "waits_for_room", "{json}");
         assert_eq!(tasks["once"]["state"], "waits_for_room", "{json}");
