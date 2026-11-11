@@ -841,7 +841,8 @@ impl<'a> TaskFire<'a> {
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
-        // A definition the row cannot compile refuses before the fire births a room.
+        // A definition the row cannot compile refuses before the fire births a room. Its prompt
+        // carries the arrival's evidence until the prompt is filled again below.
         let mut inline = match &workflow {
             TaskWorkflow::Inline(_) => Some(self.workflow_source(&workflow)?),
             TaskWorkflow::Named(_) => None,
@@ -869,7 +870,7 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
         let state = StatePaths::for_project_root(&root)?;
-        let source = match inline.take() {
+        let mut source = match inline.take() {
             Some(source) => source,
             None => self.workflow_source(&workflow)?,
         };
@@ -884,6 +885,11 @@ impl<'a> TaskFire<'a> {
         }
         if let Some(done) = self.reconcile_backlog()? {
             return Ok(TaskFirePlan::Done(done));
+        }
+        // The run lock and the reconcile may have switched the trigger this fire serves; the
+        // run's prompt carries the one its record will name.
+        if let WorkflowSource::Inline(definition) = &mut source {
+            self.fill_prompt(definition)?;
         }
         let fresh = matches!(
             self.entry.task_worktree(),
@@ -1137,7 +1143,7 @@ impl<'a> TaskFire<'a> {
     }
 
     /// The definition a fire starts: a deployed directory, or the task's compiled graph with
-    /// its assets read now and the trigger's evidence in its prompt.
+    /// its assets read now and the evidence of the trigger the fire serves now in its prompt.
     fn workflow_source(&self, workflow: &TaskWorkflow) -> Result<WorkflowSource> {
         let inline = match workflow {
             TaskWorkflow::Named(name) => {
@@ -1155,19 +1161,30 @@ impl<'a> TaskFire<'a> {
         self.inline_definition(inline).map(WorkflowSource::Inline)
     }
 
-    /// The inline graph this fire runs, its prompt asset carrying the fire's evidence.
+    /// The inline graph this fire runs, its prompt asset carrying the evidence of the trigger the
+    /// fire serves now.
     pub(in crate::harness) fn inline_definition(
         &self,
         inline: &super::compile::InlineTask,
     ) -> Result<crate::harness::workflow::InlineDefinition> {
         let mut definition = inline.definition(&self.name, &self.task, &self.config)?;
-        if let Some(prompt) = definition.assets.get_mut(super::compile::PROMPT) {
-            *prompt = self.resolve_effect_prompt()?.into_bytes();
-        }
+        self.fill_prompt(&mut definition)?;
         if self.keep {
             definition.text = super::compile::keep_agent(&definition.text)?;
         }
         Ok(definition)
+    }
+
+    /// Sets a graph's prompt asset, where it has one, to the row's prompt with the evidence of
+    /// the trigger the fire serves now.
+    fn fill_prompt(
+        &self,
+        definition: &mut crate::harness::workflow::InlineDefinition,
+    ) -> Result<()> {
+        if let Some(prompt) = definition.assets.get_mut(super::compile::PROMPT) {
+            *prompt = self.resolve_effect_prompt()?.into_bytes();
+        }
+        Ok(())
     }
 
     /// When a scheduled fire's agent gives up waiting for capacity when its row sets no
