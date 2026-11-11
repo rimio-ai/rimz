@@ -3923,6 +3923,42 @@ pub fn relaunch_login(
     .into())
 }
 
+/// The account a resume of an ended agent would run on, beside the one it ran on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResumeLogin {
+    /// The agent's own account.
+    Same,
+    /// Another account whose history pool reads the session.
+    Changed(LoginKey),
+    /// An account that cannot read the session.
+    Unreadable,
+}
+
+/// The account a resume of `agent` would run on, as [`relaunch_login`] resolves it. A room
+/// whose accounts cannot be read (`None`), or whose kind refuses its account, is taken as
+/// the agent's own: the resume reports that refusal itself.
+pub fn resume_login(
+    agent: &AgentState,
+    logins: Option<&crate::agents::RoomAccounts>,
+    catalog: &LoginCatalog,
+) -> ResumeLogin {
+    let Some(logins) = logins else {
+        return ResumeLogin::Same;
+    };
+    match relaunch_login(agent, logins, catalog) {
+        Err(RelaunchLoginErr::Mismatch(_)) => ResumeLogin::Unreadable,
+        Err(RelaunchLoginErr::Account { .. }) => ResumeLogin::Same,
+        Ok(login) => {
+            let key = LoginKey::new(agent.kind.clone(), login.unwrap_or_default());
+            if key == agent.login_key() {
+                ResumeLogin::Same
+            } else {
+                ResumeLogin::Changed(key)
+            }
+        }
+    }
+}
+
 /// A resumed agent must have a conversation the provider can still reopen.
 ///
 /// Claude and Codex stamp a `transcript_path` on their first `SessionStart`

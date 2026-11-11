@@ -48,8 +48,13 @@ fn peer_digest_uses_each_turn_task() {
     second.run_id = rimz::ids::RunId::new();
     second.prompt = "second task".into();
     let digest = compose_digest(
-        &[(&child, &first, None, None), (&child, &second, None, None)],
+        &[
+            (&child, &first, None, None, ResumeAccount::Same),
+            (&child, &second, None, None, ResumeAccount::Same),
+        ],
+        &[],
         false,
+        &Clock::local(),
     );
     assert!(digest.contains("task: \"first task\""), "{digest}");
     assert!(digest.contains("task: \"second task\""), "{digest}");
@@ -97,7 +102,12 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
     };
 
     assert_eq!(
-        compose_digest(&[(&child, &result, None, Some(&response))], true),
+        compose_digest(
+            &[(&child, &result, None, Some(&response), ResumeAccount::Same)],
+            &[],
+            true,
+            &Clock::local()
+        ),
         "Your subagent settled:\n\
          - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /state/out/planner/naming.output (<1k tokens, 3 lines)"
     );
@@ -134,11 +144,25 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
     assert_eq!(
         compose_digest(
             &[
-                (&naming, &completed, None, Some(&response)),
-                (&runtime, &blank, None, None),
-                (&reviewer, &timed_out, None, Some(&partial)),
+                (
+                    &naming,
+                    &completed,
+                    None,
+                    Some(&response),
+                    ResumeAccount::Same
+                ),
+                (&runtime, &blank, None, None, ResumeAccount::Same),
+                (
+                    &reviewer,
+                    &timed_out,
+                    None,
+                    Some(&partial),
+                    ResumeAccount::Same
+                ),
             ],
-            true
+            &[],
+            true,
+            &Clock::local()
         ),
         "All 3 subagents settled, responses total ~22k tokens, 3 lines:\n\
          - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /state/out/planner/naming.output (~1.2k tokens, 2 lines)\n\
@@ -1023,4 +1047,338 @@ fn a_running_detached_sibling_neither_holds_nor_joins_the_digest() {
         "detached answer\n",
         "the response file is published without a report"
     );
+}
+
+fn plus_one_clock(now: &str) -> Clock {
+    Clock {
+        now: now.parse().unwrap(),
+        tz: jiff::tz::TimeZone::fixed(jiff::tz::offset(1)),
+    }
+}
+
+fn limit_failed(cause: rimz::store::run::LimitFailureCause, refill_at: Option<&str>) -> RunRecord {
+    let mut record = run(RunStatus::Failed);
+    record.completed_at = Some(record.started_at + std::time::Duration::from_secs(12 * 60));
+    record.updated_at = record.completed_at.unwrap();
+    record.failure_tail = Some("stopped on a provider limit: \"Usage limit reached\"".into());
+    record.limit_failure = Some(rimz::store::run::LimitFailure {
+        cause,
+        refill_at: refill_at.map(|at| at.parse().unwrap()),
+        label: Some("Usage limit reached".into()),
+    });
+    record
+}
+
+#[test]
+fn a_limit_failure_row_names_what_the_parent_can_do() {
+    use rimz::store::run::LimitFailureCause as Cause;
+    let child = child("still-silver", Some("review correctness"));
+    let clock = plus_one_clock("2026-11-11T17:50:00Z");
+    let refill = Some("2026-11-11T20:00:00Z");
+    let passed = Some("2026-11-11T17:00:00Z");
+    let changed = ResumeAccount::Changed(Some("2026-11-11T20:00:00Z".parse().unwrap()));
+    let cases = [
+        (Cause::RefillKnown, refill, ResumeAccount::Unreadable),
+        (Cause::RefillKnown, refill, ResumeAccount::Changed(None)),
+        (Cause::RefillUnknown, None, changed),
+        (Cause::ContinueFailed, None, ResumeAccount::Same),
+        (
+            Cause::BeyondHoldLimit,
+            Some("2026-11-12T03:00:00Z"),
+            ResumeAccount::Same,
+        ),
+        (Cause::RefillKnown, refill, ResumeAccount::Same),
+        (Cause::Refilled, None, ResumeAccount::Same),
+        (Cause::RefillKnown, passed, ResumeAccount::Same),
+        (Cause::BeyondHoldLimit, passed, ResumeAccount::Same),
+        (Cause::RefillUnknown, None, ResumeAccount::Same),
+    ];
+    let rows = cases.map(|(cause, refill_at, account)| {
+        let record = limit_failed(cause, refill_at);
+        compose_answer_row(&child, &record, None, None, account, &clock)
+    });
+    let row = |tail: &str| {
+        format!(
+            "- @still-silver: failed in 12m; stopped on a provider limit: \"Usage limit reached\"{tail}, task: \"review correctness\", no response"
+        )
+    };
+    let refilled = row("; the limit has refilled. Message it to continue it");
+    let after =
+        row("; it refills in 2h10m (at 21:00 +01:00). Message it after the refill to continue it");
+    assert_eq!(
+        rows,
+        [
+            row(
+                ". The room's codex account has changed and cannot read its session: do the task yourself"
+            ),
+            row(
+                ". The room's codex account has changed since it stopped: message it to retry now; if that fails too, do the task yourself"
+            ),
+            after.clone(),
+            row(
+                ", and continuing it after the refill failed. Message it to retry; if that fails too, do the task yourself"
+            ),
+            row(
+                "; it refills in 9h10m (at 04:00 +01:00 tomorrow). Do the task yourself; a message after the refill continues it"
+            ),
+            after,
+            refilled.clone(),
+            refilled.clone(),
+            refilled,
+            row(". Message it to retry; if that fails too, do the task yourself"),
+        ]
+    );
+
+    let mut unlabeled = limit_failed(Cause::RefillUnknown, None);
+    if let Some(failure) = unlabeled.limit_failure.as_mut() {
+        failure.label = None;
+    }
+    assert_eq!(
+        compose_answer_row(&child, &unlabeled, None, None, ResumeAccount::Same, &clock),
+        "- @still-silver: failed in 12m; stopped on a provider limit. Message it to retry; if that fails too, do the task yourself, task: \"review correctness\", no response"
+    );
+}
+
+#[test]
+fn an_earlier_answer_renders_its_own_limit_failure() {
+    let child = child("still-silver", Some("review correctness"));
+    let clock = plus_one_clock("2026-11-11T17:50:00Z");
+    let failed = limit_failed(
+        rimz::store::run::LimitFailureCause::RefillKnown,
+        Some("2026-11-11T20:00:00Z"),
+    );
+    let mut value = serde_json::to_value(&failed).unwrap();
+    value["earlier_answers"] = serde_json::json!([{
+        "ordinal": 1,
+        "status": "failed",
+        "started_at": failed.started_at,
+        "completed_at": failed.completed_at,
+        "failure_tail": failed.failure_tail,
+        "limit_failure": failed.limit_failure,
+    }]);
+    value["status"] = serde_json::json!("running");
+    value["follow_ups"] = serde_json::json!(1);
+    value["limit_failure"] = serde_json::Value::Null;
+    value["failure_tail"] = serde_json::Value::Null;
+    let reopened: RunRecord = serde_json::from_value(value).unwrap();
+    let answer = &reopened.earlier_answers[0];
+    assert_eq!(
+        compose_answer_row(
+            &child,
+            &reopened,
+            Some(answer),
+            None,
+            ResumeAccount::Same,
+            &clock
+        ),
+        "- @still-silver: failed in 12m; stopped on a provider limit: \"Usage limit reached\"; it refills in 2h10m (at 21:00 +01:00). Message it after the refill to continue it, task: \"review correctness\", no response"
+    );
+}
+
+fn held(name: &str, until: &str) -> (AgentState, RunRecord) {
+    let mut child = child(name, None);
+    child.status = AgentStatus::Running;
+    let at = child.last_activity + std::time::Duration::from_secs(1);
+    let mut context = rimz::agents::AgentContext::new(child.kind.as_str(), at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at,
+        label: Some("Usage limit reached".into()),
+    });
+    child.context = Some(context);
+    let mut record = run(RunStatus::Running);
+    record.completed_at = None;
+    record.limit_hold = Some(rimz::store::run::LimitHold {
+        activity: child.last_activity,
+        since: at,
+        until: until.parse().unwrap(),
+    });
+    (child, record)
+}
+
+#[test]
+fn a_held_child_gets_a_line_and_the_heading_counts_it() {
+    let clock = plus_one_clock("2026-11-11T16:55:00Z");
+    let (otter, otter_run) = held("calm-otter", "2026-11-11T20:00:00Z");
+    let (fox, fox_run) = held("quick-fox", "2026-11-11T16:00:00Z");
+    let naming = child("naming", None);
+    let completed = run(RunStatus::Completed);
+    let response = ResponseFile {
+        path: PathBuf::from("/state/out/planner/naming.output"),
+        summary: FileSummary {
+            bytes: 19,
+            lines: 2,
+            tokens: 1_200,
+        },
+    };
+    let answer = (
+        &naming,
+        &completed,
+        None,
+        Some(&response),
+        ResumeAccount::Same,
+    );
+    let waiting = "- @calm-otter: paused on a provider limit: \"Usage limit reached\"; it refills in 3h05m (at 21:00 +01:00) and RimZ continues it then. Its report follows";
+    let continuing = "- @quick-fox: paused on a provider limit: \"Usage limit reached\"; the limit has refilled and RimZ is continuing it. Its report follows";
+    let row = "- @naming: completed in 4m12s, task: \"map it\", response: /state/out/planner/naming.output (~1.2k tokens, 2 lines)";
+    assert_eq!(
+        compose_digest(&[answer], &[(&otter, &otter_run)], true, &clock),
+        format!("1 of 2 subagents settled:\n{row}\n{waiting}")
+    );
+    assert_eq!(
+        compose_digest(
+            &[answer, answer],
+            &[(&otter, &otter_run), (&fox, &fox_run)],
+            true,
+            &clock
+        ),
+        format!(
+            "2 of 4 subagents settled, responses total ~2.4k tokens, 4 lines:\n{row}\n{row}\n{waiting}\n{continuing}"
+        )
+    );
+    let mut unlabeled = otter.clone();
+    unlabeled.context = None;
+    assert!(
+        compose_digest(&[answer], &[(&unlabeled, &otter_run)], true, &clock)
+            .contains("- @calm-otter: paused on a provider limit; it refills in 3h05m"),
+        "a row without a displayed marker drops only the label"
+    );
+    assert_eq!(
+        compose_digest(&[answer], &[], true, &clock),
+        format!("Your subagent settled:\n{row}"),
+        "no held line leaves the heading as it was"
+    );
+}
+
+fn start_turn(store: &Store, name: &str) {
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(name)),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "report-test",
+            agent_kind: AgentKind::new_unchecked("codex"),
+            event_name: "test",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+}
+
+fn seed_limit_marker(store: &Store, name: &str) {
+    let at = Timestamp::now() + std::time::Duration::from_secs(5);
+    let mut context = rimz::agents::AgentContext::new("codex", at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at,
+        label: Some("Usage limit reached".into()),
+    });
+    rimz::store::agent_context::write_record(
+        store.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new("codex", name, context),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_held_child_neither_blocks_nor_joins_its_siblings_report() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["held", "a", "b"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    start_turn(&store, "held");
+    seed_limit_marker(&store, "held");
+    let mut held = child_run(&workspace.workspace_id, "held", RunStatus::Running);
+    let now = Timestamp::now();
+    held.limit_hold = Some(rimz::store::run::LimitHold {
+        activity: now,
+        since: now,
+        until: now + std::time::Duration::from_secs(3 * 3600),
+    });
+    let a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    let mut b = child_run(&workspace.workspace_id, "b", RunStatus::Running);
+    for record in [&held, &a, &b] {
+        run::create(store.paths(), record).unwrap();
+    }
+    assert_eq!(
+        report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
+        ReportOutcome::SiblingsRunning,
+        "a working sibling still holds the report"
+    );
+    b.status = RunStatus::Completed;
+    run::create(store.paths(), &b).unwrap();
+    let mut digests = Vec::new();
+    for _ in 0..2 {
+        let ReportOutcome::Queued { message_id, .. } =
+            report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap()
+        else {
+            panic!("a held child must not hold its siblings' report");
+        };
+        let messages = store.list_messages().unwrap();
+        let text = messages
+            .iter()
+            .find(|message| message.message_id == message_id)
+            .unwrap()
+            .text
+            .clone();
+        digests.push(text);
+        let held = run::load(store.paths(), &held.run_id).unwrap();
+        assert!(
+            held.report_message_id.is_none(),
+            "the held run is not stamped"
+        );
+        assert!(held.limit_hold.is_some());
+        let answered = run::load(store.paths(), &b.run_id).unwrap();
+        assert!(answered.report_message_id.is_some());
+        // Reopen the sibling so the next report has an answer to carry.
+        let mut reopened = answered;
+        reopened.status = RunStatus::Completed;
+        reopened.report_message_id = None;
+        run::create(store.paths(), &reopened).unwrap();
+    }
+    for digest in &digests {
+        assert!(
+            digest.starts_with("1 of 2 subagents settled:")
+                || digest.starts_with("2 of 3 subagents settled"),
+            "{digest}"
+        );
+        assert!(
+            digest.contains(
+                "- @held: paused on a provider limit: \"Usage limit reached\"; it refills in "
+            ),
+            "the label comes from the stored context: {digest}"
+        );
+    }
+    assert_eq!(
+        digests
+            .iter()
+            .filter(|digest| digest.contains("@held:"))
+            .count(),
+        2,
+        "the held line repeats in every report"
+    );
+}
+
+#[test]
+fn a_fleet_with_only_held_children_reports_nothing() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    append_agent(&store, "held", Some("parent"));
+    let mut held = child_run(&workspace.workspace_id, "held", RunStatus::Running);
+    let now = Timestamp::now();
+    held.limit_hold = Some(rimz::store::run::LimitHold {
+        activity: now,
+        since: now,
+        until: now,
+    });
+    run::create(store.paths(), &held).unwrap();
+    assert_eq!(
+        report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
+        ReportOutcome::NothingToReport
+    );
+    assert!(store.list_messages().unwrap().is_empty());
 }

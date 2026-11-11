@@ -178,7 +178,7 @@ fn digest_parents_from<'a>(
                 });
             (peer_needs_settlement
                 || !super::fleet::ended_team_runs(agents.clone(), runs, parent).is_empty()
-                || (!fleet.is_empty() && !fleet.any_running() && !fleet.unreported().is_empty()))
+                || (!fleet.is_empty() && !fleet.any_working() && !fleet.unreported().is_empty()))
             .then(|| parent.agent_id.clone())
         })
         .collect()
@@ -464,8 +464,31 @@ mod tests {
 
         assert_eq!(
             digest_parents_from(&agents, &runs, |_, _| false),
-            vec![parent.agent_id]
+            vec![parent.agent_id.clone()]
         );
+        runs[1].status = crate::store::run::RunStatus::Running;
+        assert!(
+            digest_parents_from(&agents, &runs, |_, _| false).is_empty(),
+            "a working sibling holds the report back"
+        );
+        runs[1].limit_hold = Some(crate::store::run::LimitHold {
+            activity: at,
+            since: at,
+            until: at,
+        });
+        assert_eq!(
+            digest_parents_from(&agents, &runs, |_, _| false),
+            vec![parent.agent_id.clone()],
+            "a held sibling does not hold the report back"
+        );
+        runs[0].report_message_id = Some(crate::MessageId::new());
+        assert!(
+            digest_parents_from(&agents, &runs, |_, _| false).is_empty(),
+            "a held child alone owes no report"
+        );
+        runs[1].limit_hold = None;
+        runs[1].status = crate::store::run::RunStatus::Completed;
+        runs[0].report_message_id = None;
         let message_id = crate::MessageId::new();
         for run in &mut runs {
             run.report_message_id = Some(message_id.clone());
@@ -622,6 +645,16 @@ mod tests {
             panic!("a peer whose fleet is still owed needs no wait lookup")
         };
         assert!(!digest_parents_from(&agents, &runs, no_lookup).contains(&launcher.agent_id));
+        runs[1].limit_hold = Some(crate::store::run::LimitHold {
+            activity: at,
+            since: at,
+            until: at,
+        });
+        assert!(
+            !digest_parents_from(&agents, &runs, no_lookup).contains(&launcher.agent_id),
+            "a peer whose own child is held is not settled"
+        );
+        runs[1].limit_hold = None;
         runs[1].status = crate::store::run::RunStatus::Completed;
         assert!(!digest_parents_from(&agents, &runs, no_lookup).contains(&launcher.agent_id));
         runs[1].report_message_id = Some(crate::MessageId::new());

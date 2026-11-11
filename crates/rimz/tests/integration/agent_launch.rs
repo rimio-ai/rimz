@@ -2982,6 +2982,143 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
     assert!(!producer_owes_notice());
 }
 
+#[test]
+fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("gatekeeper-session");
+    let sibling_id = AgentSessionId::from("otter-session");
+    let open_run = |id: &AgentSessionId, name: &str| {
+        let mut run = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            child_kind.clone(),
+            rimz::agents::PermissionMode::Auto,
+            format!("{name} task"),
+            env.project_root.clone(),
+        );
+        run.agent_id = Some(id.clone());
+        run.agent_name = Some(name.to_owned());
+        run.subagent = true;
+        run.status = rimz::store::run::RunStatus::Running;
+        run
+    };
+    let run = open_run(&child_id, "still-silver");
+    rimz::harness::run::create(store.paths(), &run).expect("create the held child's run");
+    let mut sibling = open_run(&sibling_id, "calm-otter");
+    sibling.status = rimz::store::run::RunStatus::Completed;
+    sibling.completed_at = Some(jiff::Timestamp::now());
+    sibling.last_message = Some("the sibling's answer".to_owned());
+    rimz::harness::run::create(store.paths(), &sibling).expect("create the settled sibling's run");
+    seed_parent_and_child(
+        &env,
+        &workspace,
+        &store,
+        (&parent_kind, &parent_id),
+        (&child_kind, &child_id),
+        jiff::Timestamp::now(),
+    );
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &child_kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: sibling_id.clone(),
+                launch_id: None,
+                agent_name: "calm-otter".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(parent_kind.clone()),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed the sibling's row");
+    publish_spent_window(
+        &env,
+        &child_kind,
+        jiff::Timestamp::now() + std::time::Duration::from_secs(3600),
+    );
+    let at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
+    let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        ended_turn: false,
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at,
+        label: Some("Usage limit reached".to_owned()),
+    });
+    rimz::store::agent_context::write_record(
+        &env.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new(
+            child_kind.as_str(),
+            child_id.as_str(),
+            context,
+        ),
+    )
+    .expect("seed the limit marker");
+
+    let request = rimz::harness::park_notice::ParkNoticeRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        run_id: run.run_id.clone(),
+        horizon_secs: 6 * 3600,
+        continuation: rimz::harness::park_notice::Continuation::On,
+    };
+    env.rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "park-notice",
+            &request,
+        ))
+        .assert()
+        .success();
+
+    let messages = store.list_messages().expect("list queued messages");
+    assert_eq!(messages.len(), 1, "one report for the settled sibling");
+    let report = &messages[0].text;
+    let mut lines = report.lines();
+    assert_eq!(lines.next(), Some("1 of 2 subagents settled:"), "{report}");
+    assert!(
+        lines
+            .next()
+            .is_some_and(|line| line.starts_with("- @calm-otter: completed in ")),
+        "{report}"
+    );
+    let held_line = lines.next().unwrap_or_default();
+    assert!(
+        held_line.starts_with(
+            "- @still-silver: paused on a provider limit: \"Usage limit reached\"; it refills in "
+        ) && held_line.ends_with(" and RimZ continues it then. Its report follows"),
+        "{report}"
+    );
+    assert_eq!(lines.next(), None, "{report}");
+    let held = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
+    assert!(held.limit_hold.is_some(), "the run is held");
+    assert!(
+        held.report_message_id.is_none(),
+        "the held run is not reported"
+    );
+    let sibling = rimz::harness::run::load(store.paths(), &sibling.run_id).expect("load run");
+    assert_eq!(
+        sibling.report_message_id.as_ref(),
+        Some(&messages[0].message_id)
+    );
+}
+
 /// Seed a planner parent and its launched still-silver child, the child's turn started, every
 /// event stamped `at`.
 fn seed_parent_and_child(
@@ -3739,7 +3876,20 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
         .into_iter()
         .find(|message| message.agent_id == parent_id)
         .expect("the parent's digest");
-    assert!(report.text.contains(&reason), "{}", report.text);
+    let row = report
+        .text
+        .lines()
+        .find(|line| line.starts_with("- @still-silver: failed in "))
+        .unwrap_or_default();
+    assert!(
+        row.contains("; stopped on a provider limit: \"Usage limit reached\"; it refills in ")
+            && row.contains(
+                "). Do the task yourself; a message after the refill continues it, task: "
+            ),
+        "the report row renders the typed cause: {}",
+        report.text
+    );
+    assert!(!row.contains("refills at"), "{}", report.text);
     assert!(
         !report.text.contains("cache_keepalive_max"),
         "{}",

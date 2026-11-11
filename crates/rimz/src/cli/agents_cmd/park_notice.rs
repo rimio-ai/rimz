@@ -46,8 +46,21 @@ pub(super) fn run(request: ParkNoticeRequest, globals: &super::GlobalFlags) -> R
     );
     match action {
         None => Ok(()),
-        Some(ParkAction::Hold { hold, .. }) => {
-            rimz::harness::run::claim_limit_hold(paths, &run.run_id, hold)?;
+        Some(ParkAction::Hold { child, hold }) => {
+            if !rimz::harness::run::claim_limit_hold(paths, &run.run_id, hold)? {
+                return Ok(());
+            }
+            // A held child no longer holds back its siblings' answers.
+            let Some((kind, launcher)) = child.launcher() else {
+                return Ok(());
+            };
+            super::subagent_report::report_fleet_with_kind(
+                &ctx.workspace,
+                &ctx.store,
+                launcher,
+                Some(kind),
+            )
+            .context("reporting the held child's fleet")?;
             Ok(())
         }
         Some(ParkAction::Fail {

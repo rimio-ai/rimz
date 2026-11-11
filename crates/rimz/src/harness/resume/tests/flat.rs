@@ -926,3 +926,36 @@ fn relaunch_login_answers_by_history_pool() {
         "@coder's session belongs to claude account `work`; this room launches claude on `personal` (machine default). Run `rimz accounts use claude work` to pin this room to it and resume, then `rimz accounts use --reset claude` to follow the machine default again."
     );
 }
+
+#[test]
+fn resume_login_names_the_account_a_resume_would_run_on() {
+    let session = AgentState {
+        login: Some("work".parse().expect("login name")),
+        ..agent("claude", "a1", "/code/qe", 5)
+    };
+    let shared = claude_accounts("shared");
+    let standalone = claude_accounts("standalone");
+    let answer = |room: Option<&RoomAccounts>, catalog| resume_login(&session, room, catalog);
+
+    assert_eq!(
+        answer(Some(&claude_room("work")), &shared),
+        ResumeLogin::Same
+    );
+    assert_eq!(
+        answer(Some(&claude_room("personal")), &shared),
+        ResumeLogin::Changed(LoginKey::new(
+            AgentKind::new_unchecked("claude"),
+            "personal".parse().expect("login name"),
+        ))
+    );
+    assert_eq!(
+        answer(Some(&claude_room("personal")), &standalone),
+        ResumeLogin::Unreadable
+    );
+    // A room whose accounts cannot be read, or whose kind refuses, runs on the child's own.
+    assert_eq!(answer(None, &shared), ResumeLogin::Same);
+    let refused = RoomAccounts::unavailable(crate::agents::RoomLoginErr::Blocked {
+        state: crate::trust::TrustState::Stale,
+    });
+    assert_eq!(answer(Some(&refused), &shared), ResumeLogin::Same);
+}
